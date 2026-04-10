@@ -152,6 +152,12 @@ namespace psizam {
       table_grow,
       table_size,
       table_fill,
+      // Multi-value return: store value to _multi_return buffer
+      // ri.src1 = value vreg, ri.imm = byte offset in buffer
+      multi_return_store,
+      // Multi-value call return: load value from _multi_return buffer after a call
+      // dest = loaded vreg, ri.imm = byte offset in buffer
+      multi_return_load,
    };
 
    static constexpr uint32_t ir_vreg_none = UINT32_MAX;
@@ -364,6 +370,9 @@ namespace psizam {
       uint8_t  entered_unreachable; // true if control entered in unreachable code
       uint32_t merge_block;
       uint32_t merge_vreg;  // For if/else with result: vreg that both branches write to
+      uint8_t  result_count;       // Number of results (0 or 1 for single-value, >1 for multi-value)
+      uint8_t  result_types[16];   // Types of each result (multi-value)
+      uint32_t merge_vregs[16];    // One merge vreg per result (multi-value)
    };
    static_assert(std::is_trivially_copyable_v<ir_control_entry>);
 

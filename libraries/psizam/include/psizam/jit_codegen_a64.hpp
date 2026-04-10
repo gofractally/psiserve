@@ -57,6 +57,7 @@ namespace psizam {
       static constexpr uint32_t COND_GT = 12, COND_LE = 13;   // signed > / <=
 
       static constexpr uint32_t invert_condition(uint32_t cond) { return cond ^ 1; }
+      static constexpr int32_t multi_return_offset = 24; // offset of _multi_return in frame_info_holder
 
       static constexpr bool use_softfloat =
 #ifdef PSIZAM_SOFTFLOAT
@@ -688,12 +689,13 @@ namespace psizam {
       }
 
       void emit_function_epilogue(ir_function& func) {
-         if (_use_regalloc) {
+         if (func.type->return_count > 1) {
+            // Multi-value return: values already stored to _multi_return by multi_return_store ops
+         } else if (_use_regalloc) {
             if (func.type->return_count != 0 && func.vstack_top > 0) {
                if (func.type->return_type == types::v128) {
-                  // v128 return: load from native stack into X0:X1 (AAPCS64)
-                  emit_ldr_offset(X0, SP, 0);   // low qword
-                  emit_ldr_offset(X1, SP, 16);  // high qword
+                  emit_ldr_offset(X0, SP, 0);
+                  emit_ldr_offset(X1, SP, 16);
                } else {
                   uint32_t result_vreg = func.vstack[func.vstack_top - 1];
                   load_vreg_to(X0, result_vreg);
@@ -702,7 +704,6 @@ namespace psizam {
          } else {
             if (func.type->return_count != 0) {
                if (func.type->return_type == types::v128) {
-                  // v128 return from non-regalloc path
                   emit_ldr_offset(X0, SP, 0);
                   emit_ldr_offset(X1, SP, 16);
                } else {
@@ -1569,6 +1570,23 @@ namespace psizam {
             emit_error_handler(&on_unreachable);
             break;
 
+         // ── Multi-value return store ──
+         case ir_op::multi_return_store: {
+            load_vreg_x0(inst.ri.src1);
+            int32_t offset = multi_return_offset + inst.ri.imm;
+            // STR X0, [X19, #offset]
+            emit_str_offset(X0, X19, offset);
+            break;
+         }
+
+         // ── Multi-value call return load ──
+         case ir_op::multi_return_load: {
+            int32_t offset = multi_return_offset + inst.ri.imm;
+            emit_ldr_offset(X0, X19, offset);
+            store_x0_vreg(inst.dest);
+            break;
+         }
+
          // ── Return ──
          case ir_op::return_: {
             if (inst.rr.src1 != ir_vreg_none) {
@@ -1609,11 +1627,12 @@ namespace psizam {
                arg_bytes += (ft.param_types[p] == types::v128) ? 32 : 16;
             if (arg_bytes > 0) emit_add_imm(SP, SP, arg_bytes);
             emit_call_depth_inc();
-            if (ft.return_count > 0) {
+            if (ft.return_count > 1) {
+               // Multi-value: separate multi_return_load instructions handle the loads
+            } else if (ft.return_count > 0) {
                if (ft.return_type == types::v128) {
-                  // v128 return: X0=low, X1=high → push to native stack
-                  emit_push(X1);  // high first (deeper)
-                  emit_push(X0);  // low on top
+                  emit_push(X1);
+                  emit_push(X0);
                } else if (inst.dest != ir_vreg_none) {
                   store_x0_vreg(inst.dest);
                }
@@ -1686,10 +1705,12 @@ namespace psizam {
                arg_bytes += (ft.param_types[p] == types::v128) ? 32 : 16;
             if (arg_bytes > 0) emit_add_imm(SP, SP, arg_bytes);
             emit_call_depth_inc();
-            if (ft.return_count > 0) {
+            if (ft.return_count > 1) {
+               // Multi-value: separate multi_return_load instructions handle the loads
+            } else if (ft.return_count > 0) {
                if (ft.return_type == types::v128) {
-                  emit_push(X1);  // high first (deeper)
-                  emit_push(X0);  // low on top
+                  emit_push(X1);
+                  emit_push(X0);
                } else if (inst.dest != ir_vreg_none) {
                   store_x0_vreg(inst.dest);
                }

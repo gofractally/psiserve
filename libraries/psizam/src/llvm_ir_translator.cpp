@@ -2078,6 +2078,30 @@ namespace psizam {
                   break;
                }
 
+               // ──── Multi-value return store ────
+               case ir_op::multi_return_store: {
+                  auto* val = load_vreg(inst.ri.src1);
+                  int32_t offset = 24 + inst.ri.imm; // multi_return_offset = 24
+                  auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
+                     builder.getInt32(offset));
+                  auto* typed_ptr = builder.CreateBitCast(ptr,
+                     llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                  builder.CreateStore(val, typed_ptr);
+                  break;
+               }
+
+               // ──── Multi-value call return load ────
+               case ir_op::multi_return_load: {
+                  int32_t offset = 24 + inst.ri.imm; // multi_return_offset = 24
+                  auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
+                     builder.getInt32(offset));
+                  auto* typed_ptr = builder.CreateBitCast(ptr,
+                     llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                  auto* val = builder.CreateLoad(builder.getInt64Ty(), typed_ptr);
+                  store_vreg(inst.dest, val);
+                  break;
+               }
+
                // ──── SIMD (stub) ────
                case ir_op::v128_op:
                case ir_op::const_v128:

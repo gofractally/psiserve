@@ -302,9 +302,9 @@ namespace psizam {
          // Return is defined as equivalent to branching to the outermost label
          return emit_br(depth_change, rt, UINT32_MAX, result_count);
       }
-      void emit_block(uint8_t = 0x40) {}
-      void* emit_loop(uint8_t = 0x40) { set_branch_target(); return code; }
-      void* emit_if(uint8_t = 0x40) {
+      void emit_block(uint8_t = 0x40, uint32_t = 0) {}
+      void* emit_loop(uint8_t = 0x40, uint32_t = 0) { set_branch_target(); return code; }
+      void* emit_if(uint8_t = 0x40, uint32_t = 0) {
          if (auto cond = try_pop_recent_op<condition_op>()) {
             COUNT_INSTR_NO_FLAGS();
             return emit_branchcc32(reverse_condition(cond->branchop));

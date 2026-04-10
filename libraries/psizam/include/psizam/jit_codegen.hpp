@@ -605,6 +605,25 @@ namespace psizam {
             emit_error_handler(&on_unreachable, reloc_symbol::on_unreachable);
             break;
 
+         // ── Multi-value return store ──
+         case ir_op::multi_return_store: {
+            // Store value to ctx->_multi_return[offset]
+            // inst.ri.src1 = value vreg on stack, inst.ri.imm = byte offset
+            this->emit_pop_raw(rax);
+            int32_t offset = multi_return_offset + inst.ri.imm;
+            this->emit_mov(rax, *(rdi + offset));
+            break;
+         }
+
+         // ── Multi-value call return load ──
+         case ir_op::multi_return_load: {
+            // Load value from ctx->_multi_return[offset] after a multi-value call
+            int32_t offset = multi_return_offset + inst.ri.imm;
+            this->emit_mov(*(rdi + offset), rax);
+            this->emit_push_raw(rax);
+            break;
+         }
+
          // ── Nop / control flow markers ──
          case ir_op::nop:
          case ir_op::arg:
@@ -1600,11 +1619,13 @@ namespace psizam {
       }
 
       void emit_function_epilogue(ir_function& func) {
-         if (_use_regalloc) {
+         if (func.type->return_count > 1) {
+            // Multi-value return: values already stored to _multi_return by multi_return_store ops
+            // Nothing to do here — the stores happened inline
+         } else if (_use_regalloc) {
             if (func.type->return_count != 0 && func.vstack_top > 0) {
                if (func.type->return_type == types::v128) {
-                  // v128 return: load result into xmm0 from XMM reg or spill
-                  uint32_t ret_vreg = func.vstack[func.vstack_top - 2]; // low vreg
+                  uint32_t ret_vreg = func.vstack[func.vstack_top - 2];
                   load_v128_to_xmm(ret_vreg, xmm0);
                } else {
                   uint32_t result_vreg = func.vstack[func.vstack_top - 1];
@@ -1614,7 +1635,6 @@ namespace psizam {
          } else {
             if (func.type->return_count != 0) {
                if (func.type->return_type == types::v128) {
-                  // v128 return: load 16 bytes into xmm0
                   this->emit_vmovdqu(*rsp, xmm0);
                } else {
                   this->emit_pop_raw(rax);
@@ -2305,6 +2325,22 @@ namespace psizam {
          case ir_op::i64_store: return emit_store_reg(inst, base::MOV_B, rax);
          case ir_op::i32_store8: return emit_store_reg(inst, base::MOVB_B, al);
          case ir_op::i32_store16: return emit_store_reg(inst, base::MOVW_B, ax);
+
+         // Multi-value return store (register mode)
+         case ir_op::multi_return_store: {
+            load_vreg_rax(inst.ri.src1);
+            int32_t offset = multi_return_offset + inst.ri.imm;
+            this->emit_mov(rax, *(rdi + offset));
+            return true;
+         }
+
+         // Multi-value call return load (register mode)
+         case ir_op::multi_return_load: {
+            int32_t offset = multi_return_offset + inst.ri.imm;
+            this->emit_mov(*(rdi + offset), rax);
+            store_rax_vreg(inst.dest);
+            return true;
+         }
 
          // Return
          case ir_op::return_: {
@@ -5858,9 +5894,11 @@ namespace psizam {
          if (total_size != 0) {
             this->emit_add(total_size, rsp);
          }
-         if (ft.return_count != 0) {
+         if (ft.return_count > 1) {
+            // Multi-value: separate multi_return_load instructions handle the loads
+            // Don't push anything here — avoid double-push
+         } else if (ft.return_count != 0) {
             if (ft.return_type == types::v128) {
-               // v128 return: callee put result in xmm0, push 16 bytes
                this->emit_sub(16, rsp);
                this->emit_vmovdqu(xmm0, *rsp);
             } else {

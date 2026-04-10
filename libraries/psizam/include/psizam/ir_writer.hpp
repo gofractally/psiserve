@@ -159,11 +159,30 @@ namespace psizam {
             auto entry = _func->ctrl_pop();
             block_idx = entry.block_idx;
 
-            // If we have a merge vreg from an if/else with result type,
-            // emit a mov from the else-branch result to the merge vreg.
-            // This must happen BEFORE end_block so that branches targeting
-            // this block (e.g., else_'s forward branch) land AFTER the mov.
-            if (entry.merge_vreg != ir_vreg_none) {
+            if (entry.result_count > 1) {
+               // Multi-value block end: mov N results to merge vregs, push them
+               if (!_unreachable && _func->vstack_depth() > entry.stack_depth) {
+                  // Pop N results from vstack and mov to merge vregs
+                  for (int i = static_cast<int>(entry.result_count) - 1; i >= 0; --i) {
+                     uint32_t src = _func->vpop();
+                     if (src != entry.merge_vregs[i]) {
+                        ir_inst mov{};
+                        mov.opcode = ir_op::mov;
+                        mov.type = types::i64;
+                        mov.flags = IR_NONE;
+                        mov.dest = entry.merge_vregs[i];
+                        mov.rr.src1 = src;
+                        mov.rr.src2 = ir_vreg_none;
+                        _func->emit(mov);
+                     }
+                  }
+               }
+               _func->vstack_resize(entry.stack_depth);
+               for (uint32_t i = 0; i < entry.result_count; ++i) {
+                  _func->vpush(entry.merge_vregs[i]);
+               }
+            } else if (entry.merge_vreg != ir_vreg_none) {
+               // Single-value: existing path
                if (!_unreachable && entry.result_type != types::pseudo &&
                    _func->vstack_depth() > entry.stack_depth) {
                   if (entry.result_type == types::v128) _func->vpop(); // extra v128 slot
@@ -185,7 +204,12 @@ namespace psizam {
                }
             } else if (_unreachable) {
                _func->vstack_resize(entry.stack_depth);
-               if (entry.result_type != types::pseudo) {
+               if (entry.result_count > 1) {
+                  for (uint32_t i = 0; i < entry.result_count; ++i) {
+                     uint32_t dest = _func->alloc_vreg(types::i64);
+                     _func->vpush(dest);
+                  }
+               } else if (entry.result_type != types::pseudo) {
                   uint32_t dest = _func->alloc_vreg(entry.result_type);
                   _func->vpush(dest);
                   if (entry.result_type == types::v128) {
@@ -196,34 +220,59 @@ namespace psizam {
             }
 
             _func->end_block(entry.block_idx);
-            // If the block was entered in unreachable code, it stays unreachable.
-            // Only blocks entered reachably can make code reachable again.
             _unreachable = entry.entered_unreachable ? true : false;
          }
          return block_idx;
       }
 
-      branch_t emit_return(uint32_t dc, uint8_t rt, uint32_t /*result_count*/ = 0) {
+      branch_t emit_return(uint32_t dc, uint8_t rt, uint32_t result_count = 0) {
          if (!_unreachable) {
-            ir_inst inst{};
-            inst.opcode = ir_op::return_;
-            inst.type = rt;  // Store return type so codegen knows v128 vs scalar
-            inst.flags = IR_SIDE_EFFECT;
-            inst.dest = ir_vreg_none;
-            if (rt != types::pseudo && _func->vstack_depth() > 0) {
-               if (rt == types::v128) _func->vpop(); // extra v128 slot
-               inst.rr.src1 = _func->vpop();
+            if (result_count > 1) {
+               // Multi-value return: emit N store instructions to _multi_return buffer
+               // We use a special sequence: store each value to the context buffer,
+               // then emit a return with result_count encoded in dest field
+               for (uint32_t i = result_count; i > 0; --i) {
+                  uint32_t src = _func->vpop();
+                  ir_inst store{};
+                  store.opcode = ir_op::nop; // placeholder - the store will be done by codegen
+                  store.type = types::i64;
+                  store.flags = IR_SIDE_EFFECT;
+                  store.dest = ir_vreg_none;
+                  store.ri.src1 = src;
+                  store.ri.imm = static_cast<int32_t>((i - 1) * 8); // offset in _multi_return
+                  // Use a distinct opcode for multi-value return store
+                  store.opcode = ir_op::multi_return_store;
+                  _func->emit(store);
+               }
+               ir_inst inst{};
+               inst.opcode = ir_op::return_;
+               inst.type = rt;
+               inst.flags = IR_SIDE_EFFECT;
+               inst.dest = result_count; // encode result_count for codegen
+               inst.rr.src1 = ir_vreg_none; // values already stored
+               inst.rr.src2 = ir_vreg_none;
+               _func->emit(inst);
             } else {
-               inst.rr.src1 = ir_vreg_none;
+               ir_inst inst{};
+               inst.opcode = ir_op::return_;
+               inst.type = rt;
+               inst.flags = IR_SIDE_EFFECT;
+               inst.dest = ir_vreg_none;
+               if (rt != types::pseudo && _func->vstack_depth() > 0) {
+                  if (rt == types::v128) _func->vpop(); // extra v128 slot
+                  inst.rr.src1 = _func->vpop();
+               } else {
+                  inst.rr.src1 = ir_vreg_none;
+               }
+               inst.rr.src2 = ir_vreg_none;
+               _func->emit(inst);
             }
-            inst.rr.src2 = ir_vreg_none;
-            _func->emit(inst);
          }
          _unreachable = true;
          return UINT32_MAX; // return doesn't need branch fixup
       }
 
-      void emit_block(uint8_t result_type = types::pseudo) {
+      void emit_block(uint8_t result_type = types::pseudo, uint32_t result_count = 0) {
          ir_control_entry entry{};
          entry.block_idx = _func->new_block();
          entry.stack_depth = _func->vstack_depth();
@@ -231,16 +280,28 @@ namespace psizam {
          entry.is_loop = 0;
          entry.is_function = 0;
          entry.entered_unreachable = _unreachable ? 1 : 0;
-         // Allocate merge vreg for blocks with result types (needed for br targets)
-         if (result_type != types::pseudo) {
+         entry.result_count = static_cast<uint8_t>(result_count);
+         std::memset(entry.result_types, 0, sizeof(entry.result_types));
+         std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs)); // ir_vreg_none
+         if (result_count > 1) {
+            // Multi-value: allocate merge vregs for each result (treat all as i64)
+            for (uint32_t i = 0; i < result_count && i < 16; ++i) {
+               entry.merge_vregs[i] = _func->alloc_vreg(types::i64);
+               entry.result_types[i] = types::i64;
+            }
+            entry.merge_vreg = entry.merge_vregs[0];
+         } else if (result_type != types::pseudo) {
+            // Single-value: backwards-compatible path
             entry.merge_vreg = _func->alloc_vreg(result_type);
+            entry.merge_vregs[0] = entry.merge_vreg;
+            entry.result_types[0] = result_type;
          } else {
             entry.merge_vreg = ir_vreg_none;
          }
          _func->ctrl_push(entry);
       }
 
-      label_t emit_loop(uint8_t result_type = types::pseudo) {
+      label_t emit_loop(uint8_t result_type = types::pseudo, uint32_t result_count = 0) {
          ir_control_entry entry{};
          entry.block_idx = _func->new_block();
          _func->blocks[entry.block_idx].is_loop = 1;
@@ -249,13 +310,16 @@ namespace psizam {
          entry.is_loop = 1;
          entry.is_function = 0;
          entry.entered_unreachable = _unreachable ? 1 : 0;
+         entry.result_count = static_cast<uint8_t>(result_count);
+         std::memset(entry.result_types, 0, sizeof(entry.result_types));
+         std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs));
          entry.merge_vreg = ir_vreg_none;
          _func->ctrl_push(entry);
          _func->start_block(entry.block_idx);
          return entry.block_idx;
       }
 
-      branch_t emit_if(uint8_t result_type = types::pseudo) {
+      branch_t emit_if(uint8_t result_type = types::pseudo, uint32_t result_count = 0) {
          ir_control_entry entry{};
          entry.block_idx = _func->new_block();
          _func->blocks[entry.block_idx].is_if = 1;
@@ -263,8 +327,19 @@ namespace psizam {
          entry.is_loop = 0;
          entry.is_function = 0;
          entry.entered_unreachable = _unreachable ? 1 : 0;
-         if (result_type != types::pseudo) {
+         entry.result_count = static_cast<uint8_t>(result_count);
+         std::memset(entry.result_types, 0, sizeof(entry.result_types));
+         std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs));
+         if (result_count > 1) {
+            for (uint32_t i = 0; i < result_count && i < 16; ++i) {
+               entry.merge_vregs[i] = _func->alloc_vreg(types::i64);
+               entry.result_types[i] = types::i64;
+            }
+            entry.merge_vreg = entry.merge_vregs[0];
+         } else if (result_type != types::pseudo) {
             entry.merge_vreg = _func->alloc_vreg(result_type);
+            entry.merge_vregs[0] = entry.merge_vreg;
+            entry.result_types[0] = result_type;
          } else {
             entry.merge_vreg = ir_vreg_none;
          }
@@ -297,18 +372,34 @@ namespace psizam {
 
             // If the block has a result type and the then-branch produced a value,
             // emit a mov to the merge vreg so both branches write the same destination.
-            if (!_unreachable && entry.merge_vreg != ir_vreg_none &&
-                _func->vstack_depth() > entry.stack_depth) {
-               if (entry.result_type == types::v128) _func->vpop(); // extra v128 slot
-               uint32_t then_result = _func->vpop();
-               ir_inst mov{};
-               mov.opcode = ir_op::mov;
-               mov.type = entry.result_type;
-               mov.flags = IR_NONE;
-               mov.dest = entry.merge_vreg;
-               mov.rr.src1 = then_result;
-               mov.rr.src2 = ir_vreg_none;
-               _func->emit(mov);
+            if (!_unreachable && _func->vstack_depth() > entry.stack_depth) {
+               if (entry.result_count > 1) {
+                  // Multi-value: pop N results and mov to merge vregs
+                  for (int i = static_cast<int>(entry.result_count) - 1; i >= 0; --i) {
+                     uint32_t src = _func->vpop();
+                     if (src != entry.merge_vregs[i]) {
+                        ir_inst mov{};
+                        mov.opcode = ir_op::mov;
+                        mov.type = types::i64;
+                        mov.flags = IR_NONE;
+                        mov.dest = entry.merge_vregs[i];
+                        mov.rr.src1 = src;
+                        mov.rr.src2 = ir_vreg_none;
+                        _func->emit(mov);
+                     }
+                  }
+               } else if (entry.merge_vreg != ir_vreg_none) {
+                  if (entry.result_type == types::v128) _func->vpop(); // extra v128 slot
+                  uint32_t then_result = _func->vpop();
+                  ir_inst mov{};
+                  mov.opcode = ir_op::mov;
+                  mov.type = entry.result_type;
+                  mov.flags = IR_NONE;
+                  mov.dest = entry.merge_vreg;
+                  mov.rr.src1 = then_result;
+                  mov.rr.src2 = ir_vreg_none;
+                  _func->emit(mov);
+               }
             }
 
             // Emit else_ instruction: then-block jumps to block end
@@ -343,17 +434,39 @@ namespace psizam {
          return else_inst_idx;
       }
 
-      branch_t emit_br(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t /*result_count*/ = 0) {
+      branch_t emit_br(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
          uint32_t inst_idx = 0;
          if (!_unreachable) {
-            // If the br carries a result value and the target block has a merge vreg,
-            // emit a mov to copy the result to the merge vreg
-            if (rt != types::pseudo && _func->vstack_depth() > 0 && label != UINT32_MAX) {
+            // Multi-value branch: emit N movs to merge vregs
+            if (result_count > 1 && label != UINT32_MAX) {
+               uint32_t target_ctrl = _func->ctrl_stack_top - 1 - label;
+               if (target_ctrl < _func->ctrl_stack_top) {
+                  auto& target_entry = _func->ctrl_stack[target_ctrl];
+                  if (!target_entry.is_loop && target_entry.result_count > 1) {
+                     // Pop N results from vstack and mov to merge vregs (reverse order)
+                     uint32_t n = std::min<uint32_t>(result_count, target_entry.result_count);
+                     uint32_t base_depth = _func->vstack_top - n;
+                     for (uint32_t i = 0; i < n; ++i) {
+                        uint32_t src = _func->vstack[base_depth + i];
+                        if (src != target_entry.merge_vregs[i]) {
+                           ir_inst mov{};
+                           mov.opcode = ir_op::mov;
+                           mov.type = types::i64;
+                           mov.flags = IR_NONE;
+                           mov.dest = target_entry.merge_vregs[i];
+                           mov.rr.src1 = src;
+                           mov.rr.src2 = ir_vreg_none;
+                           _func->emit(mov);
+                        }
+                     }
+                  }
+               }
+            } else if (rt != types::pseudo && _func->vstack_depth() > 0 && label != UINT32_MAX) {
+               // Single-value: existing path
                uint32_t target_ctrl = _func->ctrl_stack_top - 1 - label;
                if (target_ctrl < _func->ctrl_stack_top) {
                   auto& target_entry = _func->ctrl_stack[target_ctrl];
                   if (target_entry.merge_vreg != ir_vreg_none && !target_entry.is_loop) {
-                     // For v128, use the low vreg (vstack_top-2), not the high vreg
                      uint32_t src = (rt == types::v128 && _func->vstack_top >= 2)
                                     ? _func->vstack[_func->vstack_top - 2]
                                     : _func->vstack_back();
@@ -361,7 +474,6 @@ namespace psizam {
                         ir_inst mov{};
                         mov.opcode = ir_op::mov;
                         mov.type = rt;
-                        // Function body merge: side effect to prevent DCE
                         mov.flags = IR_NONE;
                         mov.dest = target_entry.merge_vreg;
                         mov.rr.src1 = src;
@@ -391,15 +503,33 @@ namespace psizam {
          return inst_idx;
       }
 
-      branch_t emit_br_if(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t /*result_count*/ = 0) {
+      branch_t emit_br_if(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
          uint32_t inst_idx = 0;
          if (!_unreachable) {
             uint32_t cond = _func->vpop();
-            // If the br_if carries a result value and the target block has a merge vreg,
-            // emit a mov to copy the result to the merge vreg.
-            // This is safe because: if the branch is taken, the merge vreg is correct.
-            // If not taken, the merge vreg will be overwritten by the fall-through path.
-            if (rt != types::pseudo && _func->vstack_depth() > 0 && label != UINT32_MAX) {
+            if (result_count > 1 && label != UINT32_MAX) {
+               uint32_t target_ctrl = _func->ctrl_stack_top - 1 - label;
+               if (target_ctrl < _func->ctrl_stack_top) {
+                  auto& target_entry = _func->ctrl_stack[target_ctrl];
+                  if (!target_entry.is_loop && target_entry.result_count > 1) {
+                     uint32_t n = std::min<uint32_t>(result_count, target_entry.result_count);
+                     uint32_t base_depth = _func->vstack_top - n;
+                     for (uint32_t i = 0; i < n; ++i) {
+                        uint32_t src = _func->vstack[base_depth + i];
+                        if (src != target_entry.merge_vregs[i]) {
+                           ir_inst mov{};
+                           mov.opcode = ir_op::mov;
+                           mov.type = types::i64;
+                           mov.flags = IR_NONE;
+                           mov.dest = target_entry.merge_vregs[i];
+                           mov.rr.src1 = src;
+                           mov.rr.src2 = ir_vreg_none;
+                           _func->emit(mov);
+                        }
+                     }
+                  }
+               }
+            } else if (rt != types::pseudo && _func->vstack_depth() > 0 && label != UINT32_MAX) {
                uint32_t target_ctrl = _func->ctrl_stack_top - 1 - label;
                if (target_ctrl < _func->ctrl_stack_top) {
                   auto& target_entry = _func->ctrl_stack[target_ctrl];
@@ -436,15 +566,31 @@ namespace psizam {
       struct br_table_parser {
          ir_writer* _writer;
          br_table_parser(ir_writer* w) : _writer(w) {}
-         branch_t emit_case(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t /*result_count*/ = 0) {
-            // Emit merge mov if target has a merge vreg
-            if (rt != types::pseudo && label != UINT32_MAX) {
+         branch_t emit_case(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
+            // Emit merge movs if target has merge vregs
+            if (label != UINT32_MAX) {
                auto* func = _writer->_func;
                uint32_t target_ctrl = func->ctrl_stack_top - 1 - label;
                if (target_ctrl < func->ctrl_stack_top) {
                   auto& target_entry = func->ctrl_stack[target_ctrl];
-                  if (target_entry.merge_vreg != ir_vreg_none && !target_entry.is_loop &&
-                      func->vstack_depth() > 0) {
+                  if (result_count > 1 && !target_entry.is_loop && target_entry.result_count > 1) {
+                     uint32_t n = std::min<uint32_t>(result_count, target_entry.result_count);
+                     uint32_t base_depth = func->vstack_top - n;
+                     for (uint32_t i = 0; i < n; ++i) {
+                        uint32_t src = func->vstack[base_depth + i];
+                        if (src != target_entry.merge_vregs[i]) {
+                           ir_inst mov{};
+                           mov.opcode = ir_op::mov;
+                           mov.type = types::i64;
+                           mov.flags = IR_NONE;
+                           mov.dest = target_entry.merge_vregs[i];
+                           mov.rr.src1 = src;
+                           mov.rr.src2 = ir_vreg_none;
+                           func->emit(mov);
+                        }
+                     }
+                  } else if (rt != types::pseudo && target_entry.merge_vreg != ir_vreg_none &&
+                             !target_entry.is_loop && func->vstack_depth() > 0) {
                      uint32_t src = (rt == types::v128 && func->vstack_top >= 2)
                                     ? func->vstack[func->vstack_top - 2]
                                     : func->vstack_back();
@@ -472,8 +618,8 @@ namespace psizam {
             _writer->_func->emit(inst);
             return inst_idx;
          }
-         branch_t emit_default(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t /*result_count*/ = 0) {
-            return emit_case(dc, rt, label);
+         branch_t emit_default(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
+            return emit_case(dc, rt, label, result_count);
          }
       };
       br_table_parser emit_br_table(uint32_t table_size) {
@@ -525,10 +671,34 @@ namespace psizam {
                inst.call.index = funcnum;
                inst.call.src1 = ir_vreg_none;
                _func->emit(inst);
-               _func->vpush(dest);
-               if (ft.return_type == types::v128) {
-                  uint32_t dest2 = _func->alloc_vreg(ft.return_type);
-                  _func->vpush(dest2);
+               if (ft.return_count > 1) {
+                  // Multi-value: first return is in dest (from RAX/X0).
+                  // Store it to _multi_return[0] for consistency, then load all N from buffer.
+                  // Actually: jit_codegen stores the first value to _multi_return[0] as well
+                  // when return_count > 1. So we load all N values from the buffer.
+                  // But wait -- the callee uses multi_return_store for all values,
+                  // so we just need to load all N from _multi_return.
+                  // The call instruction's dest vreg holds the return value in RAX which
+                  // for multi-value is unused (callee stores everything to _multi_return).
+                  // Load all N return values from _multi_return buffer.
+                  for (uint32_t i = 0; i < ft.return_count; ++i) {
+                     uint32_t load_dest = _func->alloc_vreg(ft.return_types[i]);
+                     ir_inst load{};
+                     load.opcode = ir_op::multi_return_load;
+                     load.type = ft.return_types[i];
+                     load.flags = IR_SIDE_EFFECT;
+                     load.dest = load_dest;
+                     load.ri.src1 = ir_vreg_none;
+                     load.ri.imm = static_cast<int32_t>(i * 8);
+                     _func->emit(load);
+                     _func->vpush(load_dest);
+                  }
+               } else {
+                  _func->vpush(dest);
+                  if (ft.return_type == types::v128) {
+                     uint32_t dest2 = _func->alloc_vreg(ft.return_type);
+                     _func->vpush(dest2);
+                  }
                }
             } else {
                ir_inst inst{};
@@ -676,10 +846,26 @@ namespace psizam {
                inst.call.index = packed_fti;
                inst.call.src1 = elem_idx_vreg;
                _func->emit(inst);
-               _func->vpush(dest);
-               if (ft.return_type == types::v128) {
-                  uint32_t dest2 = _func->alloc_vreg(ft.return_type);
-                  _func->vpush(dest2);
+               if (ft.return_count > 1) {
+                  // Multi-value: load all N values from _multi_return buffer
+                  for (uint32_t i = 0; i < ft.return_count; ++i) {
+                     uint32_t load_dest = _func->alloc_vreg(ft.return_types[i]);
+                     ir_inst load{};
+                     load.opcode = ir_op::multi_return_load;
+                     load.type = ft.return_types[i];
+                     load.flags = IR_SIDE_EFFECT;
+                     load.dest = load_dest;
+                     load.ri.src1 = ir_vreg_none;
+                     load.ri.imm = static_cast<int32_t>(i * 8);
+                     _func->emit(load);
+                     _func->vpush(load_dest);
+                  }
+               } else {
+                  _func->vpush(dest);
+                  if (ft.return_type == types::v128) {
+                     uint32_t dest2 = _func->alloc_vreg(ft.return_type);
+                     _func->vpush(dest2);
+                  }
                }
             } else {
                ir_inst inst{};

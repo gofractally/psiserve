@@ -33,9 +33,9 @@ namespace psizam {
       uint32_t* emit_return(uint32_t depth_change, uint8_t rt, uint32_t result_count = UINT32_MAX) {
          return emit_br(depth_change, rt, UINT32_MAX, result_count);
       }
-      void emit_block(uint8_t = 0x40) {}
-      uint32_t emit_loop(uint8_t = 0x40) { return op_index; }
-      uint32_t* emit_if(uint8_t = 0x40) { 
+      void emit_block(uint8_t = 0x40, uint32_t = 0) {}
+      uint32_t emit_loop(uint8_t = 0x40, uint32_t = 0) { return op_index; }
+      uint32_t* emit_if(uint8_t = 0x40, uint32_t = 0) { 
          if_t& instr = append_instr(if_t{});
          return &instr.pc;
       }
