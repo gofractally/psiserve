@@ -1,0 +1,3 @@
+[submodule "external/psitri"]
+	path = external/psitri
+	url = https://github.com/gofractally/arbtrie.git
