@@ -560,7 +560,7 @@ int main() {
       const char* name;
       bool        enabled;
    };
-   enum RT { RT_NATIVE, RT_INTERP, RT_JIT, RT_JIT2, RT_WASM3, RT_WAMR, RT_WASMTIME, RT_WASMER, RT_COUNT };
+   enum RT { RT_NATIVE, RT_INTERP, RT_JIT, RT_JIT2, RT_JIT_LLVM, RT_WASM3, RT_WAMR, RT_WASMTIME, RT_WASMER, RT_COUNT };
 
    runtime_info runtimes[RT_COUNT] = {
       {"native",        false},  // enabled only for compute benchmarks
@@ -571,6 +571,11 @@ int main() {
 #else
       {"psizam JIT",    false},
       {"psizam JIT2",   false},
+#endif
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+      {"psizam LLVM",   true},
+#else
+      {"psizam LLVM",   false},
 #endif
 #ifdef BENCH_HAS_WASM3
       {"wasm3",         true},
@@ -668,6 +673,10 @@ int main() {
       fprintf(stderr, "host[%d] jit2...\n", t); fflush(stderr);
       host_results[t][RT_JIT2] = run_eosvm<jit2>(code, wa, benches[t].func, N);
 #endif
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+      fprintf(stderr, "host[%d] jit_llvm...\n", t); fflush(stderr);
+      host_results[t][RT_JIT_LLVM] = run_eosvm<jit_llvm>(code, wa, benches[t].func, N);
+#endif
 #ifdef BENCH_HAS_WASM3
       host_results[t][RT_WASM3] = run_wasm3(wasm_bytes, benches[t].func, N);
 #endif
@@ -748,6 +757,11 @@ int main() {
       fprintf(stderr, "jit2...\n"); fflush(stderr);
       compute_results[t][RT_JIT2] = run_eosvm_compute<jit2>(wasm, func, iters);
       fprintf(stderr, "jit2 done\n"); fflush(stderr);
+#endif
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+      fprintf(stderr, "jit_llvm...\n"); fflush(stderr);
+      compute_results[t][RT_JIT_LLVM] = run_eosvm_compute<jit_llvm>(wasm, func, iters);
+      fprintf(stderr, "jit_llvm done\n"); fflush(stderr);
 #endif
 #ifdef BENCH_HAS_WASM3
       compute_results[t][RT_WASM3] = run_wasm3_compute(wasm, func, iters);

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -221,6 +222,8 @@ namespace psizam {
       // that would prevent successful instantiation.  Must refer
       // to memory with static storage duration.
       const char *             error            = nullptr;
+      // Type-erased holder for LLVM JIT engine — keeps compiled code alive
+      std::shared_ptr<void>    jit_engine;
 
       void finalize() {
          import_functions.resize(get_imported_functions_size());

@@ -6,7 +6,8 @@ class null_writer {
  public:
    struct branch_t {};
    struct label_t {};
-   explicit null_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod) {}
+   explicit null_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod,
+                        bool /*enable_backtrace*/ = false, bool /*stack_limit_is_bytes*/ = false) {}
    static constexpr uint32_t get_depth_for_type(uint8_t /*type*/) { return 0; }
    void emit_unreachable() {}
    void emit_nop() {}

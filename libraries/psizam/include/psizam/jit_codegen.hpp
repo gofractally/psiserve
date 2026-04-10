@@ -96,7 +96,9 @@
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/execution_context.hpp>
 #include <psizam/jit_ir.hpp>
+#include <psizam/jit_reloc.hpp>
 #include <psizam/jit_regalloc.hpp>
 #include <psizam/softfloat.hpp>
 #include <psizam/x86_64_base.hpp>
@@ -110,9 +112,8 @@
 
 namespace psizam {
 
-   template<typename Context, bool StackLimitIsBytes>
-   class jit_codegen : public x86_64_base<jit_codegen<Context, StackLimitIsBytes>> {
-      using base = x86_64_base<jit_codegen<Context, StackLimitIsBytes>>;
+   class jit_codegen : public x86_64_base<jit_codegen> {
+      using base = x86_64_base<jit_codegen>;
       using base::code;
       using base::rax; using base::rcx; using base::rdx; using base::rbx;
       using base::rsp; using base::rbp; using base::rsi; using base::rdi;
@@ -134,30 +135,41 @@ namespace psizam {
       using typename base::imm32;
 
     public:
-      jit_codegen(growable_allocator& alloc, module& mod, growable_allocator& scratch_alloc, void* code_segment_base = nullptr)
-         : _allocator(alloc), _scratch_alloc(scratch_alloc), _mod(mod) {
+      jit_codegen(growable_allocator& alloc, module& mod, growable_allocator& scratch_alloc,
+                  bool enable_backtrace = false, bool stack_limit_is_bytes = false,
+                  void* code_segment_base = nullptr)
+         : _allocator(alloc), _scratch_alloc(scratch_alloc), _mod(mod),
+           _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
          // Allocate relocation table BEFORE starting the code region.
          // _code_base[0] must be the SysV ABI entry point.
          init_relocations();
          _code_segment_base = code_segment_base ? code_segment_base : _allocator.start_code();
       }
 
-      // Offset of _remaining_call_depth in the context (frame_info_holder)
-      static constexpr int32_t call_depth_offset() {
-         if constexpr (Context::async_backtrace()) return 16;
-         else return 0;
+      /// Record a relocation at the current code position.
+      /// Must be called immediately before emit_operand_ptr().
+      void emit_reloc(reloc_symbol sym) {
+         uint32_t offset = static_cast<uint32_t>(
+            reinterpret_cast<uintptr_t>(code) -
+            reinterpret_cast<uintptr_t>(_code_segment_base));
+         _reloc_recorder.record(offset, sym);
       }
+
+      /// Access the recorded relocations (for .pzam serialization).
+      const relocation_recorder& relocations() const { return _reloc_recorder; }
+
+      // Offset of _remaining_call_depth in unified frame_info_holder layout
+      // (always at offset 16, after _bottom_frame and _top_frame pointers)
+      static constexpr int32_t call_depth_offset() { return 16; }
 
       // Emit: decrement call depth in context memory, branch to overflow if zero.
       // Uses ecx as temp to avoid clobbering rax (needed for call_indirect target).
       void emit_call_depth_dec() {
-         if constexpr (!StackLimitIsBytes) {
-            auto off = call_depth_offset();
-            if (off) this->emit_mov(*(rdi + off), ecx);
-            else     this->emit_mov(*rdi, ecx);
+         if (!_stack_limit_is_bytes) {
+            constexpr auto off = call_depth_offset();
+            this->emit_mov(*(rdi + off), ecx);
             this->emit(base::DECD, ecx);
-            if (off) this->emit_mov(ecx, *(rdi + off));
-            else     this->emit_mov(ecx, *rdi);
+            this->emit_mov(ecx, *(rdi + off));
             this->emit(base::TEST, ecx, ecx);
             base::fix_branch(this->emit_branchcc32(base::JZ), stack_overflow_handler);
          }
@@ -165,13 +177,11 @@ namespace psizam {
 
       // Emit: increment call depth in context memory
       void emit_call_depth_inc() {
-         if constexpr (!StackLimitIsBytes) {
-            auto off = call_depth_offset();
-            if (off) this->emit_mov(*(rdi + off), ecx);
-            else     this->emit_mov(*rdi, ecx);
+         if (!_stack_limit_is_bytes) {
+            constexpr auto off = call_depth_offset();
+            this->emit_mov(*(rdi + off), ecx);
             this->emit(base::INCD, ecx);
-            if (off) this->emit_mov(ecx, *(rdi + off));
-            else     this->emit_mov(ecx, *rdi);
+            this->emit_mov(ecx, *(rdi + off));
          }
       }
 
@@ -188,16 +198,16 @@ namespace psizam {
          // Error handlers
          buf = _allocator.alloc<unsigned char>(80);
          code = buf;
-         fpe_handler = emit_error_handler(&on_fp_error);
-         call_indirect_handler = emit_error_handler(&on_call_indirect_error);
-         type_error_handler = emit_error_handler(&on_type_error);
-         stack_overflow_handler = emit_error_handler(&on_stack_overflow);
-         memory_handler = emit_error_handler(&on_memory_error);
+         fpe_handler = emit_error_handler(&on_fp_error, reloc_symbol::on_fp_error);
+         call_indirect_handler = emit_error_handler(&on_call_indirect_error, reloc_symbol::on_call_indirect_error);
+         type_error_handler = emit_error_handler(&on_type_error, reloc_symbol::on_type_error);
+         stack_overflow_handler = emit_error_handler(&on_stack_overflow, reloc_symbol::on_stack_overflow);
+         memory_handler = emit_error_handler(&on_memory_error, reloc_symbol::on_memory_error);
 
          // Host function thunks
          const uint32_t num_imported = _mod.get_imported_functions_size();
          if (num_imported > 0) {
-            const std::size_t host_functions_size = (42 + 10 * Context::async_backtrace()) * num_imported;
+            const std::size_t host_functions_size = (42 + 10 * _enable_backtrace) * num_imported;
             buf = _allocator.alloc<unsigned char>(host_functions_size);
             code = buf;
             for (uint32_t i = 0; i < num_imported; ++i) {
@@ -350,11 +360,11 @@ namespace psizam {
          base::fix_branch8(loop_end, code);
 
          // Call depth counter lives in context memory (frees rbx for regalloc)
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             this->emit_mov(rbp, *(rdi + 8));
          }
          this->emit_call(rcx);
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             this->emit_xor(edx, edx);
             this->emit_mov(rdx, *(rdi + 8));
          }
@@ -373,10 +383,11 @@ namespace psizam {
          this->emit(base::RET);
       }
 
-      void* emit_error_handler(void (*handler)()) {
+      void* emit_error_handler(void (*handler)(), reloc_symbol sym) {
          void* result = code;
          this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
          this->emit_bytes(0x48, 0xb8);
+         emit_reloc(sym);
          this->emit_operand_ptr(handler);
          this->emit_bytes(0xff, 0xd0); // callq *%rax
          return result;
@@ -384,7 +395,7 @@ namespace psizam {
 
       void emit_host_call(uint32_t funcnum) {
          uint32_t extra = 0;
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             this->emit_bytes(0x55);             // pushq %rbp
             this->emit_bytes(0x48, 0x89, 0x27); // movq %rsp, (%rdi)
             extra = 8;
@@ -400,18 +411,17 @@ namespace psizam {
          this->emit_bytes(0x51);             // push %rcx
          this->emit_bytes(0x51);             // push %rcx
          // Load call depth from context memory (rdi) into ecx for call_host_function
-         if constexpr (Context::async_backtrace())
-            this->emit_mov(*(rdi + 16), ecx);
-         else
-            this->emit_mov(*rdi, ecx);
+         // _remaining_call_depth is always at offset 16 in unified frame_info_holder
+         this->emit_mov(*(rdi + 16), ecx);
          this->emit_bytes(0x48, 0xb8);
+         emit_reloc(reloc_symbol::call_host_function);
          this->emit_operand_ptr(&call_host_function);
          this->emit_bytes(0xff, 0xd0);       // callq *%rax
          // restore stack
          this->emit_bytes(0x48, 0x8b, 0x24, 0x24); // mov (%rsp), %rsp
          this->emit_bytes(0x5e);             // popq %rsi
          this->emit_bytes(0x5f);             // popq %rdi
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             this->emit_bytes(0x31, 0xd2);       // xorl %edx, %edx
             this->emit_bytes(0x48, 0x89, 0x17); // movq %rdx, (%rdi)
             this->emit_bytes(0x5d);             // popq %rbp
@@ -593,7 +603,7 @@ namespace psizam {
 
          // ── Unreachable ──
          case ir_op::unreachable:
-            emit_error_handler(&on_unreachable);
+            emit_error_handler(&on_unreachable, reloc_symbol::on_unreachable);
             break;
 
          // ── Nop / control flow markers ──
@@ -829,6 +839,7 @@ namespace psizam {
             this->emit_push_raw(rdi);
             this->emit_push_raw(rsi);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::current_memory);
             this->emit_operand_ptr(&current_memory);
             this->emit(base::CALL, rax);
             this->emit_pop_raw(rsi);
@@ -842,6 +853,7 @@ namespace psizam {
             this->emit_push_raw(rsi);
             this->emit_mov(eax, esi); // pages arg in esi
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::grow_memory);
             this->emit_operand_ptr(&grow_memory);
             this->emit(base::CALL, rax);
             this->emit_pop_raw(rsi);
@@ -1151,24 +1163,24 @@ namespace psizam {
          case ir_op::f64_ge: emit_f64_relop_sse(0x02, true, false); break;
 
          // ── Float-to-int conversions (trapping, via softfloat) ──
-         case ir_op::i32_trunc_s_f32:  emit_trunc_call(&trunc_f32_i32s); break;
-         case ir_op::i32_trunc_u_f32:  emit_trunc_call(&trunc_f32_i32u); break;
-         case ir_op::i32_trunc_s_f64:  emit_trunc_call(&trunc_f64_i32s); break;
-         case ir_op::i32_trunc_u_f64:  emit_trunc_call(&trunc_f64_i32u); break;
-         case ir_op::i64_trunc_s_f32:  emit_trunc_call(&trunc_f32_i64s); break;
-         case ir_op::i64_trunc_u_f32:  emit_trunc_call(&trunc_f32_i64u); break;
-         case ir_op::i64_trunc_s_f64:  emit_trunc_call(&trunc_f64_i64s); break;
-         case ir_op::i64_trunc_u_f64:  emit_trunc_call(&trunc_f64_i64u); break;
+         case ir_op::i32_trunc_s_f32:  emit_trunc_call(&trunc_f32_i32s, reloc_symbol::trunc_f32_i32s); break;
+         case ir_op::i32_trunc_u_f32:  emit_trunc_call(&trunc_f32_i32u, reloc_symbol::trunc_f32_i32u); break;
+         case ir_op::i32_trunc_s_f64:  emit_trunc_call(&trunc_f64_i32s, reloc_symbol::trunc_f64_i32s); break;
+         case ir_op::i32_trunc_u_f64:  emit_trunc_call(&trunc_f64_i32u, reloc_symbol::trunc_f64_i32u); break;
+         case ir_op::i64_trunc_s_f32:  emit_trunc_call(&trunc_f32_i64s, reloc_symbol::trunc_f32_i64s); break;
+         case ir_op::i64_trunc_u_f32:  emit_trunc_call(&trunc_f32_i64u, reloc_symbol::trunc_f32_i64u); break;
+         case ir_op::i64_trunc_s_f64:  emit_trunc_call(&trunc_f64_i64s, reloc_symbol::trunc_f64_i64s); break;
+         case ir_op::i64_trunc_u_f64:  emit_trunc_call(&trunc_f64_i64u, reloc_symbol::trunc_f64_i64u); break;
 
          // Saturating truncations (clamp to min/max, NaN → 0)
-         case ir_op::i32_trunc_sat_f32_s: emit_trunc_call(&trunc_sat_f32_i32s); break;
-         case ir_op::i32_trunc_sat_f32_u: emit_trunc_call(&trunc_sat_f32_i32u); break;
-         case ir_op::i32_trunc_sat_f64_s: emit_trunc_call(&trunc_sat_f64_i32s); break;
-         case ir_op::i32_trunc_sat_f64_u: emit_trunc_call(&trunc_sat_f64_i32u); break;
-         case ir_op::i64_trunc_sat_f32_s: emit_trunc_call(&trunc_sat_f32_i64s); break;
-         case ir_op::i64_trunc_sat_f32_u: emit_trunc_call(&trunc_sat_f32_i64u); break;
-         case ir_op::i64_trunc_sat_f64_s: emit_trunc_call(&trunc_sat_f64_i64s); break;
-         case ir_op::i64_trunc_sat_f64_u: emit_trunc_call(&trunc_sat_f64_i64u); break;
+         case ir_op::i32_trunc_sat_f32_s: emit_trunc_call(&trunc_sat_f32_i32s, reloc_symbol::trunc_sat_f32_i32s); break;
+         case ir_op::i32_trunc_sat_f32_u: emit_trunc_call(&trunc_sat_f32_i32u, reloc_symbol::trunc_sat_f32_i32u); break;
+         case ir_op::i32_trunc_sat_f64_s: emit_trunc_call(&trunc_sat_f64_i32s, reloc_symbol::trunc_sat_f64_i32s); break;
+         case ir_op::i32_trunc_sat_f64_u: emit_trunc_call(&trunc_sat_f64_i32u, reloc_symbol::trunc_sat_f64_i32u); break;
+         case ir_op::i64_trunc_sat_f32_s: emit_trunc_call(&trunc_sat_f32_i64s, reloc_symbol::trunc_sat_f32_i64s); break;
+         case ir_op::i64_trunc_sat_f32_u: emit_trunc_call(&trunc_sat_f32_i64u, reloc_symbol::trunc_sat_f32_i64u); break;
+         case ir_op::i64_trunc_sat_f64_s: emit_trunc_call(&trunc_sat_f64_i64s, reloc_symbol::trunc_sat_f64_i64s); break;
+         case ir_op::i64_trunc_sat_f64_u: emit_trunc_call(&trunc_sat_f64_i64u, reloc_symbol::trunc_sat_f64_i64u); break;
 
          // ── Int-to-float conversions ──
          case ir_op::f32_convert_s_i32:
@@ -1271,6 +1283,7 @@ namespace psizam {
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
             this->emit_push_raw(r8);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::memory_fill);
             this->emit_operand_ptr(&memory_fill_impl);
             this->emit_bytes(0xff, 0xd0);
             this->emit_pop_raw(rsp);
@@ -1311,6 +1324,7 @@ namespace psizam {
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
             this->emit_push_raw(r8);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::memory_copy);
             this->emit_operand_ptr(&memory_copy_impl);
             this->emit_bytes(0xff, 0xd0);
             this->emit_pop_raw(rsp);
@@ -1376,6 +1390,7 @@ namespace psizam {
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
             this->emit_push_raw(rax);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::memory_init);
             this->emit_operand_ptr(&memory_init_impl);
             this->emit_bytes(0xff, 0xd0);
             this->emit_pop_raw(rsp);
@@ -1392,6 +1407,7 @@ namespace psizam {
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
             this->emit_push_raw(rax);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::data_drop);
             this->emit_operand_ptr(&data_drop_impl);
             this->emit_bytes(0xff, 0xd0);
             this->emit_pop_raw(rsp);
@@ -1411,6 +1427,7 @@ namespace psizam {
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
             this->emit_push_raw(rax);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::table_init);
             this->emit_operand_ptr(&table_init_impl);
             this->emit_bytes(0xff, 0xd0);
             this->emit_pop_raw(rsp);
@@ -1427,6 +1444,7 @@ namespace psizam {
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
             this->emit_push_raw(rax);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::elem_drop);
             this->emit_operand_ptr(&elem_drop_impl);
             this->emit_bytes(0xff, 0xd0);
             this->emit_pop_raw(rsp);
@@ -1446,6 +1464,7 @@ namespace psizam {
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
             this->emit_push_raw(rax);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::table_copy);
             this->emit_operand_ptr(&table_copy_impl);
             this->emit_bytes(0xff, 0xd0);
             this->emit_pop_raw(rsp);
@@ -1819,7 +1838,7 @@ namespace psizam {
             return true;
          }
          case ir_op::unreachable:
-            emit_error_handler(&on_unreachable);
+            emit_error_handler(&on_unreachable, reloc_symbol::on_unreachable);
             return true;
 
          // arg: push a vreg value to the x86 stack (for upcoming op/call)
@@ -2501,6 +2520,7 @@ namespace psizam {
             this->emit_push_raw(rdi);
             this->emit_push_raw(rsi);
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::current_memory);
             this->emit_operand_ptr(&current_memory);
             this->emit(base::CALL, rax);
             this->emit_pop_raw(rsi);
@@ -2513,6 +2533,7 @@ namespace psizam {
             this->emit_push_raw(rsi);
             this->emit_mov(eax, esi); // pages arg in esi
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::grow_memory);
             this->emit_operand_ptr(&grow_memory);
             this->emit(base::CALL, rax);
             this->emit_pop_raw(rsi);
@@ -2719,24 +2740,24 @@ namespace psizam {
          case ir_op::f64_ne: emit_f64_relop(inst, 0x00, false, true);  return true;
 
          // ── Float-to-int conversions (trapping, via softfloat, register mode) ──
-         case ir_op::i32_trunc_s_f32:  emit_trunc_call_reg(inst, &trunc_f32_i32s); return true;
-         case ir_op::i32_trunc_u_f32:  emit_trunc_call_reg(inst, &trunc_f32_i32u); return true;
-         case ir_op::i32_trunc_s_f64:  emit_trunc_call_reg(inst, &trunc_f64_i32s); return true;
-         case ir_op::i32_trunc_u_f64:  emit_trunc_call_reg(inst, &trunc_f64_i32u); return true;
-         case ir_op::i64_trunc_s_f32:  emit_trunc_call_reg(inst, &trunc_f32_i64s); return true;
-         case ir_op::i64_trunc_u_f32:  emit_trunc_call_reg(inst, &trunc_f32_i64u); return true;
-         case ir_op::i64_trunc_s_f64:  emit_trunc_call_reg(inst, &trunc_f64_i64s); return true;
-         case ir_op::i64_trunc_u_f64:  emit_trunc_call_reg(inst, &trunc_f64_i64u); return true;
+         case ir_op::i32_trunc_s_f32:  emit_trunc_call_reg(inst, &trunc_f32_i32s, reloc_symbol::trunc_f32_i32s); return true;
+         case ir_op::i32_trunc_u_f32:  emit_trunc_call_reg(inst, &trunc_f32_i32u, reloc_symbol::trunc_f32_i32u); return true;
+         case ir_op::i32_trunc_s_f64:  emit_trunc_call_reg(inst, &trunc_f64_i32s, reloc_symbol::trunc_f64_i32s); return true;
+         case ir_op::i32_trunc_u_f64:  emit_trunc_call_reg(inst, &trunc_f64_i32u, reloc_symbol::trunc_f64_i32u); return true;
+         case ir_op::i64_trunc_s_f32:  emit_trunc_call_reg(inst, &trunc_f32_i64s, reloc_symbol::trunc_f32_i64s); return true;
+         case ir_op::i64_trunc_u_f32:  emit_trunc_call_reg(inst, &trunc_f32_i64u, reloc_symbol::trunc_f32_i64u); return true;
+         case ir_op::i64_trunc_s_f64:  emit_trunc_call_reg(inst, &trunc_f64_i64s, reloc_symbol::trunc_f64_i64s); return true;
+         case ir_op::i64_trunc_u_f64:  emit_trunc_call_reg(inst, &trunc_f64_i64u, reloc_symbol::trunc_f64_i64u); return true;
 
          // ── Saturating truncations (register mode, clamp to min/max, NaN → 0) ──
-         case ir_op::i32_trunc_sat_f32_s: emit_trunc_call_reg(inst, &trunc_sat_f32_i32s); return true;
-         case ir_op::i32_trunc_sat_f32_u: emit_trunc_call_reg(inst, &trunc_sat_f32_i32u); return true;
-         case ir_op::i32_trunc_sat_f64_s: emit_trunc_call_reg(inst, &trunc_sat_f64_i32s); return true;
-         case ir_op::i32_trunc_sat_f64_u: emit_trunc_call_reg(inst, &trunc_sat_f64_i32u); return true;
-         case ir_op::i64_trunc_sat_f32_s: emit_trunc_call_reg(inst, &trunc_sat_f32_i64s); return true;
-         case ir_op::i64_trunc_sat_f32_u: emit_trunc_call_reg(inst, &trunc_sat_f32_i64u); return true;
-         case ir_op::i64_trunc_sat_f64_s: emit_trunc_call_reg(inst, &trunc_sat_f64_i64s); return true;
-         case ir_op::i64_trunc_sat_f64_u: emit_trunc_call_reg(inst, &trunc_sat_f64_i64u); return true;
+         case ir_op::i32_trunc_sat_f32_s: emit_trunc_call_reg(inst, &trunc_sat_f32_i32s, reloc_symbol::trunc_sat_f32_i32s); return true;
+         case ir_op::i32_trunc_sat_f32_u: emit_trunc_call_reg(inst, &trunc_sat_f32_i32u, reloc_symbol::trunc_sat_f32_i32u); return true;
+         case ir_op::i32_trunc_sat_f64_s: emit_trunc_call_reg(inst, &trunc_sat_f64_i32s, reloc_symbol::trunc_sat_f64_i32s); return true;
+         case ir_op::i32_trunc_sat_f64_u: emit_trunc_call_reg(inst, &trunc_sat_f64_i32u, reloc_symbol::trunc_sat_f64_i32u); return true;
+         case ir_op::i64_trunc_sat_f32_s: emit_trunc_call_reg(inst, &trunc_sat_f32_i64s, reloc_symbol::trunc_sat_f32_i64s); return true;
+         case ir_op::i64_trunc_sat_f32_u: emit_trunc_call_reg(inst, &trunc_sat_f32_i64u, reloc_symbol::trunc_sat_f32_i64u); return true;
+         case ir_op::i64_trunc_sat_f64_s: emit_trunc_call_reg(inst, &trunc_sat_f64_i64s, reloc_symbol::trunc_sat_f64_i64s); return true;
+         case ir_op::i64_trunc_sat_f64_u: emit_trunc_call_reg(inst, &trunc_sat_f64_i64u, reloc_symbol::trunc_sat_f64_i64u); return true;
 
          // ── Int-to-float conversions (register mode) ──
          case ir_op::f32_convert_s_i32:
@@ -4864,17 +4885,17 @@ namespace psizam {
 
       // Call a trapping trunc function: uint64_t fn(uint64_t).
       // Pops float value from x86 stack, calls fn, pushes int result.
-      void emit_trunc_call(uint64_t (*fn)(uint64_t)) {
+      void emit_trunc_call(uint64_t (*fn)(uint64_t), reloc_symbol sym = reloc_symbol::unknown) {
          this->emit_pop_raw(rdi);         // float bits → arg0 (overwrites context, saved below)
-         emit_c_call(fn);
+         emit_c_call(fn, sym);
          this->emit_push_raw(rax);        // result
       }
 
       // Register-mode: load src vreg, call trunc fn, store dest vreg.
-      void emit_trunc_call_reg(const ir_inst& inst, uint64_t (*fn)(uint64_t)) {
+      void emit_trunc_call_reg(const ir_inst& inst, uint64_t (*fn)(uint64_t), reloc_symbol sym = reloc_symbol::unknown) {
          load_vreg_rax(inst.rr.src1);
          this->emit_mov(rax, rdi);        // arg0 = float bits
-         emit_c_call(fn);
+         emit_c_call(fn, sym);
          store_rax_vreg(inst.dest);
       }
 
@@ -4882,7 +4903,7 @@ namespace psizam {
       // Saves/restores rdi (context) and rsi (linear memory) around the call.
       // Uses proper stack alignment with rsp save/restore.
       template<typename F>
-      void emit_c_call(F fn) {
+      void emit_c_call(F fn, reloc_symbol sym = reloc_symbol::unknown) {
          // Save rdi and rsi, then save rsp for alignment restoration
          this->emit_push_raw(rdi);        // [rsp] = context
          this->emit_push_raw(rsi);        // [rsp] = linear_memory
@@ -4890,6 +4911,7 @@ namespace psizam {
          this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
          this->emit_push_raw(rsi);        // push saved rsp (using aligned stack)
          this->emit_bytes(0x48, 0xb8);
+         emit_reloc(sym);
          this->emit_operand_ptr(fn);
          this->emit_bytes(0xff, 0xd0);    // call *%rax
          this->emit_pop_raw(rsp);         // restore pre-alignment rsp
@@ -4898,7 +4920,7 @@ namespace psizam {
       }
 
       // Softfloat unary: call a v128_t -> v128_t function
-      void simd_v128_unop_softfloat(v128_t (*fn)(v128_t)) {
+      void simd_v128_unop_softfloat(v128_t (*fn)(v128_t), reloc_symbol sym = reloc_symbol::unknown) {
          // The v128 argument is on the x86 stack as 16 bytes.
          // SysV ABI: v128_t is returned in rax:rdx (two uint64_t fields).
          // v128_t argument: passed as two uint64_t in rdi, rsi.
@@ -4914,6 +4936,7 @@ namespace psizam {
          this->emit_push_raw(rcx);
          // Call
          this->emit_bytes(0x48, 0xb8);
+         emit_reloc(sym);
          this->emit_operand_ptr(fn);
          this->emit_bytes(0xff, 0xd0);  // call *%rax
          // Restore stack
@@ -4926,7 +4949,7 @@ namespace psizam {
       }
 
       // Softfloat binary: call a (v128_t, v128_t) -> v128_t function
-      void simd_v128_binop_softfloat(v128_t (*fn)(v128_t, v128_t)) {
+      void simd_v128_binop_softfloat(v128_t (*fn)(v128_t, v128_t), reloc_symbol sym = reloc_symbol::unknown) {
          // Two v128 args on stack: TOS = arg2 (16 bytes), NOS = arg1 (16 bytes)
          // SysV ABI: first arg in rdi:rsi, second in rdx:rcx
          // But rsi is linear memory base, so save/restore.
@@ -4943,6 +4966,7 @@ namespace psizam {
          this->emit_push_raw(r8);
          // Call
          this->emit_bytes(0x48, 0xb8);
+         emit_reloc(sym);
          this->emit_operand_ptr(fn);
          this->emit_bytes(0xff, 0xd0);
          // Restore stack
@@ -5170,6 +5194,7 @@ namespace psizam {
          case simd_sub::i8x16_popcnt: {
             static const uint8_t popcnt4[] = {0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4};
             this->emit_bytes(0x48, 0xb8);
+            emit_reloc(reloc_symbol::simd_popcnt4_table);
             this->emit_operand_ptr(&popcnt4);
             this->emit_vmovdqu(*rsp, xmm0);
             this->emit_vmovdqu(*rax, xmm3);
@@ -5870,7 +5895,8 @@ namespace psizam {
       }
 
       // ──────── Static callbacks (same as machine_code_writer) ────────
-      static native_value call_host_function(Context* context, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+      static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          native_value result;
          psizam::longjmp_on_exception([&]() {
             auto saved = context->_remaining_call_depth;
@@ -5881,62 +5907,75 @@ namespace psizam {
          return result;
       }
 
-      static int32_t current_memory(Context* context) { return context->current_linear_memory(); }
-      static int32_t grow_memory(Context* context, int32_t pages) { return context->grow_linear_memory(pages); }
+      static int32_t current_memory(void* ctx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         return context->current_linear_memory();
+      }
+      static int32_t grow_memory(void* ctx, int32_t pages) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         return context->grow_linear_memory(pages);
+      }
       static void on_memory_error() { throw_<wasm_memory_exception>("wasm memory out-of-bounds"); }
 
       // Bulk memory helpers with explicit bounds checking.
       // Called via longjmp_on_exception since they may throw.
-      static void memory_fill_impl(Context* ctx, uint32_t dest, uint32_t val, uint32_t count) {
+      static void memory_fill_impl(void* ctx, uint32_t dest, uint32_t val, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          psizam::longjmp_on_exception([&]() {
             uint64_t end = static_cast<uint64_t>(dest) + count;
-            uint64_t mem_size = static_cast<uint64_t>(ctx->current_linear_memory()) * 65536ULL;
+            uint64_t mem_size = static_cast<uint64_t>(context->current_linear_memory()) * 65536ULL;
             if (end > mem_size)
                throw_<wasm_memory_exception>("memory.fill out of bounds");
             if (count > 0)
-               std::memset(ctx->linear_memory() + dest, static_cast<uint8_t>(val), count);
+               std::memset(context->linear_memory() + dest, static_cast<uint8_t>(val), count);
          });
       }
 
-      static void memory_copy_impl(Context* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void memory_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          psizam::longjmp_on_exception([&]() {
             uint64_t src_end = static_cast<uint64_t>(src) + count;
             uint64_t dst_end = static_cast<uint64_t>(dest) + count;
-            uint64_t mem_size = static_cast<uint64_t>(ctx->current_linear_memory()) * 65536ULL;
+            uint64_t mem_size = static_cast<uint64_t>(context->current_linear_memory()) * 65536ULL;
             if (src_end > mem_size || dst_end > mem_size)
                throw_<wasm_memory_exception>("memory.copy out of bounds");
             if (count > 0)
-               std::memmove(ctx->linear_memory() + dest, ctx->linear_memory() + src, count);
+               std::memmove(context->linear_memory() + dest, context->linear_memory() + src, count);
          });
       }
-      static void memory_init_impl(Context* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void memory_init_impl(void* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          psizam::longjmp_on_exception([&]() {
-            ctx->init_linear_memory(seg_idx, dest, src, count);
-         });
-      }
-
-      static void data_drop_impl(Context* ctx, uint32_t seg_idx) {
-         psizam::longjmp_on_exception([&]() {
-            ctx->drop_data(seg_idx);
+            context->init_linear_memory(seg_idx, dest, src, count);
          });
       }
 
-      static void table_init_impl(Context* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void data_drop_impl(void* ctx, uint32_t seg_idx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          psizam::longjmp_on_exception([&]() {
-            ctx->init_table(seg_idx, dest, src, count);
+            context->drop_data(seg_idx);
          });
       }
 
-      static void elem_drop_impl(Context* ctx, uint32_t seg_idx) {
+      static void table_init_impl(void* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          psizam::longjmp_on_exception([&]() {
-            ctx->drop_elem(seg_idx);
+            context->init_table(seg_idx, dest, src, count);
          });
       }
 
-      static void table_copy_impl(Context* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void elem_drop_impl(void* ctx, uint32_t seg_idx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          psizam::longjmp_on_exception([&]() {
-            auto* s = ctx->get_table_ptr(src, count);
-            auto* d = ctx->get_table_ptr(dest, count);
+            context->drop_elem(seg_idx);
+         });
+      }
+
+      static void table_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         psizam::longjmp_on_exception([&]() {
+            auto* s = context->get_table_ptr(src, count);
+            auto* d = context->get_table_ptr(dest, count);
             if (count > 0)
                std::memmove(d, s, count * sizeof(table_entry));
          });
@@ -5972,6 +6011,9 @@ namespace psizam {
       growable_allocator& _allocator;        // code only (executable, permanent)
       growable_allocator& _scratch_alloc;    // transient per-function data (reused)
       module& _mod;
+      bool _enable_backtrace;
+      bool _stack_limit_is_bytes;
+      relocation_recorder _reloc_recorder;   // tracks absolute address embeddings for PIC
       void* _code_segment_base;
       void* fpe_handler = nullptr;
       void* call_indirect_handler = nullptr;

@@ -2,6 +2,7 @@
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/execution_context.hpp>
 #include <psizam/signals.hpp>
 #include <psizam/softfloat.hpp>
 #include <psizam/types.hpp>
@@ -62,11 +63,12 @@ namespace psizam {
    // - rdi hold the execution context
    // - rbx holds the remaining stack frames
    //
-   template<typename Context, bool StackLimitIsBytes>
    class machine_code_writer {
     public:
-      machine_code_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod) :
-         _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()) {
+      machine_code_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod,
+                          bool enable_backtrace, bool stack_limit_is_bytes) :
+         _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()),
+         _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
          _code_start = _allocator.alloc<unsigned char>(128);
          _code_end = _code_start + 128;
          code = _code_start;
@@ -90,7 +92,7 @@ namespace psizam {
 
          // emit host functions
          const uint32_t num_imported = mod.get_imported_functions_size();
-         const std::size_t host_functions_size = (42 + 10 * Context::async_backtrace()) * num_imported;
+         const std::size_t host_functions_size = (42 + 10 * _enable_backtrace) * num_imported;
          _code_start = _allocator.alloc<unsigned char>(host_functions_size);
          _code_end = _code_start + host_functions_size;
          // code already set
@@ -154,21 +156,15 @@ namespace psizam {
          fix_branch8(loop_end, code);
 
          // load call depth counter
+         // _remaining_call_depth is always at offset 16 in unified frame_info_holder
          emit_mov(rbx, *(rbp - 16));
-         if constexpr (Context::async_backtrace())
-         {
-            emit_mov(*(rdi + 16), ebx);
-         }
-         else
-         {
-            emit_mov(*rdi, ebx);
-         }
+         emit_mov(*(rdi + 16), ebx);
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit_mov(rbp, *(rdi + 8));
          }
          emit_call(rcx);
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit_xor(edx, edx);
             emit_mov(rdx, *(rdi + 8));
          }
@@ -196,7 +192,7 @@ namespace psizam {
          _params = function_parameters{_ft};
          _locals = function_locals{locals};
          // FIXME: This is not a tight upper bound
-         const std::size_t instruction_size_ratio_upper_bound = use_softfloat?(Context::async_backtrace()?63:49):79;
+         const std::size_t instruction_size_ratio_upper_bound = use_softfloat?(_enable_backtrace?63:49):79;
          std::size_t code_size = max_prologue_size + _mod.code[funcnum].size * instruction_size_ratio_upper_bound + max_epilogue_size;
          _code_start = _allocator.alloc<unsigned char>(code_size);
          _code_end = _code_start + code_size;
@@ -4450,7 +4446,7 @@ namespace psizam {
 
       void set_stack_usage(std::uint64_t usage)
       {
-         if constexpr (StackLimitIsBytes)
+         if (_stack_limit_is_bytes)
          {
             // Add the base frame overhead
             usage += 16;
@@ -5392,7 +5388,7 @@ namespace psizam {
          }};
       }
       auto softfloat_instr(std::size_t hard_expected, std::size_t soft_expected, std::size_t softbt_expected) {
-         return fixed_size_instr(use_softfloat?(Context::async_backtrace()?softbt_expected:soft_expected):hard_expected);
+         return fixed_size_instr(use_softfloat?(_enable_backtrace?softbt_expected:soft_expected):hard_expected);
       }
       auto simd_instr() {
          // SIMD instructions use at least 2-bytes, so 64 gives an
@@ -5464,6 +5460,8 @@ namespace psizam {
       module& _mod;
       growable_allocator& _allocator;
       void * _code_segment_base;
+      bool _enable_backtrace;
+      bool _stack_limit_is_bytes;
       const func_type* _ft;
       function_parameters _params;
       function_locals _locals;
@@ -5601,7 +5599,7 @@ namespace psizam {
 
       // check_call_depth and check_stack_limit are incompatible
       void emit_check_call_depth() {
-         if constexpr (!StackLimitIsBytes)
+         if (!_stack_limit_is_bytes)
          {
             auto icount = fixed_size_instr(8);
             emit(DECD, ebx);
@@ -5609,7 +5607,7 @@ namespace psizam {
          }
       }
       void emit_check_call_depth_end() {
-         if constexpr (!StackLimitIsBytes)
+         if (!_stack_limit_is_bytes)
          {
             auto icount = fixed_size_instr(2);
             emit(INCD, ebx);
@@ -5618,7 +5616,7 @@ namespace psizam {
 
       void emit_check_stack_limit()
       {
-         if constexpr (StackLimitIsBytes)
+         if (_stack_limit_is_bytes)
          {
             // TODO: compress this based on max_func_local_bytes
             emit(IA32(0x81)/5, ebx);
@@ -5631,7 +5629,7 @@ namespace psizam {
 
       void emit_check_stack_limit_end()
       {
-         if constexpr (StackLimitIsBytes)
+         if (_stack_limit_is_bytes)
          {
             emit_add(static_cast<std::uint32_t>(stack_usage), ebx);
          }
@@ -6363,7 +6361,7 @@ namespace psizam {
 
       void emit_host_call(uint32_t funcnum) {
          uint32_t extra = 0;
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             // pushq %rbp
             emit_bytes(0x55);
             // movq %rsp, (%rdi)
@@ -6391,7 +6389,7 @@ namespace psizam {
          emit_bytes(0x5e);
          // popq %rdi
          emit_bytes(0x5f);
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit_restore_backtrace_basic();
             // popq %rbp
             emit_bytes(0x5d);
@@ -6402,7 +6400,7 @@ namespace psizam {
 
       // Needs to run before saving %rdi.  Returns the number of bytes pushed onto the stack.
       uint32_t emit_setup_backtrace() {
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             // callq next
             emit_bytes(0xe8);
             emit_operand32(0);
@@ -6419,7 +6417,7 @@ namespace psizam {
       // Does not adjust the stack pointer.  Use this if the
       // stack pointer adjustment is combined with another instruction.
       void emit_restore_backtrace_basic() {
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             // xorl %edx, %edx
             emit_bytes(0x31, 0xd2);
             // movq %rdx, (%rdi)
@@ -6427,7 +6425,7 @@ namespace psizam {
          }
       }
       void emit_restore_backtrace() {
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit_restore_backtrace_basic();
             // addq $16, %rsp
             emit_bytes(0x48, 0x83, 0xc4, 0x10);
@@ -6436,9 +6434,10 @@ namespace psizam {
 
       bool is_host_function(uint32_t funcnum) { return funcnum < _mod.get_imported_functions_size(); }
 
-      static native_value call_host_function(Context* context /*rdi*/, native_value* stack /*rsi*/, uint32_t idx /*edx*/, uint32_t remaining_stack) {
+      static native_value call_host_function(void* ctx /*rdi*/, native_value* stack /*rsi*/, uint32_t idx /*edx*/, uint32_t remaining_stack) {
          // It's currently unsafe to throw through a jit frame, because we don't set up
          // the exception tables for them.
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          native_value result;
          psizam::longjmp_on_exception([&]() {
             auto saved = context->_remaining_call_depth;
@@ -6449,27 +6448,33 @@ namespace psizam {
          return result;
       }
 
-      static int32_t current_memory(Context* context /*rdi*/) {
+      static int32_t current_memory(void* ctx /*rdi*/) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->current_linear_memory();
       }
 
-      static int32_t grow_memory(Context* context /*rdi*/, int32_t pages) {
+      static int32_t grow_memory(void* ctx /*rdi*/, int32_t pages) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->grow_linear_memory(pages);
       }
 
-      static void init_memory(Context* context /*rdi*/, uint32_t x /*esi*/, uint32_t d /*edx*/, uint32_t s /*ecx*/, uint32_t n /*r8d*/) {
+      static void init_memory(void* ctx /*rdi*/, uint32_t x /*esi*/, uint32_t d /*edx*/, uint32_t s /*ecx*/, uint32_t n /*r8d*/) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->init_linear_memory(x, d, s, n);
       }
 
-      static void drop_data(Context* context /*rdi*/, uint32_t x /*esi*/) {
+      static void drop_data(void* ctx /*rdi*/, uint32_t x /*esi*/) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->drop_data(x);
       }
 
-      static void init_table(Context* context /*rdi*/, uint32_t x /*esi*/, uint32_t d /*edx*/, uint32_t s /*ecx*/, uint32_t n /*r8d*/) {
+      static void init_table(void* ctx /*rdi*/, uint32_t x /*esi*/, uint32_t d /*edx*/, uint32_t s /*ecx*/, uint32_t n /*r8d*/) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->init_table(x, d, s, n);
       }
 
-      static void drop_elem(Context* context /*rdi*/, uint32_t x /*esi*/) {
+      static void drop_elem(void* ctx /*rdi*/, uint32_t x /*esi*/) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->drop_elem(x);
       }
 

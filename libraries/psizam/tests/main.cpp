@@ -11,7 +11,7 @@
 
 psizam::wasm_allocator wa;
 
-template void psizam::execution_context<psizam::standalone_function_t>::execute(psizam::interpret_visitor<psizam::execution_context<psizam::standalone_function_t>>& visitor);
+template void psizam::execution_context::execute(psizam::interpret_visitor<psizam::execution_context>& visitor);
 
 template class psizam::backend<psizam::standalone_function_t, psizam::interpreter>;
 #ifdef __x86_64__

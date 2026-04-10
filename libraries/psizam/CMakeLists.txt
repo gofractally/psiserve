@@ -94,6 +94,34 @@ if(PSIZAM_ENABLE_TOOLS)
    add_subdirectory(tools)
 endif()
 
+# ── LLVM Backend (opt-in) ──────────────────────────────────────────────────────
+option(PSIZAM_ENABLE_LLVM "Build LLVM JIT backend" OFF)
+
+if(PSIZAM_ENABLE_LLVM)
+   find_package(LLVM REQUIRED CONFIG)
+   message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
+
+   llvm_map_components_to_libnames(LLVM_LIBS
+      core support orcjit native
+      passes instcombine scalaropts
+   )
+
+   add_library(psizam-llvm STATIC
+      src/llvm_ir_translator.cpp
+      src/llvm_jit_compiler.cpp
+      src/llvm_compile.cpp
+      src/llvm_runtime_helpers.cpp
+   )
+   target_link_libraries(psizam-llvm PUBLIC psizam ${LLVM_LIBS})
+   target_include_directories(psizam-llvm PUBLIC ${LLVM_INCLUDE_DIRS})
+   target_compile_definitions(psizam-llvm PUBLIC PSIZAM_ENABLE_LLVM_BACKEND)
+
+   # LLVM requires consistent RTTI settings
+   if(NOT LLVM_ENABLE_RTTI)
+      target_compile_options(psizam-llvm PRIVATE -fno-rtti)
+   endif()
+endif()
+
 # ── Benchmarks ─────────────────────────────────────────────────────────────────
 if(PSIZAM_ENABLE_BENCHMARKS)
    add_subdirectory(benchmarks)

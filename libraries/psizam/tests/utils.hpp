@@ -180,7 +180,7 @@ inline psizam::wasm_allocator* get_wasm_allocator() {
    return &alloc;
 }
 
-extern template void psizam::execution_context<psizam::standalone_function_t>::execute(psizam::interpret_visitor<psizam::execution_context<psizam::standalone_function_t>>& visitor);
+extern template void psizam::execution_context::execute(psizam::interpret_visitor<psizam::execution_context>& visitor);
 extern template class psizam::backend<psizam::standalone_function_t, psizam::interpreter>;
 #ifdef __x86_64__
 extern template class psizam::backend<psizam::standalone_function_t, psizam::jit>;
@@ -190,13 +190,18 @@ extern template class psizam::backend<psizam::standalone_function_t, psizam::jit
 extern template class psizam::backend<psizam::standalone_function_t, psizam::jit2>;
 #endif
 
-#ifdef __x86_64__
-#define BACKEND_TEST_CASE(name, tags) \
-  TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit2)
-#elif defined(__aarch64__)
-#define BACKEND_TEST_CASE(name, tags) \
-  TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit2)
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+  #if defined(__x86_64__) || defined(__aarch64__)
+    #define BACKEND_TEST_CASE(name, tags) \
+      TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit2, psizam::jit_llvm)
+  #else
+    #define BACKEND_TEST_CASE(name, tags) \
+      TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit_llvm)
+  #endif
+#elif defined(__x86_64__) || defined(__aarch64__)
+  #define BACKEND_TEST_CASE(name, tags) \
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit2)
 #else
-#define BACKEND_TEST_CASE(name, tags) \
-  TEMPLATE_TEST_CASE(name, tags, psizam::interpreter)
+  #define BACKEND_TEST_CASE(name, tags) \
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter)
 #endif

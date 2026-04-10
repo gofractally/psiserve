@@ -530,7 +530,7 @@ BACKEND_TEST_CASE( "Testing throwing host functions", "[host_functions_throw_tes
 
 template<typename Impl>
 struct host_functions_exit {
-   typename Impl::template context<registered_host_functions<host_functions_exit>> * context;
+   typename Impl::context * context;
    int test(int) { context->exit(); return 0; }
 };
 

@@ -1,10 +1,33 @@
 # psiserve Design
 
-psiserve is a microkernel operating system for WebAssembly services, exposed through a POSIX-like API. The design mirrors Unix conventions wherever possible — a developer who has written a Unix daemon can write a psiserve service without reading docs.
+psiserve is a high-performance WebAssembly TCP application server. It is built from four components:
+
+```
+┌──────────────────────────┐
+│  Service (user code)     │  application
+│  #include <psi.h>        │
+├──────────────────────────┤
+│  libpsi                  │  libc — thin WASM-side stubs + ring helpers
+├──────────────────────────┤
+│  psix                    │  kernel — scheduler, fibers, COW, I/O engine,
+│                          │  fd table, page management (simulated POSIX)
+├──────────────────────────┤
+│  psizam                  │  CPU — WASM engine (interpreter, JIT)
+├──────────────────────────┤
+│  Linux / macOS           │  hardware — kqueue, io_uring, mmap
+└──────────────────────────┘
+```
+
+- **psiserve** — the product (server binary, the whole stack)
+- **libpsi** — WASM-side library services link against (`#include <psi.h>`)
+- **psix** — the kernel: simulated POSIX for WASM (scheduler, fibers, COW forking, I/O engine, fd table, page management)
+- **psizam** — the CPU: WASM engine (parser, interpreter, JIT, execution contexts)
+
+The design mirrors Unix conventions wherever possible — a developer who has written a Unix daemon can write a psiserve service without reading docs.
 
 ## POSIX Mapping
 
-| Unix | psiserve | Notes |
+| Unix | psix | Notes |
 |---|---|---|
 | Process | WASM service instance | Isolated linear memory, own fd table |
 | Address space | WASM linear memory | Guard-page protected |
@@ -22,7 +45,7 @@ psiserve is a microkernel operating system for WebAssembly services, exposed thr
 | Syscall | Host function call | No kernel trap, just a function call |
 | inetd | The runtime itself | Listens, accepts, forks, binds fd 0 |
 | kill(pid, sig) | `service_call()` | Synchronous RPC |
-| Kernel | Host runtime | Scheduler, I/O engine, page management |
+| Kernel | psix | Scheduler, I/O engine, page management |
 
 ## Service Lifecycle
 
@@ -47,7 +70,7 @@ void _start() {
 }
 ```
 
-The host manages the lifecycle: listen on port, accept connection, COW fork from template (reset ring cursors, zero-map stack pages, bind fd 0 to new socket), call `_start()`. The service doesn't know about networking — it inherits its environment, just like an inetd child process.
+psix manages the lifecycle: listen on port, accept connection, COW fork from template (reset ring cursors, zero-map stack pages, bind fd 0 to new socket), call `_start()`. The service doesn't know about networking — it inherits its environment, just like an inetd child process.
 
 Services can also be long-lived daemons (timers, watchers, background workers) that aren't tied to a single connection.
 
@@ -108,7 +131,7 @@ typedef struct {
 void ps_bind_ring(int fd, int direction, ps_ring_t* ring);
 ```
 
-Services allocate ring buffers in their own linear memory and tell the host where they are. The host passes those addresses directly to kernel read()/write() syscalls — data moves kernel <-> WASM memory with no intermediate buffer.
+Services allocate ring buffers in their own linear memory and tell psix where they are. psix passes those addresses directly to kernel read()/write() syscalls — data moves kernel <-> WASM memory with no intermediate buffer.
 
 For advanced services, the ring can be read/written directly (pure memory access, no host call) with host calls only needed to yield when the ring is empty/full.
 
@@ -116,7 +139,7 @@ For advanced services, the ring can be read/written directly (pure memory access
 
 ### Fibers
 
-Each service instance has one or more fibers. A fiber is a cooperative execution context — it runs until it makes a blocking host call, then yields to the scheduler.
+Each service instance has one or more fibers. A fiber is a cooperative execution context — it runs until it makes a blocking host call, then yields to the psix scheduler.
 
 **Interpreter backend:** The WASM operand stack, call stack, PC, and locals are all fields in an `execution_context` struct. Yielding = returning from `execute()`. Resuming = calling `execute()` again with the same struct. No native stack involvement.
 
@@ -124,13 +147,13 @@ Each service instance has one or more fibers. A fiber is a cooperative execution
 
 ### Spawning Fibers
 
-When a service needs a new fiber (e.g., to handle an incoming RPC while the main handler is suspended), the host:
+When a service needs a new fiber (e.g., to handle an incoming RPC while the main handler is suspended), psix:
 
-1. Maps zero-fill anonymous pages over the stack region of linear memory
+1. Maps zero-fill anonymous pages over the WASM stack region of linear memory
 2. Creates a new execution context pointing to the same heap/globals
 3. Calls the target function on the new fiber
 
-The new fiber shares the instance's heap and globals but has its own private stack pages. No copying of any kind — just an `mmap` to zero the stack region.
+The new fiber shares the instance's heap and globals but has its own private stack pages (zero-mapped, not COW — the new fiber starts with a fresh stack). No copying of any kind — just an `mmap`.
 
 When the fiber completes, the original stack pages are restored via `mmap`.
 
@@ -161,7 +184,7 @@ loop:
 
 ### I/O Engine
 
-The host is a syscall proxy. It passes WASM-specified buffer addresses directly to kernel I/O calls:
+psix is a syscall proxy. It passes WASM-specified buffer addresses directly to kernel I/O calls:
 
 ```cpp
 // WASM said its ring buffer is at offset 0x9000 in linear memory
@@ -252,3 +275,56 @@ Tooling generates caller stubs and dispatch functions. The canonical ABI defines
 5. **Explicit yield points.** Context switches only occur inside host function calls. The developer always knows when interleaving can happen. No hidden preemption.
 
 6. **Everything is an fd.** Sockets, timers, channels, service connections — all managed through the same fd-based API, all waited on through `ps_poll()`.
+
+## Performance: HTTP + Database Request Path
+
+### Copy analysis: standard web stack vs psiserve
+
+A typical request through nginx → app server → database:
+
+```
+                                     Standard stack        psiserve
+                                     ──────────────        ────────
+NIC DMA → kernel buf                 copy 1 (unavoidable)  copy 1 (unavoidable)
+kernel → proxy (nginx)               copy 2 (read buf)     —
+proxy → upstream socket              copy 3 (write buf)    —
+kernel → app server                  copy 4 (read buf)     copy 2 (WASM rx ring)
+parse HTTP                           copy 5 (string alloc) zero (parse from ring)
+app → DB (serialize query)           copy 6 (protocol)     —
+kernel round-trip to DB process      copy 7, 8 (IPC)       —
+DB result → app (deserialize)        copy 9 (protocol)     copy 3 (DB mem → HTTP mem)
+format response                      copy 10 (render buf)  zero (write into tx ring)
+app → proxy                          copy 11 (write)       —
+proxy → client                       copy 12 (write)       copy 4 (WASM tx ring)
+kernel → NIC DMA                     copy 13 (unavoidable) copy 5 (unavoidable)
+
+Total:                               ~13 copies            5 copies
+```
+
+The standard stack pays for: reverse proxy hop (2 copies), kernel IPC to a separate DB process (2 copies), serialization at every boundary (protocol buffers, JSON, SQL wire format), and intermediate buffers at each layer.
+
+psiserve eliminates these because:
+- No reverse proxy — WASM services handle connections directly
+- No DB process boundary — the database is a WASM service in the same address space
+- No serialization — service calls pass data through shared memory, not wire protocols
+- No intermediate buffers — kernel reads/writes directly into WASM ring buffers
+
+With same-thread shared-page channels between HTTP and DB services, copy 3 is also eliminated (DB writes result into shared ring, HTTP reads directly). Total: 4 copies, all at unavoidable hardware/kernel boundaries.
+
+### Concurrency model
+
+Compared to standard approaches:
+
+| | Thread-per-connection (Apache) | Event loop (Node.js) | Goroutines (Go) | psiserve |
+|---|---|---|---|---|
+| Connections | ~10K (thread limit) | ~100K (single thread) | ~100K (goroutines) | ~100K (fibers) |
+| Instance cost | ~8MB stack | shared state | ~4KB stack | ~64KB stack + COW pages |
+| Isolation | none (shared process) | none (shared heap) | none (shared process) | full (WASM sandbox) |
+| DB access | serialize over socket | serialize over socket | serialize over socket | direct memory read |
+| Context switch | ~1-5μs (kernel) | N/A (callbacks) | ~200ns (runtime) | ~2ns (swapcontext) |
+
+Key differences:
+- **Per-connection instances:** COW forked from template. Cost: one mmap. Full isolation between connections with near-zero overhead.
+- **Database reads:** Spawn fiber on DB instance, direct pointer access to data structures in linear memory. No serialization, no socket, no query parsing.
+- **Database writes:** Serialized through cooperative scheduling — one writer at a time, no locks, no contention, no CAS loops.
+- **Read scaling:** COW fork DB instance to create read replicas on other OS threads. Consistent snapshots (like MVCC) for free.

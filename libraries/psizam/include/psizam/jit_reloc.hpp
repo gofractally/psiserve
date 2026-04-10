@@ -1,0 +1,127 @@
+#pragma once
+
+// JIT relocation infrastructure for position-independent code caching (.pzam).
+//
+// When JIT code generators embed absolute C++ function addresses into native code
+// (via emit_operand_ptr), the relocation system records the code offset and symbol.
+// At load time, these recorded relocations are patched to the current process's
+// function addresses, allowing cached code to be loaded at any base address.
+
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+namespace psizam {
+
+   /// Symbols that may be embedded as absolute addresses in JIT-generated code.
+   /// Each symbol maps to a specific C++ function or data address that must be
+   /// resolved at load time.
+   enum class reloc_symbol : uint16_t {
+      // Core runtime
+      call_host_function,
+      current_memory,
+      grow_memory,
+
+      // Bulk memory operations
+      memory_fill,
+      memory_copy,
+      memory_init,
+      data_drop,
+      table_init,
+      elem_drop,
+      table_copy,
+
+      // Error handlers
+      on_unreachable,
+      on_fp_error,
+      on_memory_error,
+      on_call_indirect_error,
+      on_type_error,
+      on_stack_overflow,
+
+      // Softfloat arithmetic (f32)
+      sf_f32_add, sf_f32_sub, sf_f32_mul, sf_f32_div,
+      sf_f32_min, sf_f32_max, sf_f32_sqrt, sf_f32_ceil,
+      sf_f32_floor, sf_f32_trunc, sf_f32_nearest, sf_f32_abs, sf_f32_neg,
+      sf_f32_copysign,
+
+      // Softfloat arithmetic (f64)
+      sf_f64_add, sf_f64_sub, sf_f64_mul, sf_f64_div,
+      sf_f64_min, sf_f64_max, sf_f64_sqrt, sf_f64_ceil,
+      sf_f64_floor, sf_f64_trunc, sf_f64_nearest, sf_f64_abs, sf_f64_neg,
+      sf_f64_copysign,
+
+      // Softfloat conversions
+      sf_f32_convert_i32s, sf_f32_convert_i32u,
+      sf_f32_convert_i64s, sf_f32_convert_i64u,
+      sf_f64_convert_i32s, sf_f64_convert_i32u,
+      sf_f64_convert_i64s, sf_f64_convert_i64u,
+      sf_f32_demote_f64, sf_f64_promote_f32,
+
+      // Softfloat comparisons
+      sf_f32_eq, sf_f32_ne, sf_f32_lt, sf_f32_gt, sf_f32_le, sf_f32_ge,
+      sf_f64_eq, sf_f64_ne, sf_f64_lt, sf_f64_gt, sf_f64_le, sf_f64_ge,
+
+      // Softfloat reinterpret
+      sf_f32_reinterpret_i32, sf_f64_reinterpret_i64,
+      sf_i32_reinterpret_f32, sf_i64_reinterpret_f64,
+
+      // Trunc (trapping)
+      trunc_f32_i32s, trunc_f32_i32u, trunc_f64_i32s, trunc_f64_i32u,
+      trunc_f32_i64s, trunc_f32_i64u, trunc_f64_i64s, trunc_f64_i64u,
+
+      // Trunc_sat (non-trapping)
+      trunc_sat_f32_i32s, trunc_sat_f32_i32u, trunc_sat_f64_i32s, trunc_sat_f64_i32u,
+      trunc_sat_f32_i64s, trunc_sat_f32_i64u, trunc_sat_f64_i64s, trunc_sat_f64_i64u,
+
+      // SIMD helpers
+      simd_popcnt4_table,
+
+      // Standard library
+      libc_memset,
+      libc_memmove,
+
+      // Generic/unknown (for addresses not yet categorized)
+      unknown,
+
+      NUM_SYMBOLS
+   };
+
+   /// A single relocation entry: records where an absolute address was embedded.
+   struct code_relocation {
+      uint32_t     code_offset;  // byte offset within the code blob
+      reloc_symbol symbol;       // which function/data this points to
+      uint16_t     reserved = 0; // padding for alignment
+   };
+   static_assert(sizeof(code_relocation) == 8);
+
+   /// Relocation recorder — attached to code generators during compilation.
+   /// Records each absolute address embedding for later .pzam serialization.
+   class relocation_recorder {
+   public:
+      void record(uint32_t code_offset, reloc_symbol sym) {
+         _relocs.push_back({code_offset, sym, 0});
+      }
+
+      const std::vector<code_relocation>& entries() const { return _relocs; }
+      std::vector<code_relocation>& entries() { return _relocs; }
+      uint32_t size() const { return static_cast<uint32_t>(_relocs.size()); }
+      void clear() { _relocs.clear(); }
+
+   private:
+      std::vector<code_relocation> _relocs;
+   };
+
+   /// Apply relocations to a loaded code blob.
+   /// symbol_table must have NUM_SYMBOLS entries (void* per symbol).
+   inline void apply_relocations(char* code_base,
+                                  const code_relocation* relocs,
+                                  uint32_t num_relocs,
+                                  void* const* symbol_table) {
+      for (uint32_t i = 0; i < num_relocs; i++) {
+         void* addr = symbol_table[static_cast<uint32_t>(relocs[i].symbol)];
+         std::memcpy(code_base + relocs[i].code_offset, &addr, sizeof(void*));
+      }
+   }
+
+} // namespace psizam

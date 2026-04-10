@@ -5,6 +5,7 @@
 #include <psizam/exceptions.hpp>
 #include <psizam/execution_interface.hpp>
 #include <psizam/host_function.hpp>
+#include <psizam/host_function_table.hpp>
 #include <psizam/opcodes.hpp>
 #include <psizam/signals.hpp>
 #include <psizam/types.hpp>
@@ -117,9 +118,8 @@ namespace psizam {
       std::size_t size = 0;
    };
 
-   template<typename Derived, typename Host, bool IsJit>
+   template<typename Derived, bool IsJit>
    class execution_context_base {
-      using host_type  = detail::host_type_t<Host>;
     public:
       Derived& derived() { return static_cast<Derived&>(*this); }
       auto& resolve_module() {
@@ -182,6 +182,13 @@ namespace psizam {
       void               set_max_pages(std::uint32_t max_pages) { _max_pages = std::min(max_pages, static_cast<std::uint32_t>(psizam::max_pages)); }
 
       inline std::error_code get_error_code() const { return _error_code; }
+
+      // ── LLVM runtime helper accessors ──
+      inline init_expr& get_global(uint32_t idx) { return _globals[idx]; }
+      inline const init_expr& get_global(uint32_t idx) const { return _globals[idx]; }
+      inline host_function_table* get_host_table() const { return _table; }
+      inline std::vector<bool>&  get_dropped_elems() { return _dropped_elems; }
+      inline std::vector<bool>&  get_dropped_data()  { return _dropped_data; }
 
       template<typename Module>
       inline void reset(Module& mod) {
@@ -312,39 +319,39 @@ namespace psizam {
          return get_table_base() + base;
       }
 
-      template <typename Visitor, typename... Args>
-      inline std::optional<operand_stack_elem> execute(host_type* host, Visitor&& visitor, const std::string_view func,
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, const std::string_view func,
                                                Args&&... args) {
          uint32_t func_index = _mod->get_exported_function(func);
-         return derived().execute(host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
+         return derived().template execute<TC>(host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
       }
 
-      template <typename Visitor, typename... Args>
-      inline std::optional<operand_stack_elem> execute(stack_manager& alt_stack, host_type* host, Visitor&& visitor, const std::string_view func,
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(stack_manager& alt_stack, void* host, Visitor&& visitor, const std::string_view func,
                                                Args... args) {
          uint32_t func_index = _mod->get_exported_function(func);
-         return derived().execute(alt_stack, host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
+         return derived().template execute<TC>(alt_stack, host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
       }
 
       template <typename Visitor, typename... Args>
-      inline void execute_start(host_type* host, Visitor&& visitor) {
+      inline void execute_start(void* host, Visitor&& visitor) {
          if (_mod->start != std::numeric_limits<uint32_t>::max())
             derived().execute(host, std::forward<Visitor>(visitor), _mod->start);
       }
 
       template <typename Visitor, typename... Args>
-      inline void execute_start(stack_manager& alt_stack, host_type* host, Visitor&& visitor) {
+      inline void execute_start(stack_manager& alt_stack, void* host, Visitor&& visitor) {
          if (_mod->start != std::numeric_limits<uint32_t>::max())
             derived().execute(alt_stack, host, std::forward<Visitor>(visitor), _mod->start);
       }
 
     protected:
 
-      template<typename Func_type, typename... Args>
+      template<typename TC = type_converter<standalone_function_t>, typename Func_type, typename... Args>
       static void type_check_args(const Func_type& ft, Args&&...) {
          PSIZAM_ASSERT(sizeof...(Args) == ft.param_types.size(), wasm_interpreter_exception, "wrong number of arguments");
          uint32_t i = 0;
-         PSIZAM_ASSERT((... && (to_wasm_type_v<detail::type_converter_t<Host>, std::decay_t<Args>> == ft.param_types.at(i++))), wasm_interpreter_exception, "unexpected argument type");
+         PSIZAM_ASSERT((... && (to_wasm_type_v<TC, std::decay_t<Args>> == ft.param_types.at(i++))), wasm_interpreter_exception, "unexpected argument type");
       }
 
       static void handle_signal(int sig) {
@@ -364,7 +371,7 @@ namespace psizam {
       module*                         _mod = nullptr;
       wasm_allocator*                 _wasm_alloc;
       uint32_t                        _max_pages = max_pages;
-      detail::host_invoker_t<Host>    _rhf;
+      host_function_table*            _table = nullptr;
       std::error_code                 _error_code;
       operand_stack                   _os;
       std::unique_ptr<table_entry[]>  _alt_table;
@@ -375,34 +382,30 @@ namespace psizam {
 
    struct jit_visitor { template<typename T> jit_visitor(T&&) {} };
 
-   template<typename Host>
-   class null_execution_context : public execution_context_base<null_execution_context<Host>, Host, false> {
-      using base_type = execution_context_base<null_execution_context<Host>, Host, false>;
+   class null_execution_context : public execution_context_base<null_execution_context, false> {
+      using base_type = execution_context_base<null_execution_context, false>;
    public:
       null_execution_context() {}
       null_execution_context(module& m, std::uint32_t max_call_depth) : base_type(&m) {}
    };
 
+   // Unified layout: always include backtrace fields so JIT code generators
+   // can use fixed offsets regardless of EnableBacktrace setting.
    template<bool EnableBacktrace>
    struct frame_info_holder {
-      uint32_t _remaining_call_depth;
-   };
-   template<>
-   struct frame_info_holder<true> {
       void* volatile _bottom_frame = nullptr;
       void* volatile _top_frame = nullptr;
       uint32_t _remaining_call_depth;
    };
 
-   template<typename Host, bool EnableBacktrace = false>
-   class jit_execution_context : public frame_info_holder<EnableBacktrace>, public execution_context_base<jit_execution_context<Host, EnableBacktrace>, Host, true> {
-      using base_type = execution_context_base<jit_execution_context<Host, EnableBacktrace>, Host, true>;
-      using host_type  = detail::host_type_t<Host>;
+   template<bool EnableBacktrace = false>
+   class jit_execution_context : public frame_info_holder<EnableBacktrace>, public execution_context_base<jit_execution_context<EnableBacktrace>, true> {
+      using base_type = execution_context_base<jit_execution_context<EnableBacktrace>, true>;
    public:
       using base_type::execute;
       using base_type::base_type;
       using base_type::_mod;
-      using base_type::_rhf;
+      using base_type::_table;
       using base_type::_error_code;
       using base_type::handle_signal;
       using base_type::get_operand_stack;
@@ -424,46 +427,17 @@ namespace psizam {
 
       inline native_value call_host_function(native_value* stack, uint32_t index) {
          uint32_t mapped_index = _mod->import_functions[index];
-         native_value result{uint64_t{0}};
 
-         // Fast path: direct trampoline bypassing operand_stack and Type_Converter
-         if constexpr (!std::is_same_v<Host, std::nullptr_t>) {
-            if (Host::call_fast_rev(_host, mapped_index, stack, linear_memory(), result)) {
-               return result;
-            }
-         }
-
-         // Slow path: box args onto operand_stack, dispatch through std::function
+         // JIT passes args in reverse stack order: stack[0] = last param.
+         // Convert to forward order for the unified host_function_table.
          const auto& ft = _mod->get_function_type(index);
          uint32_t num_params = ft.param_types.size();
-#ifndef NDEBUG
-         uint32_t original_operands = get_operand_stack().size();
-#endif
-         for(uint32_t i = 0; i < ft.param_types.size(); ++i) {
-            switch(ft.param_types[i]) {
-             case i32: get_operand_stack().push(i32_const_t{stack[num_params - i - 1].i32}); break;
-             case i64: get_operand_stack().push(i64_const_t{stack[num_params - i - 1].i64}); break;
-             case f32: get_operand_stack().push(f32_const_t{stack[num_params - i - 1].f32}); break;
-             case f64: get_operand_stack().push(f64_const_t{stack[num_params - i - 1].f64}); break;
-             default: assert(!"Unexpected type in param_types.");
-            }
-         }
-         _rhf(_host, get_interface(), mapped_index);
-         // guarantee that the junk bits are zero, to avoid problems.
-         auto set_result = [&result](auto val) { std::memcpy(&result, &val, sizeof(val)); };
-         if(ft.return_count) {
-            operand_stack_elem el = get_operand_stack().pop();
-            switch(ft.return_type) {
-             case i32: set_result(el.to_ui32()); break;
-             case i64: set_result(el.to_ui64()); break;
-             case f32: set_result(el.to_f32()); break;
-             case f64: set_result(el.to_f64()); break;
-             default: assert(!"Unexpected function return type.");
-            }
+         native_value fwd_args[num_params > 0 ? num_params : 1];
+         for (uint32_t i = 0; i < num_params; ++i) {
+            fwd_args[i] = stack[num_params - 1 - i];
          }
 
-         assert(get_operand_stack().size() == original_operands);
-         return result;
+         return _table->call(_host, mapped_index, fwd_args, linear_memory());
       }
 
       inline void reset() {
@@ -483,22 +457,22 @@ namespace psizam {
          }
       }
 
-      template <typename... Args>
-      inline std::optional<operand_stack_elem> execute(host_type* host, jit_visitor vis, uint32_t func_index, Args&&... args)
+      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      inline std::optional<operand_stack_elem> execute(void* host, jit_visitor vis, uint32_t func_index, Args&&... args)
       {
          stack_allocator alt_stack(get_maximum_stack_size());
-         return execute(alt_stack, host, vis, func_index, std::forward<Args>(args)...);
+         return execute<TC>(alt_stack, host, vis, func_index, std::forward<Args>(args)...);
       }
-      template <typename... Args>
-      inline std::optional<operand_stack_elem> execute(stack_manager& alloc, host_type* host, jit_visitor vis, uint32_t func_index, Args&&... args)
+      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      inline std::optional<operand_stack_elem> execute(stack_manager& alloc, void* host, jit_visitor vis, uint32_t func_index, Args&&... args)
       {
          return alloc.execute(get_maximum_stack_size(), [&](stack_allocator& alt_stack){
-            return execute(alt_stack, host, vis, func_index, std::forward<Args>(args)...);
+            return execute<TC>(alt_stack, host, vis, func_index, std::forward<Args>(args)...);
          });
       }
 
-      template <typename... Args>
-      inline std::optional<operand_stack_elem> execute(stack_allocator& alt_stack, host_type* host, jit_visitor, uint32_t func_index, Args... args) {
+      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      inline std::optional<operand_stack_elem> execute(stack_allocator& alt_stack, void* host, jit_visitor, uint32_t func_index, Args... args) {
          auto saved_host = _host;
          auto saved_os_size = get_operand_stack().size();
          auto g = scope_guard([&](){ _host = saved_host; get_operand_stack().eat(saved_os_size); });
@@ -506,18 +480,18 @@ namespace psizam {
          _host = host;
 
          const auto& ft = _mod->get_function_type(func_index);
-         this->type_check_args(ft, std::forward<Args>(args)... ); // args not modified by type_check_args
+         this->template type_check_args<TC>(ft, std::forward<Args>(args)... ); // args not modified by type_check_args
          native_value_extended result;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-value"
          // Calling execute() with no `args` (i.e. `execute(host_type,jit_visitor,uint32_t)`) results in a "statement has no
          // effect [-Werror=unused-value]" warning on this line. Dissable warning.
-         constexpr std::size_t args_count = (0 + ... + (to_wasm_type_v<detail::type_converter_t<Host>, Args> == types::v128 ? 2 : 1));
+         constexpr std::size_t args_count = (0 + ... + (to_wasm_type_v<TC, Args> == types::v128 ? 2 : 1));
          native_value args_raw[args_count];
          {
             native_value* p = args_raw;
-            ((append_arg(static_cast<Args&&>(args), p)), ...);
+            ((append_arg<TC>(static_cast<Args&&>(args), p)), ...);
          }
 #pragma GCC diagnostic pop
 
@@ -525,7 +499,17 @@ namespace psizam {
             if (func_index < _mod->get_imported_functions_size()) {
                std::reverse(args_raw + 0, args_raw + args_count);
                result.scalar = call_host_function(args_raw, func_index);
+            } else if (_mod->allocator._code_base == nullptr) {
+               // LLVM backend: jit_code_offset is an absolute address to an entry wrapper
+               // with signature: int64_t(*)(void* ctx, void* mem, native_value* args)
+               using llvm_entry_fn_t = int64_t(*)(void*, void*, native_value*);
+               auto entry = reinterpret_cast<llvm_entry_fn_t>(
+                  _mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset);
+               psizam::invoke_with_signal_handler([&]() {
+                  result.scalar.i64 = entry(this, base_type::linear_memory(), args_raw);
+               }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
             } else {
+               // Native JIT path: use assembly trampoline at _code_base
                // reserve 24 bytes for data accessed by inline assembly
                void* stack = alt_stack.top();
                if(stack) {
@@ -674,9 +658,9 @@ namespace psizam {
 
    protected:
 
-      template<typename T>
+      template<typename TC = type_converter<standalone_function_t>, typename T>
       void append_arg(T&& value, native_value*& out) {
-         auto tc = detail::type_converter_t<Host>{_host, get_interface()};
+         auto tc = TC{nullptr, get_interface()};
          auto transformed_value = detail::resolve_result(tc, static_cast<T&&>(value)).data;
          if constexpr (std::is_same_v<decltype(transformed_value), v128_t>) {
             out[0] = transformed_value.high;
@@ -692,12 +676,12 @@ namespace psizam {
          }
       }
 
-      template<typename T>
+      template<typename TC = type_converter<standalone_function_t>, typename T>
       native_value transform_arg(T&& value) {
          // make sure that the garbage bits are always zero.
          native_value result;
          std::memset(&result, 0, sizeof(result));
-         auto tc = detail::type_converter_t<Host>{_host, get_interface()};
+         auto tc = TC{nullptr, get_interface()};
          auto transformed_value = detail::resolve_result(tc, std::forward<T>(value)).data;
          std::memcpy(&result, &transformed_value, sizeof(transformed_value));
          return result;
@@ -715,16 +699,17 @@ namespace psizam {
          return context->get_execute()(context, linear_memory, data, fun, stack, Count, result_type == types::v128);
       }
 
-      host_type * _host = nullptr;
+   public:
+      inline void* get_host_ptr() const { return _host; }
+   protected:
+      void* _host = nullptr;
    };
 
-   template <typename Host>
-   class execution_context : public execution_context_base<execution_context<Host>, Host, false> {
-      using base_type = execution_context_base<execution_context<Host>, Host, false>;
-      using host_type  = detail::host_type_t<Host>;
+   class execution_context : public execution_context_base<execution_context, false> {
+      using base_type = execution_context_base<execution_context, false>;
     public:
       using base_type::_mod;
-      using base_type::_rhf;
+      using base_type::_table;
       using base_type::_error_code;
       using base_type::handle_signal;
       using base_type::get_operand_stack;
@@ -757,7 +742,33 @@ namespace psizam {
             scope_guard g{[this, saved = _remaining_call_depth]{ _remaining_call_depth = saved; }};
             _remaining_call_depth -= frame_size;
             push_call( activation_frame{ nullptr, 0 } );
-            _rhf(_state.host, get_interface(), _mod->import_functions[index]);
+            // Dispatch through host_function_table
+            {
+               uint32_t mapped_index = _mod->import_functions[index];
+               const auto& hf = _table->get_entry(mapped_index);
+               uint32_t num_params = hf.signature.params.size();
+               native_value args[num_params > 0 ? num_params : 1];
+               for (uint32_t i = num_params; i > 0; --i) {
+                  auto el = get_operand_stack().pop();
+                  switch(hf.signature.params[i - 1]) {
+                   case types::i32: args[i - 1] = native_value{(uint64_t)el.to_ui32()}; break;
+                   case types::i64: args[i - 1] = native_value{el.to_ui64()}; break;
+                   case types::f32: args[i - 1] = native_value{el.to_f32()}; break;
+                   case types::f64: args[i - 1] = native_value{el.to_f64()}; break;
+                   default: break;
+                  }
+               }
+               native_value result = _table->call(_state.host, mapped_index, args, linear_memory());
+               if (!hf.signature.ret.empty()) {
+                  switch(hf.signature.ret[0]) {
+                   case types::i32: push_operand(i32_const_t{result.i32}); break;
+                   case types::i64: push_operand(i64_const_t{result.i64}); break;
+                   case types::f32: push_operand(f32_const_t{result.f32}); break;
+                   case types::f64: push_operand(f64_const_t{result.f64}); break;
+                   default: break;
+                  }
+               }
+            }
             pop_call();
          } else {
             // const auto& ft = _mod->types[_mod->functions[index - _mod->get_imported_functions_size()]];
@@ -776,6 +787,7 @@ namespace psizam {
                                [&](i64_const_t el) { std::cout << "i64:" << el.data.ui << ", "; },
                                [&](f32_const_t el) { std::cout << "f32:" << el.data.f << ", "; },
                                [&](f64_const_t el) { std::cout << "f64:" << el.data.f << ", "; },
+                               [&](v128_const_t) { std::cout << "v128, "; },
                                [&](auto el) { std::cout << "(INDEX " << el.index() << "), "; } }, get_operand_stack().get(i));
          }
          std::cout << " }\n";
@@ -925,38 +937,38 @@ namespace psizam {
          _as.eat(_state.as_index);
       }
 
-      template <typename Visitor, typename... Args>
-      inline std::optional<operand_stack_elem> execute_func_table(host_type* host, Visitor&& visitor, uint32_t table_index,
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute_func_table(void* host, Visitor&& visitor, uint32_t table_index,
                                                                   Args&&... args) {
-         return execute(host, std::forward<Visitor>(visitor), table_elem(table_index), std::forward<Args>(args)...);
+         return execute<TC>(host, std::forward<Visitor>(visitor), table_elem(table_index), std::forward<Args>(args)...);
       }
 
-      template <typename Visitor, typename... Args>
-      inline std::optional<operand_stack_elem> execute(host_type* host, Visitor&& visitor, const std::string_view func,
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, const std::string_view func,
                                                        Args&&... args) {
          uint32_t func_index = _mod->get_exported_function(func);
-         return execute(host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
+         return execute<TC>(host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
       }
 
-      template <typename Visitor, typename... Args>
-      inline std::optional<operand_stack_elem> execute(stack_manager&, host_type* host, Visitor&& visitor, const std::string_view func,
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(stack_manager&, void* host, Visitor&& visitor, const std::string_view func,
                                                        Args... args) {
-         return execute(host, std::forward<Visitor>(visitor), func, std::forward<Args>(args)...);
+         return execute<TC>(host, std::forward<Visitor>(visitor), func, std::forward<Args>(args)...);
       }
 
       template <typename Visitor, typename... Args>
-      inline void execute_start(host_type* host, Visitor&& visitor) {
+      inline void execute_start(void* host, Visitor&& visitor) {
          if (_mod->start != std::numeric_limits<uint32_t>::max())
             execute(host, std::forward<Visitor>(visitor), _mod->start);
       }
 
       template <typename Visitor>
-      inline void execute_start(stack_manager&, host_type* host, Visitor&& visitor) {
+      inline void execute_start(stack_manager&, void* host, Visitor&& visitor) {
          execute_start(host, std::forward<Visitor>(visitor));
       }
 
-      template <typename Visitor, typename... Args>
-      inline std::optional<operand_stack_elem> execute(host_type* host, Visitor&& visitor, uint32_t func_index, Args&&... args) {
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, uint32_t func_index, Args&&... args) {
          PSIZAM_ASSERT(func_index < std::numeric_limits<uint32_t>::max(), wasm_interpreter_exception,
                        "cannot execute function, function not found");
 
@@ -980,12 +992,38 @@ namespace psizam {
             _remaining_call_depth = saved_call_depth;
          });
 
-         this->type_check_args(_mod->get_function_type(func_index), std::forward<Args>(args)...); // args not modified
-         push_args(std::forward<Args>(args)...);
+         this->template type_check_args<TC>(_mod->get_function_type(func_index), std::forward<Args>(args)...); // args not modified
+         push_args<TC>(std::forward<Args>(args)...);
          push_call<true>(func_index);
 
          if (func_index < _mod->get_imported_functions_size()) {
-            _rhf(_state.host, get_interface(), _mod->import_functions[func_index]);
+            // Dispatch through host_function_table
+            {
+               uint32_t mapped_index = _mod->import_functions[func_index];
+               const auto& hf = _table->get_entry(mapped_index);
+               uint32_t num_params = hf.signature.params.size();
+               native_value hf_args[num_params > 0 ? num_params : 1];
+               for (uint32_t i = num_params; i > 0; --i) {
+                  auto el = pop_operand();
+                  switch(hf.signature.params[i - 1]) {
+                   case types::i32: hf_args[i - 1] = native_value{(uint64_t)el.to_ui32()}; break;
+                   case types::i64: hf_args[i - 1] = native_value{el.to_ui64()}; break;
+                   case types::f32: hf_args[i - 1] = native_value{el.to_f32()}; break;
+                   case types::f64: hf_args[i - 1] = native_value{el.to_f64()}; break;
+                   default: break;
+                  }
+               }
+               native_value result = _table->call(_state.host, mapped_index, hf_args, linear_memory());
+               if (!hf.signature.ret.empty()) {
+                  switch(hf.signature.ret[0]) {
+                   case types::i32: push_operand(i32_const_t{result.i32}); break;
+                   case types::i64: push_operand(i64_const_t{result.i64}); break;
+                   case types::f32: push_operand(f32_const_t{result.f32}); break;
+                   case types::f64: push_operand(f64_const_t{result.f64}); break;
+                   default: break;
+                  }
+               }
+            }
          } else {
             _state.pc = _mod->get_function_pc(func_index);
             setup_locals(func_index);
@@ -1027,9 +1065,9 @@ namespace psizam {
 
     private:
 
-      template <typename... Args>
+      template <typename TC = type_converter<standalone_function_t>, typename... Args>
       void push_args(Args... args) {
-         auto tc = detail::type_converter_t<Host>{ _host, get_interface() };
+         auto tc = TC{ nullptr, get_interface() };
          (void)tc;
          (... , push_operand(detail::resolve_result(tc, std::forward<Args>(args))));
       }
@@ -1130,7 +1168,7 @@ namespace psizam {
 #undef CREATE_TABLE_ENTRY
 
       struct execution_state {
-         host_type* host           = nullptr;
+         void*    host             = nullptr;
          uint32_t as_index         = 0;
          uint32_t os_index         = 0;
          opcode*  pc               = nullptr;
@@ -1141,7 +1179,7 @@ namespace psizam {
       uint32_t                        _last_op_index    = 0;
       call_stack                      _as;
       opcode                          _halt;
-      host_type*                      _host = nullptr;
+      void*                           _host = nullptr;
       uint32_t                        _remaining_call_depth;
    };
 } // namespace psizam

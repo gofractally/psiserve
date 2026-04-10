@@ -26,23 +26,30 @@
 
 namespace psizam {
 
-   template<typename Context, bool StackLimitIsBytes>
    class ir_writer {
 #ifdef __aarch64__
-      using codegen_t = jit_codegen_a64<Context, StackLimitIsBytes>;
+      using codegen_t = jit_codegen_a64;
 #else
-      using codegen_t = jit_codegen<Context, StackLimitIsBytes>;
+      using codegen_t = jit_codegen;
 #endif
     public:
+      // Subclass access to IR data for alternative codegen pipelines (e.g., LLVM)
+      ir_function* get_functions() const { return _functions; }
+      uint32_t     get_num_functions() const { return _num_functions; }
+      module&      get_ir_module() const { return _mod; }
+      growable_allocator& get_ir_allocator() { return _allocator; }
+      jit_scratch_allocator& get_ir_scratch() { return _scratch; }
       // Branch/label types — dummy values since IR tracks control flow directly.
       // The parser stores and passes these between emit_if/emit_else/emit_end/emit_br
       // but never interprets them. fix_branch is a no-op.
       using branch_t = uint32_t;
       using label_t  = uint32_t;
 
-      ir_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod)
+      ir_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod,
+                bool enable_backtrace = false, bool stack_limit_is_bytes = false)
          : _allocator(alloc), _source_bytes(source_bytes), _mod(mod),
-           _scratch(alloc) {
+           _scratch(alloc),
+           _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
          _num_functions = mod.code.size();
          _functions = _scratch.alloc<ir_function>(_num_functions);
          for (uint32_t i = 0; i < _num_functions; ++i) {
@@ -57,10 +64,16 @@ namespace psizam {
             return;
          }
 
+         // If a subclass handles codegen (e.g., LLVM), skip native codegen.
+         // The scratch allocator destructor will clean up IR data.
+         if (_skip_codegen) {
+            return;
+         }
+
          // Pass 2: Register allocation + code generation (fused per-function).
          // _scratch_alloc holds IR/regalloc/optimizer data (transient, non-executable).
          // _allocator holds only native code (executable, tightly packed).
-         codegen_t codegen(_allocator, _mod, _allocator);
+         codegen_t codegen(_allocator, _mod, _allocator, _enable_backtrace, _stack_limit_is_bytes);
          codegen.emit_entry_and_error_handlers();
          for (uint32_t i = 0; i < _num_functions; ++i) {
             jit_optimizer::optimize(_functions[i], _scratch);
@@ -1741,6 +1754,10 @@ namespace psizam {
       uint32_t _num_functions = 0;
       ir_function* _func = nullptr;
       bool _unreachable = false;
+      bool _enable_backtrace;
+      bool _stack_limit_is_bytes;
+    protected:
+      bool _skip_codegen = false;           // Set by subclasses to bypass native codegen
    };
 
 } // namespace psizam

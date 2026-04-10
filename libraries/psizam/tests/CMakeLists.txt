@@ -75,6 +75,9 @@ target_include_directories(psizam_spec_tests PUBLIC
    ${CMAKE_CURRENT_BINARY_DIR}/spec
 )
 target_compile_definitions(psizam_spec_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
+if(PSIZAM_ENABLE_LLVM)
+   target_link_libraries(psizam_spec_tests psizam-llvm)
+endif()
 catch_discover_tests(psizam_spec_tests)
 
 set(SPEC_TESTS)
@@ -124,6 +127,9 @@ add_executable(unit_tests main.cpp
 )
 target_link_libraries(unit_tests psizam Catch2::Catch2)
 target_compile_definitions(unit_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
+if(PSIZAM_ENABLE_LLVM)
+   target_link_libraries(unit_tests psizam-llvm)
+endif()
 
 # ── JIT2 tests ─────────────────────────────────────────────────────────────────
 
@@ -154,3 +160,17 @@ target_link_libraries(sha_verify psizam)
 add_executable(spec_test_generator ${CMAKE_CURRENT_SOURCE_DIR}/spec_test_generator/spec_test_generator.cpp)
 
 catch_discover_tests(unit_tests)
+
+# ── Compliance / differential tests ───────────────────────────────────────────
+
+add_executable(psizam_compliance_tests main.cpp
+   compliance/differential_tests.cpp
+   compliance/pzam_cache_tests.cpp
+)
+target_link_libraries(psizam_compliance_tests psizam Catch2::Catch2)
+target_include_directories(psizam_compliance_tests PUBLIC
+   ${CMAKE_CURRENT_SOURCE_DIR}
+   ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_compile_definitions(psizam_compliance_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
+catch_discover_tests(psizam_compliance_tests)

@@ -4,6 +4,7 @@
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/execution_context.hpp>
 #include <psizam/signals.hpp>
 #include <psizam/softfloat.hpp>
 #include <psizam/types.hpp>
@@ -48,7 +49,6 @@ namespace psizam {
    //
    // All ARM64 instructions are 32-bit wide.
 
-   template<typename Context, bool StackLimitIsBytes>
    class machine_code_writer {
     public:
       using branch_t = void*;
@@ -109,8 +109,10 @@ namespace psizam {
 
       static constexpr uint32_t invert_condition(uint32_t cond) { return cond ^ 1; }
 
-      machine_code_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod) :
-         _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()) {
+      machine_code_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod,
+                          bool enable_backtrace = false, bool stack_limit_is_bytes = false) :
+         _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()),
+         _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
 
          // Emit ABI interface function
          _code_start = _allocator.alloc<unsigned char>(512);
@@ -141,7 +143,7 @@ namespace psizam {
          std::size_t host_functions_size = 0;
          for(uint32_t i = 0; i < num_imported; ++i) {
             uint32_t nparams = mod.get_function_type(i).param_types.size();
-            host_functions_size += 140 + nparams * 12 + 8 * Context::async_backtrace();
+            host_functions_size += 140 + nparams * 12 + 8 * _enable_backtrace;
          }
          if (num_imported > 0) {
             _code_start = _allocator.alloc<unsigned char>(host_functions_size);
@@ -249,13 +251,10 @@ namespace psizam {
          fix_branch(skip_push, code);
 
          // Load call depth counter into X21
-         if constexpr (Context::async_backtrace()) {
-            emit32(0xB9401275); // LDR W21, [X19, #16]
-         } else {
-            emit32(0xB9400275); // LDR W21, [X19]
-         }
+         // _remaining_call_depth is always at offset 16 in unified frame_info_holder
+         emit32(0xB9401275); // LDR W21, [X19, #16]
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit32(0xF9000673); // STR X19, [X19, #8] (store FP for backtrace)
          }
 
@@ -286,7 +285,7 @@ namespace psizam {
          // MOV SP, X23  (ADD SP, X23, #0)
          emit32(0x910002FF);
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit32(0xF900067F); // STR XZR, [X19, #8] (clear backtrace)
          }
 
@@ -326,7 +325,7 @@ namespace psizam {
          _ft = &_mod.types[_mod.functions[funcnum]];
          _params = function_parameters{_ft};
          _locals = function_locals{locals};
-         const std::size_t instruction_size_ratio_upper_bound = use_softfloat?(Context::async_backtrace()?120:100):100;
+         const std::size_t instruction_size_ratio_upper_bound = use_softfloat?(_enable_backtrace?120:100):100;
          std::size_t code_size = max_prologue_size + _mod.code[funcnum].size * instruction_size_ratio_upper_bound + max_epilogue_size;
          _code_start = _allocator.alloc<unsigned char>(code_size);
          _code_end = _code_start + code_size;
@@ -380,7 +379,7 @@ namespace psizam {
          emit_check_stack_limit_end();
          // Patch the restore ADD now that we know where it is
          // (set_stack_usage is called before emit_epilogue by the parser)
-         if constexpr (StackLimitIsBytes) {
+         if (_stack_limit_is_bytes) {
             if (stack_limit_restore) {
                patch_stack_limit_slots(stack_limit_restore, stack_usage, false);
             }
@@ -3549,7 +3548,7 @@ namespace psizam {
       const void* get_base_addr() const { return _code_segment_base; }
 
       void set_stack_usage(std::uint64_t usage) {
-         if constexpr (StackLimitIsBytes) {
+         if (_stack_limit_is_bytes) {
             usage += 16; // base frame overhead
             if (usage >= 0x7fffffff) {
                unimplemented();
@@ -3984,7 +3983,7 @@ namespace psizam {
       // ===================================================================
 
       void emit_check_call_depth() {
-         if constexpr (!StackLimitIsBytes) {
+         if (!_stack_limit_is_bytes) {
             // SUBS W21, W21, #1
             emit32(0x71000400 | (1 << 10) | (X21 << 5) | X21);
             // B.EQ stack_overflow_handler
@@ -3993,14 +3992,14 @@ namespace psizam {
       }
 
       void emit_check_call_depth_end() {
-         if constexpr (!StackLimitIsBytes) {
+         if (!_stack_limit_is_bytes) {
             // ADD W21, W21, #1
             emit32(0x11000400 | (1 << 10) | (X21 << 5) | X21);
          }
       }
 
       void emit_check_stack_limit() {
-         if constexpr (StackLimitIsBytes) {
+         if (_stack_limit_is_bytes) {
             // Reserve space for stack limit check (patched later by set_stack_usage/emit_epilogue).
             // For stack_usage <= 4095: NOP; SUBS W21, W21, #imm
             // For stack_usage > 4095: MOVZ W16, #lo; MOVK W16, #hi, LSL #16; SUBS W21, W21, W16
@@ -4015,7 +4014,7 @@ namespace psizam {
       }
 
       void emit_check_stack_limit_end() {
-         if constexpr (StackLimitIsBytes) {
+         if (_stack_limit_is_bytes) {
             // Reserve matching space for stack limit restore (patched in emit_epilogue).
             stack_limit_restore = code;
             emit32(0xD503201F); // NOP (placeholder slot 0)
@@ -4097,7 +4096,7 @@ namespace psizam {
       void emit_host_call(uint32_t funcnum) {
          // Host function stub: called from WASM code via BL.
          // WASM args are on the native stack in 16-byte stride slots.
-         // Must call: static call_host_function(Context* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack)
+         // Must call: static call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack)
          //
          // Stack layout on entry (from caller's perspective):
          //   [SP + 0]:          arg[0]         (16 bytes per slot)
@@ -4112,7 +4111,7 @@ namespace psizam {
          emit32(0xA9BF7BFD); // STP X29, X30, [SP, #-16]!
          emit32(0x910003FD); // MOV X29, SP
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit32(0xF9000273); // STR X19, [X19] (store frame info)
          }
 
@@ -4159,7 +4158,7 @@ namespace psizam {
          // Restore X19/X20
          emit32(0xA8C153F3); // LDP X19, X20, [SP], #16
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit32(0xF900027F); // STR XZR, [X19] (clear backtrace)
          }
 
@@ -4741,7 +4740,8 @@ namespace psizam {
       // Static helper functions
       // ===================================================================
 
-      static native_value call_host_function(Context* context, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+      static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          native_value result;
          psizam::longjmp_on_exception([&]() {
             auto saved = context->_remaining_call_depth;
@@ -4752,23 +4752,28 @@ namespace psizam {
          return result;
       }
 
-      static int32_t current_memory(Context* context) {
+      static int32_t current_memory(void* ctx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->current_linear_memory();
       }
 
-      static int32_t grow_memory(Context* context, int32_t pages) {
+      static int32_t grow_memory(void* ctx, int32_t pages) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->grow_linear_memory(pages);
       }
 
-      static void init_memory(Context* context, uint32_t x, uint32_t d, uint32_t s, uint32_t n) {
+      static void init_memory(void* ctx, uint32_t x, uint32_t d, uint32_t s, uint32_t n) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->init_linear_memory(x, d, s, n);
       }
 
-      static void drop_data(Context* context, uint32_t x) {
+      static void drop_data(void* ctx, uint32_t x) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->drop_data(x);
       }
 
-      static uint32_t copy_memory(Context* context, void* linear_memory, uint32_t d, uint32_t s, uint32_t n) {
+      static uint32_t copy_memory(void* ctx, void* linear_memory, uint32_t d, uint32_t s, uint32_t n) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          uint64_t mem_size = static_cast<uint64_t>(context->current_linear_memory()) * page_size;
          if (static_cast<uint64_t>(d) + n > mem_size ||
              static_cast<uint64_t>(s) + n > mem_size) {
@@ -4781,7 +4786,8 @@ namespace psizam {
          return 0;
       }
 
-      static uint32_t fill_memory(Context* context, void* linear_memory, uint32_t d, uint32_t val, uint32_t n) {
+      static uint32_t fill_memory(void* ctx, void* linear_memory, uint32_t d, uint32_t val, uint32_t n) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          uint64_t mem_size = static_cast<uint64_t>(context->current_linear_memory()) * page_size;
          if (static_cast<uint64_t>(d) + n > mem_size) {
             return 1;
@@ -4793,11 +4799,13 @@ namespace psizam {
          return 0;
       }
 
-      static void init_table(Context* context, uint32_t x, uint32_t d, uint32_t s, uint32_t n) {
+      static void init_table(void* ctx, uint32_t x, uint32_t d, uint32_t s, uint32_t n) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->init_table(x, d, s, n);
       }
 
-      static void drop_elem(Context* context, uint32_t x) {
+      static void drop_elem(void* ctx, uint32_t x) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->drop_elem(x);
       }
 
@@ -4831,6 +4839,8 @@ namespace psizam {
       module& _mod;
       growable_allocator& _allocator;
       void* _code_segment_base;
+      bool _enable_backtrace;
+      bool _stack_limit_is_bytes;
       const func_type* _ft = nullptr;
       function_parameters _params;
       function_locals _locals;

@@ -19,6 +19,7 @@
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/execution_context.hpp>
 #include <psizam/jit_ir.hpp>
 #include <psizam/jit_regalloc.hpp>
 #include <psizam/softfloat.hpp>
@@ -32,7 +33,6 @@
 
 namespace psizam {
 
-   template<typename Context, bool StackLimitIsBytes>
    class jit_codegen_a64 {
     public:
       // Register numbers
@@ -64,16 +64,18 @@ namespace psizam {
          false;
 #endif
 
-      jit_codegen_a64(growable_allocator& alloc, module& mod, growable_allocator& scratch_alloc, void* code_segment_base = nullptr)
-         : _allocator(alloc), _scratch_alloc(scratch_alloc), _mod(mod) {
+      jit_codegen_a64(growable_allocator& alloc, module& mod, growable_allocator& scratch_alloc,
+                      bool enable_backtrace, bool stack_limit_is_bytes,
+                      void* code_segment_base = nullptr)
+         : _allocator(alloc), _scratch_alloc(scratch_alloc), _mod(mod),
+           _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
          init_relocations();
          _code_segment_base = code_segment_base ? code_segment_base : _allocator.start_code();
       }
 
-      static constexpr int32_t call_depth_offset() {
-         if constexpr (Context::async_backtrace()) return 16;
-         else return 0;
-      }
+      // Offset of _remaining_call_depth in unified frame_info_holder layout
+      // (always at offset 16, after _bottom_frame and _top_frame pointers)
+      static constexpr int32_t call_depth_offset() { return 16; }
 
       // ──────── Entry point and error handlers ────────
 
@@ -469,13 +471,10 @@ namespace psizam {
          fix_branch(skip_push, code);
 
          // Load call depth
-         if constexpr (Context::async_backtrace()) {
-            emit32(0xB9401275); // LDR W21, [X19, #16]
-         } else {
-            emit32(0xB9400275); // LDR W21, [X19]
-         }
+         // _remaining_call_depth is always at offset 16 in unified frame_info_holder
+         emit32(0xB9401275); // LDR W21, [X19, #16]
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit32(0xF9000673); // STR X19, [X19, #8]
          }
 
@@ -485,7 +484,7 @@ namespace psizam {
          // Restore SP
          emit32(0x910002FF); // MOV SP, X23
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit32(0xF900067F); // STR XZR, [X19, #8]
          }
 
@@ -534,7 +533,7 @@ namespace psizam {
          emit32(0xA9BF7BFD); // STP X29, X30, [SP, #-16]!
          emit32(0x910003FD); // MOV X29, SP
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit32(0xF9000273); // STR X19, [X19]
          }
 
@@ -585,7 +584,7 @@ namespace psizam {
 
          emit32(0xA8C153F3); // LDP X19, X20, [SP], #16
 
-         if constexpr (Context::async_backtrace()) {
+         if (_enable_backtrace) {
             emit32(0xF900027F); // STR XZR, [X19]
          }
 
@@ -596,7 +595,7 @@ namespace psizam {
       // ──────── Call depth checking ────────
 
       void emit_call_depth_dec() {
-         if constexpr (!StackLimitIsBytes) {
+         if (!_stack_limit_is_bytes) {
             // SUBS W21, W21, #1
             emit32(0x71000400 | (1 << 10) | (X21 << 5) | X21);
             emit_branch_to_handler(COND_EQ, stack_overflow_handler);
@@ -604,7 +603,7 @@ namespace psizam {
       }
 
       void emit_call_depth_inc() {
-         if constexpr (!StackLimitIsBytes) {
+         if (!_stack_limit_is_bytes) {
             // ADD W21, W21, #1
             emit32(0x11000400 | (1 << 10) | (X21 << 5) | X21);
          }
@@ -3143,7 +3142,8 @@ namespace psizam {
 
       // ──────── Static callbacks ────────
 
-      static native_value call_host_function(Context* context, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+      static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
          native_value result;
          psizam::longjmp_on_exception([&]() {
             auto saved = context->_remaining_call_depth;
@@ -3154,8 +3154,14 @@ namespace psizam {
          return result;
       }
 
-      static int32_t current_memory(Context* context) { return context->current_linear_memory(); }
-      static int32_t grow_memory(Context* context, int32_t pages) { return context->grow_linear_memory(pages); }
+      static int32_t current_memory(void* ctx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         return context->current_linear_memory();
+      }
+      static int32_t grow_memory(void* ctx, int32_t pages) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         return context->grow_linear_memory(pages);
+      }
       static void on_memory_error() { throw_<wasm_memory_exception>("wasm memory out-of-bounds"); }
       static void on_unreachable() { psizam::throw_<wasm_interpreter_exception>("unreachable"); }
       static void on_fp_error() { psizam::throw_<wasm_interpreter_exception>("floating point error"); }
@@ -3169,6 +3175,8 @@ namespace psizam {
       growable_allocator& _allocator;
       growable_allocator& _scratch_alloc;
       module& _mod;
+      bool _enable_backtrace;
+      bool _stack_limit_is_bytes;
       void* _code_segment_base = nullptr;
       void* fpe_handler = nullptr;
       void* call_indirect_handler = nullptr;
