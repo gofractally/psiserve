@@ -737,6 +737,7 @@ namespace psizam {
          // For multi-value: non-empty when the block has >1 results
          std::vector<uint8_t> expected_results;
          std::vector<uint8_t> label_results;
+         std::vector<uint8_t> block_params;  // params for multi-value block types
       };
 
       static constexpr uint8_t any_type = 0x82;
@@ -914,8 +915,16 @@ namespace psizam {
          auto exit_scope = [&]() {
             // There must be at least one element
             PSIZAM_ASSERT(pc_stack.size(), wasm_parse_exception, "unexpected end instruction");
-            // an if with an empty else cannot have a return value
-            PSIZAM_ASSERT(!pc_stack.back().is_if || pc_stack.back().expected_result == types::pseudo, wasm_parse_exception, "wrong type");
+            // an if with an empty else requires params == results (identity)
+            if (pc_stack.back().is_if) {
+               if (!pc_stack.back().block_params.empty() || !pc_stack.back().expected_results.empty()) {
+                  PSIZAM_ASSERT(pc_stack.back().block_params == pc_stack.back().expected_results,
+                                wasm_parse_exception, "type mismatch: if without else requires matching params and results");
+               } else {
+                  PSIZAM_ASSERT(pc_stack.back().expected_result == types::pseudo,
+                                wasm_parse_exception, "type mismatch: if without else cannot have a return value");
+               }
+            }
             auto end_pos = code_writer.emit_end();
             if(auto* relocations = std::get_if<std::vector<branch_t>>(&pc_stack.back().relocations)) {
                for(auto branch_op : *relocations) {
@@ -959,44 +968,141 @@ namespace psizam {
                   op_stack.start_unreachable();
                } break;
                case opcodes::block: {
-                  uint32_t expected_result = *code++;
+                  // Parse block type: inline valtype (single byte) or s33 type index
+                  uint8_t first_byte = *code;
+                  uint8_t single_type = types::pseudo;
+                  std::vector<uint8_t> bp, br;
 
-                  PSIZAM_ASSERT(expected_result == types::i32 || expected_result == types::i64 ||
-                                expected_result == types::f32 || expected_result == types::f64 ||
-                                (expected_result == types::v128 && detail::get_enable_simd(_options)) ||
-                                expected_result == types::pseudo, wasm_parse_exception,
-                                "Invalid type code in block");
-                  pc_stack.push_back({op_stack.depth(), expected_result, expected_result, false, std::vector<branch_t>{}});
-                  code_writer.emit_block(expected_result);
+                  if (first_byte == types::pseudo || first_byte == types::i32 || first_byte == types::i64 ||
+                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128) {
+                     code++;
+                     PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
+                                   first_byte == types::f32 || first_byte == types::f64 ||
+                                   (first_byte == types::v128 && detail::get_enable_simd(_options)) ||
+                                   first_byte == types::pseudo, wasm_parse_exception,
+                                   "Invalid type code in block");
+                     single_type = first_byte;
+                  } else {
+                     // s33 type index (multi-value block type)
+                     int32_t type_idx = parse_varint32(code);
+                     PSIZAM_ASSERT(type_idx >= 0 && static_cast<uint32_t>(type_idx) < _mod->types.size(),
+                                   wasm_parse_exception, "invalid block type index");
+                     const func_type& ft = _mod->types[type_idx];
+                     bp.assign(ft.param_types.begin(), ft.param_types.end());
+                     br.assign(ft.return_types.begin(), ft.return_types.end());
+                     single_type = ft.return_count ? ft.return_type : types::pseudo;
+                  }
+
+                  // Pop params from outer stack (multi-value blocks can have inputs)
+                  for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
+                     op_stack.pop(bp[i]);
+
+                  pc_element_t elem{};
+                  elem.operand_depth = op_stack.depth();
+                  elem.expected_result = single_type;
+                  elem.label_result = single_type;
+                  elem.is_if = false;
+                  elem.relocations = std::vector<branch_t>{};
+                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
+                  elem.block_params = std::move(bp);
+                  pc_stack.push_back(std::move(elem));
+                  code_writer.emit_block(single_type);
                   op_stack.push_scope();
+                  // Push params back inside the block scope
+                  for (auto p : pc_stack.back().block_params)
+                     op_stack.push(p);
                   _nested_checker.on_control(_options);
                } break;
                case opcodes::loop: {
-                  uint32_t expected_result = *code++;
+                  uint8_t first_byte = *code;
+                  uint8_t single_type = types::pseudo;
+                  std::vector<uint8_t> bp, br;
 
-                  PSIZAM_ASSERT(expected_result == types::i32 || expected_result == types::i64 ||
-                                expected_result == types::f32 || expected_result == types::f64 ||
-                                (expected_result == types::v128 && detail::get_enable_simd(_options)) ||
-                                expected_result == types::pseudo, wasm_parse_exception,
-                                "Invalid type code in loop");
-                  auto pos = code_writer.emit_loop(expected_result);
-                  pc_stack.push_back({op_stack.depth(), expected_result, types::pseudo, false, pos});
+                  if (first_byte == types::pseudo || first_byte == types::i32 || first_byte == types::i64 ||
+                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128) {
+                     code++;
+                     PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
+                                   first_byte == types::f32 || first_byte == types::f64 ||
+                                   (first_byte == types::v128 && detail::get_enable_simd(_options)) ||
+                                   first_byte == types::pseudo, wasm_parse_exception,
+                                   "Invalid type code in loop");
+                     single_type = first_byte;
+                  } else {
+                     int32_t type_idx = parse_varint32(code);
+                     PSIZAM_ASSERT(type_idx >= 0 && static_cast<uint32_t>(type_idx) < _mod->types.size(),
+                                   wasm_parse_exception, "invalid block type index");
+                     const func_type& ft = _mod->types[type_idx];
+                     bp.assign(ft.param_types.begin(), ft.param_types.end());
+                     br.assign(ft.return_types.begin(), ft.return_types.end());
+                     single_type = ft.return_count ? ft.return_type : types::pseudo;
+                  }
+
+                  // Pop params from outer stack
+                  for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
+                     op_stack.pop(bp[i]);
+
+                  auto pos = code_writer.emit_loop(single_type);
+                  pc_element_t elem{};
+                  elem.operand_depth = op_stack.depth();
+                  elem.expected_result = single_type;
+                  elem.label_result = types::pseudo;  // loops: labels carry params, not results
+                  elem.is_if = false;
+                  elem.relocations = pos;
+                  if (!br.empty()) elem.expected_results = br;
+                  if (!bp.empty()) elem.label_results = bp;  // loop labels carry param types
+                  elem.block_params = std::move(bp);
+                  pc_stack.push_back(std::move(elem));
                   op_stack.push_scope();
+                  // Push params back inside the loop scope
+                  for (auto p : pc_stack.back().block_params)
+                     op_stack.push(p);
                   _nested_checker.on_control(_options);
                } break;
                case opcodes::if_: {
                   check_in_bounds();
-                  uint32_t expected_result = *code++;
+                  uint8_t first_byte = *code;
+                  uint8_t single_type = types::pseudo;
+                  std::vector<uint8_t> bp, br;
 
-                  PSIZAM_ASSERT(expected_result == types::i32 || expected_result == types::i64 ||
-                                expected_result == types::f32 || expected_result == types::f64 ||
-                                (expected_result == types::v128 && detail::get_enable_simd(_options)) ||
-                                expected_result == types::pseudo, wasm_parse_exception,
-                                "Invalid type code in if");
-                  auto branch = code_writer.emit_if(expected_result);
-                  op_stack.pop(types::i32);
-                  pc_stack.push_back({op_stack.depth(), expected_result, expected_result, true, std::vector{branch}});
+                  if (first_byte == types::pseudo || first_byte == types::i32 || first_byte == types::i64 ||
+                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128) {
+                     code++;
+                     PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
+                                   first_byte == types::f32 || first_byte == types::f64 ||
+                                   (first_byte == types::v128 && detail::get_enable_simd(_options)) ||
+                                   first_byte == types::pseudo, wasm_parse_exception,
+                                   "Invalid type code in if");
+                     single_type = first_byte;
+                  } else {
+                     int32_t type_idx = parse_varint32(code);
+                     PSIZAM_ASSERT(type_idx >= 0 && static_cast<uint32_t>(type_idx) < _mod->types.size(),
+                                   wasm_parse_exception, "invalid block type index");
+                     const func_type& ft = _mod->types[type_idx];
+                     bp.assign(ft.param_types.begin(), ft.param_types.end());
+                     br.assign(ft.return_types.begin(), ft.return_types.end());
+                     single_type = ft.return_count ? ft.return_type : types::pseudo;
+                  }
+
+                  auto branch = code_writer.emit_if(single_type);
+                  op_stack.pop(types::i32);  // condition
+
+                  // Pop params from outer stack
+                  for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
+                     op_stack.pop(bp[i]);
+
+                  pc_element_t elem{};
+                  elem.operand_depth = op_stack.depth();
+                  elem.expected_result = single_type;
+                  elem.label_result = single_type;
+                  elem.is_if = true;
+                  elem.relocations = std::vector{branch};
+                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
+                  elem.block_params = std::move(bp);
+                  pc_stack.push_back(std::move(elem));
                   op_stack.push_scope();
+                  // Push params back inside the if scope
+                  for (auto p : pc_stack.back().block_params)
+                     op_stack.push(p);
                   _nested_checker.on_control(_options);
                } break;
                case opcodes::else_: {
@@ -1005,9 +1111,17 @@ namespace psizam {
                   PSIZAM_ASSERT(old_index.is_if, wasm_parse_exception, "else outside if");
                   auto& relocations = std::get<std::vector<branch_t>>(old_index.relocations);
                   // reset the operand stack to the same state as the if
-                  op_stack.pop(old_index.expected_result);
+                  if (!old_index.expected_results.empty()) {
+                     for (int i = static_cast<int>(old_index.expected_results.size()) - 1; i >= 0; --i)
+                        op_stack.pop(old_index.expected_results[i]);
+                  } else {
+                     op_stack.pop(old_index.expected_result);
+                  }
                   op_stack.pop_scope();
                   op_stack.push_scope();
+                  // Re-push params for the else branch
+                  for (auto p : old_index.block_params)
+                     op_stack.push(p);
                   // Overwrite the branch from the `if` with the `else`.
                   // We're left with a normal relocation list where everything
                   // branches to the corresponding `end`

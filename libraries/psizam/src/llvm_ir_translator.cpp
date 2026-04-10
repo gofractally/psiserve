@@ -2041,31 +2041,31 @@ namespace psizam {
                }
 
                case ir_op::table_get: {
-                  auto* elem_idx = get_vreg(inst.ri.src1);
+                  auto* elem_idx = load_vreg(inst.ri.src1);
                   auto* result = builder.CreateCall(rt_table_get,
                      {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), elem_idx});
-                  set_vreg(inst.dest, result);
+                  store_vreg(inst.dest, result);
                   break;
                }
                case ir_op::table_set: {
-                  auto* elem_idx = get_vreg(inst.rr.src1);
-                  auto* val = get_vreg(inst.rr.src2);
+                  auto* elem_idx = load_vreg(inst.rr.src1);
+                  auto* val = load_vreg(inst.rr.src2);
                   builder.CreateCall(rt_table_set,
                      {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), elem_idx, val});
                   break;
                }
                case ir_op::table_grow: {
-                  auto* init_val = get_vreg(inst.rr.src1);
-                  auto* delta = get_vreg(inst.rr.src2);
+                  auto* init_val = load_vreg(inst.rr.src1);
+                  auto* delta = load_vreg(inst.rr.src2);
                   auto* result = builder.CreateCall(rt_table_grow,
                      {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), delta, init_val});
-                  set_vreg(inst.dest, result);
+                  store_vreg(inst.dest, result);
                   break;
                }
                case ir_op::table_size: {
                   auto* result = builder.CreateCall(rt_table_size,
                      {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm))});
-                  set_vreg(inst.dest, result);
+                  store_vreg(inst.dest, result);
                   break;
                }
                case ir_op::table_fill: {
