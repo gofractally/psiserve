@@ -13,11 +13,16 @@
 
 namespace psizam {
 
+   static int g_llvm_opt_level = 2;
+
+   void set_llvm_opt_level(int level) { g_llvm_opt_level = (level < 0) ? 0 : (level > 5) ? 5 : level; }
+   int  get_llvm_opt_level()          { return g_llvm_opt_level; }
+
    void llvm_compile_functions(ir_function* funcs, uint32_t num_functions,
                                module& mod, growable_allocator& alloc) {
       // Step 1: Translate all IR functions to LLVM IR
       llvm_translate_options topts;
-      topts.opt_level = 2;
+      topts.opt_level = g_llvm_opt_level;
       llvm_ir_translator translator(mod, topts);
 
       for (uint32_t i = 0; i < num_functions; ++i) {

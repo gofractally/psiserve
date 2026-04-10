@@ -105,6 +105,20 @@ double run_wasmtime(const std::vector<uint8_t>& wasm, const char* func, uint32_t
    return std::chrono::duration<double, std::milli>(t2 - t1).count();
 }
 
+double compile_wasmtime(const std::vector<uint8_t>& wasm) {
+   wasm_engine_t* engine = wasm_engine_new();
+
+   auto t1 = std::chrono::high_resolution_clock::now();
+   wasmtime_module_t* module = nullptr;
+   wasmtime_error_t* err = wasmtime_module_new(engine, wasm.data(), wasm.size(), &module);
+   auto t2 = std::chrono::high_resolution_clock::now();
+
+   if (err) { fprintf(stderr, "wasmtime compile error\n"); wasmtime_error_delete(err); wasm_engine_delete(engine); return -1; }
+   wasmtime_module_delete(module);
+   wasm_engine_delete(engine);
+   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+}
+
 double run_wasmtime_compute(const std::vector<uint8_t>& wasm, const char* func, uint32_t n) {
    wasm_engine_t* engine = wasm_engine_new();
    wasmtime_store_t* store = wasmtime_store_new(engine, nullptr, nullptr);

@@ -9,6 +9,9 @@
 
 #include "bench_hosts.hpp"
 #include <psizam/backend.hpp>
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+#include <psizam/ir_writer_llvm.hpp>
+#endif
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -22,6 +25,10 @@ extern "C" {
    int64_t bench_sha256(int32_t iterations);
    int64_t bench_ecdsa_verify(int32_t iterations);
    int64_t bench_ecdsa_sign(int32_t iterations);
+   int64_t bench_fib(int32_t n);
+   int64_t bench_sort(int32_t iterations);
+   int64_t bench_crc32(int32_t iterations);
+   int64_t bench_matmul(int32_t iterations);
 }
 #endif
 
@@ -283,6 +290,28 @@ static double run_eosvm(wasm_code& code, wasm_allocator& wa, const char* func, u
 
    auto t1 = std::chrono::high_resolution_clock::now();
    bkend.call_with_return("env", func, n);
+   auto t2 = std::chrono::high_resolution_clock::now();
+   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+}
+
+template<typename Impl>
+static double compile_eosvm(const std::vector<uint8_t>& wasm_bytes) {
+   using backend_t = psizam::backend<std::nullptr_t, Impl>;
+   wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+   wasm_allocator wa;
+
+   auto t1 = std::chrono::high_resolution_clock::now();
+   backend_t bkend(code, &wa);
+   auto t2 = std::chrono::high_resolution_clock::now();
+   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+}
+
+template<typename Impl>
+static double compile_eosvm_hostcall(wasm_code& code, wasm_allocator& wa) {
+   using backend_t = psizam::backend<rhf_t, Impl>;
+
+   auto t1 = std::chrono::high_resolution_clock::now();
+   backend_t bkend(code, &wa);
    auto t2 = std::chrono::high_resolution_clock::now();
    return std::chrono::duration<double, std::milli>(t2 - t1).count();
 }
@@ -633,8 +662,14 @@ int main() {
       for (int t = 0; t < num_tests; t++) {
          printf("  %-26s", labels[t]);
          for (int r = 0; r < RT_COUNT; r++)
-            if (runtimes[r].enabled)
-               printf(" %14.1f", results[t][r]);
+            if (runtimes[r].enabled) {
+               if (results[t][r] <= 0)
+                  printf("            n/a");
+               else if (results[t][r] < 0.1)
+                  printf(" %14.3f", results[t][r]);
+               else
+                  printf(" %14.1f", results[t][r]);
+            }
          printf("\n");
       }
 
@@ -648,11 +683,17 @@ int main() {
          printf("  %-26s", labels[t]);
          for (int r = 0; r < RT_COUNT; r++) {
             if (!runtimes[r].enabled) continue;
+            if (results[t][r] <= 0) {
+               printf("           n/a");
+               continue;
+            }
             double ratio = results[t][r] / fastest[t];
             if (ratio < 1.05)
-               printf("      \xe2\x96\xb6 %4.1fx ", ratio);  // arrow for winner
+               printf("      \xe2\x96\xb6 %5.1fx", ratio);  // arrow for winner
+            else if (ratio >= 100)
+               printf("       %5.0fx", ratio);
             else
-               printf("        %4.1fx ", ratio);
+               printf("       %5.1fx", ratio);
          }
          printf("\n");
       }
@@ -718,19 +759,31 @@ int main() {
       {"SHA-256 (64B, 10K)",   BENCH_SHA256_WASM, "bench_sha256",       bench_sha256,       10'000},
       {"ECDSA verify (k1)",    BENCH_ECDSA_WASM,  "bench_ecdsa_verify", bench_ecdsa_verify, 100},
       {"ECDSA sign (k1)",      BENCH_ECDSA_WASM,  "bench_ecdsa_sign",   bench_ecdsa_sign,   100},
+      {"Fibonacci (1M)",       BENCH_MISC_WASM,   "bench_fib",          bench_fib,          1'000'000},
+      {"Bubble sort (100K)",   BENCH_MISC_WASM,   "bench_sort",         bench_sort,         100'000},
+      {"CRC32 (100K)",         BENCH_MISC_WASM,   "bench_crc32",        bench_crc32,        100'000},
+      {"Matrix mult 8x8 (100K)", BENCH_MISC_WASM, "bench_matmul",       bench_matmul,       100'000},
    };
    const int num_compute = sizeof(compute_tests) / sizeof(compute_tests[0]);
-   double compute_results[3][RT_COUNT] = {};
-   const char* compute_labels[3];
+   double compute_results[8][RT_COUNT] = {};
+   const char* compute_labels[8];
 
    // Pre-load WASM files
-   std::vector<uint8_t> sha_wasm, ecdsa_wasm;
+   std::vector<uint8_t> sha_wasm, ecdsa_wasm, misc_wasm;
    try { sha_wasm = psizam::read_wasm(BENCH_SHA256_WASM); } catch (...) {}
    try { ecdsa_wasm = psizam::read_wasm(BENCH_ECDSA_WASM); } catch (...) {}
+   try { misc_wasm = psizam::read_wasm(BENCH_MISC_WASM); } catch (...) {}
+
+   auto get_wasm = [&](int t) -> const std::vector<uint8_t>& {
+      const char* path = compute_tests[t].wasm_path;
+      if (strcmp(path, BENCH_SHA256_WASM) == 0) return sha_wasm;
+      if (strcmp(path, BENCH_ECDSA_WASM) == 0) return ecdsa_wasm;
+      return misc_wasm;
+   };
 
    for (int t = 0; t < num_compute; t++) {
       compute_labels[t] = compute_tests[t].label;
-      auto& wasm = (t == 0) ? sha_wasm : ecdsa_wasm;
+      const auto& wasm = get_wasm(t);
       auto func = compute_tests[t].func;
       auto iters = compute_tests[t].iters;
 
@@ -784,6 +837,140 @@ int main() {
    // Disable native column again so it doesn't affect any further output
    runtimes[RT_NATIVE].enabled = false;
    num_active--;
+#endif
+
+   // =========================================================================
+   // Compile-time benchmarks
+   // =========================================================================
+   {
+      // Disable native for compile-time (no compilation step)
+      bool native_was_enabled = runtimes[RT_NATIVE].enabled;
+      if (native_was_enabled) { runtimes[RT_NATIVE].enabled = false; num_active--; }
+
+      // Count compile-time test modules
+      struct compile_def { const char* label; const std::vector<uint8_t>* wasm; };
+      std::vector<compile_def> compile_tests;
+      compile_tests.push_back({"host-call bench (tiny)", &wasm_bytes});
+#ifdef BENCH_HAS_COMPUTE
+      if (!sha_wasm.empty()) compile_tests.push_back({"SHA-256 module", &sha_wasm});
+      if (!ecdsa_wasm.empty()) compile_tests.push_back({"ECDSA module", &ecdsa_wasm});
+      if (!misc_wasm.empty()) compile_tests.push_back({"misc module (fib/sort/crc/mat)", &misc_wasm});
+#endif
+
+      const int num_compile = static_cast<int>(compile_tests.size());
+      double compile_results[8][RT_COUNT] = {};
+      const char* compile_labels[8];
+
+      for (int t = 0; t < num_compile; t++) {
+         compile_labels[t] = compile_tests[t].label;
+         const auto& wasm = *compile_tests[t].wasm;
+
+         fprintf(stderr, "compile[%d] interp...\n", t); fflush(stderr);
+         compile_results[t][RT_INTERP] = compile_eosvm<interpreter>(wasm);
+#if defined(__x86_64__) || defined(__aarch64__)
+         fprintf(stderr, "compile[%d] jit...\n", t); fflush(stderr);
+         compile_results[t][RT_JIT] = compile_eosvm<jit>(wasm);
+         fprintf(stderr, "compile[%d] jit2...\n", t); fflush(stderr);
+         compile_results[t][RT_JIT2] = compile_eosvm<jit2>(wasm);
+#endif
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+         fprintf(stderr, "compile[%d] jit_llvm...\n", t); fflush(stderr);
+         compile_results[t][RT_JIT_LLVM] = compile_eosvm<jit_llvm>(wasm);
+#endif
+#ifdef BENCH_HAS_WASMTIME
+         fprintf(stderr, "compile[%d] wasmtime...\n", t); fflush(stderr);
+         compile_results[t][RT_WASMTIME] = compile_wasmtime(wasm);
+#endif
+#ifdef BENCH_HAS_WASMER
+         fprintf(stderr, "compile[%d] wasmer...\n", t); fflush(stderr);
+         compile_results[t][RT_WASMER] = compile_wasmer(wasm);
+#endif
+      }
+
+      print_table("COMPILE TIME (parse + validate + codegen)",
+                  "Measures time to compile WASM bytes into executable form.",
+                  num_compile, compile_labels, compile_results);
+
+      if (native_was_enabled) { runtimes[RT_NATIVE].enabled = true; num_active++; }
+   }
+
+   // =========================================================================
+   // LLVM optimization level comparison (O0 through O3)
+   // =========================================================================
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND) && defined(BENCH_HAS_COMPUTE)
+   {
+      printf("\nLLVM OPTIMIZATION LEVEL COMPARISON\n");
+      printf("Compile time (ms), execution time (ms), and native code size (bytes)\n");
+
+      struct llvm_module_def {
+         const char* label;
+         const std::vector<uint8_t>* wasm;
+         const char* func;
+         uint32_t iters;
+      };
+      llvm_module_def llvm_tests[] = {
+         {"SHA-256",      &sha_wasm,   "bench_sha256",       10'000},
+         {"ECDSA verify", &ecdsa_wasm, "bench_ecdsa_verify", 100},
+         {"ECDSA sign",   &ecdsa_wasm, "bench_ecdsa_sign",   100},
+         {"Fibonacci",  &misc_wasm, "bench_fib",     1'000'000},
+         {"Bubble sort", &misc_wasm, "bench_sort",   100'000},
+         {"CRC32",      &misc_wasm, "bench_crc32",   100'000},
+         {"Matrix mult", &misc_wasm, "bench_matmul", 100'000},
+      };
+
+      // Test levels: O0, O1, O2(default custom), O3, generic(5)
+      const int levels[] = {0, 1, 2, 3, 5};
+      const char* level_names[] = {"O0", "O1", "O2", "O3", "generic"};
+      const int num_levels = 5;
+
+      printf("\n  %-20s  ── compile (ms) ─────────────────  ── execute (ms) ─────────────────\n", "");
+      printf("  %-20s", "");
+      for (int l = 0; l < num_levels; l++) printf(" %8s", level_names[l]);
+      printf(" ");
+      for (int l = 0; l < num_levels; l++) printf(" %8s", level_names[l]);
+      printf("\n  %s\n", std::string(20 + 8*num_levels*2 + 3, '-').c_str());
+
+      for (auto& test : llvm_tests) {
+         if (test.wasm->empty()) continue;
+
+         double compile_ms[5] = {};
+         double exec_ms[5] = {};
+
+         for (int li = 0; li < num_levels; li++) {
+            set_llvm_opt_level(levels[li]);
+            fprintf(stderr, "llvm %s %s...\n", level_names[li], test.label); fflush(stderr);
+
+            using backend_t = psizam::backend<std::nullptr_t, jit_llvm>;
+            wasm_code code_copy(test.wasm->begin(), test.wasm->end());
+            wasm_allocator wa;
+
+            auto t1 = std::chrono::high_resolution_clock::now();
+            backend_t bkend(code_copy, &wa);
+            auto t2 = std::chrono::high_resolution_clock::now();
+            compile_ms[li] = std::chrono::duration<double, std::milli>(t2 - t1).count();
+
+            bkend.initialize(nullptr);
+
+            // Warm-up run
+            bkend.call_with_return("env", test.func, test.iters);
+
+            // Timed run
+            t1 = std::chrono::high_resolution_clock::now();
+            bkend.call_with_return("env", test.func, test.iters);
+            t2 = std::chrono::high_resolution_clock::now();
+            exec_ms[li] = std::chrono::duration<double, std::milli>(t2 - t1).count();
+         }
+
+         printf("  %-20s", test.label);
+         for (int l = 0; l < num_levels; l++) printf(" %8.1f", compile_ms[l]);
+         printf(" ");
+         for (int l = 0; l < num_levels; l++) printf(" %8.1f", exec_ms[l]);
+         printf("\n");
+      }
+
+      // Restore default
+      set_llvm_opt_level(2);
+   }
 #endif
 
    printf("\n");

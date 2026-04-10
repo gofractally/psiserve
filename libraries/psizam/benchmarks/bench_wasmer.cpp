@@ -115,6 +115,23 @@ double run_wasmer(const std::vector<uint8_t>& wasm, const char* func, uint32_t n
    return std::chrono::duration<double, std::milli>(t2 - t1).count();
 }
 
+double compile_wasmer(const std::vector<uint8_t>& wasm) {
+   wasm_engine_t* engine = wasm_engine_new();
+   wasm_store_t* store = wasm_store_new(engine);
+
+   wasm_byte_vec_t binary = {wasm.size(), const_cast<wasm_byte_t*>(reinterpret_cast<const wasm_byte_t*>(wasm.data()))};
+
+   auto t1 = std::chrono::high_resolution_clock::now();
+   wasm_module_t* module = wasm_module_new(store, &binary);
+   auto t2 = std::chrono::high_resolution_clock::now();
+
+   if (!module) { fprintf(stderr, "wasmer compile error\n"); wasm_store_delete(store); wasm_engine_delete(engine); return -1; }
+   wasm_module_delete(module);
+   wasm_store_delete(store);
+   wasm_engine_delete(engine);
+   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+}
+
 double run_wasmer_compute(const std::vector<uint8_t>& wasm, const char* func, uint32_t n) {
    wasm_engine_t* engine = wasm_engine_new();
    wasm_store_t* store = wasm_store_new(engine);

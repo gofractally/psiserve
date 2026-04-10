@@ -32,3 +32,12 @@ double run_wasmtime_compute(const std::vector<uint8_t>& wasm, const char* func, 
 #ifdef BENCH_HAS_WASMER
 double run_wasmer_compute(const std::vector<uint8_t>& wasm, const char* func, uint32_t n);
 #endif
+
+// Compile-time measurement (returns milliseconds)
+#ifdef BENCH_HAS_WASMTIME
+double compile_wasmtime(const std::vector<uint8_t>& wasm);
+#endif
+
+#ifdef BENCH_HAS_WASMER
+double compile_wasmer(const std::vector<uint8_t>& wasm);
+#endif
