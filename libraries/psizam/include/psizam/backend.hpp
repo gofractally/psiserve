@@ -9,8 +9,8 @@
 // MULTI-VALUE RETURNS
 //   parse multi-value types      🟢     🟢       🟢        🟢      🟢
 //   function returns (N>1)       🟢     🔴       🔴        🔴      🔴
-//   multi-value block types      🟡     🟡       🟡        🟡      🟡
-//   branch encoding (N vals)     🟢     🔴       🔴        🔴      🔴
+//   multi-value block types      🟢     🟢       🟡        🟡      🟡
+//   branch encoding (N vals)     🟢     🟢       🔴        🔴      🔴
 //
 // MULTI-TABLE
 //   call_indirect w/ table       🟢     🟢       🟢        🟢      🟢
