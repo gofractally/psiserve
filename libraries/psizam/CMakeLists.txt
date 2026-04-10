@@ -83,6 +83,12 @@ if(PSIZAM_FULL_DEBUG)
    target_compile_definitions(psizam INTERFACE PSIZAM_FULL_DEBUG)
 endif()
 
+# ── Runtime helpers (non-LLVM, needed by all JIT backends) ────────────────────
+add_library(psizam-runtime STATIC
+   src/runtime_helpers.cpp
+)
+target_link_libraries(psizam-runtime PUBLIC psizam)
+
 # ── Tools ──────────────────────────────────────────────────────────────────────
 if(PSIZAM_ENABLE_TOOLS)
    add_subdirectory(tools)
@@ -106,7 +112,7 @@ if(PSIZAM_ENABLE_LLVM)
       src/llvm_compile.cpp
       src/llvm_runtime_helpers.cpp
    )
-   target_link_libraries(psizam-llvm PUBLIC psizam ${LLVM_LIBS})
+   target_link_libraries(psizam-llvm PUBLIC psizam psizam-runtime ${LLVM_LIBS})
    target_include_directories(psizam-llvm PUBLIC ${LLVM_INCLUDE_DIRS})
    target_compile_definitions(psizam-llvm PUBLIC PSIZAM_ENABLE_LLVM_BACKEND)
 

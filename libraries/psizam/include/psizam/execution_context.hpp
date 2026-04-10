@@ -187,6 +187,7 @@ namespace psizam {
       inline init_expr& get_global(uint32_t idx) { return _globals[idx]; }
       inline const init_expr& get_global(uint32_t idx) const { return _globals[idx]; }
       inline host_function_table* get_host_table() const { return _table; }
+      inline void set_host_table(host_function_table* table) { _table = table; }
       inline std::vector<bool>&  get_dropped_elems() { return _dropped_elems; }
       inline std::vector<bool>&  get_dropped_data()  { return _dropped_data; }
 
@@ -233,20 +234,36 @@ namespace psizam {
          char* globals_location = _linear_memory + wasm_allocator::globals_end();
          std::memcpy(globals_location - sizeof(globals_start), &globals_start, sizeof(globals_start));
 
-         // reset the table
-         if (mod.tables.size() != 0) {
-            char* table_location = _linear_memory + wasm_allocator::table_offset();
-            table_entry* table_start;
-            if (_mod->indirect_table(0)) {
-               if (!_alt_table) {
-                  _alt_table.reset(new table_entry[mod.tables[0].limits.initial]);
+         // reset tables (multi-table support)
+         _table_data.resize(mod.tables.size());
+         _table_sizes.resize(mod.tables.size());
+         for (uint32_t t = 0; t < mod.tables.size(); ++t) {
+            uint32_t tsize = mod.tables[t].limits.initial;
+            _table_sizes[t] = tsize;
+            if (t == 0) {
+               // Table 0 uses the guard-paged prefix area (backward compat with JIT)
+               char* table_location = _linear_memory + wasm_allocator::table_offset();
+               table_entry* table_start;
+               if (_mod->indirect_table(0)) {
+                  if (!_alt_table) {
+                     _alt_table.reset(new table_entry[tsize]);
+                  }
+                  table_start = _alt_table.get();
+                  std::memcpy(table_location, &table_start, sizeof(table_start));
+               } else {
+                  table_start = new (table_location) table_entry[tsize];
                }
-               table_start = _alt_table.get();
-               std::memcpy(table_location, &table_start, sizeof(table_start));
+               std::memset(table_start, 0xff, tsize * sizeof(table_entry));
+               _table_data[0] = table_start;
             } else {
-               table_start = new (table_location) table_entry[mod.tables[0].limits.initial];
+               // Additional tables use heap allocation
+               _extra_tables.emplace_back(std::make_unique<table_entry[]>(tsize));
+               auto* table_start = _extra_tables.back().get();
+               std::memset(table_start, 0xff, tsize * sizeof(table_entry));
+               _table_data[t] = table_start;
             }
-            std::memset(table_start, 0xff, mod.tables[0].limits.initial * sizeof(table_entry));
+         }
+         if (mod.tables.size() != 0) {
             _dropped_elems.assign(mod.elements.size(), false);
             for (uint32_t i = 0; i < mod.elements.size(); ++i) {
                auto& elem_seg = mod.elements[i];
@@ -254,10 +271,12 @@ namespace psizam {
                } else if (elem_seg.mode == elem_mode::declarative) {
                   _dropped_elems[i] = true;
                } else {
+                  uint32_t tidx = elem_seg.index;
+                  PSIZAM_ASSERT(tidx < mod.tables.size(), wasm_memory_exception, "elem segment table index out of range");
                   uint32_t offset = elem_seg.offset.value.i32;
-                  PSIZAM_ASSERT(static_cast<std::uint64_t>(offset) + elem_seg.elems.size() <= mod.tables[0].limits.initial, wasm_memory_exception, "elem out of range");
+                  PSIZAM_ASSERT(static_cast<std::uint64_t>(offset) + elem_seg.elems.size() <= _table_sizes[tidx], wasm_memory_exception, "elem out of range");
                   if (elem_seg.elems.size())
-                     std::memcpy(table_start + offset, elem_seg.elems.data(), elem_seg.elems.size() * sizeof(table_entry));
+                     std::memcpy(_table_data[tidx] + offset, elem_seg.elems.data(), elem_seg.elems.size() * sizeof(table_entry));
                   _dropped_elems[i] = true;
                }
             }
@@ -283,40 +302,88 @@ namespace psizam {
          _dropped_data[x] = true;
       }
 
-      table_entry* get_table_base() {
-         auto& mod = resolve_module();
-         if (_mod->indirect_table(0)) {
-            return (*reinterpret_cast<table_entry**>(linear_memory() + wasm_allocator::table_offset()));
-         } else {
-            return reinterpret_cast<table_entry*>(linear_memory() + wasm_allocator::table_offset());
+      table_entry* get_table_base(uint32_t table_idx = 0) {
+         if (table_idx == 0) {
+            if (_mod->indirect_table(0)) {
+               return (*reinterpret_cast<table_entry**>(linear_memory() + wasm_allocator::table_offset()));
+            } else {
+               return reinterpret_cast<table_entry*>(linear_memory() + wasm_allocator::table_offset());
+            }
          }
+         return _table_data[table_idx];
       }
 
-      void init_table(uint32_t x, uint32_t d, uint32_t s, uint32_t n) {
+      uint32_t get_table_size(uint32_t table_idx) const {
+         return _table_sizes[table_idx];
+      }
+
+      void init_table(uint32_t x, uint32_t d, uint32_t s, uint32_t n, uint32_t table_idx = 0) {
          auto& mod = resolve_module();
          assert(x < mod.elements.size());
          const auto& elem_seg = mod.elements[x];
          auto elem_len = _dropped_elems[x]? 0 : elem_seg.elems.size();
          if (std::uint64_t{s} + n > elem_len)
             throw_<wasm_memory_exception>("elem out of range");
-         if (std::uint64_t{d} + n > mod.tables[0].limits.initial)
+         if (std::uint64_t{d} + n > _table_sizes[table_idx])
             throw_<wasm_memory_exception>("wasm memory out-of-bounds");
          if (elem_len)
-            std::memcpy(get_table_base() + d, elem_seg.elems.data() + s, n * sizeof(table_entry));
+            std::memcpy(get_table_base(table_idx) + d, elem_seg.elems.data() + s, n * sizeof(table_entry));
       }
 
       void drop_elem(uint32_t x) {
          auto& mod = resolve_module();
          assert(x < mod.elements.size());
-         auto& elem_seg = mod.elements[x];
          _dropped_elems[x] = true;
       }
 
-      table_entry* get_table_ptr(uint32_t base, uint32_t size) {
-         auto& mod = resolve_module();
-         if (std::uint64_t{base} + size > mod.tables[0].limits.initial)
+      table_entry* get_table_ptr(uint32_t base, uint32_t size, uint32_t table_idx = 0) {
+         if (std::uint64_t{base} + size > _table_sizes[table_idx])
             throw_<wasm_memory_exception>("table out of range");
-         return get_table_base() + base;
+         return get_table_base(table_idx) + base;
+      }
+
+      // table.grow: grows a table, returns previous size or -1 on failure
+      uint32_t table_grow(uint32_t table_idx, uint32_t delta, table_entry init_val) {
+         auto& mod = resolve_module();
+         uint32_t old_size = _table_sizes[table_idx];
+         uint64_t new_size = static_cast<uint64_t>(old_size) + delta;
+         uint32_t max_size = mod.tables[table_idx].limits.flags ?
+                             mod.tables[table_idx].limits.maximum : 0xFFFFFFFFu;
+         if (new_size > max_size) return static_cast<uint32_t>(-1);
+
+         auto new_data = std::make_unique<table_entry[]>(new_size);
+         std::memcpy(new_data.get(), _table_data[table_idx], old_size * sizeof(table_entry));
+         for (uint64_t i = old_size; i < new_size; ++i)
+            new_data[i] = init_val;
+
+         if (table_idx == 0) {
+            _alt_table = std::move(new_data);
+            _table_data[0] = _alt_table.get();
+            // Update the pointer in the prefix area for JIT compat
+            char* table_location = _linear_memory + wasm_allocator::table_offset();
+            table_entry* ptr = _alt_table.get();
+            std::memcpy(table_location, &ptr, sizeof(ptr));
+         } else {
+            // Find and replace the extra_tables entry
+            for (auto& et : _extra_tables) {
+               if (et.get() == _table_data[table_idx]) {
+                  et = std::move(new_data);
+                  _table_data[table_idx] = et.get();
+                  break;
+               }
+            }
+         }
+         _table_sizes[table_idx] = static_cast<uint32_t>(new_size);
+         return old_size;
+      }
+
+      // table.fill: fill n entries starting at i with value val
+      void table_fill(uint32_t table_idx, uint32_t i, table_entry val, uint32_t n) {
+         if (std::uint64_t{i} + n > _table_sizes[table_idx])
+            throw_<wasm_memory_exception>("table out of range");
+         auto* base = get_table_base(table_idx);
+         for (uint32_t j = 0; j < n; ++j)
+            base[i + j] = val;
       }
 
       template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
@@ -375,6 +442,9 @@ namespace psizam {
       std::error_code                 _error_code;
       operand_stack                   _os;
       std::unique_ptr<table_entry[]>  _alt_table;
+      std::vector<std::unique_ptr<table_entry[]>> _extra_tables;
+      std::vector<table_entry*>       _table_data;
+      std::vector<uint32_t>           _table_sizes;
       std::vector<init_expr>          _globals;
       std::vector<bool>               _dropped_elems;
       std::vector<bool>               _dropped_data;
@@ -793,9 +863,9 @@ namespace psizam {
          std::cout << " }\n";
       }
 
-      inline uint32_t       table_elem(uint32_t i) {
-         PSIZAM_ASSERT(i < _mod->tables.at(0).limits.initial, wasm_interpreter_exception, "table index out of range");
-         return this->get_table_base()[i].index;
+      inline uint32_t       table_elem(uint32_t i, uint32_t table_idx = 0) {
+         PSIZAM_ASSERT(i < _table_sizes[table_idx], wasm_interpreter_exception, "table index out of range");
+         return this->get_table_base(table_idx)[i].index;
       }
       inline void           push_operand(operand_stack_elem el) { get_operand_stack().push(std::move(el)); }
       inline operand_stack_elem get_operand(uint32_t index) const { return get_operand_stack().get(_last_op_index + index); }

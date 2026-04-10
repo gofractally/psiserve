@@ -543,9 +543,15 @@ namespace psizam {
          }
       }
 
-      void emit_call_indirect(const func_type& ft, uint32_t fti) {
+      void emit_table_get(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.get not supported in jit2 backend"); }
+      void emit_table_set(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.set not supported in jit2 backend"); }
+      void emit_table_grow(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.grow not supported in jit2 backend"); }
+      void emit_table_size(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.size not supported in jit2 backend"); }
+      void emit_table_fill(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.fill not supported in jit2 backend"); }
+
+      void emit_call_indirect(const func_type& ft, uint32_t fti, uint32_t table_idx = 0) {
          if (!_unreachable) {
-            uint32_t table_idx = _func->vpop();
+            uint32_t elem_idx_vreg = _func->vpop();
             uint32_t nparams = ft.param_types.size();
             // Emit arg instructions for each parameter
             uint32_t param_vregs[64];
@@ -564,17 +570,19 @@ namespace psizam {
                arg.rr.src2 = ir_vreg_none;
                _func->emit(arg);
             }
-            // Emit arg for table index (must be on top of stack for call_indirect)
+            // Emit arg for element index (must be on top of stack for call_indirect)
             {
                ir_inst arg{};
                arg.opcode = ir_op::arg;
                arg.type = types::pseudo;
                arg.flags = IR_NONE;
                arg.dest = ir_vreg_none;
-               arg.rr.src1 = table_idx;
+               arg.rr.src1 = elem_idx_vreg;
                arg.rr.src2 = ir_vreg_none;
                _func->emit(arg);
             }
+            // Pack table_idx into upper 16 bits of call.index
+            uint32_t packed_fti = fti | (table_idx << 16);
             if (ft.return_count > 0) {
                uint32_t dest = _func->alloc_vreg(ft.return_type);
                ir_inst inst{};
@@ -582,8 +590,8 @@ namespace psizam {
                inst.type = ft.return_type;
                inst.flags = IR_SIDE_EFFECT;
                inst.dest = dest;
-               inst.call.index = fti;
-               inst.call.src1 = table_idx;
+               inst.call.index = packed_fti;
+               inst.call.src1 = elem_idx_vreg;
                _func->emit(inst);
                _func->vpush(dest);
                if (ft.return_type == types::v128) {
@@ -596,8 +604,8 @@ namespace psizam {
                inst.type = types::pseudo;
                inst.flags = IR_SIDE_EFFECT;
                inst.dest = ir_vreg_none;
-               inst.call.index = fti;
-               inst.call.src1 = table_idx;
+               inst.call.index = packed_fti;
+               inst.call.src1 = elem_idx_vreg;
                _func->emit(inst);
             }
          }
@@ -1448,12 +1456,12 @@ namespace psizam {
             _func->emit(inst);
          }
       }
-      void emit_table_init(std::uint32_t s) {
+      void emit_table_init(std::uint32_t elem_idx, std::uint32_t table_idx = 0) {
          ir_bulk_mem3();
          if (!_unreachable) {
             ir_inst inst{}; inst.opcode = ir_op::table_init;
             inst.flags = IR_SIDE_EFFECT; inst.dest = ir_vreg_none;
-            inst.ri.imm = static_cast<int32_t>(s); // element segment index
+            inst.ri.imm = static_cast<int32_t>(elem_idx | (table_idx << 16));
             _func->emit(inst);
          }
       }
@@ -1465,11 +1473,12 @@ namespace psizam {
             _func->emit(inst);
          }
       }
-      void emit_table_copy() {
+      void emit_table_copy(std::uint32_t dst_table = 0, std::uint32_t src_table = 0) {
          ir_bulk_mem3();
          if (!_unreachable) {
             ir_inst inst{}; inst.opcode = ir_op::table_copy;
             inst.flags = IR_SIDE_EFFECT; inst.dest = ir_vreg_none;
+            inst.ri.imm = static_cast<int32_t>(dst_table | (src_table << 16));
             _func->emit(inst);
          }
       }

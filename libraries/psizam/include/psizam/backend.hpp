@@ -199,13 +199,14 @@ namespace psizam {
          if (ctx.owns) {
             ctx->initialize_globals();
          }
+         // Build the host_function_table and wire it into the execution context.
+         // Even for standalone_function_t (nullptr_t), we need a valid (empty) table
+         // so that call_indirect to unresolved imports throws instead of crashing.
          if constexpr (!std::is_same_v<HostFunctions, std::nullptr_t>) {
             HostFunctions::resolve(*mod);
-            // Build the host_function_table from registered_host_functions
-            // and wire it into the execution context.
-            _host_table = build_host_table();
-            ctx->_table = &_host_table;
          }
+         _host_table = build_host_table();
+         ctx->set_host_table(&_host_table);
          // FIXME: should not hard code knowledge of null_backend here
          if (ctx.owns) {
             if constexpr (!std::is_same_v<Impl, null_backend>)

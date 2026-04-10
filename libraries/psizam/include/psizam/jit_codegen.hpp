@@ -5948,10 +5948,12 @@ namespace psizam {
          });
       }
 
-      static void table_init_impl(void* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void table_init_impl(void* ctx, uint32_t packed_idx, uint32_t dest, uint32_t src, uint32_t count) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         uint32_t seg_idx = packed_idx & 0xFFFF;
+         uint32_t table_idx = packed_idx >> 16;
          psizam::longjmp_on_exception([&]() {
-            context->init_table(seg_idx, dest, src, count);
+            context->init_table(seg_idx, dest, src, count, table_idx);
          });
       }
 

@@ -22,6 +22,7 @@
 #include <psizam/execution_context.hpp>
 #include <psizam/jit_ir.hpp>
 #include <psizam/jit_regalloc.hpp>
+#include <psizam/llvm_runtime_helpers.hpp>
 #include <psizam/softfloat.hpp>
 #include <psizam/types.hpp>
 #include <psizam/utils.hpp>
@@ -378,10 +379,10 @@ namespace psizam {
             emit32(0xAA0003E0 | (rm << 16) | rd); // ORR Xd, XZR, Xm
       }
 
-      // MOV Wd, Wm (32-bit, zero-extends)
+      // MOV Wd, Wm (32-bit, zero-extends upper 32 bits of Xd)
+      // Must emit even when rd == rm — the write to Wd zeros the upper 32 bits.
       void emit_mov_reg32(uint32_t rd, uint32_t rm) {
-         if (rd != rm)
-            emit32(0x2A0003E0 | (rm << 16) | rd); // ORR Wd, WZR, Wm
+         emit32(0x2A0003E0 | (rm << 16) | rd); // ORR Wd, WZR, Wm
       }
 
       // LDR Xt, [Xn, #offset] (signed offset, using X16 as scratch if needed)
@@ -520,6 +521,22 @@ namespace psizam {
             // Invert condition, skip trampoline
             void* skip = code;
             emit32(0x54000000 | invert_condition(cond)); // B.inv skip
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(handler));
+            emit32(0xD61F0100); // BR X8
+            fix_branch(skip, code);
+         }
+      }
+
+      // CBZ Xn, handler — branch to handler if Xn == 0
+      void emit_branch_to_handler_cbz(uint32_t reg, void* handler) {
+         int64_t offset = (static_cast<uint8_t*>(handler) - code) / 4;
+         if (offset >= -0x40000 && offset < 0x40000) {
+            // CBZ Xn, offset
+            emit32(0xB4000000 | ((static_cast<uint32_t>(offset) & 0x7FFFF) << 5) | reg);
+         } else {
+            // CBNZ Xn, skip; B handler
+            void* skip = code;
+            emit32(0xB5000000 | reg); // CBNZ Xn, skip (placeholder)
             emit_mov_imm64(X8, reinterpret_cast<uint64_t>(handler));
             emit32(0xD61F0100); // BR X8
             fix_branch(skip, code);
@@ -1604,44 +1621,65 @@ namespace psizam {
             break;
          }
          case ir_op::call_indirect: {
-            uint32_t fti = inst.call.index;
+            // Unpack: lower 16 bits = function type index, upper 16 = table index
+            uint32_t fti = inst.call.index & 0xFFFF;
+            uint32_t table_idx = inst.call.index >> 16;
             const func_type& ft = _mod.types[fti];
-            // Pop table index
+            // Pop element index
             emit_pop(X0);
-            // Bounds check
-            uint32_t table_size = _mod.tables[0].limits.initial;
-            emit_cmp_imm32(X0, table_size);
-            emit_branch_to_handler(COND_HS, call_indirect_handler);
-            // Table entry: index * 16
-            emit32(0xD37CEC00); // LSL X0, X0, #4
-            if (_mod.indirect_table(0)) {
-               int32_t toff = wasm_allocator::table_offset();
-               if (toff >= 0) {
-                  emit_ldr_offset(X8, X20, toff);
-               } else {
-                  emit_mov_imm64(X16, static_cast<uint64_t>(static_cast<int64_t>(toff)));
-                  emit32(0x8B100000 | (X20 << 5) | X8); // ADD X8, X20, X16
-                  emit32(0xF9400108); // LDR X8, [X8]
-               }
-               emit32(0x8B000000 | (X0 << 16) | (X8 << 5) | X0); // ADD X0, X8, X0
+
+            if (table_idx != 0) {
+               // Non-zero table: use runtime helper for bounds/type check
+               emit32(0xAA0003E3); // MOV X3, X0 (elem_idx)
+               emit_mov_reg(X0, X19);           // X0 = ctx
+               emit_mov_imm32(X1, fti);         // W1 = type_idx
+               emit_mov_imm32(X2, table_idx);   // W2 = table_idx
+               emit_push(X19); emit_push(X20);
+               emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_resolve_indirect));
+               emit32(0xD63F0100); // BLR X8
+               emit_pop(X20); emit_pop(X19);
+               // X0 = code_ptr (null on error)
+               // CBZ X0 → call_indirect_handler
+               emit_branch_to_handler_cbz(X0, call_indirect_handler);
+               emit32(0xAA0003E8); // MOV X8, X0
+               emit_call_depth_dec();
+               emit32(0xD63F0100); // BLR X8
             } else {
-               // table_offset is negative: X0 = X20 + X0 + table_offset
-               int32_t toff = wasm_allocator::table_offset();
-               emit32(0x8B000000 | (X0 << 16) | (X20 << 5) | X0); // ADD X0, X20, X0
-               if (toff < 0) {
-                  emit_sub_imm(X0, X0, static_cast<uint32_t>(-toff));
+               // Bounds check
+               uint32_t table_size = _mod.tables[0].limits.initial;
+               emit_cmp_imm32(X0, table_size);
+               emit_branch_to_handler(COND_HS, call_indirect_handler);
+               // Table entry: index * 16
+               emit32(0xD37CEC00); // LSL X0, X0, #4
+               if (_mod.indirect_table(0)) {
+                  int32_t toff = wasm_allocator::table_offset();
+                  if (toff >= 0) {
+                     emit_ldr_offset(X8, X20, toff);
+                  } else {
+                     emit_mov_imm64(X16, static_cast<uint64_t>(static_cast<int64_t>(toff)));
+                     emit32(0x8B100000 | (X20 << 5) | X8); // ADD X8, X20, X16
+                     emit32(0xF9400108); // LDR X8, [X8]
+                  }
+                  emit32(0x8B000000 | (X0 << 16) | (X8 << 5) | X0); // ADD X0, X8, X0
                } else {
-                  emit_add_imm(X0, X0, static_cast<uint32_t>(toff));
+                  // table_offset is negative: X0 = X20 + X0 + table_offset
+                  int32_t toff = wasm_allocator::table_offset();
+                  emit32(0x8B000000 | (X0 << 16) | (X20 << 5) | X0); // ADD X0, X20, X0
+                  if (toff < 0) {
+                     emit_sub_imm(X0, X0, static_cast<uint32_t>(-toff));
+                  } else {
+                     emit_add_imm(X0, X0, static_cast<uint32_t>(toff));
+                  }
                }
+               // Type check
+               emit32(0xB9400008 | (X0 << 5)); // LDR W8, [X0]
+               emit_cmp_imm32(X8, fti);
+               emit_branch_to_handler(COND_NE, type_error_handler);
+               // Load function pointer
+               emit_ldr_offset(X8, X0, 8);
+               emit_call_depth_dec();
+               emit32(0xD63F0100); // BLR X8
             }
-            // Type check
-            emit32(0xB9400008 | (X0 << 5)); // LDR W8, [X0]
-            emit_cmp_imm32(X8, fti);
-            emit_branch_to_handler(COND_NE, type_error_handler);
-            // Load function pointer
-            emit_ldr_offset(X8, X0, 8);
-            emit_call_depth_dec();
-            emit32(0xD63F0100); // BLR X8
             // Pop params
             uint32_t arg_bytes = 0;
             for (uint32_t p = 0; p < ft.param_types.size(); ++p)
@@ -1988,6 +2026,7 @@ namespace psizam {
             emit_pop(X3);  // count
             emit_pop(X2);  // src
             emit_pop(X1);  // dest
+            emit_mov_imm32(X4, static_cast<uint32_t>(inst.ri.imm)); // packed table indices
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
             emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&table_copy_impl));
@@ -3221,10 +3260,12 @@ namespace psizam {
             context->drop_data(seg_idx);
          });
       }
-      static void table_init_impl(void* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void table_init_impl(void* ctx, uint32_t packed_idx, uint32_t dest, uint32_t src, uint32_t count) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         uint32_t seg_idx = packed_idx & 0xFFFF;
+         uint32_t table_idx = packed_idx >> 16;
          psizam::longjmp_on_exception([&]() {
-            context->init_table(seg_idx, dest, src, count);
+            context->init_table(seg_idx, dest, src, count, table_idx);
          });
       }
       static void elem_drop_impl(void* ctx, uint32_t seg_idx) {
@@ -3233,11 +3274,13 @@ namespace psizam {
             context->drop_elem(seg_idx);
          });
       }
-      static void table_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void table_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count, uint32_t packed_tables = 0) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         uint32_t dst_table = packed_tables & 0xFFFF;
+         uint32_t src_table = packed_tables >> 16;
          psizam::longjmp_on_exception([&]() {
-            auto* s = context->get_table_ptr(src, count);
-            auto* d = context->get_table_ptr(dest, count);
+            auto* s = context->get_table_ptr(src, count, src_table);
+            auto* d = context->get_table_ptr(dest, count, dst_table);
             if (count > 0)
                std::memmove(d, s, count * sizeof(table_entry));
          });

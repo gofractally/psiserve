@@ -48,8 +48,8 @@
    opcode_macro(tee_local, 0x22)                \
    opcode_macro(get_global, 0x23)               \
    opcode_macro(set_global, 0x24)               \
-   opcode_macro(padding_va_0, 0x25)             \
-   opcode_macro(padding_va_1, 0x26)             \
+   opcode_macro(table_get, 0x25)                 \
+   opcode_macro(table_set, 0x26)                 \
    opcode_macro(padding_va_2, 0x27)
 #define PSIZAM_MEMORY_OPS(opcode_macro)         \
    opcode_macro(i32_load, 0x28)                 \
@@ -285,7 +285,11 @@
    opcode_macro(memory_init, 8)                 \
    opcode_macro(data_drop, 9)                   \
    opcode_macro(table_init, 12)                 \
-   opcode_macro(elem_drop, 13)
+   opcode_macro(elem_drop, 13)                  \
+   opcode_macro(table_copy, 14)                 \
+   opcode_macro(table_grow, 15)                 \
+   opcode_macro(table_size, 16)                 \
+   opcode_macro(table_fill, 17)
 
 #define PSIZAM_EXT_OPS(opcode_macro)            \
    opcode_macro(i32_trunc_sat_f32_s, 0)         \
@@ -297,8 +301,7 @@
    opcode_macro(i64_trunc_sat_f64_s, 6)         \
    opcode_macro(i64_trunc_sat_f64_u, 7)         \
    opcode_macro(memory_copy, 10)                \
-   opcode_macro(memory_fill, 11)                \
-   opcode_macro(table_copy, 14)
+   opcode_macro(memory_fill, 11)
 
 #define PSIZAM_VEC_MEMORY_OPS(opcode_macro)     \
    opcode_macro(v128_load, 0)                   \

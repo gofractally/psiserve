@@ -25,7 +25,7 @@ class null_writer {
    };
    br_table_parser emit_br_table(uint32_t /*table_size*/) { return {}; }
    void emit_call(const func_type& /*ft*/, uint32_t /*funcnum*/) {}
-   void emit_call_indirect(const func_type& /*ft*/, uint32_t /*functypeidx*/) {}
+   void emit_call_indirect(const func_type& /*ft*/, uint32_t /*functypeidx*/, uint32_t /*table_idx*/ = 0) {}
 
    void emit_drop(uint8_t /*type*/) {}
    void emit_select(uint8_t /*type*/) {}
@@ -34,6 +34,8 @@ class null_writer {
    void emit_tee_local(uint32_t /*localidx*/, uint8_t /*type*/) {}
    void emit_get_global(uint32_t /*localidx*/) {}
    void emit_set_global(uint32_t /*localidx*/) {}
+   void emit_table_get(uint32_t /*table_idx*/) {}
+   void emit_table_set(uint32_t /*table_idx*/) {}
 
    void emit_i32_load(uint32_t /*offset*/, uint32_t /*alignment*/) {}
    void emit_i64_load(uint32_t /*offset*/, uint32_t /*alignment*/) {}
@@ -455,9 +457,12 @@ class null_writer {
    void emit_data_drop(std::uint32_t) {}
    void emit_memory_copy() {}
    void emit_memory_fill() {}
-   void emit_table_init(std::uint32_t) {}
+   void emit_table_init(std::uint32_t, std::uint32_t = 0) {}
    void emit_elem_drop(std::uint32_t) {}
-   void emit_table_copy() {}
+   void emit_table_copy(std::uint32_t = 0, std::uint32_t = 0) {}
+   void emit_table_grow(std::uint32_t) {}
+   void emit_table_size(std::uint32_t) {}
+   void emit_table_fill(std::uint32_t) {}
 
    void fix_branch(branch_t, label_t) {}
    void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& /*locals*/, uint32_t /*idx*/) {}

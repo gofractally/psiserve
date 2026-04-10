@@ -5,6 +5,7 @@
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
 #include <psizam/execution_context.hpp>
+#include <psizam/llvm_runtime_helpers.hpp>
 #include <psizam/signals.hpp>
 #include <psizam/softfloat.hpp>
 #include <psizam/types.hpp>
@@ -629,45 +630,67 @@ namespace psizam {
          emit_check_call_depth_end();
       }
 
-      void emit_call_indirect(const func_type& ft, uint32_t functypeidx) {
+      void emit_call_indirect(const func_type& ft, uint32_t functypeidx, uint32_t table_idx = 0) {
          emit_check_call_depth();
-         std::uint32_t table_size = _mod.tables[0].limits.initial;
-         // Pop table index
-         emit_pop_x(X0);
 
-         // Bounds check: CMP W0, #table_size
-         emit_cmp_imm32(X0, table_size);
-         // B.HS call_indirect_handler
-         emit_branch_to_handler(COND_HS, call_indirect_handler);
-
-         // Compute table entry address: entry = table_base + index * 16
-         // LSL X0, X0, #4
-         emit32(0xD37CEC00);
-
-         // Load table base (table_offset is negative — table is before linear memory)
-         if (_mod.indirect_table(0)) {
-            // LDR X8, [X20, #table_offset]
-            emit_ldr_signed_offset(X8, X20, wasm_allocator::table_offset());
-            // ADD X0, X8, X0
-            emit32(0x8B000100 | (X0 << 16) | (X8 << 5) | X0);
+         if (table_idx != 0) {
+            // Non-zero table: use runtime helper for bounds/type check
+            // Pop element index
+            emit_pop_x(X3);  // X3 = elem_idx
+            emit_save_context();
+            emit32(0xAA1303E0); // MOV X0, X19 (context)
+            emit_mov_imm32(X1, functypeidx); // W1 = type_idx
+            emit_mov_imm32(X2, table_idx);   // W2 = table_idx
+            // X3 already has elem_idx
+            emit_call_c_function(&__psizam_resolve_indirect);
+            emit_restore_context();
+            // X0 = code_ptr (null on error → branch to handler)
+            {
+               int64_t offset = (static_cast<uint8_t*>(call_indirect_handler) - code) / 4;
+               // CBZ X0, call_indirect_handler
+               emit32(0xB4000000 | ((static_cast<uint32_t>(offset) & 0x7FFFF) << 5) | X0);
+            }
+            emit32(0xAA0003E8); // MOV X8, X0
+            emit32(0xD63F0100); // BLR X8
          } else {
-            // ADD X8, X20, #table_offset
-            emit_add_signed_imm(X8, X20, wasm_allocator::table_offset());
-            // ADD X0, X8, X0
-            emit32(0x8B000100 | (X0 << 16) | (X8 << 5) | X0);
+            std::uint32_t table_size = _mod.tables[0].limits.initial;
+            // Pop table index
+            emit_pop_x(X0);
+
+            // Bounds check: CMP W0, #table_size
+            emit_cmp_imm32(X0, table_size);
+            // B.HS call_indirect_handler
+            emit_branch_to_handler(COND_HS, call_indirect_handler);
+
+            // Compute table entry address: entry = table_base + index * 16
+            // LSL X0, X0, #4
+            emit32(0xD37CEC00);
+
+            // Load table base (table_offset is negative — table is before linear memory)
+            if (_mod.indirect_table(0)) {
+               // LDR X8, [X20, #table_offset]
+               emit_ldr_signed_offset(X8, X20, wasm_allocator::table_offset());
+               // ADD X0, X8, X0
+               emit32(0x8B000100 | (X0 << 16) | (X8 << 5) | X0);
+            } else {
+               // ADD X8, X20, #table_offset
+               emit_add_signed_imm(X8, X20, wasm_allocator::table_offset());
+               // ADD X0, X8, X0
+               emit32(0x8B000100 | (X0 << 16) | (X8 << 5) | X0);
+            }
+
+            // Check function type: LDR W8, [X0] (type ID at offset 0)
+            emit32(0xB9400008 | (X0 << 5));
+            // CMP W8, #functypeidx
+            emit_cmp_imm32(X8, functypeidx);
+            // B.NE type_error_handler
+            emit_branch_to_handler(COND_NE, type_error_handler);
+
+            // Load function pointer: LDR X8, [X0, #8]
+            emit32(0xF9400408 | (X0 << 5));
+            // BLR X8
+            emit32(0xD63F0100);
          }
-
-         // Check function type: LDR W8, [X0] (type ID at offset 0)
-         emit32(0xB9400008 | (X0 << 5));
-         // CMP W8, #functypeidx
-         emit_cmp_imm32(X8, functypeidx);
-         // B.NE type_error_handler
-         emit_branch_to_handler(COND_NE, type_error_handler);
-
-         // Load function pointer: LDR X8, [X0, #8]
-         emit32(0xF9400408 | (X0 << 5));
-         // BLR X8
-         emit32(0xD63F0100);
 
          emit_multipop(ft);
          emit_check_call_depth_end();
@@ -1097,14 +1120,24 @@ namespace psizam {
          emit_branch_to_handler(COND_NE, memory_handler);
       }
 
-      void emit_table_init(std::uint32_t x) {
-         emit_pop_x(X4);
-         emit_pop_x(X3);
-         emit_pop_x(X2);
+      void emit_table_get(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.get not supported in jit backend"); }
+      void emit_table_set(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.set not supported in jit backend"); }
+      void emit_table_grow(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.grow not supported in jit backend"); }
+      void emit_table_size(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.size not supported in jit backend"); }
+      void emit_table_fill(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.fill not supported in jit backend"); }
+
+      void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
+         // Pop n, s, d from WASM stack
+         emit_pop_x(X4);  // n
+         emit_pop_x(X3);  // s
+         emit_pop_x(X2);  // d
          emit_save_context();
-         emit32(0xAA1303E0);
-         emit_mov_imm32(X1, x);
-         emit_call_c_function(&init_table);
+         // __psizam_table_init(ctx, elem_idx, dest, src, n, table_idx)
+         emit32(0xAA1303E0); // MOV X0, X19 (context)
+         emit_mov_imm32(X1, x);        // elem_idx
+         // X2 = dest, X3 = src, X4 = n (already set)
+         emit_mov_imm32(X5, table_idx); // table_idx
+         emit_call_c_function(&__psizam_table_init);
          emit_restore_context();
       }
 
@@ -1116,28 +1149,21 @@ namespace psizam {
          emit_restore_context();
       }
 
-      void emit_table_copy() {
+      void emit_table_copy(std::uint32_t dst_table = 0, std::uint32_t src_table = 0) {
          // Pop n, s, d from WASM stack
-         emit_pop_x(X4);  // n
-         emit_pop_x(X3);  // s
-         emit_pop_x(X2);  // d
+         emit_pop_x(X3);  // n
+         emit_pop_x(X2);  // s
+         emit_pop_x(X1);  // d
 
          emit_save_context();
 
-         // Compute table base
-         if (_mod.indirect_table(0)) {
-            emit_ldr_signed_offset(X0, X20, wasm_allocator::table_offset());
-         } else {
-            emit_add_signed_imm(X0, X20, wasm_allocator::table_offset());
-         }
-         // X1 = table size
-         emit_mov_imm32(X1, _mod.tables[0].limits.initial);
-         // X2 = d, X3 = s, X4 = n (already set)
-         emit_call_c_function(&copy_table);
+         // __psizam_table_copy(ctx, dest, src, n, dst_table, src_table)
+         emit32(0xAA1303E0); // MOV X0, X19 (context)
+         // X1 = dest, X2 = src, X3 = n (already set)
+         emit_mov_imm32(X4, dst_table);
+         emit_mov_imm32(X5, src_table);
+         emit_call_c_function(&__psizam_table_copy);
          emit_restore_context();
-         // Check return: 0 = success, nonzero = error
-         emit32(0x7100001F); // CMP W0, #0
-         emit_branch_to_handler(COND_NE, memory_handler);
       }
 
       // ===================================================================

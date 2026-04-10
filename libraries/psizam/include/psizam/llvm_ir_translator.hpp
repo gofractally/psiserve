@@ -42,6 +42,7 @@ namespace psizam {
    /// Options for the LLVM IR translator.
    struct llvm_translate_options {
       bool softfloat         = false; // Use softfloat wrappers instead of native float ops
+      bool deterministic     = false; // Constrained FP: prevents identity-op folding, preserves NaN semantics
       bool enable_backtrace  = false; // Enable async backtrace support
       int  opt_level         = 2;     // LLVM optimization level (0-3)
    };

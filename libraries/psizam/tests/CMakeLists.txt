@@ -73,7 +73,7 @@ add_spec_test_impl(e_table ${CMAKE_CURRENT_SOURCE_DIR}/spec/extra/table.wast)
 add_spec_test_impl(e_simd ${CMAKE_CURRENT_SOURCE_DIR}/spec/extra/simd.wast)
 
 add_executable(psizam_spec_tests main.cpp ${SPEC_TESTS})
-target_link_libraries(psizam_spec_tests psizam Catch2::Catch2)
+target_link_libraries(psizam_spec_tests psizam psizam-runtime Catch2::Catch2)
 target_include_directories(psizam_spec_tests PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -111,7 +111,7 @@ foreach(testcase ${SIMD_TESTS})
 endforeach()
 
 add_executable(psizam_simd_tests main.cpp ${SPEC_TESTS})
-target_link_libraries(psizam_simd_tests psizam Catch2::Catch2)
+target_link_libraries(psizam_simd_tests psizam psizam-runtime Catch2::Catch2)
 target_include_directories(psizam_simd_tests PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -133,7 +133,7 @@ add_executable(unit_tests main.cpp
    unity_batch_6.cpp
    unity_batch_7.cpp
 )
-target_link_libraries(unit_tests psizam Catch2::Catch2)
+target_link_libraries(unit_tests psizam psizam-runtime Catch2::Catch2)
 target_compile_definitions(unit_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
 if(PSIZAM_ENABLE_LLVM)
    target_link_libraries(unit_tests psizam-llvm)
@@ -149,7 +149,7 @@ add_executable(jit2_tests main.cpp
    host_functions_tests.cpp
    implementation_limits_tests.cpp
 )
-target_link_libraries(jit2_tests psizam Catch2::Catch2)
+target_link_libraries(jit2_tests psizam psizam-runtime Catch2::Catch2)
 target_include_directories(jit2_tests PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -157,13 +157,13 @@ target_include_directories(jit2_tests PUBLIC
 target_compile_definitions(jit2_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
 
 add_executable(jit2_load_test ${CMAKE_CURRENT_SOURCE_DIR}/../tests/jit2_load_test.cpp)
-target_link_libraries(jit2_load_test psizam)
+target_link_libraries(jit2_load_test psizam psizam-runtime)
 
 add_executable(compile_time ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compile_time.cpp)
-target_link_libraries(compile_time psizam)
+target_link_libraries(compile_time psizam psizam-runtime)
 
 add_executable(sha_verify ${CMAKE_CURRENT_SOURCE_DIR}/../tests/sha_verify.cpp)
-target_link_libraries(sha_verify psizam)
+target_link_libraries(sha_verify psizam psizam-runtime)
 
 add_executable(spec_test_generator ${CMAKE_CURRENT_SOURCE_DIR}/spec_test_generator/spec_test_generator.cpp)
 
@@ -175,7 +175,7 @@ add_executable(psizam_compliance_tests main.cpp
    compliance/differential_tests.cpp
    compliance/pzam_cache_tests.cpp
 )
-target_link_libraries(psizam_compliance_tests psizam Catch2::Catch2)
+target_link_libraries(psizam_compliance_tests psizam psizam-runtime Catch2::Catch2)
 target_include_directories(psizam_compliance_tests PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include

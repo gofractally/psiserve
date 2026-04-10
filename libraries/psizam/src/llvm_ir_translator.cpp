@@ -137,17 +137,19 @@ namespace psizam {
          rt_memory_fill = decl("__psizam_memory_fill",
             llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i32_ty, i32_ty}, false));
 
-         // void __psizam_table_init(void* ctx, uint32_t elem, uint32_t dest, uint32_t src, uint32_t n)
+         // void __psizam_table_init(void* ctx, uint32_t elem, uint32_t dest, uint32_t src, uint32_t n,
+         //                          uint32_t table_idx)
          rt_table_init = decl("__psizam_table_init",
-            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false));
+            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false));
 
          // void __psizam_elem_drop(void* ctx, uint32_t seg)
          rt_elem_drop = decl("__psizam_elem_drop",
             llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty}, false));
 
-         // void __psizam_table_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n)
+         // void __psizam_table_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n,
+         //                          uint32_t dst_table, uint32_t src_table)
          rt_table_copy = decl("__psizam_table_copy",
-            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i32_ty, i32_ty}, false));
+            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false));
 
          // int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
          //                                uint32_t table_elem, void* args_buf, uint32_t nargs)
@@ -193,6 +195,11 @@ namespace psizam {
             std::string name = "wasm_func_" + std::to_string(i);
             auto* fn = llvm::Function::Create(fn_ty, llvm::Function::InternalLinkage,
                                                name, llvm_mod.get());
+            // In deterministic/softfloat mode, WASM requires precise FP semantics —
+            // identity operations (x-0, x*1) must not be folded away because they
+            // quiet sNaN to qNaN.
+            if (opts.deterministic || opts.softfloat)
+               fn->addFnAttr(llvm::Attribute::StrictFP);
             wasm_funcs[i] = fn;
          }
       }
@@ -240,6 +247,15 @@ namespace psizam {
          if (!fn) return;
 
          llvm::IRBuilder<> builder(*ctx);
+
+         // In deterministic or softfloat mode, use constrained FP to prevent LLVM
+         // from folding identity float ops (x-0.0 → x, x*1.0 → x) that would
+         // skip sNaN → qNaN quieting required by the WASM spec.
+         if (opts.deterministic || opts.softfloat) {
+            builder.setIsFPConstrained(true);
+            builder.setDefaultConstrainedExcept(llvm::fp::ebStrict);
+            builder.setDefaultConstrainedRounding(llvm::RoundingMode::NearestTiesToEven);
+         }
 
          // ── Entry block: allocas, parameters ──
          auto* entry_bb = llvm::BasicBlock::Create(*ctx, "entry", fn);
@@ -1971,9 +1987,12 @@ namespace psizam {
 
                case ir_op::table_init: {
                   if (call_args.size() >= 3) {
+                     uint32_t elem_idx = static_cast<uint32_t>(inst.ri.imm) & 0xFFFF;
+                     uint32_t table_idx = static_cast<uint32_t>(inst.ri.imm) >> 16;
                      builder.CreateCall(rt_table_init,
-                        {ctx_ptr, builder.getInt32(inst.ri.imm),
-                         call_args[0], call_args[1], call_args[2]});
+                        {ctx_ptr, builder.getInt32(elem_idx),
+                         call_args[0], call_args[1], call_args[2],
+                         builder.getInt32(table_idx)});
                   }
                   call_args.clear();
                   break;
@@ -1986,8 +2005,11 @@ namespace psizam {
 
                case ir_op::table_copy: {
                   if (call_args.size() >= 3) {
+                     uint32_t dst_table = static_cast<uint32_t>(inst.ri.imm) & 0xFFFF;
+                     uint32_t src_table = static_cast<uint32_t>(inst.ri.imm) >> 16;
                      builder.CreateCall(rt_table_copy,
-                        {ctx_ptr, call_args[0], call_args[1], call_args[2]});
+                        {ctx_ptr, call_args[0], call_args[1], call_args[2],
+                         builder.getInt32(dst_table), builder.getInt32(src_table)});
                   }
                   call_args.clear();
                   break;

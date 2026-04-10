@@ -130,13 +130,21 @@ namespace psizam {
       /// Call a host function by mapped index.
       inline native_value call(void* host, uint32_t mapped_idx,
                                native_value* args, char* memory) const {
+         PSIZAM_ASSERT(mapped_idx < _entries.size(), wasm_link_exception,
+                       "unresolved imported function");
          auto& e = _entries[mapped_idx];
          if (e.trampoline)
             return e.trampoline(host, args, memory);
+         PSIZAM_ASSERT(e.slow_dispatch, wasm_link_exception,
+                       "unresolved imported function");
          return e.slow_dispatch(host, args, memory);
       }
 
-      const entry& get_entry(uint32_t idx) const { return _entries[idx]; }
+      const entry& get_entry(uint32_t idx) const {
+         PSIZAM_ASSERT(idx < _entries.size(), wasm_link_exception,
+                       "unresolved imported function");
+         return _entries[idx];
+      }
       uint32_t size() const { return static_cast<uint32_t>(_entries.size()); }
       const std::vector<entry>& entries() const { return _entries; }
 

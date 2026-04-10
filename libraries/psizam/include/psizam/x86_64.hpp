@@ -451,7 +451,7 @@ namespace psizam {
          emit_check_call_depth_end();
       }
 
-      void emit_call_indirect(const func_type& ft, uint32_t functypeidx)
+      void emit_call_indirect(const func_type& ft, uint32_t functypeidx, uint32_t table_idx = 0)
       {
          COUNT_INSTR();
          auto icount = variable_size_instr(37, 64);
@@ -840,7 +840,13 @@ namespace psizam {
          emit_pop(rdi);
          emit_restore_backtrace();
       }
-      void emit_table_init(std::uint32_t x) {
+      void emit_table_get(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.get not supported in jit backend"); }
+      void emit_table_set(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.set not supported in jit backend"); }
+      void emit_table_grow(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.grow not supported in jit backend"); }
+      void emit_table_size(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.size not supported in jit backend"); }
+      void emit_table_fill(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.fill not supported in jit backend"); }
+
+      void emit_table_init(std::uint32_t x, std::uint32_t /*table_idx*/ = 0) {
          COUNT_INSTR();
          auto icount = variable_size_instr(25, 43);
          emit_pop(r8);
@@ -4336,7 +4342,7 @@ namespace psizam {
          emit_mov(r9, rdi);
       }
 
-      void emit_table_copy() {
+      void emit_table_copy(std::uint32_t /*dst_table*/ = 0, std::uint32_t /*src_table*/ = 0) {
          COUNT_INSTR();
          auto icount = fixed_size_instr(97);
          emit_pop(rcx);

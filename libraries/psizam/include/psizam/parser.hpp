@@ -494,7 +494,7 @@ namespace psizam {
 
       void parse_table_type(wasm_code_ptr& code, table_type& tt) {
          tt.element_type   = *code++;
-         PSIZAM_ASSERT(tt.element_type == types::anyfunc, wasm_parse_exception, "table must have type anyfunc");
+         PSIZAM_ASSERT(tt.element_type == types::funcref || tt.element_type == types::externref, wasm_parse_exception, "table must have type funcref or externref");
          tt.limits.flags   = parse_flags(code);
          tt.limits.initial = parse_varuint32(code);
          if (tt.limits.flags) {
@@ -556,7 +556,7 @@ namespace psizam {
                           wasm_parse_exception, "invalid function param type");
          }
          ft.param_types  = std::move(param_types);
-         ft.return_count = *code++;
+         ft.return_count = parse_varuint32(code);
          PSIZAM_ASSERT(ft.return_count < 2, wasm_parse_exception, "invalid function return count");
          if (ft.return_count > 0) {
             uint8_t rt        = *code++;
@@ -615,10 +615,8 @@ namespace psizam {
             PSIZAM_ASSERT(elemkind == 0x00, wasm_parse_exception, "elemkind must be funcref");
          } else if (flags == 5 || flags == 6 || flags == 7) {
             auto reftype = *code++;
-            // externref requires reference types, which we do not support
-            PSIZAM_ASSERT(reftype == types::funcref, wasm_parse_exception, "elem type must be funcref");
+            PSIZAM_ASSERT(reftype == types::funcref || reftype == types::externref, wasm_parse_exception, "elem type must be funcref or externref");
          }
-         PSIZAM_ASSERT(!tt || tt->element_type == types::anyfunc, wasm_parse_exception, "elem type does not match table type");
          uint32_t           size  = parse_varuint32(code);
          PSIZAM_ASSERT(size <= detail::get_max_element_segment_elements(_options), wasm_parse_exception, "elem segment too large");
          decltype(es.elems) elems(size);
@@ -642,7 +640,7 @@ namespace psizam {
          switch (opcode) {
             case opcodes::ref_null:
                te.type = te.index = std::numeric_limits<std::uint32_t>::max();
-               PSIZAM_ASSERT(*code == types::funcref, wasm_parse_exception, "Unknown type for elem");
+               PSIZAM_ASSERT(*code == types::funcref || *code == types::externref, wasm_parse_exception, "Unknown type for elem");
                ++code;
                break;
             case opcodes::ref_func:
@@ -1057,9 +1055,9 @@ namespace psizam {
                   PSIZAM_ASSERT(ft.return_count <= 1, wasm_parse_exception, "unsupported");
                   if(ft.return_count)
                      op_stack.push(ft.return_type);
-                  code_writer.emit_call_indirect(ft, type_aliases[functypeidx]);
-                  PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "call_indirect must end with 0x00.");
-                  code++; // 0x00
+                  uint32_t table_idx = parse_varuint32(code);
+                  PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "call_indirect table index out of range");
+                  code_writer.emit_call_indirect(ft, type_aliases[functypeidx], table_idx);
                   break;
                }
                case opcodes::drop: check_in_bounds(); code_writer.emit_drop(op_stack.pop()); break;
@@ -1100,6 +1098,23 @@ namespace psizam {
                   PSIZAM_ASSERT(_mod->globals.at(global_idx).type.mutability, wasm_parse_exception, "cannot set const global");
                   op_stack.pop(_mod->globals.at(global_idx).type.content_type);
                   code_writer.emit_set_global(global_idx);
+               } break;
+               case opcodes::table_get: {
+                  check_in_bounds();
+                  uint32_t table_idx = parse_varuint32(code);
+                  PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.get table index out of range");
+                  op_stack.pop(types::i32);
+                  // table.get produces a funcref or externref — push as i32 for funcref (index)
+                  op_stack.push(types::i32);
+                  code_writer.emit_table_get(table_idx);
+               } break;
+               case opcodes::table_set: {
+                  check_in_bounds();
+                  uint32_t table_idx = parse_varuint32(code);
+                  PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.set table index out of range");
+                  op_stack.pop(types::i32);  // value (ref)
+                  op_stack.pop(types::i32);  // index
+                  code_writer.emit_table_set(table_idx);
                } break;
 #define LOAD_OP(op_name, max_align, type)                            \
                case opcodes::op_name: {                              \
@@ -1800,13 +1815,14 @@ namespace psizam {
                         check_in_bounds();
                         PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->tables.size() != 0, wasm_parse_exception, "table.init requires table");
-                        auto x = parse_varuint32(code);
-                        PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "table.init must end with 0x00");
-                        ++code;
+                        auto elem_idx = parse_varuint32(code);
+                        auto table_idx = parse_varuint32(code);
+                        PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.init table index out of range");
+                        PSIZAM_ASSERT(elem_idx < _mod->elements.size(), wasm_parse_exception, "elem segment does not exist");
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
-                        code_writer.emit_table_init(x);
+                        code_writer.emit_table_init(elem_idx, table_idx);
                      } break;
                      case ext_opcodes::elem_drop: {
                         check_in_bounds();
@@ -1815,19 +1831,44 @@ namespace psizam {
                         PSIZAM_ASSERT(x < _mod->elements.size(), wasm_parse_exception, "elem segment does not exist");
                         code_writer.emit_elem_drop(x);
                      } break;
-                     case ext_opcodes::table_copy:
+                     case ext_opcodes::table_copy: {
                         check_in_bounds();
                         PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->tables.size() != 0, wasm_parse_exception, "table.copy requires table");
-                        PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "table.copy must end with 0x00 0x00");
-                        ++code;
-                        PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "table.copy must end with 0x00 0x00");
-                        ++code;
+                        auto dst_table = parse_varuint32(code);
+                        auto src_table = parse_varuint32(code);
+                        PSIZAM_ASSERT(dst_table < _mod->tables.size(), wasm_parse_exception, "table.copy dst table index out of range");
+                        PSIZAM_ASSERT(src_table < _mod->tables.size(), wasm_parse_exception, "table.copy src table index out of range");
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
-                        code_writer.emit_table_copy();
-                        break;
+                        code_writer.emit_table_copy(dst_table, src_table);
+                     } break;
+                     case ext_opcodes::table_grow: {
+                        check_in_bounds();
+                        auto table_idx = parse_varuint32(code);
+                        PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.grow table index out of range");
+                        op_stack.pop(types::i32);  // delta
+                        op_stack.pop(types::i32);  // init value (ref)
+                        op_stack.push(types::i32); // previous size or -1
+                        code_writer.emit_table_grow(table_idx);
+                     } break;
+                     case ext_opcodes::table_size: {
+                        check_in_bounds();
+                        auto table_idx = parse_varuint32(code);
+                        PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.size table index out of range");
+                        op_stack.push(types::i32);
+                        code_writer.emit_table_size(table_idx);
+                     } break;
+                     case ext_opcodes::table_fill: {
+                        check_in_bounds();
+                        auto table_idx = parse_varuint32(code);
+                        PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.fill table index out of range");
+                        op_stack.pop(types::i32);  // n
+                        op_stack.pop(types::i32);  // value (ref)
+                        op_stack.pop(types::i32);  // i (start index)
+                        code_writer.emit_table_fill(table_idx);
+                     } break;
                      default: PSIZAM_ASSERT(false, wasm_parse_exception, "Illegal instruction");
                   }
                } break;
@@ -1916,7 +1957,7 @@ namespace psizam {
       requires (id == section_id::table_section)
       inline void parse_section(wasm_code_ptr&           code,
                                 std::vector<table_type>& elems) {
-         parse_section_impl(code, elems, 1,
+         parse_section_impl(code, elems, detail::get_max_section_elements(_options),
                             [&](wasm_code_ptr& code, table_type& tt, std::size_t /*idx*/) { parse_table_type(code, tt); });
       }
       template <uint8_t id>

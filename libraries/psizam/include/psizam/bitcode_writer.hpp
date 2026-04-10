@@ -92,7 +92,7 @@ namespace psizam {
       };
       auto emit_br_table(uint32_t table_size) { return br_table_parser{ *this, table_size }; }
       void emit_call(const func_type& ft, uint32_t funcnum) { fb[op_index++] = call_t{ funcnum }; }
-      void emit_call_indirect(const func_type& ft, uint32_t functypeidx) { fb[op_index++] = call_indirect_t{ functypeidx }; }
+      void emit_call_indirect(const func_type& ft, uint32_t functypeidx, uint32_t table_idx = 0) { fb[op_index++] = call_indirect_t{ functypeidx | (table_idx << 16) }; }
 
 
       void emit_drop(uint8_t /*type*/) { fb[op_index++] = drop_t{}; }
@@ -102,6 +102,8 @@ namespace psizam {
       void emit_tee_local(uint32_t localidx, uint8_t /*type*/) { fb[op_index++] = tee_local_t{localidx}; }
       void emit_get_global(uint32_t localidx) { fb[op_index++] = get_global_t{localidx}; }
       void emit_set_global(uint32_t localidx) { fb[op_index++] = set_global_t{localidx}; }
+      void emit_table_get(uint32_t table_idx) { fb[op_index++] = table_get_t{table_idx}; }
+      void emit_table_set(uint32_t table_idx) { fb[op_index++] = table_set_t{table_idx}; }
 
 #define MEM_OP(op_name) \
       void emit_ ## op_name(uint32_t offset, uint32_t alignment) { fb[op_index++] = op_name ## _t{ offset, alignment }; }
@@ -347,9 +349,9 @@ namespace psizam {
          fb[op_index++] = memory_fill_t{};
       }
 
-      void emit_table_init(std::uint32_t x)
+      void emit_table_init(std::uint32_t elem_idx, std::uint32_t table_idx = 0)
       {
-         fb[op_index++] = table_init_t{x};
+         fb[op_index++] = table_init_t{elem_idx | (table_idx << 16)};
       }
 
       void emit_elem_drop(std::uint32_t x)
@@ -357,9 +359,24 @@ namespace psizam {
          fb[op_index++] = elem_drop_t{x};
       }
 
-      void emit_table_copy()
+      void emit_table_copy(std::uint32_t dst_table = 0, std::uint32_t src_table = 0)
       {
-         fb[op_index++] = table_copy_t{};
+         fb[op_index++] = table_copy_t{dst_table | (src_table << 16)};
+      }
+
+      void emit_table_grow(std::uint32_t table_idx)
+      {
+         fb[op_index++] = table_grow_t{table_idx};
+      }
+
+      void emit_table_size(std::uint32_t table_idx)
+      {
+         fb[op_index++] = table_size_t{table_idx};
+      }
+
+      void emit_table_fill(std::uint32_t table_idx)
+      {
+         fb[op_index++] = table_fill_t{table_idx};
       }
 
       void emit_error() { fb[op_index++] = error_t{}; }

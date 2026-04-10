@@ -18,7 +18,7 @@
 #include <vector>
 
 namespace psizam {
-   enum types { i32 = 0x7f, i64 = 0x7e, f32 = 0x7d, f64 = 0x7c, v128 = 0x7b, anyfunc = 0x70, funcref = anyfunc, func = 0x60, pseudo = 0x40, ret_void };
+   enum types { i32 = 0x7f, i64 = 0x7e, f32 = 0x7d, f64 = 0x7c, v128 = 0x7b, anyfunc = 0x70, funcref = anyfunc, externref = 0x6f, func = 0x60, pseudo = 0x40, ret_void };
 
    enum external_kind { Function = 0, Table = 1, Memory = 2, Global = 3 };
 

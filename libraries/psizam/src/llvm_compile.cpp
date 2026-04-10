@@ -19,10 +19,12 @@ namespace psizam {
    int  get_llvm_opt_level()          { return g_llvm_opt_level; }
 
    void llvm_compile_functions(ir_function* funcs, uint32_t num_functions,
-                               module& mod, growable_allocator& alloc) {
+                               module& mod, growable_allocator& alloc,
+                               bool deterministic) {
       // Step 1: Translate all IR functions to LLVM IR
       llvm_translate_options topts;
-      topts.opt_level = g_llvm_opt_level;
+      topts.opt_level     = g_llvm_opt_level;
+      topts.deterministic = deterministic;
       llvm_ir_translator translator(mod, topts);
 
       for (uint32_t i = 0; i < num_functions; ++i) {

@@ -77,9 +77,11 @@ namespace psizam {
          context.call(op.index);
       }
       [[gnu::always_inline]] inline void operator()(const call_indirect_t& op) {
+         uint32_t type_idx = op.index & 0xFFFF;
+         uint32_t table_idx = op.index >> 16;
          const auto& index = context.pop_operand().to_ui32();
-         uint32_t fn = context.table_elem(index);
-         const auto& expected_type = context.get_module().types.at(op.index);
+         uint32_t fn = context.table_elem(index, table_idx);
+         const auto& expected_type = context.get_module().types.at(type_idx);
          const auto& actual_type = context.get_module().get_function_type(fn);
          PSIZAM_ASSERT(actual_type == expected_type, wasm_interpreter_exception, "bad call_indirect type");
          context.call(fn);
@@ -2550,22 +2552,26 @@ namespace psizam {
          }
       }
       [[gnu::always_inline]] inline void operator()(const table_init_t& op) {
+         uint32_t elem_idx = op.index & 0xFFFF;
+         uint32_t table_idx = op.index >> 16;
          const auto& size = context.pop_operand();
          const auto& src = context.pop_operand();
          const auto& dst = context.pop_operand();
          context.inc_pc();
-         context.init_table(op.index, dst.to_ui32(), src.to_ui32(), size.to_ui32());
+         context.init_table(elem_idx, dst.to_ui32(), src.to_ui32(), size.to_ui32(), table_idx);
       }
       [[gnu::always_inline]] inline void operator()(const elem_drop_t& op) {
          context.inc_pc();
          context.drop_elem(op.index);
       }
-      [[gnu::always_inline]] inline void operator()(const table_copy_t&) {
+      [[gnu::always_inline]] inline void operator()(const table_copy_t& op) {
+         uint32_t dst_table = op.index & 0xFFFF;
+         uint32_t src_table = op.index >> 16;
          auto& size = context.peek_operand(0);
          auto& src = context.peek_operand(1);
          auto& dst = context.peek_operand(2);
-         auto s = context.get_table_ptr(src.to_ui32(), size.to_ui32());
-         auto d = context.get_table_ptr(dst.to_ui32(), size.to_ui32());
+         auto s = context.get_table_ptr(src.to_ui32(), size.to_ui32(), src_table);
+         auto d = context.get_table_ptr(dst.to_ui32(), size.to_ui32(), dst_table);
          if (size.to_ui32() == 0)
          {
             context.pop_operand();
@@ -2573,7 +2579,7 @@ namespace psizam {
             context.pop_operand();
             context.inc_pc();
          }
-         else if (dst.to_ui32() <= src.to_ui32())
+         else if (dst_table != src_table || dst.to_ui32() <= src.to_ui32())
          {
             *d = *s;
             size = i32_const_t{size.to_ui32() - 1};
@@ -2586,6 +2592,52 @@ namespace psizam {
             d[n - 1] = s[n - 1];
             size = i32_const_t{size.to_ui32() - 1};
          }
+      }
+      [[gnu::always_inline]] inline void operator()(const table_get_t& op) {
+         auto& idx = context.peek_operand();
+         uint32_t i = idx.to_ui32();
+         uint32_t table_idx = op.index;
+         PSIZAM_ASSERT(i < context.get_table_size(table_idx), wasm_interpreter_exception, "table index out of range");
+         auto* base = context.get_table_base(table_idx);
+         idx = i32_const_t{base[i].index};
+         context.inc_pc();
+      }
+      [[gnu::always_inline]] inline void operator()(const table_set_t& op) {
+         auto val = context.pop_operand().to_ui32();
+         auto idx = context.pop_operand().to_ui32();
+         uint32_t table_idx = op.index;
+         PSIZAM_ASSERT(idx < context.get_table_size(table_idx), wasm_interpreter_exception, "table index out of range");
+         auto* base = context.get_table_base(table_idx);
+         base[idx].index = val;
+         base[idx].type = UINT32_MAX;  // externref entries don't have function types
+         base[idx].code_ptr = nullptr;
+         context.inc_pc();
+      }
+      [[gnu::always_inline]] inline void operator()(const table_grow_t& op) {
+         auto delta = context.pop_operand().to_ui32();
+         auto init_val = context.pop_operand().to_ui32();
+         table_entry te;
+         te.type = UINT32_MAX;
+         te.index = init_val;
+         te.code_ptr = nullptr;
+         uint32_t result = context.table_grow(op.index, delta, te);
+         context.push_operand(i32_const_t{result});
+         context.inc_pc();
+      }
+      [[gnu::always_inline]] inline void operator()(const table_size_t& op) {
+         context.push_operand(i32_const_t{context.get_table_size(op.index)});
+         context.inc_pc();
+      }
+      [[gnu::always_inline]] inline void operator()(const table_fill_t& op) {
+         auto n = context.pop_operand().to_ui32();
+         auto val = context.pop_operand().to_ui32();
+         auto i = context.pop_operand().to_ui32();
+         table_entry te;
+         te.type = UINT32_MAX;
+         te.index = val;
+         te.code_ptr = nullptr;
+         context.table_fill(op.index, i, te, n);
+         context.inc_pc();
       }
    };
 

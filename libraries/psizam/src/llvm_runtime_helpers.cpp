@@ -82,43 +82,46 @@ void __psizam_memory_fill(void* ctx, uint32_t dest, uint32_t val, uint32_t n) {
 }
 
 void __psizam_table_init(void* ctx, uint32_t elem_idx,
-                          uint32_t dest, uint32_t src, uint32_t n) {
-   as_ctx(ctx).init_table(elem_idx, dest, src, n);
+                          uint32_t dest, uint32_t src, uint32_t n,
+                          uint32_t table_idx) {
+   as_ctx(ctx).init_table(elem_idx, dest, src, n, table_idx);
 }
 
 void __psizam_elem_drop(void* ctx, uint32_t seg_idx) {
    as_ctx(ctx).drop_elem(seg_idx);
 }
 
-void __psizam_table_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n) {
+void __psizam_table_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n,
+                          uint32_t dst_table, uint32_t src_table) {
    auto& c = as_ctx(ctx);
-   auto* table_base = c.get_table_base();
-   auto& mod = c.get_module();
-   uint32_t table_size = mod.tables[0].limits.initial;
-   if (uint64_t(dest) + n > table_size || uint64_t(src) + n > table_size)
-      throw psizam::wasm_memory_exception{"table out of range"};
+   auto* s = c.get_table_ptr(src, n, src_table);
+   auto* d = c.get_table_ptr(dest, n, dst_table);
    if (n > 0)
-      std::memmove(table_base + dest, table_base + src, n * sizeof(psizam::table_entry));
+      std::memmove(d, s, n * sizeof(psizam::table_entry));
 }
 
 int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
                                 uint32_t table_elem, void* args_buf, uint32_t nargs) {
+   // type_idx packs: type index in lower 16 bits, table index in upper 16 bits
+   uint32_t table_idx = type_idx >> 16;
+   type_idx &= 0xFFFF;
    auto& c = as_ctx(ctx);
    auto& mod = c.get_module();
 
-   // Bounds check
-   if (mod.tables.empty())
-      throw psizam::wasm_interpreter_exception{"no table"};
-   uint32_t table_size = mod.tables[0].limits.initial;
+   PSIZAM_ASSERT(table_idx < mod.tables.size(), psizam::wasm_interpreter_exception, "no table");
+   uint32_t table_size = c.get_table_size(table_idx);
    if (table_elem >= table_size)
       throw psizam::wasm_interpreter_exception{"undefined element"};
 
    // Get table entry
-   auto* table_base = c.get_table_base();
+   auto* table_base = c.get_table_base(table_idx);
    auto& entry = table_base[table_elem];
 
+   // Null/uninitialized check (0xFFFFFFFF is the sentinel)
+   if (entry.type == 0xFFFFFFFF)
+      throw psizam::wasm_interpreter_exception{"undefined element"};
+
    // Type check
-   uint32_t func_type = mod.functions[entry.index];
    const auto& expected_type = mod.types[type_idx];
    const auto& actual_type = mod.get_function_type(entry.index);
    if (!(actual_type == expected_type))
