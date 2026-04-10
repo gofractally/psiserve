@@ -1203,6 +1203,43 @@ namespace psizam {
                   code_writer.emit_call_indirect(ft, type_aliases[functypeidx], table_idx);
                   break;
                }
+               // Tail calls: desugar to call + return (correct but not yet optimized)
+               case 0x12: { // return_call
+                  check_in_bounds();
+                  uint32_t funcnum = parse_varuint32(code);
+                  const func_type& ft = _mod->get_function_type(funcnum);
+                  for(uint32_t i = 0; i < ft.param_types.size(); ++i)
+                     op_stack.pop(ft.param_types[ft.param_types.size() - i - 1]);
+                  for(auto rt : ft.return_types)
+                     op_stack.push(rt);
+                  code_writer.emit_call(ft, funcnum);
+                  // Emit implicit return
+                  uint32_t label = pc_stack.size() - 1;
+                  auto [depth_change,rt,rc] = compute_depth_change(label);
+                  auto branch = code_writer.emit_return(depth_change, rt, rc);
+                  handle_branch_target(label, branch);
+                  op_stack.start_unreachable();
+               } break;
+               case 0x13: { // return_call_indirect
+                  check_in_bounds();
+                  uint32_t functypeidx = parse_varuint32(code);
+                  const func_type& ft = _mod->types.at(functypeidx);
+                  PSIZAM_ASSERT(_mod->tables.size() > 0, wasm_parse_exception, "return_call_indirect requires a table");
+                  op_stack.pop(types::i32);
+                  for(uint32_t i = 0; i < ft.param_types.size(); ++i)
+                     op_stack.pop(ft.param_types[ft.param_types.size() - i - 1]);
+                  for(auto rt : ft.return_types)
+                     op_stack.push(rt);
+                  uint32_t table_idx = parse_varuint32(code);
+                  PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "return_call_indirect table index out of range");
+                  code_writer.emit_call_indirect(ft, type_aliases[functypeidx], table_idx);
+                  // Emit implicit return
+                  uint32_t label = pc_stack.size() - 1;
+                  auto [depth_change,rt,rc] = compute_depth_change(label);
+                  auto branch = code_writer.emit_return(depth_change, rt, rc);
+                  handle_branch_target(label, branch);
+                  op_stack.start_unreachable();
+               } break;
                case opcodes::drop: check_in_bounds(); code_writer.emit_drop(op_stack.pop()); break;
                case opcodes::select: {
                   check_in_bounds();

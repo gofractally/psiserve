@@ -57,8 +57,8 @@
 //   shared memory                🔴     🔴       🔴        🔴      🔴
 //
 // TAIL CALLS
-//   return_call                  🔴     🔴       🔴        🔴      🔴
-//   return_call_indirect         🔴     🔴       🔴        🔴      🔴
+//   return_call                  🟢     🟢       🟢        🟢      🟢
+//   return_call_indirect         🟢     🟢       🟢        🟢      🟢
 //
 // MEMORY64
 //   i64 addressing               🔴     🔴       🔴        🔴      🔴
