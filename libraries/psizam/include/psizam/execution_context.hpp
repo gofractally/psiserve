@@ -1112,12 +1112,23 @@ namespace psizam {
 
       inline void jump(uint32_t pop_info, uint32_t new_pc) {
          set_relative_pc(new_pc);
-         if ((pop_info & 0x80000000u)) {
+         uint32_t depth_change = pop_info & 0x00FFFFFFu;
+         uint32_t result_count = pop_info >> 24;
+         if (result_count == 1) {
             const auto& op = pop_operand();
-            eat_operands(get_operand_stack().size() - ((pop_info & 0x7FFFFFFFu) - 1));
+            eat_operands(get_operand_stack().size() - (depth_change - 1));
             push_operand(op);
+         } else if (result_count > 1) {
+            // Multi-value: save N results, unwind stack, push results back
+            operand_stack_elem results[256];
+            for (uint32_t i = 0; i < result_count; i++)
+               results[i] = pop_operand();
+            eat_operands(get_operand_stack().size() - (depth_change - result_count));
+            // Push back in reverse order (first result on bottom)
+            for (int i = static_cast<int>(result_count) - 1; i >= 0; --i)
+               push_operand(results[i]);
          } else {
-            eat_operands(get_operand_stack().size() - pop_info);
+            eat_operands(get_operand_stack().size() - depth_change);
          }
       }
 

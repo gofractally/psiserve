@@ -449,7 +449,7 @@ namespace psizam {
          return code;
       }
 
-      void* emit_return(uint32_t depth_change, uint8_t rt) {
+      void* emit_return(uint32_t depth_change, uint8_t rt, uint32_t /*result_count*/ = 0) {
          return emit_br(depth_change, rt);
       }
 
@@ -485,7 +485,7 @@ namespace psizam {
          return result;
       }
 
-      void* emit_br(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX) {
+      void* emit_br(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
          emit_multipop(depth_change, rt);
          // B target (patched later)
          void* branch = code;
@@ -493,7 +493,7 @@ namespace psizam {
          return branch;
       }
 
-      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX) {
+      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
          // Try to fold: if last op was a comparison, use B.cond directly
          if (auto cond = try_pop_recent_op<condition_op>()) {
             if (is_simple_multipop(depth_change, rt)) {
@@ -536,7 +536,7 @@ namespace psizam {
 
       // Generate a binary search tree for br_table
       struct br_table_generator {
-         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX) {
+         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
             while(true) {
                assert(!stack.empty());
                auto [min, max, label] = stack.back();
@@ -576,7 +576,7 @@ namespace psizam {
                }
             }
          }
-         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX) {
+         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
             void* result = emit_case(depth_change, rt);
             assert(stack.empty());
             return result;

@@ -281,7 +281,7 @@ namespace psizam {
       }
       void emit_nop() {}
       void* emit_end() { set_branch_target(); return code; }
-      void* emit_return(uint32_t depth_change, uint8_t rt) {
+      void* emit_return(uint32_t depth_change, uint8_t rt, uint32_t /*result_count*/ = 0) {
          // Return is defined as equivalent to branching to the outermost label
          return emit_br(depth_change, rt);
       }
@@ -307,7 +307,7 @@ namespace psizam {
          set_branch_target();
          return result;
       }
-      void* emit_br(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX) {
+      void* emit_br(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 22);
          // add RSP, depth_change * 8
@@ -316,7 +316,7 @@ namespace psizam {
          emit_bytes(0xe9);
          return emit_branch_target32();
       }
-      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX) {
+      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
          if (auto cond = try_pop_recent_op<condition_op>()) {
             COUNT_INSTR_NO_FLAGS(); // The previous flags are use be the conditional branch
             if (is_simple_multipop(depth_change, rt)) {
@@ -351,7 +351,7 @@ namespace psizam {
 
       // Generate a binary search.
       struct br_table_generator {
-         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX) {
+         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
             while(true) {
                assert(!stack.empty() && "The parser is supposed to handle the number of elements in br_table.");
                auto [min, max, label] = stack.back();
@@ -396,7 +396,7 @@ namespace psizam {
             }
 
          }
-         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX) {
+         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
             void* result = emit_case(depth_change, rt);
             assert(stack.empty() && "unexpected default.");
             return result;

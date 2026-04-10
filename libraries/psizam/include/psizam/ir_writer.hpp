@@ -203,7 +203,7 @@ namespace psizam {
          return block_idx;
       }
 
-      branch_t emit_return(uint32_t dc, uint8_t rt) {
+      branch_t emit_return(uint32_t dc, uint8_t rt, uint32_t /*result_count*/ = 0) {
          if (!_unreachable) {
             ir_inst inst{};
             inst.opcode = ir_op::return_;
@@ -343,7 +343,7 @@ namespace psizam {
          return else_inst_idx;
       }
 
-      branch_t emit_br(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX) {
+      branch_t emit_br(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t /*result_count*/ = 0) {
          uint32_t inst_idx = 0;
          if (!_unreachable) {
             // If the br carries a result value and the target block has a merge vreg,
@@ -391,7 +391,7 @@ namespace psizam {
          return inst_idx;
       }
 
-      branch_t emit_br_if(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX) {
+      branch_t emit_br_if(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t /*result_count*/ = 0) {
          uint32_t inst_idx = 0;
          if (!_unreachable) {
             uint32_t cond = _func->vpop();
@@ -436,7 +436,7 @@ namespace psizam {
       struct br_table_parser {
          ir_writer* _writer;
          br_table_parser(ir_writer* w) : _writer(w) {}
-         branch_t emit_case(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX) {
+         branch_t emit_case(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t /*result_count*/ = 0) {
             // Emit merge mov if target has a merge vreg
             if (rt != types::pseudo && label != UINT32_MAX) {
                auto* func = _writer->_func;
@@ -472,7 +472,7 @@ namespace psizam {
             _writer->_func->emit(inst);
             return inst_idx;
          }
-         branch_t emit_default(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX) {
+         branch_t emit_default(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t /*result_count*/ = 0) {
             return emit_case(dc, rt, label);
          }
       };

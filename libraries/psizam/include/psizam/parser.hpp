@@ -897,18 +897,23 @@ namespace psizam {
             PSIZAM_ASSERT(label < pc_stack.size(), wasm_parse_exception, "invalid label");
             pc_element_t& branch_target = pc_stack[pc_stack.size() - label - 1];
             auto result = op_stack.depth() - branch_target.operand_depth;
+            uint32_t result_count;
             if (!branch_target.label_results.empty()) {
                // Multi-value: validate all label results on the stack (top-down)
                for (int i = static_cast<int>(branch_target.label_results.size()) - 1; i >= 0; --i)
                   op_stack.top(branch_target.label_results[i]);
+               result_count = static_cast<uint32_t>(branch_target.label_results.size());
             } else if(branch_target.label_result != types::pseudo) {
                op_stack.top(branch_target.label_result);
+               result_count = 1;
+            } else {
+               result_count = 0;
             }
-            // For multi-value, use the first label result for encoding (single-value compat)
+            // For single-value compat, use the first label result type
             uint8_t rt = !branch_target.label_results.empty()
                          ? branch_target.label_results[0]
                          : static_cast<uint8_t>(branch_target.label_result);
-            return std::pair{result, rt};
+            return std::tuple{result, rt, result_count};
          };
 
          // Handles branches to the end of the scope and pops the pc_stack
@@ -962,8 +967,8 @@ namespace psizam {
                case opcodes::return_: {
                   check_in_bounds();
                   uint32_t label = pc_stack.size() - 1;
-                  auto [depth_change,rt] = compute_depth_change(label);
-                  auto branch = code_writer.emit_return(depth_change, rt);
+                  auto [depth_change,rt,rc] = compute_depth_change(label);
+                  auto branch = code_writer.emit_return(depth_change, rt, rc);
                   handle_branch_target(label, branch);
                   op_stack.start_unreachable();
                } break;
@@ -1133,8 +1138,8 @@ namespace psizam {
                case opcodes::br: {
                   check_in_bounds();
                   uint32_t label = parse_varuint32(code);
-                  auto [depth_change,rt] = compute_depth_change(label);
-                  auto branch = code_writer.emit_br(depth_change, rt, label);
+                  auto [depth_change,rt,rc] = compute_depth_change(label);
+                  auto branch = code_writer.emit_br(depth_change, rt, label, rc);
                   handle_branch_target(label, branch);
                   op_stack.start_unreachable();
                } break;
@@ -1142,8 +1147,8 @@ namespace psizam {
                   check_in_bounds();
                   uint32_t label = parse_varuint32(code);
                   op_stack.pop(types::i32);
-                  auto [depth_change,rt] = compute_depth_change(label);
-                  auto branch = code_writer.emit_br_if(depth_change, rt, label);
+                  auto [depth_change,rt,rc] = compute_depth_change(label);
+                  auto branch = code_writer.emit_br_if(depth_change, rt, label, rc);
                   handle_branch_target(label, branch);
                } break;
                case opcodes::br_table: {
@@ -1155,8 +1160,8 @@ namespace psizam {
                   auto handler = code_writer.emit_br_table(table_size);
                   for (size_t i = 0; i < table_size; i++) {
                      uint32_t label = parse_varuint32(code);
-                     auto [depth_change,rt] = compute_depth_change(label);
-                     auto branch = handler.emit_case(depth_change, rt, label);
+                     auto [depth_change,rt,rc] = compute_depth_change(label);
+                     auto branch = handler.emit_case(depth_change, rt, label, rc);
                      handle_branch_target(label, branch);
                      uint8_t one_result = pc_stack[pc_stack.size() - label - 1].label_result;
                      if(i == 0) {
@@ -1166,8 +1171,8 @@ namespace psizam {
                      }
                   }
                   uint32_t label = parse_varuint32(code);
-                  auto [depth_change,rt] = compute_depth_change(label);
-                  auto branch = handler.emit_default(depth_change, rt, label);
+                  auto [depth_change,rt,rc] = compute_depth_change(label);
+                  auto branch = handler.emit_default(depth_change, rt, label, rc);
                   handle_branch_target(label, branch);
                   PSIZAM_ASSERT(table_size == 0 || result_type == pc_stack[pc_stack.size() - label - 1].label_result,
                                 wasm_parse_exception, "br_table labels must have the same type");
