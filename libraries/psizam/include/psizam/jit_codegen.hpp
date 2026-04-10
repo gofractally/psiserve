@@ -100,6 +100,7 @@
 #include <psizam/jit_ir.hpp>
 #include <psizam/jit_reloc.hpp>
 #include <psizam/jit_regalloc.hpp>
+#include <psizam/llvm_runtime_helpers.hpp>
 #include <psizam/softfloat.hpp>
 #include <psizam/x86_64_base.hpp>
 #include <psizam/types.hpp>
@@ -702,33 +703,61 @@ namespace psizam {
             break;
          }
          case ir_op::call_indirect: {
-            uint32_t fti = inst.call.index;
+            uint32_t packed_fti = inst.call.index;
+            uint32_t fti = packed_fti & 0xFFFF;
+            uint32_t table_idx = packed_fti >> 16;
             const func_type& ft = _mod.types[fti];
-            // Pop table index
+            // Pop element index
             this->emit_pop_raw(rax);
-            // Bounds check
-            uint32_t table_size = _mod.tables[0].limits.initial;
-            this->emit_cmp(table_size, eax);
-            base::fix_branch(this->emit_branchcc32(base::JAE), call_indirect_handler);
-            // Compute table entry: each entry is 16 bytes {type_idx(4), pad(4), code_ptr(8)}
-            // shlq $4, %rax
-            this->emit_bytes(0x48, 0xc1, 0xe0, 0x04);
-            if (_mod.indirect_table(0)) {
-               this->emit_mov(*(rsi + wasm_allocator::table_offset()), rcx);
-               this->emit_add(rcx, rax);
+
+            if (table_idx != 0) {
+               // Non-zero table: use runtime helper for bounds/type/null check
+               // __psizam_resolve_indirect(ctx, type_idx, table_idx, elem_idx)
+               this->emit_push_raw(rdi); // save ctx
+               this->emit_push_raw(rsi); // save mem
+               this->emit_mov(eax, ecx);  // elem_idx → arg4
+               this->emit_mov(static_cast<uint32_t>(table_idx), edx); // table_idx → arg3
+               this->emit_mov(static_cast<uint32_t>(fti), esi); // type_idx → arg2
+               // rdi already has ctx
+               this->emit_mov(rsp, rax);
+               this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // align rsp
+               this->emit_push_raw(rax);
+               this->emit_bytes(0x48, 0xb8);
+               this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_resolve_indirect));
+               this->emit_bytes(0xff, 0xd0); // call rax
+               this->emit_pop_raw(rsp);
+               // rax = code_ptr (null on error)
+               this->emit_bytes(0x48, 0x85, 0xc0); // test rax, rax
+               base::fix_branch(this->emit_branchcc32(base::JE), call_indirect_handler);
+               this->emit_pop_raw(rsi);
+               this->emit_pop_raw(rdi);
+               emit_call_depth_dec();
+               this->emit_bytes(0xff, 0xd0); // call rax
             } else {
-               // lea table_offset(%rsi,%rax), %rax
-               this->emit_bytes(0x48, 0x8d, 0x84, 0x06);
-               this->emit_operand32(static_cast<uint32_t>(wasm_allocator::table_offset()));
+               // Table 0 fast path: inline bounds + type check
+               uint32_t table_size = _mod.tables[0].limits.initial;
+               this->emit_cmp(table_size, eax);
+               base::fix_branch(this->emit_branchcc32(base::JAE), call_indirect_handler);
+               // Compute table entry: each entry is 16 bytes {type_idx(4), pad(4), code_ptr(8)}
+               // shlq $4, %rax
+               this->emit_bytes(0x48, 0xc1, 0xe0, 0x04);
+               if (_mod.indirect_table(0)) {
+                  this->emit_mov(*(rsi + wasm_allocator::table_offset()), rcx);
+                  this->emit_add(rcx, rax);
+               } else {
+                  // lea table_offset(%rsi,%rax), %rax
+                  this->emit_bytes(0x48, 0x8d, 0x84, 0x06);
+                  this->emit_operand32(static_cast<uint32_t>(wasm_allocator::table_offset()));
+               }
+               // Type check: cmp $fti, (%rax)
+               this->emit_bytes(0x81, 0x38); // cmp imm32, (%rax)
+               this->emit_operand32(fti);
+               base::fix_branch(this->emit_branchcc32(base::JNE), type_error_handler);
+               // Call through function pointer
+               emit_call_depth_dec();
+               // call *8(%rax)
+               this->emit_bytes(0xff, 0x50, 0x08);
             }
-            // Type check: cmp $fti, (%rax)
-            this->emit_bytes(0x81, 0x38); // cmp imm32, (%rax)
-            this->emit_operand32(fti);
-            base::fix_branch(this->emit_branchcc32(base::JNE), type_error_handler);
-            // Call through function pointer
-            emit_call_depth_dec();
-            // call *8(%rax)
-            this->emit_bytes(0xff, 0x50, 0x08);
             emit_call_multipop(ft);
             emit_call_depth_inc();
             break;
@@ -1457,6 +1486,7 @@ namespace psizam {
             this->emit_pop_raw(rax);  // dest
             this->emit_push_raw(rdi);
             this->emit_push_raw(rsi);
+            this->emit_mov(static_cast<uint32_t>(inst.ri.imm), r8d); // packed_tables → arg5
             this->emit_mov(eax, esi); // dest → arg2
             this->emit_mov(rsp, rax);
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
@@ -1464,6 +1494,99 @@ namespace psizam {
             this->emit_bytes(0x48, 0xb8);
             emit_reloc(reloc_symbol::table_copy);
             this->emit_operand_ptr(&table_copy_impl);
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            break;
+         }
+         case ir_op::table_get: {
+            // table_idx in inst.ri.imm, elem_idx on stack
+            this->emit_pop_raw(rdx);  // elem_idx → arg3
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(static_cast<uint32_t>(inst.ri.imm), esi); // table_idx → arg2
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_table_get));
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            this->emit_push_raw(rax);
+            break;
+         }
+         case ir_op::table_set: {
+            // Stack: [elem_idx, val]
+            this->emit_pop_raw(rcx);  // val → arg4
+            this->emit_pop_raw(rdx);  // elem_idx → arg3
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(static_cast<uint32_t>(inst.ri.imm), esi); // table_idx → arg2
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_table_set));
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            break;
+         }
+         case ir_op::table_grow: {
+            // Stack: [init_val, delta]
+            // __psizam_table_grow(ctx, table_idx, delta, init_val)
+            this->emit_pop_raw(rax);  // delta
+            this->emit_pop_raw(r8);   // init_val → stash in r8
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(eax, edx); // delta → arg3
+            this->emit_mov(r8d, ecx); // init_val → arg4
+            this->emit_mov(static_cast<uint32_t>(inst.ri.imm), esi); // table_idx → arg2
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_table_grow));
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            this->emit_push_raw(rax);
+            break;
+         }
+         case ir_op::table_size: {
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(static_cast<uint32_t>(inst.ri.imm), esi); // table_idx → arg2
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_table_size));
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            this->emit_push_raw(rax);
+            break;
+         }
+         case ir_op::table_fill: {
+            // Stack: [i, val, n]
+            this->emit_pop_raw(r8);   // n → arg5
+            this->emit_pop_raw(rcx);  // val → arg4
+            this->emit_pop_raw(rdx);  // i → arg3
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(static_cast<uint32_t>(inst.ri.imm), esi); // table_idx → arg2
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_table_fill));
             this->emit_bytes(0xff, 0xd0);
             this->emit_pop_raw(rsp);
             this->emit_pop_raw(rsi);
@@ -1880,28 +2003,52 @@ namespace psizam {
             return true;
          }
          case ir_op::call_indirect: {
-            uint32_t fti = inst.call.index;
+            uint32_t packed_fti = inst.call.index;
+            uint32_t fti = packed_fti & 0xFFFF;
+            uint32_t table_idx = packed_fti >> 16;
             const func_type& ft = _mod.types[fti];
             // Table index was pushed by an arg instruction — pop it
             this->emit_pop_raw(rax);
-            // Bounds check
-            uint32_t table_size = _mod.tables[0].limits.initial;
-            this->emit_cmp(table_size, eax);
-            base::fix_branch(this->emit_branchcc32(base::JAE), call_indirect_handler);
-            // Table lookup
-            this->emit_bytes(0x48, 0xc1, 0xe0, 0x04); // shlq $4, %rax
-            if (_mod.indirect_table(0)) {
-               this->emit_mov(*(rsi + wasm_allocator::table_offset()), rcx);
-               this->emit_add(rcx, rax);
+
+            if (table_idx != 0) {
+               // Non-zero table: use runtime helper
+               this->emit_push_raw(rdi);
+               this->emit_push_raw(rsi);
+               this->emit_mov(eax, ecx);  // elem_idx → arg4
+               this->emit_mov(static_cast<uint32_t>(table_idx), edx); // table_idx → arg3
+               this->emit_mov(static_cast<uint32_t>(fti), esi); // type_idx → arg2
+               this->emit_mov(rsp, rax);
+               this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+               this->emit_push_raw(rax);
+               this->emit_bytes(0x48, 0xb8);
+               this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_resolve_indirect));
+               this->emit_bytes(0xff, 0xd0);
+               this->emit_pop_raw(rsp);
+               this->emit_bytes(0x48, 0x85, 0xc0); // test rax, rax
+               base::fix_branch(this->emit_branchcc32(base::JE), call_indirect_handler);
+               this->emit_pop_raw(rsi);
+               this->emit_pop_raw(rdi);
+               emit_call_depth_dec();
+               this->emit_bytes(0xff, 0xd0); // call rax
             } else {
-               this->emit_bytes(0x48, 0x8d, 0x84, 0x06);
-               this->emit_operand32(static_cast<uint32_t>(wasm_allocator::table_offset()));
+               // Table 0 fast path
+               uint32_t table_size = _mod.tables[0].limits.initial;
+               this->emit_cmp(table_size, eax);
+               base::fix_branch(this->emit_branchcc32(base::JAE), call_indirect_handler);
+               this->emit_bytes(0x48, 0xc1, 0xe0, 0x04); // shlq $4, %rax
+               if (_mod.indirect_table(0)) {
+                  this->emit_mov(*(rsi + wasm_allocator::table_offset()), rcx);
+                  this->emit_add(rcx, rax);
+               } else {
+                  this->emit_bytes(0x48, 0x8d, 0x84, 0x06);
+                  this->emit_operand32(static_cast<uint32_t>(wasm_allocator::table_offset()));
+               }
+               this->emit_bytes(0x81, 0x38);
+               this->emit_operand32(fti);
+               base::fix_branch(this->emit_branchcc32(base::JNE), type_error_handler);
+               emit_call_depth_dec();
+               this->emit_bytes(0xff, 0x50, 0x08); // call *8(%rax)
             }
-            this->emit_bytes(0x81, 0x38);
-            this->emit_operand32(fti);
-            base::fix_branch(this->emit_branchcc32(base::JNE), type_error_handler);
-            emit_call_depth_dec();
-            this->emit_bytes(0xff, 0x50, 0x08); // call *8(%rax)
             // Remove args, store result
             uint32_t arg_bytes = 0;
             for (uint32_t p = 0; p < ft.param_types.size(); ++p)
@@ -2509,6 +2656,11 @@ namespace psizam {
          case ir_op::table_init:
          case ir_op::elem_drop:
          case ir_op::table_copy:
+         case ir_op::table_get:
+         case ir_op::table_set:
+         case ir_op::table_grow:
+         case ir_op::table_size:
+         case ir_op::table_fill:
             return false; // use stack-mode emit_ir_inst
 
          // ── Memory management (register mode) ──
@@ -5964,11 +6116,13 @@ namespace psizam {
          });
       }
 
-      static void table_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void table_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count, uint32_t packed_tables) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         uint32_t dst_table = packed_tables & 0xFFFF;
+         uint32_t src_table = packed_tables >> 16;
          psizam::longjmp_on_exception([&]() {
-            auto* s = context->get_table_ptr(src, count);
-            auto* d = context->get_table_ptr(dest, count);
+            auto* s = context->get_table_ptr(src, count, src_table);
+            auto* d = context->get_table_ptr(dest, count, dst_table);
             if (count > 0)
                std::memmove(d, s, count * sizeof(table_entry));
          });

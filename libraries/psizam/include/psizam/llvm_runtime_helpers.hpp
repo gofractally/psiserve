@@ -39,6 +39,13 @@ extern "C" {
    int64_t  __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
                                     uint32_t table_elem, void* args_buf, uint32_t nargs);
 
+   // Table element operations
+   uint32_t __psizam_table_get(void* ctx, uint32_t table_idx, uint32_t elem_idx);
+   void     __psizam_table_set(void* ctx, uint32_t table_idx, uint32_t elem_idx, uint32_t val);
+   uint32_t __psizam_table_grow(void* ctx, uint32_t table_idx, uint32_t delta, uint32_t init_val);
+   uint32_t __psizam_table_size(void* ctx, uint32_t table_idx);
+   void     __psizam_table_fill(void* ctx, uint32_t table_idx, uint32_t i, uint32_t val, uint32_t n);
+
    // Resolve indirect call for JIT backends — performs bounds check, null check,
    // and type check. Returns the code_ptr from the table entry.
    // Throws wasm_interpreter_exception on error.

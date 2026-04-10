@@ -1,5 +1,84 @@
 #pragma once
 
+//
+// BACKEND FEATURE PARITY TRACKER
+// Legend: 🟢 done  🟡 partial  🔴 missing  🐛 bug
+//
+//                              INTERP JIT(x86) JIT2(x86) JIT2(a64) LLVM
+//                              ────── ──────── ───────── ───────── ────
+// MULTI-VALUE RETURNS
+//   parse multi-value types      🟢     🟢       🟢        🟢      🟢
+//   function returns (N>1)       🟢     🔴       🔴        🔴      🔴
+//   multi-value block types      🔴     🔴       🔴        🔴      🔴
+//   branch encoding (N vals)     🔴     🔴       🔴        🔴      🔴
+//
+// MULTI-TABLE
+//   call_indirect w/ table       🟢     🟢       🟢        🟢      🟢
+//   table.copy multi-table       🟢     🟢       🟢        🟢      🟢
+//   table.init multi-table       🟢     🟢       🟢        🟢      🟢
+//   elem.drop                    🟢     🟢       🟢        🟢      🟢
+//
+// TABLE ELEMENT OPS
+//   table.get                    🟢     🟢       🟢        🟢      🟢
+//   table.set                    🟢     🟢       🟢        🟢      🟢
+//   table.grow                   🟢     🟢       🟢        🟢      🟢
+//   table.size                   🟢     🟢       🟢        🟢      🟢
+//   table.fill                   🟢     🟢       🟢        🟢      🟢
+//
+// BULK MEMORY
+//   memory.init                  🟢     🟢       🟢        🟢      🟢
+//   memory.copy                  🟢     🟢       🟢        🟢      🟢
+//   memory.fill                  🟢     🟢       🟢        🟢      🟢
+//   data.drop                    🟢     🟢       🟢        🟢      🟢
+//
+// SIMD (v128)
+//   full v128 ops                🟢     🟢       🟢        🟡      🔴
+//
+// REFERENCE TYPES
+//   ref.null / ref.is_null       🔴     🔴       🔴        🔴      🔴
+//   ref.func                     🔴     🔴       🔴        🔴      🔴
+//   externref                    🔴     🔴       🔴        🔴      🔴
+//
+// SIGN EXTENSION OPS
+//   i32_extend8/16_s             🟢     🟢       🟢        🟢      🟢
+//   i64_extend8/16/32_s          🟢     🟢       🟢        🟢      🟢
+//
+// NONTRAPPING FLOAT-TO-INT
+//   trunc_sat_*                  🟢     🟢       🟢        🟢      🟢
+//
+// MUTABLE GLOBALS IMPORT/EXPORT
+//   mutable global import        🟢     🟢       🟢        🟢      🟢
+//
+// EXCEPTION HANDLING
+//   try/catch/throw              🔴     🔴       🔴        🔴      🔴
+//
+// THREADS / ATOMICS
+//   atomic ops                   🔴     🔴       🔴        🔴      🔴
+//   shared memory                🔴     🔴       🔴        🔴      🔴
+//
+// TAIL CALLS
+//   return_call                  🔴     🔴       🔴        🔴      🔴
+//   return_call_indirect         🔴     🔴       🔴        🔴      🔴
+//
+// MEMORY64
+//   i64 addressing               🔴     🔴       🔴        🔴      🔴
+//
+// GC PROPOSAL
+//   struct/array types           🔴     🔴       🔴        🔴      🔴
+//
+// RELAXED SIMD
+//   relaxed simd ops             🔴     🔴       🔴        🔴      🔴
+//
+// KNOWN BUGS 🐛
+//   [B1] SIMD float ops incomplete on aarch64 softfloat (~60 spec failures)
+//   [B2] v128_load32_zero guard page crash in interpreter (simd_const_385/387)
+//   [B3] JIT2(x86) call_0_wasm SIGABRT (pre-existing)
+//   [B4] LLVM OOB load/trap failures (pending fix)
+//   [B5] error_codes_def.hpp extraneous brace warnings on aarch64 tools
+//
+// Last updated: 2026-04-10
+//
+
 #include <psizam/allocator.hpp>
 #include <psizam/bitcode_writer.hpp>
 #include <psizam/config.hpp>

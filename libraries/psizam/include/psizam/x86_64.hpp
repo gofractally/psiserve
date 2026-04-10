@@ -3,6 +3,7 @@
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
 #include <psizam/execution_context.hpp>
+#include <psizam/llvm_runtime_helpers.hpp>
 #include <psizam/signals.hpp>
 #include <psizam/softfloat.hpp>
 #include <psizam/types.hpp>
@@ -456,23 +457,42 @@ namespace psizam {
          COUNT_INSTR();
          auto icount = variable_size_instr(37, 64);
          emit_check_call_depth();
-         std::uint32_t table_size = _mod.tables[0].limits.initial;
          emit_pop(rax);
-         emit_cmp(table_size, eax);
-         fix_branch(emit_branchcc32(JAE), call_indirect_handler);
-         emit(SHL_imm8, imm8{4}, rax);
-         if (_mod.indirect_table(0))
-         {
-            emit_mov(*(rsi + wasm_allocator::table_offset()), rcx);
-            emit_add(rcx, rax);
+
+         if (table_idx != 0) {
+            // Non-zero table: use runtime helper for bounds/type/null check
+            // __psizam_resolve_indirect(ctx, type_idx, table_idx, elem_idx)
+            emit_push(rdi);
+            emit_push(rsi);
+            emit_mov(eax, ecx);  // elem_idx → arg4
+            emit_mov(table_idx, edx); // table_idx → arg3
+            emit_mov(functypeidx, esi); // type_idx → arg2
+            emit_mov(&__psizam_resolve_indirect, rax);
+            emit(CALL, rax);
+            // rax = code_ptr (null on error)
+            emit_pop(rsi);
+            emit_pop(rdi);
+            emit(TEST, rax, rax);
+            fix_branch(emit_branchcc32(JE), call_indirect_handler);
+            emit(CALL, rax);
+         } else {
+            std::uint32_t table_size = _mod.tables[0].limits.initial;
+            emit_cmp(table_size, eax);
+            fix_branch(emit_branchcc32(JAE), call_indirect_handler);
+            emit(SHL_imm8, imm8{4}, rax);
+            if (_mod.indirect_table(0))
+            {
+               emit_mov(*(rsi + wasm_allocator::table_offset()), rcx);
+               emit_add(rcx, rax);
+            }
+            else
+            {
+               emit(LEA, *(rax + rsi + wasm_allocator::table_offset()), rax);
+            }
+            emit_cmp(functypeidx, *dword_ptr(rax));
+            fix_branch(emit_branchcc32(JNE), type_error_handler);
+            emit(CALL, *(rax + 8));
          }
-         else
-         {
-            emit(LEA, *(rax + rsi + wasm_allocator::table_offset()), rax);
-         }
-         emit_cmp(functypeidx, *dword_ptr(rax));
-         fix_branch(emit_branchcc32(JNE), type_error_handler);
-         emit(CALL, *(rax + 8));
          emit_multipop(ft);
          emit_check_call_depth_end();
       }
@@ -840,22 +860,104 @@ namespace psizam {
          emit_pop(rdi);
          emit_restore_backtrace();
       }
-      void emit_table_get(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.get not supported in jit backend"); }
-      void emit_table_set(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.set not supported in jit backend"); }
-      void emit_table_grow(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.grow not supported in jit backend"); }
-      void emit_table_size(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.size not supported in jit backend"); }
-      void emit_table_fill(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.fill not supported in jit backend"); }
-
-      void emit_table_init(std::uint32_t x, std::uint32_t /*table_idx*/ = 0) {
+      void emit_table_get(uint32_t table_idx) {
          COUNT_INSTR();
          auto icount = variable_size_instr(25, 43);
-         emit_pop(r8);
-         emit_pop(rcx);
-         emit_pop(rdx);
+         // Stack: [elem_idx]; table_get_helper(ctx, table_idx, elem_idx) -> result
+         emit_pop(rdx);  // elem_idx → arg3
          emit_setup_backtrace();
          emit_push(rdi);
          emit_push(rsi);
-         emit_mov(x, esi);
+         emit_mov(table_idx, esi); // table_idx → arg2
+         emit_mov(&table_get_helper, rax);
+         emit(CALL, rax);
+         emit_pop(rsi);
+         emit_pop(rdi);
+         emit_restore_backtrace();
+         emit_push(rax); // push result
+      }
+      void emit_table_set(uint32_t table_idx) {
+         COUNT_INSTR();
+         auto icount = variable_size_instr(25, 43);
+         // Stack: [elem_idx, val]; table_set_helper(ctx, table_idx, elem_idx, val)
+         emit_pop(rcx);  // val → arg4
+         emit_pop(rdx);  // elem_idx → arg3
+         emit_setup_backtrace();
+         emit_push(rdi);
+         emit_push(rsi);
+         emit_mov(table_idx, esi); // table_idx → arg2
+         emit_mov(&table_set_helper, rax);
+         emit(CALL, rax);
+         emit_pop(rsi);
+         emit_pop(rdi);
+         emit_restore_backtrace();
+      }
+      void emit_table_grow(uint32_t table_idx) {
+         COUNT_INSTR();
+         auto icount = variable_size_instr(25, 43);
+         // Stack: [init_val, delta]; table_grow_helper(ctx, table_idx, delta, init_val)
+         emit_pop(rcx);  // delta
+         emit_pop(rax);  // init_val → stash
+         emit_setup_backtrace();
+         emit_push(rdi);
+         emit_push(rsi);
+         emit_mov(table_idx, esi); // table_idx → arg2
+         emit_mov(eax, r8d);       // init_val → arg5... wait, SysV arg order:
+         // rdi=ctx, rsi=table_idx, rdx=delta, rcx=init_val
+         // delta was in rcx, init_val in rax
+         // Need: rdx=delta(was rcx), rcx=init_val(was rax)
+         emit_mov(ecx, edx);  // delta → arg3
+         emit_mov(eax, ecx);  // init_val → arg4
+         emit_mov(&table_grow_helper, rax);
+         emit(CALL, rax);
+         emit_pop(rsi);
+         emit_pop(rdi);
+         emit_restore_backtrace();
+         emit_push(rax); // push result
+      }
+      void emit_table_size(uint32_t table_idx) {
+         COUNT_INSTR();
+         auto icount = variable_size_instr(21, 39);
+         emit_setup_backtrace();
+         emit_push(rdi);
+         emit_push(rsi);
+         emit_mov(table_idx, esi); // table_idx → arg2
+         emit_mov(&table_size_helper, rax);
+         emit(CALL, rax);
+         emit_pop(rsi);
+         emit_pop(rdi);
+         emit_restore_backtrace();
+         emit_push(rax); // push result
+      }
+      void emit_table_fill(uint32_t table_idx) {
+         COUNT_INSTR();
+         auto icount = variable_size_instr(25, 43);
+         // Stack: [i, val, n]; table_fill_helper(ctx, table_idx, i, val, n)
+         emit_pop(r8);   // n → arg5
+         emit_pop(rcx);  // val → arg4
+         emit_pop(rdx);  // i → arg3
+         emit_setup_backtrace();
+         emit_push(rdi);
+         emit_push(rsi);
+         emit_mov(table_idx, esi); // table_idx → arg2
+         emit_mov(&table_fill_helper, rax);
+         emit(CALL, rax);
+         emit_pop(rsi);
+         emit_pop(rdi);
+         emit_restore_backtrace();
+      }
+
+      void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
+         COUNT_INSTR();
+         auto icount = variable_size_instr(25, 43);
+         emit_pop(r8);   // n
+         emit_pop(rcx);  // src
+         emit_pop(rdx);  // dest
+         emit_setup_backtrace();
+         emit_push(rdi);
+         emit_push(rsi);
+         // Pack elem_idx | (table_idx << 16) into esi for init_table
+         emit_mov(x | (table_idx << 16), esi);
 
          emit_mov(&init_table, rax);
          emit(CALL, rax);
@@ -4342,8 +4444,36 @@ namespace psizam {
          emit_mov(r9, rdi);
       }
 
-      void emit_table_copy(std::uint32_t /*dst_table*/ = 0, std::uint32_t /*src_table*/ = 0) {
+      void emit_table_copy(std::uint32_t dst_table = 0, std::uint32_t src_table = 0) {
          COUNT_INSTR();
+         if (dst_table != 0 || src_table != 0) {
+            // Non-zero tables: use runtime helper
+            auto icount = variable_size_instr(25, 43);
+            emit_pop(r8);   // n
+            emit_pop(rcx);  // src
+            emit_pop(rdx);  // dest
+            emit_setup_backtrace();
+            emit_push(rdi);
+            emit_push(rsi);
+            // __psizam_table_copy(ctx, dest, src, n, dst_table, src_table)
+            // SysV: rdi=ctx, rsi=dest, rdx=src, rcx=n, r8=dst_table, r9=src_table
+            // We have: rdx=dest, rcx=src, r8=n
+            // Need to shuffle: rsi=dest(rdx), rdx=src(rcx), rcx=n(r8), r8=dst_table, r9=src_table
+            emit_mov(edx, esi);  // dest → arg2
+            // src is in ecx, n is in r8d
+            // edx = src(ecx), ecx = n(r8d), r8d = dst_table, r9d = src_table
+            emit_mov(ecx, edx);  // src → arg3
+            emit_mov(r8d, ecx);  // n → arg4
+            emit_mov(dst_table, r8d); // dst_table → arg5
+            emit_mov(src_table, r9d); // src_table → arg6
+            emit_mov(&__psizam_table_copy, rax);
+            emit(CALL, rax);
+            emit_pop(rsi);
+            emit_pop(rdi);
+            emit_restore_backtrace();
+            return;
+         }
+
          auto icount = fixed_size_instr(97);
          emit_pop(rcx);
          emit_mov(rsi, r8);
@@ -6474,14 +6604,55 @@ namespace psizam {
          context->drop_data(x);
       }
 
-      static void init_table(void* ctx /*rdi*/, uint32_t x /*esi*/, uint32_t d /*edx*/, uint32_t s /*ecx*/, uint32_t n /*r8d*/) {
+      static void init_table(void* ctx /*rdi*/, uint32_t packed /*esi*/, uint32_t d /*edx*/, uint32_t s /*ecx*/, uint32_t n /*r8d*/) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
-         context->init_table(x, d, s, n);
+         uint32_t elem_idx = packed & 0xFFFF;
+         uint32_t table_idx = packed >> 16;
+         context->init_table(elem_idx, d, s, n, table_idx);
       }
 
       static void drop_elem(void* ctx /*rdi*/, uint32_t x /*esi*/) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          context->drop_elem(x);
+      }
+
+      static uint32_t table_get_helper(void* ctx, uint32_t table_idx, uint32_t elem_idx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         if (elem_idx >= context->get_table_size(table_idx))
+            psizam::throw_<wasm_interpreter_exception>("table index out of range");
+         return context->get_table_base(table_idx)[elem_idx].index;
+      }
+
+      static void table_set_helper(void* ctx, uint32_t table_idx, uint32_t elem_idx, uint32_t val) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         if (elem_idx >= context->get_table_size(table_idx))
+            psizam::throw_<wasm_interpreter_exception>("table index out of range");
+         auto& entry = context->get_table_base(table_idx)[elem_idx];
+         entry.index = val;
+         entry.type = UINT32_MAX;
+         entry.code_ptr = nullptr;
+      }
+
+      static uint32_t table_grow_helper(void* ctx, uint32_t table_idx, uint32_t delta, uint32_t init_val) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         table_entry te;
+         te.type = UINT32_MAX;
+         te.index = init_val;
+         te.code_ptr = nullptr;
+         return context->table_grow(table_idx, delta, te);
+      }
+
+      static uint32_t table_size_helper(void* ctx, uint32_t table_idx) {
+         return static_cast<jit_execution_context<false>*>(ctx)->get_table_size(table_idx);
+      }
+
+      static void table_fill_helper(void* ctx, uint32_t table_idx, uint32_t i, uint32_t val, uint32_t n) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         table_entry te;
+         te.type = UINT32_MAX;
+         te.index = val;
+         te.code_ptr = nullptr;
+         context->table_fill(table_idx, i, te, n);
       }
 
       static void on_memory_error() { throw_<wasm_memory_exception>("wasm memory out-of-bounds"); }

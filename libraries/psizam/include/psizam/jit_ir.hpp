@@ -147,6 +147,11 @@ namespace psizam {
       table_init,
       elem_drop,
       table_copy,
+      table_get,
+      table_set,
+      table_grow,
+      table_size,
+      table_fill,
    };
 
    static constexpr uint32_t ir_vreg_none = UINT32_MAX;

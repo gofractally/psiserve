@@ -2035,6 +2035,65 @@ namespace psizam {
             break;
          }
 
+         case ir_op::table_get: {
+            emit_pop(X2);  // elem_idx → arg3
+            emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
+            emit_mov_reg(X0, X19);  // ctx
+            emit_push(X19); emit_push(X20);
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_get));
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20); emit_pop(X19);
+            emit_push(X0); // push result
+            break;
+         }
+         case ir_op::table_set: {
+            emit_pop(X3);  // val → arg4
+            emit_pop(X2);  // elem_idx → arg3
+            emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
+            emit_mov_reg(X0, X19);  // ctx
+            emit_push(X19); emit_push(X20);
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_set));
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20); emit_pop(X19);
+            break;
+         }
+         case ir_op::table_grow: {
+            // Stack: [init_val, delta]
+            emit_pop(X2);  // delta → arg3
+            emit_pop(X3);  // init_val → arg4
+            emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
+            emit_mov_reg(X0, X19);  // ctx
+            emit_push(X19); emit_push(X20);
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_grow));
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20); emit_pop(X19);
+            emit_push(X0); // push result
+            break;
+         }
+         case ir_op::table_size: {
+            emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
+            emit_mov_reg(X0, X19);  // ctx
+            emit_push(X19); emit_push(X20);
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_size));
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20); emit_pop(X19);
+            emit_push(X0); // push result
+            break;
+         }
+         case ir_op::table_fill: {
+            // Stack: [i, val, n]
+            emit_pop(X4);  // n → arg5
+            emit_pop(X3);  // val → arg4
+            emit_pop(X2);  // i → arg3
+            emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
+            emit_mov_reg(X0, X19);  // ctx
+            emit_push(X19); emit_push(X20);
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_fill));
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20); emit_pop(X19);
+            break;
+         }
+
          default:
             break;
          }

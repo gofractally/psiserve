@@ -543,11 +543,78 @@ namespace psizam {
          }
       }
 
-      void emit_table_get(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.get not supported in jit2 backend"); }
-      void emit_table_set(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.set not supported in jit2 backend"); }
-      void emit_table_grow(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.grow not supported in jit2 backend"); }
-      void emit_table_size(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.size not supported in jit2 backend"); }
-      void emit_table_fill(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.fill not supported in jit2 backend"); }
+      void emit_table_get(uint32_t table_idx) {
+         if (!_unreachable) {
+            uint32_t idx_vreg = _func->vpop();
+            uint32_t dest = _func->alloc_vreg(types::i32);
+            ir_inst inst{};
+            inst.opcode = ir_op::table_get;
+            inst.type = types::i32;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = dest;
+            inst.ri.src1 = idx_vreg;
+            inst.ri.imm = static_cast<int32_t>(table_idx);
+            _func->emit(inst);
+            _func->vpush(dest);
+         }
+      }
+      void emit_table_set(uint32_t table_idx) {
+         if (!_unreachable) {
+            uint32_t val_vreg = _func->vpop();
+            uint32_t idx_vreg = _func->vpop();
+            ir_inst inst{};
+            inst.opcode = ir_op::table_set;
+            inst.type = types::pseudo;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = ir_vreg_none;
+            inst.rr.src1 = idx_vreg;
+            inst.rr.src2 = val_vreg;
+            inst.ri.imm = static_cast<int32_t>(table_idx);
+            _func->emit(inst);
+         }
+      }
+      void emit_table_grow(uint32_t table_idx) {
+         if (!_unreachable) {
+            uint32_t delta_vreg = _func->vpop();
+            uint32_t init_vreg = _func->vpop();
+            uint32_t dest = _func->alloc_vreg(types::i32);
+            ir_inst inst{};
+            inst.opcode = ir_op::table_grow;
+            inst.type = types::i32;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = dest;
+            inst.rr.src1 = init_vreg;
+            inst.rr.src2 = delta_vreg;
+            inst.ri.imm = static_cast<int32_t>(table_idx);
+            _func->emit(inst);
+            _func->vpush(dest);
+         }
+      }
+      void emit_table_size(uint32_t table_idx) {
+         if (!_unreachable) {
+            uint32_t dest = _func->alloc_vreg(types::i32);
+            ir_inst inst{};
+            inst.opcode = ir_op::table_size;
+            inst.type = types::i32;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = dest;
+            inst.ri.imm = static_cast<int32_t>(table_idx);
+            _func->emit(inst);
+            _func->vpush(dest);
+         }
+      }
+      void emit_table_fill(uint32_t table_idx) {
+         ir_bulk_mem3(); // pops n, val, i
+         if (!_unreachable) {
+            ir_inst inst{};
+            inst.opcode = ir_op::table_fill;
+            inst.type = types::pseudo;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = ir_vreg_none;
+            inst.ri.imm = static_cast<int32_t>(table_idx);
+            _func->emit(inst);
+         }
+      }
 
       void emit_call_indirect(const func_type& ft, uint32_t fti, uint32_t table_idx = 0) {
          if (!_unreachable) {

@@ -62,4 +62,43 @@ void __psizam_table_init(void* ctx, uint32_t elem_idx,
    as_ctx(ctx).init_table(elem_idx, dest, src, n, table_idx);
 }
 
+uint32_t __psizam_table_get(void* ctx, uint32_t table_idx, uint32_t elem_idx) {
+   auto& c = as_ctx(ctx);
+   if (elem_idx >= c.get_table_size(table_idx))
+      throw psizam::wasm_interpreter_exception{"table index out of range"};
+   return c.get_table_base(table_idx)[elem_idx].index;
+}
+
+void __psizam_table_set(void* ctx, uint32_t table_idx, uint32_t elem_idx, uint32_t val) {
+   auto& c = as_ctx(ctx);
+   if (elem_idx >= c.get_table_size(table_idx))
+      throw psizam::wasm_interpreter_exception{"table index out of range"};
+   auto& entry = c.get_table_base(table_idx)[elem_idx];
+   entry.index = val;
+   entry.type = UINT32_MAX;
+   entry.code_ptr = nullptr;
+}
+
+uint32_t __psizam_table_grow(void* ctx, uint32_t table_idx, uint32_t delta, uint32_t init_val) {
+   auto& c = as_ctx(ctx);
+   psizam::table_entry te;
+   te.type = UINT32_MAX;
+   te.index = init_val;
+   te.code_ptr = nullptr;
+   return c.table_grow(table_idx, delta, te);
+}
+
+uint32_t __psizam_table_size(void* ctx, uint32_t table_idx) {
+   return as_ctx(ctx).get_table_size(table_idx);
+}
+
+void __psizam_table_fill(void* ctx, uint32_t table_idx, uint32_t i, uint32_t val, uint32_t n) {
+   auto& c = as_ctx(ctx);
+   psizam::table_entry te;
+   te.type = UINT32_MAX;
+   te.index = val;
+   te.code_ptr = nullptr;
+   c.table_fill(table_idx, i, te, n);
+}
+
 } // extern "C"

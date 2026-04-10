@@ -1120,11 +1120,62 @@ namespace psizam {
          emit_branch_to_handler(COND_NE, memory_handler);
       }
 
-      void emit_table_get(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.get not supported in jit backend"); }
-      void emit_table_set(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.set not supported in jit backend"); }
-      void emit_table_grow(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.grow not supported in jit backend"); }
-      void emit_table_size(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.size not supported in jit backend"); }
-      void emit_table_fill(uint32_t /*table_idx*/) { PSIZAM_ASSERT(false, wasm_parse_exception, "table.fill not supported in jit backend"); }
+      void emit_table_get(uint32_t table_idx) {
+         // __psizam_table_get(ctx, table_idx, elem_idx)
+         emit_pop_x(X2);  // elem_idx → arg3
+         emit_mov_imm32(X1, table_idx); // table_idx → arg2
+         emit32(0xAA1303E0); // MOV X0, X19 (ctx)
+         emit_push_x(X19); emit_push_x(X20);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_get));
+         emit32(0xD63F0100); // BLR X8
+         emit_pop_x(X20); emit_pop_x(X19);
+         emit_push_x(X0); // push result
+      }
+      void emit_table_set(uint32_t table_idx) {
+         // __psizam_table_set(ctx, table_idx, elem_idx, val)
+         emit_pop_x(X3);  // val → arg4
+         emit_pop_x(X2);  // elem_idx → arg3
+         emit_mov_imm32(X1, table_idx); // table_idx → arg2
+         emit32(0xAA1303E0); // MOV X0, X19 (ctx)
+         emit_push_x(X19); emit_push_x(X20);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_set));
+         emit32(0xD63F0100); // BLR X8
+         emit_pop_x(X20); emit_pop_x(X19);
+      }
+      void emit_table_grow(uint32_t table_idx) {
+         // __psizam_table_grow(ctx, table_idx, delta, init_val)
+         emit_pop_x(X2);  // delta → arg3
+         emit_pop_x(X3);  // init_val → arg4
+         emit_mov_imm32(X1, table_idx); // table_idx → arg2
+         emit32(0xAA1303E0); // MOV X0, X19 (ctx)
+         emit_push_x(X19); emit_push_x(X20);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_grow));
+         emit32(0xD63F0100); // BLR X8
+         emit_pop_x(X20); emit_pop_x(X19);
+         emit_push_x(X0); // push result
+      }
+      void emit_table_size(uint32_t table_idx) {
+         // __psizam_table_size(ctx, table_idx)
+         emit_mov_imm32(X1, table_idx); // table_idx → arg2
+         emit32(0xAA1303E0); // MOV X0, X19 (ctx)
+         emit_push_x(X19); emit_push_x(X20);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_size));
+         emit32(0xD63F0100); // BLR X8
+         emit_pop_x(X20); emit_pop_x(X19);
+         emit_push_x(X0); // push result
+      }
+      void emit_table_fill(uint32_t table_idx) {
+         // __psizam_table_fill(ctx, table_idx, i, val, n)
+         emit_pop_x(X4);  // n → arg5
+         emit_pop_x(X3);  // val → arg4
+         emit_pop_x(X2);  // i → arg3
+         emit_mov_imm32(X1, table_idx); // table_idx → arg2
+         emit32(0xAA1303E0); // MOV X0, X19 (ctx)
+         emit_push_x(X19); emit_push_x(X20);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_fill));
+         emit32(0xD63F0100); // BLR X8
+         emit_pop_x(X20); emit_pop_x(X19);
+      }
 
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
          // Pop n, s, d from WASM stack

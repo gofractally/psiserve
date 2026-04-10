@@ -93,6 +93,11 @@ namespace psizam {
       llvm::Function* rt_elem_drop     = nullptr;
       llvm::Function* rt_table_copy    = nullptr;
       llvm::Function* rt_call_indirect = nullptr;
+      llvm::Function* rt_table_get     = nullptr;
+      llvm::Function* rt_table_set     = nullptr;
+      llvm::Function* rt_table_grow    = nullptr;
+      llvm::Function* rt_table_size    = nullptr;
+      llvm::Function* rt_table_fill    = nullptr;
       llvm::Function* rt_trap           = nullptr;
 
       void declare_runtime_helpers() {
@@ -155,6 +160,26 @@ namespace psizam {
          //                                uint32_t table_elem, void* args_buf, uint32_t nargs)
          rt_call_indirect = decl("__psizam_call_indirect",
             llvm::FunctionType::get(i64_ty, {ptr_ty, ptr_ty, i32_ty, i32_ty, ptr_ty, i32_ty}, false));
+
+         // uint32_t __psizam_table_get(void* ctx, uint32_t table_idx, uint32_t elem_idx)
+         rt_table_get = decl("__psizam_table_get",
+            llvm::FunctionType::get(i32_ty, {ptr_ty, i32_ty, i32_ty}, false));
+
+         // void __psizam_table_set(void* ctx, uint32_t table_idx, uint32_t elem_idx, uint32_t val)
+         rt_table_set = decl("__psizam_table_set",
+            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i32_ty, i32_ty}, false));
+
+         // uint32_t __psizam_table_grow(void* ctx, uint32_t table_idx, uint32_t delta, uint32_t init_val)
+         rt_table_grow = decl("__psizam_table_grow",
+            llvm::FunctionType::get(i32_ty, {ptr_ty, i32_ty, i32_ty, i32_ty}, false));
+
+         // uint32_t __psizam_table_size(void* ctx, uint32_t table_idx)
+         rt_table_size = decl("__psizam_table_size",
+            llvm::FunctionType::get(i32_ty, {ptr_ty, i32_ty}, false));
+
+         // void __psizam_table_fill(void* ctx, uint32_t table_idx, uint32_t i, uint32_t val, uint32_t n)
+         rt_table_fill = decl("__psizam_table_fill",
+            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false));
 
          // void __psizam_trap(void* ctx, uint32_t trap_code)
          rt_trap = decl("__psizam_trap",
@@ -2010,6 +2035,44 @@ namespace psizam {
                      builder.CreateCall(rt_table_copy,
                         {ctx_ptr, call_args[0], call_args[1], call_args[2],
                          builder.getInt32(dst_table), builder.getInt32(src_table)});
+                  }
+                  call_args.clear();
+                  break;
+               }
+
+               case ir_op::table_get: {
+                  auto* elem_idx = get_vreg(inst.ri.src1);
+                  auto* result = builder.CreateCall(rt_table_get,
+                     {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), elem_idx});
+                  set_vreg(inst.dest, result);
+                  break;
+               }
+               case ir_op::table_set: {
+                  auto* elem_idx = get_vreg(inst.rr.src1);
+                  auto* val = get_vreg(inst.rr.src2);
+                  builder.CreateCall(rt_table_set,
+                     {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), elem_idx, val});
+                  break;
+               }
+               case ir_op::table_grow: {
+                  auto* init_val = get_vreg(inst.rr.src1);
+                  auto* delta = get_vreg(inst.rr.src2);
+                  auto* result = builder.CreateCall(rt_table_grow,
+                     {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), delta, init_val});
+                  set_vreg(inst.dest, result);
+                  break;
+               }
+               case ir_op::table_size: {
+                  auto* result = builder.CreateCall(rt_table_size,
+                     {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm))});
+                  set_vreg(inst.dest, result);
+                  break;
+               }
+               case ir_op::table_fill: {
+                  if (call_args.size() >= 3) {
+                     builder.CreateCall(rt_table_fill,
+                        {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)),
+                         call_args[0], call_args[1], call_args[2]});
                   }
                   call_args.clear();
                   break;
