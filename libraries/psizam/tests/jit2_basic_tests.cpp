@@ -399,6 +399,65 @@ static std::vector<uint8_t> multivalue_wasm = {
    0x09, 0x00, 0x20,0x00, 0x20,0x01, 0x10,0x02, 0x6b, 0x0b,
 };
 
+// Multi-value block type test module:
+// (module
+//   (type $mv (func (result i32 i32)))                ;; type 0: () -> (i32, i32)
+//   (type $i  (func (result i32)))                    ;; type 1: () -> (i32)
+//   (type $bp (func (param i32 i32) (result i32)))    ;; type 2: (i32, i32) -> (i32)
+//
+//   (func (export "test_block_end") (result i32)      ;; func 0: type 1
+//     (block (type $mv) i32.const 10 i32.const 20 end)
+//     i32.add)                                        ;; 10 + 20 = 30
+//
+//   (func (export "test_block_br") (result i32)       ;; func 1: type 1
+//     (block (type $mv) i32.const 100 i32.const 200 br 0 end)
+//     i32.sub)                                        ;; 100 - 200 = -100
+//
+//   (func (export "test_block_params") (result i32)   ;; func 2: type 1
+//     i32.const 10 i32.const 20
+//     (block (type $bp) i32.add end))                 ;; 10 + 20 = 30
+// )
+static std::vector<uint8_t> multivalue_block_wasm = {
+   0x00,0x61,0x73,0x6d, 0x01,0x00,0x00,0x00,  // magic + version
+   // Type section (id=1, size=16)
+   0x01, 0x10,
+   0x03,                                       // 3 types
+   0x60, 0x00, 0x02, 0x7f, 0x7f,              // type 0: () -> (i32, i32)
+   0x60, 0x00, 0x01, 0x7f,                    // type 1: () -> (i32)
+   0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,        // type 2: (i32, i32) -> (i32)
+   // Function section (id=3, size=4)
+   0x03, 0x04, 0x03, 0x01, 0x01, 0x01,
+   // Export section (id=7, size=54)
+   0x07, 0x36,
+   0x03,                                       // 3 exports
+   0x0e, 0x74,0x65,0x73,0x74,0x5f,0x62,0x6c,0x6f,0x63,0x6b,0x5f,0x65,0x6e,0x64,  // "test_block_end"
+   0x00, 0x00,                                 // func index 0
+   0x0d, 0x74,0x65,0x73,0x74,0x5f,0x62,0x6c,0x6f,0x63,0x6b,0x5f,0x62,0x72,       // "test_block_br"
+   0x00, 0x01,                                 // func index 1
+   0x11, 0x74,0x65,0x73,0x74,0x5f,0x62,0x6c,0x6f,0x63,0x6b,0x5f,0x70,0x61,0x72,0x61,0x6d,0x73,  // "test_block_params"
+   0x00, 0x02,                                 // func index 2
+   // Code section (id=10, size=38)
+   0x0a, 0x26,
+   0x03,                                       // 3 function bodies
+   // func 0: (block (type 0) i32.const 10 i32.const 20 end) i32.add end
+   0x0a, 0x00, 0x02,0x00, 0x41,0x0a, 0x41,0x14, 0x0b, 0x6a, 0x0b,
+   // func 1: (block (type 0) i32.const 100 i32.const 200 br 0 end) i32.sub end
+   0x0e, 0x00, 0x02,0x00, 0x41,0xe4,0x00, 0x41,0xc8,0x01, 0x0c,0x00, 0x0b, 0x6b, 0x0b,
+   // func 2: i32.const 10 i32.const 20 (block (type 2) i32.add end) end
+   0x0a, 0x00, 0x41,0x0a, 0x41,0x14, 0x02,0x02, 0x6a, 0x0b, 0x0b,
+};
+
+TEST_CASE("multi-value block types: interpreter", "[multi_value]") {
+   using backend_t = backend<std::nullptr_t, psizam::interpreter>;
+   backend_t bkend(multivalue_block_wasm, &wa);
+   // block with type () -> (i32, i32): pushes 10, 20, end -> add = 30
+   CHECK(bkend.call_with_return("env", "test_block_end")->to_ui32() == 30);
+   // block with type () -> (i32, i32): pushes 100, 200, br 0 carries 2 values -> sub = -100
+   CHECK(bkend.call_with_return("env", "test_block_br")->to_i32() == -100);
+   // block with params (i32, i32) -> (i32): outer pushes 10, 20, block adds them -> 30
+   CHECK(bkend.call_with_return("env", "test_block_params")->to_ui32() == 30);
+}
+
 TEST_CASE("multi-value returns: interpreter", "[multi_value]") {
    using backend_t = backend<std::nullptr_t, psizam::interpreter>;
    backend_t bkend(multivalue_wasm, &wa);
