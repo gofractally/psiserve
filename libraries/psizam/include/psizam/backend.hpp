@@ -8,7 +8,7 @@
 //                              ────── ──────── ───────── ───────── ────
 // MULTI-VALUE RETURNS
 //   parse multi-value types      🟢     🟢       🟢        🟢      🟢
-//   function returns (N>1)       🟢     🔴       🔴        🔴      🔴
+//   function returns (N>1)       🟢     🟢       🔴        🔴      🔴
 //   multi-value block types      🟢     🟢       🟡        🟡      🟡
 //   branch encoding (N vals)     🟢     🟢       🔴        🔴      🔴
 //
