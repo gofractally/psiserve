@@ -36,6 +36,9 @@ class null_writer {
    void emit_set_global(uint32_t /*localidx*/) {}
    void emit_table_get(uint32_t /*table_idx*/) {}
    void emit_table_set(uint32_t /*table_idx*/) {}
+   void emit_ref_null(uint8_t /*type*/) {}
+   void emit_ref_is_null() {}
+   void emit_ref_func(uint32_t /*idx*/) {}
 
    void emit_i32_load(uint32_t /*offset*/, uint32_t /*alignment*/) {}
    void emit_i64_load(uint32_t /*offset*/, uint32_t /*alignment*/) {}

@@ -558,6 +558,22 @@ namespace psizam {
             _func->vpush(dest);
          }
       }
+      void emit_ref_null(uint8_t /*type*/) {
+         // ref.null → push UINT32_MAX (null sentinel)
+         emit_i32_const(UINT32_MAX);
+      }
+      void emit_ref_is_null() {
+         // ref.is_null → compare top of stack with UINT32_MAX
+         if (!_unreachable) {
+            // Push UINT32_MAX, then compare equal
+            emit_i32_const(UINT32_MAX);
+            ir_binop(ir_op::i32_eq, types::i32);
+         }
+      }
+      void emit_ref_func(uint32_t idx) {
+         // ref.func → push function index
+         emit_i32_const(idx);
+      }
       void emit_table_set(uint32_t table_idx) {
          if (!_unreachable) {
             uint32_t val_vreg = _func->vpop();

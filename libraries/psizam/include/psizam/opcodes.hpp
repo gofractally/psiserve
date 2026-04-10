@@ -91,6 +91,12 @@ namespace psizam {
    PSIZAM_NUMERIC_OPS(PSIZAM_CREATE_TYPES)
    PSIZAM_CONVERSION_OPS(PSIZAM_CREATE_TYPES)
    PSIZAM_EXIT_OP(PSIZAM_CREATE_EXIT_TYPE)
+
+   // Reference type opcodes — manually defined since they have different layouts
+   struct ref_null_t { uint8_t type; static constexpr uint8_t opcode = 0xD0; };
+   struct ref_is_null_t { static constexpr uint8_t opcode = 0xD1; };
+   struct ref_func_t { uint32_t index; static constexpr uint8_t opcode = 0xD2; };
+
    PSIZAM_EMPTY_OPS(PSIZAM_CREATE_TYPES)
    PSIZAM_ERROR_OPS(PSIZAM_CREATE_TYPES)
    PSIZAM_DATA_OPS(PSIZAM_CREATE_DATA_TYPES)
@@ -119,6 +125,7 @@ namespace psizam {
       PSIZAM_NUMERIC_OPS(PSIZAM_IDENTITY)
       PSIZAM_CONVERSION_OPS(PSIZAM_IDENTITY)
       PSIZAM_EXIT_OP(PSIZAM_IDENTITY)
+      ref_null_t, ref_is_null_t, ref_func_t,
       PSIZAM_EMPTY_OPS(PSIZAM_IDENTITY)
       PSIZAM_DATA_OPS(PSIZAM_IDENTITY)
       PSIZAM_EXT_OPS(PSIZAM_IDENTITY)

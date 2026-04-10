@@ -35,9 +35,9 @@
 //   full v128 ops                🟢     🟢       🟢        🟡      🔴
 //
 // REFERENCE TYPES
-//   ref.null / ref.is_null       🔴     🔴       🔴        🔴      🔴
-//   ref.func                     🔴     🔴       🔴        🔴      🔴
-//   externref                    🔴     🔴       🔴        🔴      🔴
+//   ref.null / ref.is_null       🟢     🟢       🟢        🟢      🟢
+//   ref.func                     🟢     🟢       🟢        🟢      🟢
+//   externref                    🟢     🟢       🟢        🟢      🟢
 //
 // SIGN EXTENSION OPS
 //   i32_extend8/16_s             🟢     🟢       🟢        🟢      🟢

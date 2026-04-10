@@ -1242,6 +1242,28 @@ namespace psizam {
                   op_stack.pop(_mod->globals.at(global_idx).type.content_type);
                   code_writer.emit_set_global(global_idx);
                } break;
+               case opcodes::ref_null: {
+                  check_in_bounds();
+                  uint8_t ref_type = *code++;
+                  PSIZAM_ASSERT(ref_type == types::funcref || ref_type == types::externref,
+                                wasm_parse_exception, "ref.null requires funcref or externref type");
+                  op_stack.push(types::i32);  // ref values are carried as i32 (index)
+                  code_writer.emit_ref_null(ref_type);
+               } break;
+               case opcodes::ref_is_null: {
+                  check_in_bounds();
+                  op_stack.pop(types::i32);   // pop ref
+                  op_stack.push(types::i32);  // push i32 result
+                  code_writer.emit_ref_is_null();
+               } break;
+               case opcodes::ref_func: {
+                  check_in_bounds();
+                  uint32_t func_idx = parse_varuint32(code);
+                  PSIZAM_ASSERT(func_idx < _mod->get_functions_total(),
+                                wasm_parse_exception, "ref.func function index out of range");
+                  op_stack.push(types::i32);  // funcref carried as i32
+                  code_writer.emit_ref_func(func_idx);
+               } break;
                case opcodes::table_get: {
                   check_in_bounds();
                   uint32_t table_idx = parse_varuint32(code);

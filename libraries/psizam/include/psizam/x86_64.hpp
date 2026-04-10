@@ -921,6 +921,30 @@ namespace psizam {
          emit_pop(rdi);
          emit_restore_backtrace();
       }
+      void emit_ref_null(uint8_t /*type*/) {
+         // ref.null pushes the null sentinel (UINT32_MAX)
+         COUNT_INSTR();
+         auto icount = fixed_size_instr(6);
+         emit_mov(static_cast<uint32_t>(UINT32_MAX), eax);
+         emit_push(rax);
+      }
+      void emit_ref_is_null() {
+         // ref.is_null: pop ref, push 1 if == UINT32_MAX, else 0
+         COUNT_INSTR();
+         auto icount = fixed_size_instr(12);
+         emit_pop(rax);
+         emit(CMP, static_cast<int32_t>(-1), eax);
+         emit(XOR_A, ecx, ecx);
+         emit(SETZ, cl);
+         emit_push(rcx);
+      }
+      void emit_ref_func(uint32_t idx) {
+         // ref.func pushes the function index
+         COUNT_INSTR();
+         auto icount = fixed_size_instr(6);
+         emit_mov(idx, eax);
+         emit_push(rax);
+      }
       void emit_table_grow(uint32_t table_idx) {
          COUNT_INSTR();
          auto icount = variable_size_instr(25, 43);

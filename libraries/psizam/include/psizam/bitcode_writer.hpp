@@ -104,6 +104,9 @@ namespace psizam {
       void emit_set_global(uint32_t localidx) { fb[op_index++] = set_global_t{localidx}; }
       void emit_table_get(uint32_t table_idx) { fb[op_index++] = table_get_t{table_idx}; }
       void emit_table_set(uint32_t table_idx) { fb[op_index++] = table_set_t{table_idx}; }
+      void emit_ref_null(uint8_t type) { fb[op_index++] = ref_null_t{type}; }
+      void emit_ref_is_null() { fb[op_index++] = ref_is_null_t{}; }
+      void emit_ref_func(uint32_t idx) { fb[op_index++] = ref_func_t{idx}; }
 
 #define MEM_OP(op_name) \
       void emit_ ## op_name(uint32_t offset, uint32_t alignment) { fb[op_index++] = op_name ## _t{ offset, alignment }; }

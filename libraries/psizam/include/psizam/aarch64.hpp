@@ -1165,6 +1165,25 @@ namespace psizam {
          emit32(0xD63F0100); // BLR X8
          emit_pop_x(X20); emit_pop_x(X19);
       }
+      void emit_ref_null(uint8_t /*type*/) {
+         // ref.null pushes the null sentinel (UINT32_MAX)
+         emit_mov_imm32(X0, UINT32_MAX);
+         emit_push_x(X0);
+      }
+      void emit_ref_is_null() {
+         // ref.is_null: pop ref, push 1 if == UINT32_MAX, else 0
+         emit_pop_x(X0);
+         // CMN W0, #1  (equivalent to CMP W0, #-1, i.e. CMP W0, 0xFFFFFFFF)
+         emit32(0x3100041F);
+         // CSET X0, EQ
+         emit_cset(X0, COND_EQ);
+         emit_push_x(X0);
+      }
+      void emit_ref_func(uint32_t idx) {
+         // ref.func pushes the function index
+         emit_mov_imm32(X0, idx);
+         emit_push_x(X0);
+      }
       void emit_table_grow(uint32_t table_idx) {
          // __psizam_table_grow(ctx, table_idx, delta, init_val)
          emit_pop_x(X2);  // delta → arg3

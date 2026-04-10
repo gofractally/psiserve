@@ -2613,6 +2613,19 @@ namespace psizam {
          base[idx].code_ptr = nullptr;
          context.inc_pc();
       }
+      [[gnu::always_inline]] inline void operator()(const ref_null_t& /*op*/) {
+         context.push_operand(i32_const_t{static_cast<uint32_t>(UINT32_MAX)});
+         context.inc_pc();
+      }
+      [[gnu::always_inline]] inline void operator()(const ref_is_null_t& /*op*/) {
+         auto val = context.pop_operand().to_ui32();
+         context.push_operand(i32_const_t{val == UINT32_MAX ? 1u : 0u});
+         context.inc_pc();
+      }
+      [[gnu::always_inline]] inline void operator()(const ref_func_t& op) {
+         context.push_operand(i32_const_t{op.index});
+         context.inc_pc();
+      }
       [[gnu::always_inline]] inline void operator()(const table_grow_t& op) {
          auto delta = context.pop_operand().to_ui32();
          auto init_val = context.pop_operand().to_ui32();
