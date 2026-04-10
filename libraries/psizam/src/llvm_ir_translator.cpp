@@ -1066,7 +1066,10 @@ namespace psizam {
                   }
 
                   auto* load_inst = builder.CreateLoad(load_ty, ptr);
-                  load_inst->setVolatile(true); // prevent optimizer from speculating/eliminating OOB loads
+                  // Non-volatile: LLVM won't speculate loads from non-dereferenceable
+                  // pointers (isSafeToSpeculativelyExecute returns false), so guard
+                  // pages still catch OOB access. Removing volatile enables GVN,
+                  // load forwarding, and addressing mode folding.
                   llvm::Value* loaded = load_inst;
                   // Extend if needed
                   if (load_ty != result_ty) {
@@ -1115,7 +1118,6 @@ namespace psizam {
                         break;
                   }
                   auto* store_inst = builder.CreateStore(val, ptr);
-                  store_inst->setVolatile(true); // prevent optimizer from speculating/eliminating OOB stores
                   break;
                }
 
