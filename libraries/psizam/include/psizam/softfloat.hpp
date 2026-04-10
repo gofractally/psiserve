@@ -993,5 +993,61 @@ inline v128_t _psizam_f64x2_promote_low_f32x4(v128_t a) {
    return apply_f32x4_low(a, _psizam_f32_promote);
 }
 
+// ── Relaxed SIMD runtime functions ──
+
+inline v128_t _psizam_f32x4_relaxed_madd(v128_t a, v128_t b, v128_t c) {
+   v128_t tmp = _psizam_f32x4_mul(a, b);
+   return _psizam_f32x4_add(tmp, c);
+}
+
+inline v128_t _psizam_f32x4_relaxed_nmadd(v128_t a, v128_t b, v128_t c) {
+   v128_t tmp = _psizam_f32x4_mul(a, b);
+   v128_t neg = _psizam_f32x4_neg(tmp);
+   return _psizam_f32x4_add(neg, c);
+}
+
+inline v128_t _psizam_f64x2_relaxed_madd(v128_t a, v128_t b, v128_t c) {
+   v128_t tmp = _psizam_f64x2_mul(a, b);
+   return _psizam_f64x2_add(tmp, c);
+}
+
+inline v128_t _psizam_f64x2_relaxed_nmadd(v128_t a, v128_t b, v128_t c) {
+   v128_t tmp = _psizam_f64x2_mul(a, b);
+   v128_t neg = _psizam_f64x2_neg(tmp);
+   return _psizam_f64x2_add(neg, c);
+}
+
+inline v128_t _psizam_i16x8_relaxed_dot_i8x16_i7x16_s(v128_t a, v128_t b) {
+   std::int8_t va[16], vb[16];
+   std::memcpy(va, &a, 16);
+   std::memcpy(vb, &b, 16);
+   std::int16_t r[8];
+   for (int i = 0; i < 8; ++i) {
+      r[i] = static_cast<int16_t>(static_cast<int32_t>(va[2*i]) * static_cast<int32_t>(vb[2*i]))
+           + static_cast<int16_t>(static_cast<int32_t>(va[2*i+1]) * static_cast<int32_t>(vb[2*i+1]));
+   }
+   v128_t res;
+   std::memcpy(&res, r, 16);
+   return res;
+}
+
+inline v128_t _psizam_i32x4_relaxed_dot_i8x16_i7x16_add_s(v128_t a, v128_t b, v128_t c) {
+   std::int8_t va[16], vb[16];
+   std::int32_t vc[4];
+   std::memcpy(va, &a, 16);
+   std::memcpy(vb, &b, 16);
+   std::memcpy(vc, &c, 16);
+   std::int32_t r[4];
+   for (int i = 0; i < 4; ++i) {
+      int32_t sum = vc[i];
+      for (int j = 0; j < 4; ++j)
+         sum += static_cast<int32_t>(va[4*i+j]) * static_cast<int32_t>(vb[4*i+j]);
+      r[i] = sum;
+   }
+   v128_t res;
+   std::memcpy(&res, r, 16);
+   return res;
+}
+
 } // namespace psizam
 #endif

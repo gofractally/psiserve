@@ -3605,6 +3605,26 @@ namespace psizam {
          emit_push_v128();
       }
 
+      // Relaxed SIMD
+      void emit_f32x4_relaxed_madd() {
+         emit_v128_ternop_softfloat(&_psizam_f32x4_relaxed_madd);
+      }
+      void emit_f32x4_relaxed_nmadd() {
+         emit_v128_ternop_softfloat(&_psizam_f32x4_relaxed_nmadd);
+      }
+      void emit_f64x2_relaxed_madd() {
+         emit_v128_ternop_softfloat(&_psizam_f64x2_relaxed_madd);
+      }
+      void emit_f64x2_relaxed_nmadd() {
+         emit_v128_ternop_softfloat(&_psizam_f64x2_relaxed_nmadd);
+      }
+      void emit_i16x8_relaxed_dot_i8x16_i7x16_s() {
+         emit_v128_binop_softfloat(&_psizam_i16x8_relaxed_dot_i8x16_i7x16_s);
+      }
+      void emit_i32x4_relaxed_dot_i8x16_i7x16_add_s() {
+         emit_v128_ternop_softfloat(&_psizam_i32x4_relaxed_dot_i8x16_i7x16_add_s);
+      }
+
       // ===================================================================
       // Branch fixing and finalization
       // ===================================================================
@@ -4808,6 +4828,22 @@ namespace psizam {
          emit_call_c_function(softfloatfun);
          emit_restore_context();
          // Result in X0,X1
+         emit_push_x(X1);
+         emit_push_x(X0);
+      }
+
+      void emit_v128_ternop_softfloat(v128_t (*softfloatfun)(v128_t, v128_t, v128_t)) {
+         // Pop three v128 (c then b then a), call f(a, b, c), push result
+         // AAPCS64: arg1=X0:X1, arg2=X2:X3, arg3=X4:X5
+         emit_pop_x(X4); // c low
+         emit_pop_x(X5); // c high
+         emit_pop_x(X2); // b low
+         emit_pop_x(X3); // b high
+         emit_pop_x(X0); // a low
+         emit_pop_x(X1); // a high
+         emit_save_context();
+         emit_call_c_function(softfloatfun);
+         emit_restore_context();
          emit_push_x(X1);
          emit_push_x(X0);
       }

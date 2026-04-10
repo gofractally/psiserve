@@ -329,6 +329,7 @@ namespace psizam {
       void emit_ ## op_name() { fb[op_index++] = op_name ## _t{}; }
 
       PSIZAM_VEC_NUMERIC_OPS(NUMERIC_OP)
+      PSIZAM_VEC_RELAXED_OPS(NUMERIC_OP)
 
 #undef NUMERIC_OP
 

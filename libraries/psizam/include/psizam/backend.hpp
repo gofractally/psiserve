@@ -67,7 +67,7 @@
 //   struct/array types           🔴     🔴       🔴        🔴      🔴
 //
 // RELAXED SIMD
-//   relaxed simd ops             🔴     🔴       🔴        🔴      🔴
+//   relaxed simd ops             🟢     🟢       🟢        🟢      🟢
 //
 // KNOWN BUGS 🐛
 //   [B1] SIMD float ops incomplete on aarch64 softfloat (~60 spec failures)

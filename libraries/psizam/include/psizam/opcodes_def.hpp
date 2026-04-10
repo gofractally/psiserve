@@ -561,6 +561,16 @@
    opcode_macro(f32x4_demote_f64x2_zero, 94)    \
    opcode_macro(f64x2_promote_low_f32x4, 95)
 
+// Relaxed SIMD ops that need their own implementation (can't delegate)
+// These use sub-opcode values 256+ under the 0xFD prefix
+#define PSIZAM_VEC_RELAXED_OPS(opcode_macro)    \
+   opcode_macro(f32x4_relaxed_madd, 256)        \
+   opcode_macro(f32x4_relaxed_nmadd, 257)       \
+   opcode_macro(f64x2_relaxed_madd, 258)        \
+   opcode_macro(f64x2_relaxed_nmadd, 259)       \
+   opcode_macro(i16x8_relaxed_dot_i8x16_i7x16_s, 260) \
+   opcode_macro(i32x4_relaxed_dot_i8x16_i7x16_add_s, 261)
+
 /* clang-format on */
 
 #define PSIZAM_CREATE_ENUM(name, code) name = code,
@@ -750,7 +760,7 @@
    struct PSIZAM_OPCODE_T(name) {                                                                                      \
       PSIZAM_OPCODE_T(name)() = default;                                                                               \
       static constexpr uint8_t opcode_prefix = 0xfd;                                                                   \
-      static constexpr uint8_t opcode = code;                                                                          \
+      static constexpr uint16_t opcode = code;                                                                         \
    };
 
 

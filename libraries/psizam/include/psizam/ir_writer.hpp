@@ -1564,6 +1564,13 @@ namespace psizam {
       static constexpr auto emit_f64x2_convert_low_i32x4_u_sub = simd_sub::f64x2_convert_low_i32x4_u;
       static constexpr auto emit_f32x4_demote_f64x2_zero_sub = simd_sub::f32x4_demote_f64x2_zero;
       static constexpr auto emit_f64x2_promote_low_f32x4_sub = simd_sub::f64x2_promote_low_f32x4;
+      // Relaxed SIMD
+      static constexpr auto emit_f32x4_relaxed_madd_sub = simd_sub::f32x4_relaxed_madd;
+      static constexpr auto emit_f32x4_relaxed_nmadd_sub = simd_sub::f32x4_relaxed_nmadd;
+      static constexpr auto emit_f64x2_relaxed_madd_sub = simd_sub::f64x2_relaxed_madd;
+      static constexpr auto emit_f64x2_relaxed_nmadd_sub = simd_sub::f64x2_relaxed_nmadd;
+      static constexpr auto emit_i16x8_relaxed_dot_i8x16_i7x16_s_sub = simd_sub::i16x8_relaxed_dot_i8x16_i7x16_s;
+      static constexpr auto emit_i32x4_relaxed_dot_i8x16_i7x16_add_s_sub = simd_sub::i32x4_relaxed_dot_i8x16_i7x16_add_s;
 
       SIMD_EXTRACT(emit_i8x16_extract_lane_s) SIMD_EXTRACT(emit_i8x16_extract_lane_u) SIMD_REPLACE(emit_i8x16_replace_lane)
       SIMD_EXTRACT(emit_i16x8_extract_lane_s) SIMD_EXTRACT(emit_i16x8_extract_lane_u) SIMD_REPLACE(emit_i16x8_replace_lane)
@@ -1594,6 +1601,26 @@ namespace psizam {
       SIMD_RELOP(emit_f64x2_le) SIMD_RELOP(emit_f64x2_ge)
       SIMD_UNOP(emit_v128_not) SIMD_BINOP(emit_v128_and) SIMD_BINOP(emit_v128_andnot) SIMD_BINOP(emit_v128_or)
       SIMD_BINOP(emit_v128_xor)
+      void emit_simd_ternop(simd_sub sub) {
+         if (!_unreachable) {
+            _func->vpop(); uint32_t c_vreg = _func->vpop(); // third input
+            _func->vpop(); uint32_t b_vreg = _func->vpop(); // second input
+            _func->vpop(); uint32_t a_vreg = _func->vpop(); // first input
+            uint32_t d1 = _func->alloc_vreg(types::v128);
+            uint32_t d2 = _func->alloc_vreg(types::v128);
+            ir_inst inst{};
+            inst.opcode = ir_op::v128_op;
+            inst.type = types::v128;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = static_cast<uint32_t>(sub);
+            inst.simd.v_src1 = static_cast<uint16_t>(a_vreg);
+            inst.simd.v_src2 = static_cast<uint16_t>(b_vreg);
+            inst.simd.v_dest = static_cast<uint16_t>(d1);
+            inst.simd.addr = c_vreg;
+            _func->emit(inst);
+            _func->vpush(d1); _func->vpush(d2);
+         }
+      }
       void emit_v128_bitselect() {
          if (!_unreachable) {
             _func->vpop(); uint32_t mask = _func->vpop(); // mask (low vreg)
@@ -1682,6 +1709,16 @@ namespace psizam {
       SIMD_UNOP(emit_i32x4_trunc_sat_f64x2_s_zero) SIMD_UNOP(emit_i32x4_trunc_sat_f64x2_u_zero)
       SIMD_UNOP(emit_f64x2_convert_low_i32x4_s) SIMD_UNOP(emit_f64x2_convert_low_i32x4_u)
       SIMD_UNOP(emit_f32x4_demote_f64x2_zero) SIMD_UNOP(emit_f64x2_promote_low_f32x4)
+
+      // Relaxed SIMD binary
+      SIMD_BINOP(emit_i16x8_relaxed_dot_i8x16_i7x16_s)
+
+      // Relaxed SIMD ternary (FMA, dot+add)
+      void emit_f32x4_relaxed_madd() { emit_simd_ternop(simd_sub::f32x4_relaxed_madd); }
+      void emit_f32x4_relaxed_nmadd() { emit_simd_ternop(simd_sub::f32x4_relaxed_nmadd); }
+      void emit_f64x2_relaxed_madd() { emit_simd_ternop(simd_sub::f64x2_relaxed_madd); }
+      void emit_f64x2_relaxed_nmadd() { emit_simd_ternop(simd_sub::f64x2_relaxed_nmadd); }
+      void emit_i32x4_relaxed_dot_i8x16_i7x16_add_s() { emit_simd_ternop(simd_sub::i32x4_relaxed_dot_i8x16_i7x16_add_s); }
 
 #undef SIMD_UNOP
 #undef SIMD_BINOP

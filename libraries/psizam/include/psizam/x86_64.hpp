@@ -4427,6 +4427,32 @@ namespace psizam {
          emit_v128_unop_softfloat(&_psizam_f64x2_promote_low_f32x4);
       }
 
+      // Relaxed SIMD
+      void emit_f32x4_relaxed_madd() {
+         COUNT_INSTR();
+         emit_v128_ternop_softfloat(&_psizam_f32x4_relaxed_madd);
+      }
+      void emit_f32x4_relaxed_nmadd() {
+         COUNT_INSTR();
+         emit_v128_ternop_softfloat(&_psizam_f32x4_relaxed_nmadd);
+      }
+      void emit_f64x2_relaxed_madd() {
+         COUNT_INSTR();
+         emit_v128_ternop_softfloat(&_psizam_f64x2_relaxed_madd);
+      }
+      void emit_f64x2_relaxed_nmadd() {
+         COUNT_INSTR();
+         emit_v128_ternop_softfloat(&_psizam_f64x2_relaxed_nmadd);
+      }
+      void emit_i16x8_relaxed_dot_i8x16_i7x16_s() {
+         COUNT_INSTR();
+         emit_v128_binop_softfloat(&_psizam_i16x8_relaxed_dot_i8x16_i7x16_s);
+      }
+      void emit_i32x4_relaxed_dot_i8x16_i7x16_add_s() {
+         COUNT_INSTR();
+         emit_v128_ternop_softfloat(&_psizam_i32x4_relaxed_dot_i8x16_i7x16_add_s);
+      }
+
       void emit_error() { unimplemented(); }
 
       // bulk memory
@@ -6520,6 +6546,32 @@ namespace psizam {
          emit_pop(rsi);
          emit_pop(rdi);
          emit_restore_backtrace(); // FIXME: clobbers rdx
+         emit_mov(rax, *rsp);
+         emit_mov(rdx, *(rsp + 8));
+      }
+
+      void emit_v128_ternop_softfloat(v128_t (*softfloatfun)(v128_t, v128_t, v128_t)) {
+         int32_t extra = emit_setup_backtrace();
+         emit_push(rdi);
+         emit_push(rsi);
+         // Stack: [rsi][rdi] + extra + [c.lo][c.hi][b.lo][b.hi][a.lo][a.hi]
+         // SysV ABI: arg1=RDI:RSI, arg2=RDX:RCX, arg3=R8:R9
+         emit_mov(*(rsp + (16 + extra)), r8);      // c.lo -> r8
+         emit_mov(*(rsp + (24 + extra)), r9);      // c.hi -> r9
+         emit_mov(*(rsp + (32 + extra)), rdx);     // b.lo -> rdx
+         emit_mov(*(rsp + (40 + extra)), rcx);     // b.hi -> rcx
+         emit_mov(*(rsp + (48 + extra)), rdi);     // a.lo -> rdi
+         emit_mov(*(rsp + (56 + extra)), rsi);     // a.hi -> rsi
+         emit_align_stack(rax);
+         emit_bytes(0x48, 0xb8);
+         emit_operand_ptr(softfloatfun);
+         emit_bytes(0xff, 0xd0);
+         emit_restore_stack();
+         emit_pop(rsi);
+         emit_pop(rdi);
+         emit_restore_backtrace_basic();
+         // Free 2 extra v128 slots (consumed 3, keep 1 for result)
+         emit_add(32 + extra, rsp);
          emit_mov(rax, *rsp);
          emit_mov(rdx, *(rsp + 8));
       }

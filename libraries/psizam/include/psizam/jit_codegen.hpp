@@ -5128,6 +5128,36 @@ namespace psizam {
       }
 
       // Softfloat binary: call a (v128_t, v128_t) -> v128_t function
+      void simd_v128_ternop_softfloat(v128_t (*fn)(v128_t, v128_t, v128_t)) {
+         // Three v128 args on stack: TOS = arg3 (16 bytes), NOS = arg2, NOS+16 = arg1
+         // SysV ABI: arg1 in rdi:rsi, arg2 in rdx:rcx, arg3 in r8:r9
+         this->emit_push_raw(rdi);
+         this->emit_push_raw(rsi);
+         // After pushes: arg3 at rsp+16, arg2 at rsp+32, arg1 at rsp+48
+         this->emit_mov(*(rsp + 16), r8);    // arg3.low
+         this->emit_mov(*(rsp + 24), r9);    // arg3.high
+         this->emit_mov(*(rsp + 32), rdx);   // arg2.low
+         this->emit_mov(*(rsp + 40), rcx);   // arg2.high
+         this->emit_mov(*(rsp + 48), rdi);   // arg1.low
+         this->emit_mov(*(rsp + 56), rsi);   // arg1.high
+         // Align stack
+         this->emit_mov(rsp, rax);
+         this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+         this->emit_push_raw(rax);
+         // Call
+         this->emit_bytes(0x48, 0xb8);
+         this->emit_operand_ptr(fn);
+         this->emit_bytes(0xff, 0xd0);
+         // Restore stack
+         this->emit_pop_raw(rsp);
+         this->emit_pop_raw(rsi);
+         this->emit_pop_raw(rdi);
+         // Remove 2 extra v128 args (32 bytes), store result to remaining slot
+         this->emit_add(32, rsp);
+         this->emit_mov(rax, *rsp);
+         this->emit_mov(rdx, *(rsp + 8));
+      }
+
       void simd_v128_binop_softfloat(v128_t (*fn)(v128_t, v128_t), reloc_symbol sym = reloc_symbol::unknown) {
          // Two v128 args on stack: TOS = arg2 (16 bytes), NOS = arg1 (16 bytes)
          // SysV ABI: first arg in rdi:rsi, second in rdx:rcx
@@ -5870,6 +5900,14 @@ namespace psizam {
          case simd_sub::f64x2_convert_low_i32x4_u: simd_v128_unop_softfloat(&_psizam_f64x2_convert_low_i32x4_u); break;
          case simd_sub::f32x4_demote_f64x2_zero: simd_v128_unop_softfloat(&_psizam_f32x4_demote_f64x2_zero); break;
          case simd_sub::f64x2_promote_low_f32x4: simd_v128_unop_softfloat(&_psizam_f64x2_promote_low_f32x4); break;
+
+         // Relaxed SIMD
+         case simd_sub::f32x4_relaxed_madd: simd_v128_ternop_softfloat(&_psizam_f32x4_relaxed_madd); break;
+         case simd_sub::f32x4_relaxed_nmadd: simd_v128_ternop_softfloat(&_psizam_f32x4_relaxed_nmadd); break;
+         case simd_sub::f64x2_relaxed_madd: simd_v128_ternop_softfloat(&_psizam_f64x2_relaxed_madd); break;
+         case simd_sub::f64x2_relaxed_nmadd: simd_v128_ternop_softfloat(&_psizam_f64x2_relaxed_nmadd); break;
+         case simd_sub::i16x8_relaxed_dot_i8x16_i7x16_s: simd_v128_binop_softfloat(&_psizam_i16x8_relaxed_dot_i8x16_i7x16_s); break;
+         case simd_sub::i32x4_relaxed_dot_i8x16_i7x16_add_s: simd_v128_ternop_softfloat(&_psizam_i32x4_relaxed_dot_i8x16_i7x16_add_s); break;
 
          default:
             break;

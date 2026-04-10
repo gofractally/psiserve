@@ -69,7 +69,7 @@ target_include_directories(psizam INTERFACE
 
 target_compile_options(psizam INTERFACE
    $<$<COMPILE_LANGUAGE:CXX>:-Wno-register>
-   $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fbracket-depth=512>
+   $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fbracket-depth=1024>
 )
 
 target_link_libraries(psizam INTERFACE Threads::Threads)

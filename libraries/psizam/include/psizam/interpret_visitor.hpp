@@ -2492,6 +2492,61 @@ namespace psizam {
       [[gnu::always_inline]] inline void operator()(const f64x2_promote_low_f32x4_t&) {
          v128_unop(&_psizam_f64x2_promote_low_f32x4);
       }
+      // Relaxed SIMD ops
+      [[gnu::always_inline]] inline void operator()(const f32x4_relaxed_madd_t&) {
+         // fma: a*b+c
+         v128_ternop<float[4]>([](float a, float b, float c) -> float { return a * b + c; });
+      }
+      [[gnu::always_inline]] inline void operator()(const f32x4_relaxed_nmadd_t&) {
+         // nfma: -a*b+c
+         v128_ternop<float[4]>([](float a, float b, float c) -> float { return -(a * b) + c; });
+      }
+      [[gnu::always_inline]] inline void operator()(const f64x2_relaxed_madd_t&) {
+         v128_ternop<double[2]>([](double a, double b, double c) -> double { return a * b + c; });
+      }
+      [[gnu::always_inline]] inline void operator()(const f64x2_relaxed_nmadd_t&) {
+         v128_ternop<double[2]>([](double a, double b, double c) -> double { return -(a * b) + c; });
+      }
+      [[gnu::always_inline]] inline void operator()(const i16x8_relaxed_dot_i8x16_i7x16_s_t&) {
+         // Dot product: for each i16 lane, sum of pairwise products of i8 lanes
+         context.inc_pc();
+         v128_t c2 = context.pop_operand().to_v128();
+         v128_t c1 = context.pop_operand().to_v128();
+         std::int8_t a[16], b[16];
+         std::memcpy(a, &c1, 16);
+         std::memcpy(b, &c2, 16);
+         std::int16_t r[8];
+         for (int i = 0; i < 8; ++i) {
+            r[i] = static_cast<int16_t>(static_cast<int32_t>(a[2*i]) * static_cast<int32_t>(b[2*i]))
+                 + static_cast<int16_t>(static_cast<int32_t>(a[2*i+1]) * static_cast<int32_t>(b[2*i+1]));
+         }
+         v128_t res;
+         std::memcpy(&res, r, 16);
+         context.push_operand(v128_const_t{ res });
+      }
+      [[gnu::always_inline]] inline void operator()(const i32x4_relaxed_dot_i8x16_i7x16_add_s_t&) {
+         // Dot product + accumulate: 4 i32 lanes, each summing 4 pairwise i8 products + accumulator
+         context.inc_pc();
+         v128_t c3 = context.pop_operand().to_v128(); // accumulator (c)
+         v128_t c2 = context.pop_operand().to_v128(); // b
+         v128_t c1 = context.pop_operand().to_v128(); // a
+         std::int8_t a[16], b[16];
+         std::int32_t c[4];
+         std::memcpy(a, &c1, 16);
+         std::memcpy(b, &c2, 16);
+         std::memcpy(c, &c3, 16);
+         std::int32_t r[4];
+         for (int i = 0; i < 4; ++i) {
+            int32_t sum = c[i];
+            for (int j = 0; j < 4; ++j) {
+               sum += static_cast<int32_t>(a[4*i+j]) * static_cast<int32_t>(b[4*i+j]);
+            }
+            r[i] = sum;
+         }
+         v128_t res;
+         std::memcpy(&res, r, 16);
+         context.push_operand(v128_const_t{ res });
+      }
       [[gnu::always_inline]] inline void operator()(const memory_init_t& op) {
          const auto& size = context.pop_operand();
          const auto& src = context.pop_operand();

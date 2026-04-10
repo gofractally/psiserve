@@ -1210,6 +1210,7 @@ namespace psizam {
             PSIZAM_VEC_SHUFFLE_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_VEC_LANE_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_VEC_NUMERIC_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VEC_RELAXED_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_ERROR_OPS(CREATE_TABLE_ENTRY)
             &&__ev_last
          };
@@ -1243,6 +1244,7 @@ namespace psizam {
              PSIZAM_VEC_SHUFFLE_OPS(CREATE_LABEL);
              PSIZAM_VEC_LANE_OPS(CREATE_LABEL);
              PSIZAM_VEC_NUMERIC_OPS(CREATE_LABEL);
+             PSIZAM_VEC_RELAXED_OPS(CREATE_LABEL);
              PSIZAM_ERROR_OPS(CREATE_LABEL);
              __ev_last:
                 throw wasm_interpreter_exception{"should never reach here"};

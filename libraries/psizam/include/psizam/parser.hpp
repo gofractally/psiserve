@@ -1944,6 +1944,130 @@ namespace psizam {
 #undef INPUTS_1
 #undef INPUTS_0
 
+                     // ── Relaxed SIMD ──
+                     // Relaxed semantics allow delegation to strict equivalents.
+                     case 0x100: // i8x16.relaxed_swizzle
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_i8x16_swizzle();
+                        break;
+                     case 0x101: // i32x4.relaxed_trunc_f32x4_s
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.push(types::v128);
+                        code_writer.emit_i32x4_trunc_sat_f32x4_s();
+                        break;
+                     case 0x102: // i32x4.relaxed_trunc_f32x4_u
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.push(types::v128);
+                        code_writer.emit_i32x4_trunc_sat_f32x4_u();
+                        break;
+                     case 0x103: // i32x4.relaxed_trunc_f64x2_s_zero
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.push(types::v128);
+                        code_writer.emit_i32x4_trunc_sat_f64x2_s_zero();
+                        break;
+                     case 0x104: // i32x4.relaxed_trunc_f64x2_u_zero
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.push(types::v128);
+                        code_writer.emit_i32x4_trunc_sat_f64x2_u_zero();
+                        break;
+                     case 0x105: // f32x4.relaxed_madd (a, b, c) -> a*b+c
+                        // Decompose: stack has [a, b, c] -> mul(a,b) then add(result, c)
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        // c is on top, then b, then a. We need: a*b+c
+                        // Emit: swap top two (get b on top of c), then do mul, then add
+                        // Actually the WASM stack order for ternary: a is deepest, c on top
+                        // We need to: mul(a,b), add(result, c)
+                        // But c is already popped first by the writer's emit_f32x4_mul...
+                        // Simplest: emit neg(nothing) + mul + add won't work directly.
+                        // Use the ternary → binary decomposition via explicit stack manipulation:
+                        // The parser already validated types. The code_writers just need the right sequence.
+                        // For ternary ops, we need the writer to have a ternary emit or decompose here.
+                        // Since relaxed_madd(a,b,c) = a*b+c, and stack is [a, b, c] (c on top):
+                        // We can't easily decompose without extra local/temp. Instead, add proper ternary support.
+                        // For now, decompose: this requires reordering — not trivial with the writer API.
+                        // Use a simpler approach: treat as mul+add with stack reorder
+                        // Actually, let me just call emit_f32x4_mul then emit_f32x4_add.
+                        // The issue is stack ordering. Stack top is c, then b, then a.
+                        // mul pops 2 values (b, a) and pushes result. But c is on top of b.
+                        // We need to save c, do mul(a,b), then add(result, c).
+                        // Without a save mechanism, we can't decompose at parser level easily.
+                        // Let's add proper ternary ops to the writers instead.
+                        code_writer.emit_f32x4_relaxed_madd();
+                        break;
+                     case 0x106: // f32x4.relaxed_nmadd (a, b, c) -> -a*b+c
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_f32x4_relaxed_nmadd();
+                        break;
+                     case 0x107: // f64x2.relaxed_madd (a, b, c) -> a*b+c
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_f64x2_relaxed_madd();
+                        break;
+                     case 0x108: // f64x2.relaxed_nmadd (a, b, c) -> -a*b+c
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_f64x2_relaxed_nmadd();
+                        break;
+                     case 0x109: // i8x16.relaxed_laneselect
+                     case 0x10A: // i16x8.relaxed_laneselect
+                     case 0x10B: // i32x4.relaxed_laneselect
+                     case 0x10C: // i64x2.relaxed_laneselect
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_v128_bitselect();
+                        break;
+                     case 0x10D: // f32x4.relaxed_min
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_f32x4_pmin();
+                        break;
+                     case 0x10E: // f32x4.relaxed_max
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_f32x4_pmax();
+                        break;
+                     case 0x10F: // f64x2.relaxed_min
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_f64x2_pmin();
+                        break;
+                     case 0x110: // f64x2.relaxed_max
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_f64x2_pmax();
+                        break;
+                     case 0x111: // i16x8.relaxed_q15mulr_s
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_i16x8_q15mulr_sat_s();
+                        break;
+                     case 0x112: // i16x8.relaxed_dot_i8x16_i7x16_s
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_i16x8_relaxed_dot_i8x16_i7x16_s();
+                        break;
+                     case 0x113: // i32x4.relaxed_dot_i8x16_i7x16_add_s
+                        check_in_bounds();
+                        op_stack.pop(types::v128); op_stack.pop(types::v128); op_stack.pop(types::v128);
+                        op_stack.push(types::v128);
+                        code_writer.emit_i32x4_relaxed_dot_i8x16_i7x16_add_s();
+                        break;
+
                      default: PSIZAM_ASSERT(false, wasm_parse_exception, "Illegal instruction");
                   }
                } break;

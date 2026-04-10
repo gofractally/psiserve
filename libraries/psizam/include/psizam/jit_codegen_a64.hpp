@@ -1127,6 +1127,25 @@ namespace psizam {
          emit_str_offset(X1, SP, 16);
       }
 
+      // Softfloat ternary: v128_t fn(v128_t, v128_t, v128_t)
+      void simd_v128_ternop_softfloat(v128_t (*fn)(v128_t, v128_t, v128_t)) {
+         // Stack: arg1 (bottom, 32b), arg2 (middle, 32b), arg3 (top, 32b)
+         // AAPCS64: arg1 in X0:X1, arg2 in X2:X3, arg3 in X4:X5
+         emit_ldr_offset(X4, SP, 0);    // arg3.low
+         emit_ldr_offset(X5, SP, 16);   // arg3.high
+         emit_ldr_offset(X2, SP, 32);   // arg2.low
+         emit_ldr_offset(X3, SP, 48);   // arg2.high
+         emit_ldr_offset(X0, SP, 64);   // arg1.low
+         emit_ldr_offset(X1, SP, 80);   // arg1.high
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(fn));
+         emit32(0xD63F0100);  // BLR X8
+         // Pop arg2 + arg3 (64 bytes)
+         emit_add_imm(SP, SP, 64);
+         // Store result to arg1 slot (now TOS)
+         emit_str_offset(X0, SP, 0);
+         emit_str_offset(X1, SP, 16);
+      }
+
       // SIMD memory load: load addr from vreg, load from memory, push v128
       void simd_v128_load(uint32_t offset, uint32_t addr_vreg) {
          load_vreg_x0(addr_vreg);
@@ -2791,6 +2810,14 @@ namespace psizam {
          case simd_sub::f64x2_convert_low_i32x4_u:   simd_v128_unop_softfloat(&_psizam_f64x2_convert_low_i32x4_u); break;
          case simd_sub::f32x4_demote_f64x2_zero:     simd_v128_unop_softfloat(&_psizam_f32x4_demote_f64x2_zero); break;
          case simd_sub::f64x2_promote_low_f32x4:     simd_v128_unop_softfloat(&_psizam_f64x2_promote_low_f32x4); break;
+
+         // ── Relaxed SIMD ──
+         case simd_sub::f32x4_relaxed_madd:  simd_v128_ternop_softfloat(&_psizam_f32x4_relaxed_madd); break;
+         case simd_sub::f32x4_relaxed_nmadd: simd_v128_ternop_softfloat(&_psizam_f32x4_relaxed_nmadd); break;
+         case simd_sub::f64x2_relaxed_madd:  simd_v128_ternop_softfloat(&_psizam_f64x2_relaxed_madd); break;
+         case simd_sub::f64x2_relaxed_nmadd: simd_v128_ternop_softfloat(&_psizam_f64x2_relaxed_nmadd); break;
+         case simd_sub::i16x8_relaxed_dot_i8x16_i7x16_s: simd_v128_binop_softfloat(&_psizam_i16x8_relaxed_dot_i8x16_i7x16_s); break;
+         case simd_sub::i32x4_relaxed_dot_i8x16_i7x16_add_s: simd_v128_ternop_softfloat(&_psizam_i32x4_relaxed_dot_i8x16_i7x16_add_s); break;
 
          default:
             break;

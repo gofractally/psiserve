@@ -455,6 +455,13 @@ class null_writer {
    void emit_f64x2_convert_low_i32x4_u() {}
    void emit_f32x4_demote_f64x2_zero() {}
    void emit_f64x2_promote_low_f32x4() {}
+   // Relaxed SIMD
+   void emit_f32x4_relaxed_madd() {}
+   void emit_f32x4_relaxed_nmadd() {}
+   void emit_f64x2_relaxed_madd() {}
+   void emit_f64x2_relaxed_nmadd() {}
+   void emit_i16x8_relaxed_dot_i8x16_i7x16_s() {}
+   void emit_i32x4_relaxed_dot_i8x16_i7x16_add_s() {}
 
    void emit_memory_init(std::uint32_t) {}
    void emit_data_drop(std::uint32_t) {}

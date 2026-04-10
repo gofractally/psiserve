@@ -259,6 +259,11 @@ namespace psizam {
       i32x4_trunc_sat_f64x2_s_zero, i32x4_trunc_sat_f64x2_u_zero,
       f64x2_convert_low_i32x4_s, f64x2_convert_low_i32x4_u,
       f32x4_demote_f64x2_zero, f64x2_promote_low_f32x4,
+      // Relaxed SIMD
+      f32x4_relaxed_madd, f32x4_relaxed_nmadd,
+      f64x2_relaxed_madd, f64x2_relaxed_nmadd,
+      i16x8_relaxed_dot_i8x16_i7x16_s,
+      i32x4_relaxed_dot_i8x16_i7x16_add_s,
    };
 
    // Returns true if a v128_op's simd.offset field holds a vreg number
