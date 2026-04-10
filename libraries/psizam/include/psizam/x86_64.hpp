@@ -281,9 +281,9 @@ namespace psizam {
       }
       void emit_nop() {}
       void* emit_end() { set_branch_target(); return code; }
-      void* emit_return(uint32_t depth_change, uint8_t rt, uint32_t /*result_count*/ = 0) {
+      void* emit_return(uint32_t depth_change, uint8_t rt, uint32_t result_count = 0) {
          // Return is defined as equivalent to branching to the outermost label
-         return emit_br(depth_change, rt);
+         return emit_br(depth_change, rt, UINT32_MAX, result_count);
       }
       void emit_block(uint8_t = 0x40) {}
       void* emit_loop(uint8_t = 0x40) { set_branch_target(); return code; }
@@ -307,23 +307,30 @@ namespace psizam {
          set_branch_target();
          return result;
       }
-      void* emit_br(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
+      void* emit_br(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
          COUNT_INSTR();
-         auto icount = variable_size_instr(5, 22);
-         // add RSP, depth_change * 8
-         emit_multipop(depth_change, rt);
+         if (result_count > 1) {
+            auto icount = variable_size_instr(5, 5 + result_count * 16 + 12);
+            emit_multipop_multivalue(depth_change, result_count);
+         } else {
+            auto icount = variable_size_instr(5, 22);
+            emit_multipop(depth_change, rt);
+         }
          // jmp DEST
          emit_bytes(0xe9);
          return emit_branch_target32();
       }
-      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
+      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
          if (auto cond = try_pop_recent_op<condition_op>()) {
             COUNT_INSTR_NO_FLAGS(); // The previous flags are use be the conditional branch
-            if (is_simple_multipop(depth_change, rt)) {
+            if (is_simple_multipop(depth_change, rt, result_count)) {
                return emit_branchcc32(cond->branchop);
             } else {
                void* skip = emit_branch8(reverse_condition(cond->branchop));
-               emit_multipop(depth_change, rt);
+               if (result_count > 1)
+                  emit_multipop_multivalue(depth_change, result_count);
+               else
+                  emit_multipop(depth_change, rt);
                emit(JMP_32);
                void* result = emit_branch_target32();
                fix_branch8(skip, code);
@@ -331,16 +338,19 @@ namespace psizam {
             }
          }
          COUNT_INSTR();
-         auto icount = variable_size_instr(9, 27);
+         auto icount = variable_size_instr(9, result_count > 1 ? 9 + result_count * 16 + 17 : 27);
          emit_pop(rax);
          emit(TEST, eax, eax);
 
-         if(is_simple_multipop(depth_change, rt)) {
+         if(is_simple_multipop(depth_change, rt, result_count)) {
             return emit_branchcc32(JNZ);
          } else {
             void* skip = emit_branch8(JZ);
             // add depth_change*8, %rsp
-            emit_multipop(depth_change, rt);
+            if (result_count > 1)
+               emit_multipop_multivalue(depth_change, result_count);
+            else
+               emit_multipop(depth_change, rt);
             emit(JMP_32);
             void* result = emit_branch_target32();
             // SKIP:
@@ -351,7 +361,7 @@ namespace psizam {
 
       // Generate a binary search.
       struct br_table_generator {
-         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
+         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
             while(true) {
                assert(!stack.empty() && "The parser is supposed to handle the number of elements in br_table.");
                auto [min, max, label] = stack.back();
@@ -374,10 +384,10 @@ namespace psizam {
                   stack.push_back({mid,max,mid_label});
                   stack.push_back({min,mid,nullptr});
                } else {
-                  auto icount = _this->variable_size_instr(0, 22);
+                  auto icount = _this->variable_size_instr(0, result_count > 1 ? result_count * 16 + 17 : 22);
                   assert(min == static_cast<uint32_t>(_i));
                   _i++;
-                  if (is_simple_multipop(depth_change, rt)) {
+                  if (is_simple_multipop(depth_change, rt, result_count)) {
                      if(label) {
                         return label;
                      } else {
@@ -386,18 +396,20 @@ namespace psizam {
                         return _this->emit_branch_target32();
                      }
                   } else {
-                     // jne NEXT
-                    _this->emit_multipop(depth_change, rt);
-                    // jmp TARGET
-                    _this->emit_bytes(0xe9);
-                    return _this->emit_branch_target32();
+                     if (result_count > 1)
+                        _this->emit_multipop_multivalue(depth_change, result_count);
+                     else
+                        _this->emit_multipop(depth_change, rt);
+                     // jmp TARGET
+                     _this->emit_bytes(0xe9);
+                     return _this->emit_branch_target32();
                   }
                }
             }
 
          }
-         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
-            void* result = emit_case(depth_change, rt);
+         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
+            void* result = emit_case(depth_change, rt, UINT32_MAX, result_count);
             assert(stack.empty() && "unexpected default.");
             return result;
          }
@@ -5773,7 +5785,8 @@ namespace psizam {
 
       static void unimplemented() { PSIZAM_ASSERT(false, wasm_parse_exception, "Sorry, not implemented."); }
 
-      static constexpr bool is_simple_multipop(uint32_t count, uint8_t rt) {
+      static constexpr bool is_simple_multipop(uint32_t count, uint8_t rt, uint32_t result_count = 0) {
+         if (result_count > 1) return count == result_count;
          switch(rt) {
          case types::pseudo:
             return count == 0;
@@ -5784,6 +5797,20 @@ namespace psizam {
          default:
             return false;
          }
+      }
+
+      // Multi-value multipop: copy result_count qwords from top of stack
+      // past (depth_change - result_count) garbage slots, then adjust RSP
+      void emit_multipop_multivalue(uint32_t depth_change, uint32_t result_count) {
+         uint32_t gap = depth_change - result_count;
+         if (gap == 0) return;
+         for (uint32_t i = 0; i < result_count; i++) {
+            int32_t src_offset = static_cast<int32_t>(i) * 8;
+            int32_t dst_offset = static_cast<int32_t>(i + gap) * 8;
+            emit_mov(*(rsp + src_offset), rax);
+            emit_mov(rax, *(rsp + dst_offset));
+         }
+         emit_add(gap * 8, rsp);
       }
 
       // clobbers %rax or %xmm0 if rt is not void

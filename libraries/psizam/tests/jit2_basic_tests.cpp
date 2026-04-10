@@ -458,6 +458,14 @@ TEST_CASE("multi-value block types: interpreter", "[multi_value]") {
    CHECK(bkend.call_with_return("env", "test_block_params")->to_ui32() == 30);
 }
 
+TEST_CASE("multi-value block types: jit", "[multi_value]") {
+   using backend_t = backend<std::nullptr_t, psizam::jit>;
+   backend_t bkend(multivalue_block_wasm, &wa);
+   CHECK(bkend.call_with_return("env", "test_block_end")->to_ui32() == 30);
+   CHECK(bkend.call_with_return("env", "test_block_br")->to_i32() == -100);
+   CHECK(bkend.call_with_return("env", "test_block_params")->to_ui32() == 30);
+}
+
 TEST_CASE("multi-value returns: interpreter", "[multi_value]") {
    using backend_t = backend<std::nullptr_t, psizam::interpreter>;
    backend_t bkend(multivalue_wasm, &wa);

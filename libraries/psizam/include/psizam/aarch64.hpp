@@ -449,8 +449,8 @@ namespace psizam {
          return code;
       }
 
-      void* emit_return(uint32_t depth_change, uint8_t rt, uint32_t /*result_count*/ = 0) {
-         return emit_br(depth_change, rt);
+      void* emit_return(uint32_t depth_change, uint8_t rt, uint32_t result_count = 0) {
+         return emit_br(depth_change, rt, UINT32_MAX, result_count);
       }
 
       void emit_block(uint8_t = 0x40) {}
@@ -485,18 +485,21 @@ namespace psizam {
          return result;
       }
 
-      void* emit_br(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
-         emit_multipop(depth_change, rt);
+      void* emit_br(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
+         if (result_count > 1)
+            emit_multipop_multivalue(depth_change, result_count);
+         else
+            emit_multipop(depth_change, rt);
          // B target (patched later)
          void* branch = code;
          emit32(0x14000000);
          return branch;
       }
 
-      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
+      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
          // Try to fold: if last op was a comparison, use B.cond directly
          if (auto cond = try_pop_recent_op<condition_op>()) {
-            if (is_simple_multipop(depth_change, rt)) {
+            if (is_simple_multipop(depth_change, rt, result_count)) {
                // B.cond target (patched later)
                void* branch = code;
                emit32(0x54000000 | cond->cond);
@@ -505,7 +508,10 @@ namespace psizam {
                // B.!cond skip
                void* skip = code;
                emit32(0x54000000 | invert_condition(cond->cond));
-               emit_multipop(depth_change, rt);
+               if (result_count > 1)
+                  emit_multipop_multivalue(depth_change, result_count);
+               else
+                  emit_multipop(depth_change, rt);
                void* branch = code;
                emit32(0x14000000);
                fix_branch(skip, code);
@@ -516,7 +522,7 @@ namespace psizam {
          // Pop condition
          emit_pop_x(X0);
 
-         if(is_simple_multipop(depth_change, rt)) {
+         if(is_simple_multipop(depth_change, rt, result_count)) {
             // CBNZ W0, target (patched later)
             void* branch = code;
             emit32(0x35000000 | X0);
@@ -525,7 +531,10 @@ namespace psizam {
             // CBZ W0, skip
             void* skip = code;
             emit32(0x34000000 | X0);
-            emit_multipop(depth_change, rt);
+            if (result_count > 1)
+               emit_multipop_multivalue(depth_change, result_count);
+            else
+               emit_multipop(depth_change, rt);
             // B target
             void* branch = code;
             emit32(0x14000000);
@@ -536,7 +545,7 @@ namespace psizam {
 
       // Generate a binary search tree for br_table
       struct br_table_generator {
-         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
+         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
             while(true) {
                assert(!stack.empty());
                auto [min, max, label] = stack.back();
@@ -556,19 +565,15 @@ namespace psizam {
                } else {
                   assert(min == static_cast<uint32_t>(_i));
                   _i++;
-                  if (is_simple_multipop(depth_change, rt)) {
-                     if(label) {
-                        // This case was already branched to; emit unconditional branch
-                        void* branch = _this->code;
-                        _this->emit32(0x14000000);
-                        return branch;
-                     } else {
-                        void* branch = _this->code;
-                        _this->emit32(0x14000000);
-                        return branch;
-                     }
+                  if (is_simple_multipop(depth_change, rt, result_count)) {
+                     void* branch = _this->code;
+                     _this->emit32(0x14000000);
+                     return branch;
                   } else {
-                     _this->emit_multipop(depth_change, rt);
+                     if (result_count > 1)
+                        _this->emit_multipop_multivalue(depth_change, result_count);
+                     else
+                        _this->emit_multipop(depth_change, rt);
                      void* branch = _this->code;
                      _this->emit32(0x14000000);
                      return branch;
@@ -576,8 +581,8 @@ namespace psizam {
                }
             }
          }
-         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t /*result_count*/ = 0) {
-            void* result = emit_case(depth_change, rt);
+         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
+            void* result = emit_case(depth_change, rt, UINT32_MAX, result_count);
             assert(stack.empty());
             return result;
          }
@@ -4463,7 +4468,8 @@ namespace psizam {
       // Multipop helpers
       // ===================================================================
 
-      static constexpr bool is_simple_multipop(uint32_t count, uint8_t rt) {
+      static constexpr bool is_simple_multipop(uint32_t count, uint8_t rt, uint32_t result_count = 0) {
+         if (result_count > 1) return count == result_count;
          switch(rt) {
          case types::pseudo:
             return count == 0;
@@ -4474,6 +4480,23 @@ namespace psizam {
          default:
             return false;
          }
+      }
+
+      // Multi-value multipop: copy result_count values from top of stack
+      // past (depth_change - result_count) garbage slots, then adjust SP
+      // Each value occupies 16 bytes on the aarch64 JIT stack
+      void emit_multipop_multivalue(uint32_t depth_change, uint32_t result_count) {
+         uint32_t gap = depth_change - result_count;
+         if (gap == 0) return;
+         for (uint32_t i = 0; i < result_count; i++) {
+            uint32_t src_offset = i * 16;
+            uint32_t dst_offset = (i + gap) * 16;
+            // LDR X0, [SP, #src_offset]
+            emit32(0xF94003E0 | ((src_offset / 8) << 10));
+            // STR X0, [SP, #dst_offset]
+            emit32(0xF90003E0 | ((dst_offset / 8) << 10));
+         }
+         emit_add_imm_sp(gap * 16);
       }
 
       void emit_multipop(uint32_t count, uint8_t rt) {
