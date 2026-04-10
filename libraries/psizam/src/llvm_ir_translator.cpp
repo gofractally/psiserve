@@ -1066,10 +1066,11 @@ namespace psizam {
                   }
 
                   auto* load_inst = builder.CreateLoad(load_ty, ptr);
-                  // Non-volatile: LLVM won't speculate loads from non-dereferenceable
-                  // pointers (isSafeToSpeculativelyExecute returns false), so guard
-                  // pages still catch OOB access. Removing volatile enables GVN,
-                  // load forwarding, and addressing mode folding.
+                  // Volatile: WASM loads can trap via guard pages on OOB access.
+                  // LLVM must not eliminate or reorder them (e.g. DCE when the
+                  // result is dropped).  Volatile prevents this while still
+                  // allowing register allocation and instruction selection.
+                  load_inst->setVolatile(true);
                   llvm::Value* loaded = load_inst;
                   // Extend if needed
                   if (load_ty != result_ty) {

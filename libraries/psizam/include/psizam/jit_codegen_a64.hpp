@@ -1870,18 +1870,18 @@ namespace psizam {
             break;
 
          // ── Float comparisons ──
-         case ir_op::f32_eq: emit_f32_cmp(inst, COND_EQ); break;
-         case ir_op::f32_ne: emit_f32_cmp(inst, COND_NE); break;
-         case ir_op::f32_lt: emit_f32_cmp(inst, COND_LO); break; // MI for ordered, but LO handles unordered
-         case ir_op::f32_gt: emit_f32_cmp(inst, COND_GT); break;
-         case ir_op::f32_le: emit_f32_cmp(inst, COND_LS); break;
-         case ir_op::f32_ge: emit_f32_cmp(inst, COND_GE); break;
-         case ir_op::f64_eq: emit_f64_cmp(inst, COND_EQ); break;
-         case ir_op::f64_ne: emit_f64_cmp(inst, COND_NE); break;
-         case ir_op::f64_lt: emit_f64_cmp(inst, COND_LO); break;
-         case ir_op::f64_gt: emit_f64_cmp(inst, COND_GT); break;
-         case ir_op::f64_le: emit_f64_cmp(inst, COND_LS); break;
-         case ir_op::f64_ge: emit_f64_cmp(inst, COND_GE); break;
+         case ir_op::f32_eq: emit_f32_cmp(func, inst, idx, COND_EQ); break;
+         case ir_op::f32_ne: emit_f32_cmp(func, inst, idx, COND_NE); break;
+         case ir_op::f32_lt: emit_f32_cmp(func, inst, idx, COND_LO); break; // MI for ordered, but LO handles unordered
+         case ir_op::f32_gt: emit_f32_cmp(func, inst, idx, COND_GT); break;
+         case ir_op::f32_le: emit_f32_cmp(func, inst, idx, COND_LS); break;
+         case ir_op::f32_ge: emit_f32_cmp(func, inst, idx, COND_GE); break;
+         case ir_op::f64_eq: emit_f64_cmp(func, inst, idx, COND_EQ); break;
+         case ir_op::f64_ne: emit_f64_cmp(func, inst, idx, COND_NE); break;
+         case ir_op::f64_lt: emit_f64_cmp(func, inst, idx, COND_LO); break;
+         case ir_op::f64_gt: emit_f64_cmp(func, inst, idx, COND_GT); break;
+         case ir_op::f64_le: emit_f64_cmp(func, inst, idx, COND_LS); break;
+         case ir_op::f64_ge: emit_f64_cmp(func, inst, idx, COND_GE); break;
 
          // ── Float-to-int conversions (trapping: overflow/NaN → exception) ──
          case ir_op::i32_trunc_s_f32:     emit_fcvt_trap(inst, 0x1E380000, true, true); break;   // FCVTZS W0, S0
@@ -1929,35 +1929,72 @@ namespace psizam {
 
          // ── Bulk memory ──
          case ir_op::memory_fill: {
-            emit_pop(X2); // count
-            emit_pop(X1); // value
-            emit_pop(X0); // dest
-            emit32(0x8B140000); // ADD X0, X0, X20 (native addr)
+            // Stack: [dest, value, count]
+            emit_pop(X3); // count
+            emit_pop(X2); // value
+            emit_pop(X1); // dest
+            emit_mov_reg(X0, X19); // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(memset));
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&memory_fill_checked));
             emit32(0xD63F0100);
             emit_pop(X20); emit_pop(X19);
             break;
          }
          case ir_op::memory_copy: {
-            emit_pop(X2); // count
-            emit_pop(X1); // src
-            emit_pop(X0); // dest
-            emit32(0x8B140000); // ADD X0, X0, X20
-            emit32(0x8B140021); // ADD X1, X1, X20
+            // Stack: [dest, src, count]
+            emit_pop(X3); // count
+            emit_pop(X2); // src
+            emit_pop(X1); // dest
+            emit_mov_reg(X0, X19); // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(memmove));
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&memory_copy_checked));
             emit32(0xD63F0100);
             emit_pop(X20); emit_pop(X19);
             break;
          }
 
          case ir_op::memory_init:
+         case ir_op::table_init: {
+            // Stack: [dest, src, count] from arg pushes
+            emit_pop(X4);  // count
+            emit_pop(X3);  // src
+            emit_pop(X2);  // dest
+            emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // seg_idx
+            emit_mov_reg(X0, X19);  // ctx
+            emit_push(X19); emit_push(X20);
+            auto fn = (inst.opcode == ir_op::memory_init)
+               ? reinterpret_cast<uint64_t>(&memory_init_impl)
+               : reinterpret_cast<uint64_t>(&table_init_impl);
+            emit_mov_imm64(X8, fn);
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20); emit_pop(X19);
+            break;
+         }
          case ir_op::data_drop:
-         case ir_op::table_init:
-         case ir_op::elem_drop:
-         case ir_op::table_copy:
-            break; // TODO
+         case ir_op::elem_drop: {
+            emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // seg_idx
+            emit_mov_reg(X0, X19);  // ctx
+            emit_push(X19); emit_push(X20);
+            auto fn = (inst.opcode == ir_op::data_drop)
+               ? reinterpret_cast<uint64_t>(&data_drop_impl)
+               : reinterpret_cast<uint64_t>(&elem_drop_impl);
+            emit_mov_imm64(X8, fn);
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20); emit_pop(X19);
+            break;
+         }
+         case ir_op::table_copy: {
+            // Stack: [dest, src, count] from arg pushes
+            emit_pop(X3);  // count
+            emit_pop(X2);  // src
+            emit_pop(X1);  // dest
+            emit_mov_reg(X0, X19);  // ctx
+            emit_push(X19); emit_push(X20);
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&table_copy_impl));
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20); emit_pop(X19);
+            break;
+         }
 
          default:
             break;
@@ -3045,21 +3082,23 @@ namespace psizam {
          store_x0_vreg(inst.dest);
       }
 
-      void emit_f32_cmp(const ir_inst& inst, uint32_t cond) {
+      void emit_f32_cmp(ir_function& func, const ir_inst& inst, uint32_t idx, uint32_t cond) {
          load_vreg_x0(inst.rr.src1);
          load_vreg_x1(inst.rr.src2);
          emit32(0x1E270000);             // FMOV S0, W0
          emit32(0x1E270000 | (X1 << 5) | 1); // FMOV S1, W1
          emit32(0x1E212000);             // FCMP S0, S1
+         if ((inst.flags & IR_FUSE_NEXT) && emit_fused_branch(func, idx, cond)) return;
          emit_cset(X0, cond);
          store_x0_vreg(inst.dest);
       }
-      void emit_f64_cmp(const ir_inst& inst, uint32_t cond) {
+      void emit_f64_cmp(ir_function& func, const ir_inst& inst, uint32_t idx, uint32_t cond) {
          load_vreg_x0(inst.rr.src1);
          load_vreg_x1(inst.rr.src2);
          emit32(0x9E670000);             // FMOV D0, X0
          emit32(0x9E670000 | (X1 << 5) | 1); // FMOV D1, X1
          emit32(0x1E612000);             // FCMP D0, D1
+         if ((inst.flags & IR_FUSE_NEXT) && emit_fused_branch(func, idx, cond)) return;
          emit_cset(X0, cond);
          store_x0_vreg(inst.dest);
       }
@@ -3168,6 +3207,63 @@ namespace psizam {
       static void on_call_indirect_error() { psizam::throw_<wasm_interpreter_exception>("call_indirect out of range"); }
       static void on_type_error() { psizam::throw_<wasm_interpreter_exception>("call_indirect incorrect function type"); }
       static void on_stack_overflow() { psizam::throw_<wasm_interpreter_exception>("stack overflow"); }
+
+      // Bulk memory/table runtime helpers
+      static void memory_init_impl(void* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         psizam::longjmp_on_exception([&]() {
+            context->init_linear_memory(seg_idx, dest, src, count);
+         });
+      }
+      static void data_drop_impl(void* ctx, uint32_t seg_idx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         psizam::longjmp_on_exception([&]() {
+            context->drop_data(seg_idx);
+         });
+      }
+      static void table_init_impl(void* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         psizam::longjmp_on_exception([&]() {
+            context->init_table(seg_idx, dest, src, count);
+         });
+      }
+      static void elem_drop_impl(void* ctx, uint32_t seg_idx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         psizam::longjmp_on_exception([&]() {
+            context->drop_elem(seg_idx);
+         });
+      }
+      static void table_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         psizam::longjmp_on_exception([&]() {
+            auto* s = context->get_table_ptr(src, count);
+            auto* d = context->get_table_ptr(dest, count);
+            if (count > 0)
+               std::memmove(d, s, count * sizeof(table_entry));
+         });
+      }
+      static void memory_copy_checked(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         psizam::longjmp_on_exception([&]() {
+            char* mem = context->linear_memory();
+            uint32_t mem_size = static_cast<uint32_t>(context->current_linear_memory()) * 65536u;
+            if (uint64_t(dest) + count > mem_size || uint64_t(src) + count > mem_size)
+               psizam::throw_<wasm_memory_exception>("out of bounds memory access");
+            if (count > 0)
+               std::memmove(mem + dest, mem + src, count);
+         });
+      }
+      static void memory_fill_checked(void* ctx, uint32_t dest, uint32_t val, uint32_t count) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         psizam::longjmp_on_exception([&]() {
+            char* mem = context->linear_memory();
+            uint32_t mem_size = static_cast<uint32_t>(context->current_linear_memory()) * 65536u;
+            if (uint64_t(dest) + count > mem_size)
+               psizam::throw_<wasm_memory_exception>("out of bounds memory access");
+            if (count > 0)
+               std::memset(mem + dest, static_cast<uint8_t>(val), count);
+         });
+      }
 
       // ──────── State ────────
 

@@ -60,10 +60,11 @@ void __psizam_data_drop(void* ctx, uint32_t seg_idx) {
 void __psizam_memory_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n) {
    auto& c = as_ctx(ctx);
    char* mem = c.linear_memory();
-   // Validate bounds by accessing through interface
+   uint32_t mem_size = static_cast<uint32_t>(c.current_linear_memory()) * 65536u;
+   // Spec: trap if dest + n > |mem| or src + n > |mem| (even when n=0)
+   if (uint64_t(dest) + n > mem_size || uint64_t(src) + n > mem_size)
+      throw psizam::wasm_memory_exception{"out of bounds memory access"};
    if (n > 0) {
-      uint64_t max_addr = std::max(uint64_t(dest) + n, uint64_t(src) + n);
-      (void)max_addr; // bounds checked by guard page
       std::memmove(mem + dest, mem + src, n);
    }
 }
@@ -71,6 +72,10 @@ void __psizam_memory_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n) {
 void __psizam_memory_fill(void* ctx, uint32_t dest, uint32_t val, uint32_t n) {
    auto& c = as_ctx(ctx);
    char* mem = c.linear_memory();
+   uint32_t mem_size = static_cast<uint32_t>(c.current_linear_memory()) * 65536u;
+   // Spec: trap if dest + n > |mem| (even when n=0)
+   if (uint64_t(dest) + n > mem_size)
+      throw psizam::wasm_memory_exception{"out of bounds memory access"};
    if (n > 0) {
       std::memset(mem + dest, static_cast<uint8_t>(val), n);
    }

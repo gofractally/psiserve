@@ -581,14 +581,24 @@ namespace psizam {
                }
             }
 
-            // Check if this interval crosses a call (XMM regs are caller-saved)
+            // Check if this interval crosses a call (XMM regs are caller-saved).
+            // Start from start+1 to exclude the defining instruction — a vreg
+            // defined by a call is live AFTER the call, not during it.
             bool xmm_crosses_call = false;
-            if (has_calls) {
-               for (uint32_t p = interval.start; p <= interval.end; ++p) {
-                  if (call_bmp[p / 64] & (uint64_t(1) << (p % 64))) {
-                     xmm_crosses_call = true;
-                     break;
-                  }
+            if (has_calls && interval.end > interval.start + 1) {
+               uint32_t lo = interval.start + 1;
+               uint32_t hi = interval.end; // exclusive
+               uint32_t lo_word = lo / 64, hi_word = (hi - 1) / 64;
+               if (lo_word == hi_word) {
+                  uint64_t mask = (hi % 64 == 0 ? ~uint64_t(0) : (uint64_t(1) << (hi % 64)) - 1)
+                                & ~((uint64_t(1) << (lo % 64)) - 1);
+                  xmm_crosses_call = (call_bmp[lo_word] & mask) != 0;
+               } else {
+                  uint64_t acc = call_bmp[lo_word] & ~((uint64_t(1) << (lo % 64)) - 1);
+                  for (uint32_t w = lo_word + 1; w < hi_word; ++w) acc |= call_bmp[w];
+                  uint64_t hi_mask = hi % 64 == 0 ? ~uint64_t(0) : (uint64_t(1) << (hi % 64)) - 1;
+                  acc |= call_bmp[hi_word] & hi_mask;
+                  xmm_crosses_call = acc != 0;
                }
             }
 
@@ -613,9 +623,19 @@ namespace psizam {
                // float bits across the call (faster than memory spill).
                // The codegen loads floats via load_vreg_rax → vmovd/vmovq,
                // so a GPR assignment works transparently.
+               // Must check for overlap with existing GPR intervals (reg_used
+               // from first pass is stale at this point).
                int gpr = -1;
                for (int r = static_cast<int>(phys_reg::caller_saved_count); r < NUM_REGS; ++r) {
-                  if (!reg_used[r]) { gpr = r; break; }
+                  bool in_use = false;
+                  for (uint32_t k = 0; k < func.interval_count; ++k) {
+                     auto& kiv = func.intervals[k];
+                     if (kiv.phys_reg == r && kiv.start < interval.end && kiv.end > interval.start) {
+                        in_use = true;
+                        break;
+                     }
+                  }
+                  if (!in_use) { gpr = r; break; }
                }
                if (gpr >= 0) {
                   interval.phys_reg = static_cast<int8_t>(gpr);

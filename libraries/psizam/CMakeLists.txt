@@ -35,8 +35,6 @@ option(PSIZAM_ENABLE_SOFTFLOAT
    "Enable deterministic software floating point operations" ON)
 option(PSIZAM_FULL_DEBUG
    "Enable stack dumping and instruction tracing" OFF)
-option(PSIZAM_ENABLE_MEMORY_OPS_ALIGNMENT
-   "Enable the backend to obey alignment hints" OFF)
 option(PSIZAM_ENABLE_INSTALL
    "Enable install rules for psizam" ${PSIZAM_IS_TOPLEVEL})
 option(PSIZAM_ENABLE_TOOLS
@@ -83,10 +81,6 @@ endif()
 
 if(PSIZAM_FULL_DEBUG)
    target_compile_definitions(psizam INTERFACE PSIZAM_FULL_DEBUG)
-endif()
-
-if(PSIZAM_ENABLE_MEMORY_OPS_ALIGNMENT)
-   target_compile_definitions(psizam INTERFACE PSIZAM_ALIGN_MEMORY_OPS)
 endif()
 
 # ── Tools ──────────────────────────────────────────────────────────────────────

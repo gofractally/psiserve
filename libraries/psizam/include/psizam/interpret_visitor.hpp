@@ -24,14 +24,6 @@ namespace psizam {
 
       ExecutionContext& get_context() { return context; }
 
-      static inline constexpr void* align_address(void* addr, size_t align_amt) {
-         if constexpr (should_align_memory_ops) {
-            addr = (void*)(((uintptr_t)addr + (1 << align_amt) - 1) & ~((1 << align_amt) - 1));
-            return addr;
-         } else {
-            return addr;
-         }
-      }
       template<typename T>
       static inline T read_unaligned(const void* addr) {
          T result;
@@ -131,7 +123,7 @@ namespace psizam {
       template<typename Op>
       inline void * pop_memop_addr(const Op& op) {
          const auto& ptr  = context.pop_operand();
-         return align_address((context.linear_memory() + op.offset + ptr.to_ui32()), op.flags_align);
+         return context.linear_memory() + op.offset + ptr.to_ui32();
       }
       [[gnu::always_inline]] inline void operator()(const i32_load_t& op) {
          context.inc_pc();
@@ -562,7 +554,7 @@ namespace psizam {
          auto&       lhs = context.peek_operand().to_i32();
          PSIZAM_ASSERT(rhs != 0, wasm_interpreter_exception, "i32.div_s divide by zero");
          PSIZAM_ASSERT(!(lhs == std::numeric_limits<int32_t>::min() && rhs == -1), wasm_interpreter_exception,
-                       "i32.div_s traps when I32_MAX/-1");
+                       "i32.div_s traps when I32_MIN/-1");
          lhs /= rhs;
       }
       [[gnu::always_inline]] inline void operator()(const i32_div_u_t& op) {
@@ -688,7 +680,7 @@ namespace psizam {
          auto&       lhs = context.peek_operand().to_i64();
          PSIZAM_ASSERT(rhs != 0, wasm_interpreter_exception, "i64.div_s divide by zero");
          PSIZAM_ASSERT(!(lhs == std::numeric_limits<int64_t>::min() && rhs == -1), wasm_interpreter_exception,
-                       "i64.div_s traps when I64_MAX/-1");
+                       "i64.div_s traps when I64_MIN/-1");
          lhs /= rhs;
       }
       [[gnu::always_inline]] inline void operator()(const i64_div_u_t& op) {
@@ -712,7 +704,7 @@ namespace psizam {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_ui64();
          auto&       lhs = context.peek_operand().to_ui64();
-         PSIZAM_ASSERT(rhs != 0, wasm_interpreter_exception, "i64.rem_s divide by zero");
+         PSIZAM_ASSERT(rhs != 0, wasm_interpreter_exception, "i64.rem_u divide by zero");
          lhs %= rhs;
       }
       [[gnu::always_inline]] inline void operator()(const i64_and_t& op) {

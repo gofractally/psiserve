@@ -67,7 +67,7 @@ namespace psizam {
         lhs.param_types.size() == rhs.param_types.size() &&
         std::equal(lhs.param_types.data(), lhs.param_types.data() + lhs.param_types.size(), rhs.param_types.data()) &&
         lhs.return_count == rhs.return_count &&
-        (lhs.return_count || lhs.return_type == rhs.return_type);
+        (!lhs.return_count || lhs.return_type == rhs.return_type);
    }
 
    union expr_value {
