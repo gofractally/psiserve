@@ -327,7 +327,11 @@ namespace psizam {
          _params = function_parameters{_ft};
          _locals = function_locals{locals};
          const std::size_t instruction_size_ratio_upper_bound = use_softfloat?(_enable_backtrace?120:100):100;
-         std::size_t code_size = max_prologue_size + _mod.code[funcnum].size * instruction_size_ratio_upper_bound + max_epilogue_size;
+         // Multi-value epilogue: 8 bytes per value (2 instructions) + frame restore
+         std::size_t epilogue_size = (_ft->return_types.size() > 1)
+            ? _ft->return_types.size() * 8 + max_epilogue_size
+            : max_epilogue_size;
+         std::size_t code_size = max_prologue_size + _mod.code[funcnum].size * instruction_size_ratio_upper_bound + epilogue_size;
          _code_start = _allocator.alloc<unsigned char>(code_size);
          _code_end = _code_start + code_size;
          code = _code_start;
@@ -376,6 +380,9 @@ namespace psizam {
 
       }
 
+      // Offset of _multi_return buffer in frame_info_holder (accessed via X19)
+      static constexpr uint32_t multi_return_offset = 24;
+
       void emit_epilogue(const func_type& ft, const std::vector<local_entry>& /*locals*/, uint32_t funcnum) {
          emit_check_stack_limit_end();
          // Patch the restore ADD now that we know where it is
@@ -385,7 +392,18 @@ namespace psizam {
                patch_stack_limit_slots(stack_limit_restore, stack_usage, false);
             }
          }
-         if(ft.return_count != 0) {
+         if (ft.return_types.size() > 1) {
+            // Multi-value return: copy N values from operand stack to ctx->_multi_return
+            for (uint32_t i = 0; i < ft.return_types.size(); i++) {
+               uint32_t stack_slot = ft.return_types.size() - 1 - i;
+               uint32_t sp_offset = stack_slot * 16;  // 16-byte aligned slots
+               uint32_t mr_offset = multi_return_offset + i * 8;
+               // LDR X0, [SP, #sp_offset]
+               emit32(0xF94003E0 | ((sp_offset / 8) << 10));
+               // STR X0, [X19, #mr_offset]
+               emit32(0xF9000260 | ((mr_offset / 8) << 10));
+            }
+         } else if(ft.return_count != 0) {
             if(ft.return_type == types::v128) {
                // v128 occupies two 16-byte slots: load low half, then high half
                emit_pop_x(X0); // low 64 bits (first slot)
@@ -4525,6 +4543,24 @@ namespace psizam {
          // Call boundary: invalidate peephole state so no optimization
          // reaches across the BL instruction that precedes this.
          invalidate_recent_ops();
+         if (ft.return_types.size() > 1) {
+            // Multi-value return: pop params, push N results from ctx->_multi_return
+            uint32_t total_size = 0;
+            for(uint32_t i = 0; i < ft.param_types.size(); ++i) {
+               total_size += (ft.param_types[i] == types::v128) ? 32 : 16;
+            }
+            if(total_size != 0) {
+               emit_add_imm_sp(total_size);
+            }
+            // Push return values: result[0] first (deepest), result[N-1] last (top)
+            for (uint32_t i = 0; i < ft.return_types.size(); i++) {
+               uint32_t mr_offset = multi_return_offset + i * 8;
+               // LDR X0, [X19, #mr_offset]
+               emit32(0xF9400260 | ((mr_offset / 8) << 10));
+               emit_push_x(X0);
+            }
+            return;
+         }
          uint32_t total_size = 0;
          for(uint32_t i = 0; i < ft.param_types.size(); ++i) {
             if(ft.param_types[i] == types::v128) {

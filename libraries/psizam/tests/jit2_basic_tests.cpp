@@ -469,10 +469,17 @@ TEST_CASE("multi-value block types: jit", "[multi_value]") {
 TEST_CASE("multi-value returns: interpreter", "[multi_value]") {
    using backend_t = backend<std::nullptr_t, psizam::interpreter>;
    backend_t bkend(multivalue_wasm, &wa);
-   // pair() returns (42, 7), sub => 42 - 7 = 35
    CHECK(bkend.call_with_return("env", "test_pair")->to_ui32() == 35);
-   // swap(10, 3) returns (3, 10), sub => 3 - 10 = -7 (as unsigned: 0xFFFFFFF9)
    CHECK(bkend.call_with_return("env", "test_swap", (uint32_t)10, (uint32_t)3)->to_i32() == -7);
-   // swap(5, 5) returns (5, 5), sub => 5 - 5 = 0
+   CHECK(bkend.call_with_return("env", "test_swap", (uint32_t)5, (uint32_t)5)->to_i32() == 0);
+}
+
+TEST_CASE("multi-value returns: jit", "[multi_value]") {
+   using backend_t = backend<std::nullptr_t, psizam::jit>;
+   backend_t bkend(multivalue_wasm, &wa);
+   // pair() returns (42, 7), test_pair calls it then subs: 42 - 7 = 35
+   CHECK(bkend.call_with_return("env", "test_pair")->to_ui32() == 35);
+   // swap(10, 3) returns (3, 10), sub: 3 - 10 = -7
+   CHECK(bkend.call_with_return("env", "test_swap", (uint32_t)10, (uint32_t)3)->to_i32() == -7);
    CHECK(bkend.call_with_return("env", "test_swap", (uint32_t)5, (uint32_t)5)->to_i32() == 0);
 }

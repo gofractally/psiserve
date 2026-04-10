@@ -463,9 +463,11 @@ namespace psizam {
    // can use fixed offsets regardless of EnableBacktrace setting.
    template<bool EnableBacktrace>
    struct frame_info_holder {
-      void* volatile _bottom_frame = nullptr;
-      void* volatile _top_frame = nullptr;
-      uint32_t _remaining_call_depth;
+      void* volatile _bottom_frame = nullptr;    // offset 0
+      void* volatile _top_frame = nullptr;       // offset 8
+      uint32_t _remaining_call_depth;             // offset 16
+      uint32_t _multi_return_count = 0;           // offset 20: number of return values stored
+      native_value _multi_return[16] = {};        // offset 24: buffer for multi-value returns (up to 16 values)
    };
 
    template<bool EnableBacktrace = false>

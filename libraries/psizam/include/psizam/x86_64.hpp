@@ -187,14 +187,18 @@ namespace psizam {
       }
 
       static constexpr std::size_t max_prologue_size = 33;
-      static constexpr std::size_t max_epilogue_size = 16;
+      static constexpr std::size_t max_epilogue_size = 16; // single-value epilogue
       void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& locals, uint32_t funcnum) {
          _ft = &_mod.types[_mod.functions[funcnum]];
          _params = function_parameters{_ft};
          _locals = function_locals{locals};
          // FIXME: This is not a tight upper bound
          const std::size_t instruction_size_ratio_upper_bound = use_softfloat?(_enable_backtrace?63:49):79;
-         std::size_t code_size = max_prologue_size + _mod.code[funcnum].size * instruction_size_ratio_upper_bound + max_epilogue_size;
+         // Multi-value epilogue needs ~16 bytes per return value for the mov pairs
+         std::size_t epilogue_size = (_ft->return_types.size() > 1)
+            ? _ft->return_types.size() * 16 + 16
+            : max_epilogue_size;
+         std::size_t code_size = max_prologue_size + _mod.code[funcnum].size * instruction_size_ratio_upper_bound + epilogue_size;
          _code_start = _allocator.alloc<unsigned char>(code_size);
          _code_end = _code_start + code_size;
          code = _code_start;
@@ -246,25 +250,38 @@ namespace psizam {
          }
          assert((char*)code <= (char*)_code_start + max_prologue_size);
       }
+      // Offset of _multi_return buffer in frame_info_holder (accessed via RDI)
+      static constexpr int32_t multi_return_offset = 24;
+
       void emit_epilogue(const func_type& ft, const std::vector<local_entry>& locals, uint32_t /*funcnum*/) {
-#ifndef NDEBUG
-         void * epilogue_start = code;
-#endif
          emit_check_stack_limit_end();
-         if(ft.return_count != 0) {
-            if(ft.return_type == types::v128) {
-               emit_vmovups(*rsp, xmm0);
-            } else {
-               // pop RAX
-               emit_pop(rax);
+         if (ft.return_types.size() > 1) {
+            // Multi-value return: copy N return values from operand stack to ctx->_multi_return
+            for (uint32_t i = 0; i < ft.return_types.size(); i++) {
+               // Values are on stack: RSP is result[N-1] (top), RSP+(N-1)*8 is result[0]
+               uint32_t stack_idx = ft.return_types.size() - 1 - i;
+               emit_mov(*(rsp + static_cast<int32_t>(stack_idx * 8)), rax);
+               emit_mov(rax, *(rdi + multi_return_offset + static_cast<int32_t>(i * 8)));
             }
-         }
-         if (_local_count > 0 || (ft.return_count != 0 && ft.return_type == types::v128)) {
+            // Restore frame
             emit_mov(rbp, rsp);
+            emit_pop(rbp);
+            emit(RET);
+         } else {
+            if(ft.return_count != 0) {
+               if(ft.return_type == types::v128) {
+                  emit_vmovups(*rsp, xmm0);
+               } else {
+                  // pop RAX
+                  emit_pop(rax);
+               }
+            }
+            if (_local_count > 0 || (ft.return_count != 0 && ft.return_type == types::v128)) {
+               emit_mov(rbp, rsp);
+            }
+            emit_pop(rbp);
+            emit(RET);
          }
-         emit_pop(rbp);
-         emit(RET);
-         assert((char*)code <= (char*)epilogue_start + max_epilogue_size);
       }
       static constexpr uint32_t get_depth_for_type(uint8_t type) {
          if(type == types::v128) {
@@ -5843,6 +5860,23 @@ namespace psizam {
       // \pre the result (if any) is in %rax or %xmm0
       // \post the result (if any) is at the top of the stack
       void emit_multipop(const func_type& ft) {
+         if (ft.return_types.size() > 1) {
+            // Multi-value return: pop params, then push N results from ctx->_multi_return
+            auto icount = variable_size_instr(0, 7 + ft.return_types.size() * 16);
+            uint32_t total_size = 0;
+            for(uint32_t i = 0; i < ft.param_types.size(); ++i) {
+               total_size += (ft.param_types[i] == v128) ? 16 : 8;
+            }
+            if(total_size != 0) {
+               emit_add(total_size, rsp);
+            }
+            // Push return values from ctx->_multi_return (result[0] first = deepest)
+            for (uint32_t i = 0; i < ft.return_types.size(); i++) {
+               emit_mov(*(rdi + multi_return_offset + static_cast<int32_t>(i * 8)), rax);
+               emit_push(rax);
+            }
+            return;
+         }
          auto icount = variable_size_instr(0, 12);
          uint32_t total_size = 0;
          for(uint32_t i = 0; i < ft.param_types.size(); ++i) {
