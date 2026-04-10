@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -21,32 +21,32 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "type-i32")->to_ui32() == UINT32_C(306));
-   CHECK(bkend.call_with_return("env", "type-i64")->to_ui64() == UINT32_C(356));
+   CHECK(bkend.call_with_return("env", "type-i64")->to_ui64() == UINT64_C(356));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-f32")->to_f32()) == UINT32_C(1165172736));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-f64")->to_f64()) == UINT64_C(4660882566700597248));
-   CHECK(bkend.call_with_return("env", "type-index")->to_ui64() == UINT32_C(100));
+   CHECK(bkend.call_with_return("env", "type-index")->to_ui64() == UINT64_C(100));
    CHECK(bkend.call_with_return("env", "type-first-i32")->to_ui32() == UINT32_C(32));
-   CHECK(bkend.call_with_return("env", "type-first-i64")->to_ui64() == UINT32_C(64));
+   CHECK(bkend.call_with_return("env", "type-first-i64")->to_ui64() == UINT64_C(64));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-first-f32")->to_f32()) == UINT32_C(1068037571));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-first-f64")->to_f64()) == UINT64_C(4610064722561534525));
    CHECK(bkend.call_with_return("env", "type-second-i32")->to_ui32() == UINT32_C(32));
-   CHECK(bkend.call_with_return("env", "type-second-i64")->to_ui64() == UINT32_C(64));
+   CHECK(bkend.call_with_return("env", "type-second-i64")->to_ui64() == UINT64_C(64));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-second-f32")->to_f32()) == UINT32_C(1107296256));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-second-f64")->to_f64()) == UINT64_C(4634211053438658150));
-   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(5), UINT64_C(2))->to_ui64() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(5), UINT64_C(5))->to_ui64() == UINT32_C(5));
-   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(12), UINT64_C(5))->to_ui64() == UINT32_C(120));
-   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(13), UINT64_C(5))->to_ui64() == UINT32_C(8));
-   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(20), UINT64_C(2))->to_ui64() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(5), UINT64_C(2))->to_ui64() == UINT64_C(2));
+   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(5), UINT64_C(5))->to_ui64() == UINT64_C(5));
+   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(12), UINT64_C(5))->to_ui64() == UINT64_C(120));
+   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(13), UINT64_C(5))->to_ui64() == UINT64_C(8));
+   CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(20), UINT64_C(2))->to_ui64() == UINT64_C(2));
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(0), UINT64_C(2)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(15), UINT64_C(2)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(29), UINT64_C(2)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(4294967295), UINT64_C(2)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(1213432423), UINT64_C(2)), std::exception);
-   CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(5))->to_ui64() == UINT32_C(9));
-   CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(12))->to_ui64() == UINT32_C(362880));
-   CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(13))->to_ui64() == UINT32_C(55));
-   CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(20))->to_ui64() == UINT32_C(9));
+   CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(5))->to_ui64() == UINT64_C(9));
+   CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(12))->to_ui64() == UINT64_C(362880));
+   CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(13))->to_ui64() == UINT64_C(55));
+   CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(20))->to_ui64() == UINT64_C(9));
    CHECK_THROWS_AS(bkend("env", "dispatch-structural-i64", UINT32_C(11)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch-structural-i64", UINT32_C(22)), std::exception);
    CHECK(bkend.call_with_return("env", "dispatch-structural-i32", UINT32_C(4))->to_ui32() == UINT32_C(9));
@@ -67,10 +67,10 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "dispatch-structural-f64", UINT32_C(22))->to_f64()) == UINT64_C(4621256167635550208));
    CHECK_THROWS_AS(bkend("env", "dispatch-structural-f64", UINT32_C(10)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch-structural-f64", UINT32_C(18)), std::exception);
-   CHECK(bkend.call_with_return("env", "fac-i64", UINT64_C(0))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fac-i64", UINT64_C(1))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fac-i64", UINT64_C(5))->to_ui64() == UINT32_C(120));
-   CHECK(bkend.call_with_return("env", "fac-i64", UINT64_C(25))->to_ui64() == UINT32_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fac-i64", UINT64_C(0))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fac-i64", UINT64_C(1))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fac-i64", UINT64_C(5))->to_ui64() == UINT64_C(120));
+   CHECK(bkend.call_with_return("env", "fac-i64", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
    CHECK(bkend.call_with_return("env", "fac-i32", UINT32_C(0))->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "fac-i32", UINT32_C(1))->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "fac-i32", UINT32_C(5))->to_ui32() == UINT32_C(120));
@@ -83,11 +83,11 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "fac-f64", bit_cast<double>(UINT64_C(4607182418800017408)))->to_f64()) == UINT64_C(4607182418800017408));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "fac-f64", bit_cast<double>(UINT64_C(4617315517961601024)))->to_f64()) == UINT64_C(4638144666238189568));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "fac-f64", bit_cast<double>(UINT64_C(4621819117588971520)))->to_f64()) == UINT64_C(4705047200009289728));
-   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(0))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(1))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(2))->to_ui64() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(5))->to_ui64() == UINT32_C(8));
-   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(20))->to_ui64() == UINT32_C(10946));
+   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(0))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(1))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(2))->to_ui64() == UINT64_C(2));
+   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(5))->to_ui64() == UINT64_C(8));
+   CHECK(bkend.call_with_return("env", "fib-i64", UINT64_C(20))->to_ui64() == UINT64_C(10946));
    CHECK(bkend.call_with_return("env", "fib-i32", UINT32_C(0))->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "fib-i32", UINT32_C(1))->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "fib-i32", UINT32_C(2))->to_ui32() == UINT32_C(2));
@@ -115,7 +115,7 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    CHECK(bkend.call_with_return("env", "as-select-mid")->to_ui32() == UINT32_C(2));
    CHECK(bkend.call_with_return("env", "as-select-last")->to_ui32() == UINT32_C(2));
    CHECK(bkend.call_with_return("env", "as-if-condition")->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "as-br_if-first")->to_ui64() == UINT32_C(356));
+   CHECK(bkend.call_with_return("env", "as-br_if-first")->to_ui64() == UINT64_C(356));
    CHECK(bkend.call_with_return("env", "as-br_if-last")->to_ui32() == UINT32_C(2));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "as-br_table-first")->to_f32()) == UINT32_C(1165172736));
    CHECK(bkend.call_with_return("env", "as-br_table-last")->to_ui32() == UINT32_C(2));
@@ -135,7 +135,7 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    CHECK(bkend.call_with_return("env", "as-test-operand")->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "as-compare-left")->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "as-compare-right")->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "as-convert-operand")->to_ui64() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "as-convert-operand")->to_ui64() == UINT64_C(1));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <call_indirect_12_wasm>", "[call_indirect_12_wasm_tests]" ) {

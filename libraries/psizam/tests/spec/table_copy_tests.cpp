@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -28,36 +28,66 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_1_wasm>", "[table_copy_1_wasm_tests
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(10)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(13))->to_ui32() == UINT32_C(5));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(17)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_10_wasm>", "[table_copy_10_wasm_tests]" ) {
@@ -65,7 +95,67 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_10_wasm>", "[table_copy_10_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_copy.10.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_11_wasm>", "[table_copy_11_wasm_tests]" ) {
@@ -73,7 +163,67 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_11_wasm>", "[table_copy_11_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_copy.11.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_12_wasm>", "[table_copy_12_wasm_tests]" ) {
@@ -81,7 +231,67 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_12_wasm>", "[table_copy_12_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_copy.12.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(25))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(26))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_13_wasm>", "[table_copy_13_wasm_tests]" ) {
@@ -90,6 +300,66 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_13_wasm>", "[table_copy_13_wasm_tes
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(13)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(14)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(15)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_14_wasm>", "[table_copy_14_wasm_tests]" ) {
@@ -98,6 +368,66 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_14_wasm>", "[table_copy_14_wasm_tes
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_15_wasm>", "[table_copy_15_wasm_tests]" ) {
@@ -105,7 +435,67 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_15_wasm>", "[table_copy_15_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_copy.15.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(26))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(27))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_16_wasm>", "[table_copy_16_wasm_tests]" ) {
@@ -114,6 +504,66 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_16_wasm>", "[table_copy_16_wasm_tes
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(10))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(11))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(15)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_17_wasm>", "[table_copy_17_wasm_tests]" ) {
@@ -121,7 +571,67 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_17_wasm>", "[table_copy_17_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_copy.17.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(12)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(13)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(17))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(18))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_18_wasm>", "[table_copy_18_wasm_tests]" ) {
@@ -130,6 +640,66 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_18_wasm>", "[table_copy_18_wasm_tes
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(22))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(23))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(24))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(25))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(26))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_19_wasm>", "[table_copy_19_wasm_tests]" ) {
@@ -146,41 +716,375 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_2_wasm>", "[table_copy_2_wasm_tests
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(10)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(13))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(17)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_20_wasm>", "[table_copy_20_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_copy.20.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_21_wasm>", "[table_copy_21_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.21.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_22_wasm>", "[table_copy_22_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.22.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_23_wasm>", "[table_copy_23_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.23.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_24_wasm>", "[table_copy_24_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.24.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_25_wasm>", "[table_copy_25_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.25.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_26_wasm>", "[table_copy_26_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.26.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_27_wasm>", "[table_copy_27_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.27.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_28_wasm>", "[table_copy_28_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.28.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_29_wasm>", "[table_copy_29_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.29.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_3_wasm>", "[table_copy_3_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.3.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(25))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(26))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_30_wasm>", "[table_copy_30_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.30.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_31_wasm>", "[table_copy_31_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.31.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_32_wasm>", "[table_copy_32_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.32.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_33_wasm>", "[table_copy_33_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.33.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_34_wasm>", "[table_copy_34_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.34.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_35_wasm>", "[table_copy_35_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.35.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_36_wasm>", "[table_copy_36_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.36.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_37_wasm>", "[table_copy_37_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.37.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_38_wasm>", "[table_copy_38_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.38.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_39_wasm>", "[table_copy_39_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.39.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_4_wasm>", "[table_copy_4_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.4.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(13)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(14)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(15)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_40_wasm>", "[table_copy_40_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.40.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_41_wasm>", "[table_copy_41_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.41.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(24), UINT32_C(0), UINT32_C(16)), std::exception);
@@ -218,9 +1122,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_20_wasm>", "[table_copy_20_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(31)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_21_wasm>", "[table_copy_21_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_42_wasm>", "[table_copy_42_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.21.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.42.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(23), UINT32_C(0), UINT32_C(15)), std::exception);
@@ -258,9 +1162,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_21_wasm>", "[table_copy_21_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(31)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_22_wasm>", "[table_copy_22_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_43_wasm>", "[table_copy_43_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.22.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.43.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(0), UINT32_C(24), UINT32_C(16)), std::exception);
@@ -298,9 +1202,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_22_wasm>", "[table_copy_22_wasm_tes
    CHECK(bkend.call_with_return("env", "test", UINT32_C(31))->to_ui32() == UINT32_C(7));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_23_wasm>", "[table_copy_23_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_44_wasm>", "[table_copy_44_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.23.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.44.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(0), UINT32_C(23), UINT32_C(15)), std::exception);
@@ -338,9 +1242,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_23_wasm>", "[table_copy_23_wasm_tes
    CHECK(bkend.call_with_return("env", "test", UINT32_C(31))->to_ui32() == UINT32_C(8));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_24_wasm>", "[table_copy_24_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_45_wasm>", "[table_copy_45_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.24.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.45.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(24), UINT32_C(11), UINT32_C(16)), std::exception);
@@ -378,9 +1282,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_24_wasm>", "[table_copy_24_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(31)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_25_wasm>", "[table_copy_25_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_46_wasm>", "[table_copy_46_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.25.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.46.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(11), UINT32_C(24), UINT32_C(16)), std::exception);
@@ -418,9 +1322,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_25_wasm>", "[table_copy_25_wasm_tes
    CHECK(bkend.call_with_return("env", "test", UINT32_C(31))->to_ui32() == UINT32_C(7));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_26_wasm>", "[table_copy_26_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_47_wasm>", "[table_copy_47_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.26.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.47.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(24), UINT32_C(21), UINT32_C(16)), std::exception);
@@ -458,9 +1362,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_26_wasm>", "[table_copy_26_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(31)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_27_wasm>", "[table_copy_27_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_48_wasm>", "[table_copy_48_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.27.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.48.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(21), UINT32_C(24), UINT32_C(16)), std::exception);
@@ -498,9 +1402,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_27_wasm>", "[table_copy_27_wasm_tes
    CHECK(bkend.call_with_return("env", "test", UINT32_C(31))->to_ui32() == UINT32_C(7));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_28_wasm>", "[table_copy_28_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_49_wasm>", "[table_copy_49_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.28.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.49.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(21), UINT32_C(21), UINT32_C(16)), std::exception);
@@ -538,9 +1442,77 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_28_wasm>", "[table_copy_28_wasm_tes
    CHECK(bkend.call_with_return("env", "test", UINT32_C(31))->to_ui32() == UINT32_C(10));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_29_wasm>", "[table_copy_29_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_5_wasm>", "[table_copy_5_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.29.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.5.wasm");
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_copy_50_wasm>", "[table_copy_50_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.50.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(0), UINT32_C(112), UINT32_C(4294967264)), std::exception);
@@ -674,47 +1646,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_29_wasm>", "[table_copy_29_wasm_tes
    CHECK(bkend.call_with_return("env", "test", UINT32_C(127))->to_ui32() == UINT32_C(15));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_3_wasm>", "[table_copy_3_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_copy_51_wasm>", "[table_copy_51_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.3.wasm");
-   backend_t bkend( code, &wa );
-
-bkend("env", "test");
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(10)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(13))->to_ui32() == UINT32_C(5));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(17)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(25))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(26))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <table_copy_30_wasm>", "[table_copy_30_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.30.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_copy.51.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(112), UINT32_C(0), UINT32_C(4294967264)), std::exception);
@@ -848,118 +1782,72 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_30_wasm>", "[table_copy_30_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(127)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_copy_4_wasm>", "[table_copy_4_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.4.wasm");
-   backend_t bkend( code, &wa );
-
-bkend("env", "test");
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(10)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(13)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(14)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(15)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(17)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <table_copy_5_wasm>", "[table_copy_5_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_copy.5.wasm");
-   backend_t bkend( code, &wa );
-
-bkend("env", "test");
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(10)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(13))->to_ui32() == UINT32_C(5));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(17)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
-}
-
 BACKEND_TEST_CASE( "Testing wasm <table_copy_6_wasm>", "[table_copy_6_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_copy.6.wasm");
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(10)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(13))->to_ui32() == UINT32_C(5));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(17)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(26))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(27))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(26))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(27))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_7_wasm>", "[table_copy_7_wasm_tests]" ) {
@@ -968,36 +1856,66 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_7_wasm>", "[table_copy_7_wasm_tests
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(10))->to_ui32() == UINT32_C(7));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(11))->to_ui32() == UINT32_C(5));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(13))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(15)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(16)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(17)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(10))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(11))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(15)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_8_wasm>", "[table_copy_8_wasm_tests]" ) {
@@ -1006,36 +1924,66 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_8_wasm>", "[table_copy_8_wasm_tests
    backend_t bkend( code, &wa );
 
 bkend("env", "test");
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(10)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(12)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(13)), std::exception);
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(7));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(5));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(17))->to_ui32() == UINT32_C(3));
-   CHECK(bkend.call_with_return("env", "check", UINT32_C(18))->to_ui32() == UINT32_C(6));
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(12)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(13)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(17))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(18))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(11))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_copy_9_wasm>", "[table_copy_9_wasm_tests]" ) {
@@ -1043,6 +1991,66 @@ BACKEND_TEST_CASE( "Testing wasm <table_copy_9_wasm>", "[table_copy_9_wasm_tests
    auto code = read_wasm( std::string(wasm_directory) + "table_copy.9.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t0", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t0", UINT32_C(29)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(4))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(6))->to_ui32() == UINT32_C(4));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(12))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(13))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(14))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(15))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(16)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(21)), std::exception);
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(22))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(23))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(24))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(25))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check_t1", UINT32_C(26))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check_t1", UINT32_C(29)), std::exception);
 }
 

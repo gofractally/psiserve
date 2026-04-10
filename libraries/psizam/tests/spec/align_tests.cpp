@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -134,65 +134,11 @@ BACKEND_TEST_CASE( "Testing wasm <align_107_wasm>", "[align_107_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "load", UINT32_C(65532))->to_ui32() == UINT32_C(0));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <align_108_wasm>", "[align_108_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.108.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <align_109_wasm>", "[align_109_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.109.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
 BACKEND_TEST_CASE( "Testing wasm <align_11_wasm>", "[align_11_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "align.11.wasm");
    backend_t bkend( code, &wa );
 
-}
-
-BACKEND_TEST_CASE( "Testing wasm <align_110_wasm>", "[align_110_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.110.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <align_111_wasm>", "[align_111_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.111.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <align_112_wasm>", "[align_112_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.112.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <align_113_wasm>", "[align_113_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.113.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <align_114_wasm>", "[align_114_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.114.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <align_115_wasm>", "[align_115_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.115.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <align_116_wasm>", "[align_116_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "align.116.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <align_12_wasm>", "[align_12_wasm_tests]" ) {

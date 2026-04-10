@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 

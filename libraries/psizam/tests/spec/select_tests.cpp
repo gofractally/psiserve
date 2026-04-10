@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -21,13 +21,13 @@ BACKEND_TEST_CASE( "Testing wasm <select_0_wasm>", "[select_0_wasm_tests]" ) {
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "select_i32", UINT32_C(1), UINT32_C(2), UINT32_C(1))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(1))->to_ui64() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(1))->to_ui64() == UINT64_C(2));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(1065353216)), bit_cast<float>(UINT32_C(1073741824)), UINT32_C(1))->to_f32()) == UINT32_C(1065353216));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(4607182418800017408)), bit_cast<double>(UINT64_C(4611686018427387904)), UINT32_C(1))->to_f64()) == UINT64_C(4607182418800017408));
    CHECK(bkend.call_with_return("env", "select_i32", UINT32_C(1), UINT32_C(2), UINT32_C(0))->to_ui32() == UINT32_C(2));
    CHECK(bkend.call_with_return("env", "select_i32", UINT32_C(2), UINT32_C(1), UINT32_C(0))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(4294967295))->to_ui64() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(4042322160))->to_ui64() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(4294967295))->to_ui64() == UINT64_C(2));
+   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(4042322160))->to_ui64() == UINT64_C(2));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(2143289344)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(1))->to_f32()) == UINT32_C(2143289344));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(2139226884)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(1))->to_f32()) == UINT32_C(2139226884));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(2143289344)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(0))->to_f32()) == UINT32_C(1065353216));

@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -58,18 +58,18 @@ BACKEND_TEST_CASE( "Testing wasm <loop_0_wasm>", "[loop_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "break-repeated")->to_ui32() == UINT32_C(18));
    CHECK(bkend.call_with_return("env", "break-inner")->to_ui32() == UINT32_C(31));
    CHECK(bkend.call_with_return("env", "effects")->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "while", UINT64_C(0))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "while", UINT64_C(1))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "while", UINT64_C(2))->to_ui64() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "while", UINT64_C(3))->to_ui64() == UINT32_C(6));
-   CHECK(bkend.call_with_return("env", "while", UINT64_C(5))->to_ui64() == UINT32_C(120));
-   CHECK(bkend.call_with_return("env", "while", UINT64_C(20))->to_ui64() == UINT32_C(2432902008176640000));
-   CHECK(bkend.call_with_return("env", "for", UINT64_C(0))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "for", UINT64_C(1))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "for", UINT64_C(2))->to_ui64() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "for", UINT64_C(3))->to_ui64() == UINT32_C(6));
-   CHECK(bkend.call_with_return("env", "for", UINT64_C(5))->to_ui64() == UINT32_C(120));
-   CHECK(bkend.call_with_return("env", "for", UINT64_C(20))->to_ui64() == UINT32_C(2432902008176640000));
+   CHECK(bkend.call_with_return("env", "while", UINT64_C(0))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "while", UINT64_C(1))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "while", UINT64_C(2))->to_ui64() == UINT64_C(2));
+   CHECK(bkend.call_with_return("env", "while", UINT64_C(3))->to_ui64() == UINT64_C(6));
+   CHECK(bkend.call_with_return("env", "while", UINT64_C(5))->to_ui64() == UINT64_C(120));
+   CHECK(bkend.call_with_return("env", "while", UINT64_C(20))->to_ui64() == UINT64_C(2432902008176640000));
+   CHECK(bkend.call_with_return("env", "for", UINT64_C(0))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "for", UINT64_C(1))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "for", UINT64_C(2))->to_ui64() == UINT64_C(2));
+   CHECK(bkend.call_with_return("env", "for", UINT64_C(3))->to_ui64() == UINT64_C(6));
+   CHECK(bkend.call_with_return("env", "for", UINT64_C(5))->to_ui64() == UINT64_C(120));
+   CHECK(bkend.call_with_return("env", "for", UINT64_C(20))->to_ui64() == UINT64_C(2432902008176640000));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "nesting", bit_cast<float>(UINT32_C(0)), bit_cast<float>(UINT32_C(1088421888)))->to_f32()) == UINT32_C(0));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "nesting", bit_cast<float>(UINT32_C(1088421888)), bit_cast<float>(UINT32_C(0)))->to_f32()) == UINT32_C(0));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "nesting", bit_cast<float>(UINT32_C(1065353216)), bit_cast<float>(UINT32_C(1065353216)))->to_f32()) == UINT32_C(1065353216));

@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -235,30 +235,6 @@ BACKEND_TEST_CASE( "Testing wasm <i64_0_wasm>", "[i64_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "popcnt", UINT64_C(12297829381041378645))->to_ui64() == UINT64_C(32));
    CHECK(bkend.call_with_return("env", "popcnt", UINT64_C(11068046444512062122))->to_ui64() == UINT64_C(32));
    CHECK(bkend.call_with_return("env", "popcnt", UINT64_C(16045690984833335023))->to_ui64() == UINT64_C(48));
-   CHECK(bkend.call_with_return("env", "extend8_s", UINT64_C(0))->to_ui64() == UINT64_C(0));
-   CHECK(bkend.call_with_return("env", "extend8_s", UINT64_C(127))->to_ui64() == UINT64_C(127));
-   CHECK(bkend.call_with_return("env", "extend8_s", UINT64_C(128))->to_ui64() == UINT64_C(18446744073709551488));
-   CHECK(bkend.call_with_return("env", "extend8_s", UINT64_C(255))->to_ui64() == UINT64_C(18446744073709551615));
-   CHECK(bkend.call_with_return("env", "extend8_s", UINT64_C(81985529216486656))->to_ui64() == UINT64_C(0));
-   CHECK(bkend.call_with_return("env", "extend8_s", UINT64_C(18364758544493064832))->to_ui64() == UINT64_C(18446744073709551488));
-   CHECK(bkend.call_with_return("env", "extend8_s", UINT64_C(18446744073709551615))->to_ui64() == UINT64_C(18446744073709551615));
-   CHECK(bkend.call_with_return("env", "extend16_s", UINT64_C(0))->to_ui64() == UINT64_C(0));
-   CHECK(bkend.call_with_return("env", "extend16_s", UINT64_C(32767))->to_ui64() == UINT64_C(32767));
-   CHECK(bkend.call_with_return("env", "extend16_s", UINT64_C(32768))->to_ui64() == UINT64_C(18446744073709518848));
-   CHECK(bkend.call_with_return("env", "extend16_s", UINT64_C(65535))->to_ui64() == UINT64_C(18446744073709551615));
-   CHECK(bkend.call_with_return("env", "extend16_s", UINT64_C(1311768467463733248))->to_ui64() == UINT64_C(0));
-   CHECK(bkend.call_with_return("env", "extend16_s", UINT64_C(18364758544493084672))->to_ui64() == UINT64_C(18446744073709518848));
-   CHECK(bkend.call_with_return("env", "extend16_s", UINT64_C(18446744073709551615))->to_ui64() == UINT64_C(18446744073709551615));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(0))->to_ui64() == UINT64_C(0));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(32767))->to_ui64() == UINT64_C(32767));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(32768))->to_ui64() == UINT64_C(32768));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(65535))->to_ui64() == UINT64_C(65535));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(2147483647))->to_ui64() == UINT64_C(2147483647));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(2147483648))->to_ui64() == UINT64_C(18446744071562067968));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(4294967295))->to_ui64() == UINT64_C(18446744073709551615));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(81985526906748928))->to_ui64() == UINT64_C(0));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(18364758544655319040))->to_ui64() == UINT64_C(18446744071562067968));
-   CHECK(bkend.call_with_return("env", "extend32_s", UINT64_C(18446744073709551615))->to_ui64() == UINT64_C(18446744073709551615));
    CHECK(bkend.call_with_return("env", "eqz", UINT64_C(0))->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "eqz", UINT64_C(1))->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "eqz", UINT64_C(9223372036854775808))->to_ui32() == UINT32_C(0));

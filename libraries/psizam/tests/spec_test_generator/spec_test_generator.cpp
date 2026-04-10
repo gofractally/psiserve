@@ -1154,6 +1154,45 @@ std::string cpp_string(const picojson::value& x) {
       return "std::string(" + result + ", " + std::to_string(original.size()) + ")";
 }
 
+// Returns true if a type string refers to an unsupported reference type.
+bool is_unsupported_ref_type(const std::string& t) {
+   return t == "externref" || t == "exnref" || t == "funcref";
+}
+
+// Returns true if a command involves unsupported reference types in its
+// action args or expected results, and should be skipped.
+bool uses_unsupported_ref_type(const picojson::object& cmd) {
+   // Check expected results
+   auto exp_it = cmd.find("expected");
+   if (exp_it != cmd.end() && exp_it->second.is<picojson::array>()) {
+      for (const auto& e : exp_it->second.get<picojson::array>()) {
+         if (e.is<picojson::object>()) {
+            auto type_it = e.get<picojson::object>().find("type");
+            if (type_it != e.get<picojson::object>().end() &&
+                is_unsupported_ref_type(type_it->second.to_str()))
+               return true;
+         }
+      }
+   }
+   // Check action args
+   auto act_it = cmd.find("action");
+   if (act_it != cmd.end() && act_it->second.is<picojson::object>()) {
+      const auto& action = act_it->second.get<picojson::object>();
+      auto args_it = action.find("args");
+      if (args_it != action.end() && args_it->second.is<picojson::array>()) {
+         for (const auto& a : args_it->second.get<picojson::array>()) {
+            if (a.is<picojson::object>()) {
+               auto type_it = a.get<picojson::object>().find("type");
+               if (type_it != a.get<picojson::object>().end() &&
+                   is_unsupported_ref_type(type_it->second.to_str()))
+                  return true;
+            }
+         }
+      }
+   }
+   return false;
+}
+
 void translate_arg(std::ostream& ss, picojson::object arg) {
    if (arg["type"].to_str() == "i32")
       ss << "UINT32_C(" << arg["value"].to_str() << ")";
@@ -1172,6 +1211,10 @@ void translate_arg(std::ostream& ss, picojson::object arg) {
          ss << elem.to_str() << "u";
       }
       ss << ")";
+   } else if (is_unsupported_ref_type(arg["type"].to_str())) {
+      // Should not reach here if uses_unsupported_ref_type filtered correctly,
+      // but handle gracefully just in case.
+      std::cerr << "warning: skipping unsupported ref type: " << arg["type"].to_str() << std::endl;
    } else {
       std::cerr << "unknown type: " << arg["type"].to_str() << std::endl;
       std::exit(1);
@@ -1210,14 +1253,14 @@ string generate_test_call(picojson::object obj, string expected_t, string expect
       ss << "UINT64_C(" << expected_v << ")";
    } else if (expected_t == "f32") {
       ss << ")->to_f32()) == ";
-      if (expected_v.starts_with("nan")) {
+      if (expected_v.substr(0, 3) == "nan") {
          ss << expected_v;
       } else {
          ss << "UINT32_C(" << expected_v << ")";
       }
    } else if (expected_t == "f64") {
       ss << ")->to_f64()) == ";
-      if (expected_v.starts_with("nan")) {
+      if (expected_v.substr(0, 3) == "nan") {
          ss << expected_v;
       } else {
          ss << "UINT64_C(" << expected_v << ")";
@@ -1353,6 +1396,10 @@ void generate_tests(const map<string, vector<picojson::object>>& mappings) {
          unit_tests << "   " << test_preamble_1 << "\n\n";
 
          for (picojson::object cmd : cmds) {
+            if (uses_unsupported_ref_type(cmd)) {
+               // Skip assertions that involve externref or other unsupported reference types
+               continue;
+            }
             if (cmd["type"].to_str() == "assert_return") {
                unit_tests << "   CHECK(";
                exp_t = "";

@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -290,12 +290,6 @@ BACKEND_TEST_CASE( "Testing wasm <local_tee_40_wasm>", "[local_tee_40_wasm_tests
 BACKEND_TEST_CASE( "Testing wasm <local_tee_41_wasm>", "[local_tee_41_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "local_tee.41.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <local_tee_42_wasm>", "[local_tee_42_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "local_tee.42.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 

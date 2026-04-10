@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -63,9 +63,38 @@ bkend("env", "test");
 BACKEND_TEST_CASE( "Testing wasm <table_init_10_wasm>", "[table_init_10_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.10.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_100_wasm>", "[table_init_100_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.100.wasm");
    backend_t bkend( code, &wa );
 
-bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "run", UINT32_C(0), UINT32_C(4294967292)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(1)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(2)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(3)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(4)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(5)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(11)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(12)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(13)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(14)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(15)), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_101_wasm>", "[table_init_101_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.101.wasm");
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_11_wasm>", "[table_init_11_wasm_tests]" ) {
@@ -89,7 +118,7 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_13_wasm>", "[table_init_13_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_init.13.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_14_wasm>", "[table_init_14_wasm_tests]" ) {
@@ -97,7 +126,7 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_14_wasm>", "[table_init_14_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_init.14.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_15_wasm>", "[table_init_15_wasm_tests]" ) {
@@ -113,7 +142,7 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_16_wasm>", "[table_init_16_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_init.16.wasm");
    backend_t bkend( code, &wa );
 
-bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_17_wasm>", "[table_init_17_wasm_tests]" ) {
@@ -129,7 +158,7 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_18_wasm>", "[table_init_18_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_init.18.wasm");
    backend_t bkend( code, &wa );
 
-bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_19_wasm>", "[table_init_19_wasm_tests]" ) {
@@ -137,7 +166,7 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_19_wasm>", "[table_init_19_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_init.19.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_2_wasm>", "[table_init_2_wasm_tests]" ) {
@@ -183,7 +212,7 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_20_wasm>", "[table_init_20_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_init.20.wasm");
    backend_t bkend( code, &wa );
 
-bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_21_wasm>", "[table_init_21_wasm_tests]" ) {
@@ -191,55 +220,71 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_21_wasm>", "[table_init_21_wasm_tes
    auto code = read_wasm( std::string(wasm_directory) + "table_init.21.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
+bkend("env", "test");
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_22_wasm>", "[table_init_22_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.22.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_23_wasm>", "[table_init_23_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.23.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_24_wasm>", "[table_init_24_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.24.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_25_wasm>", "[table_init_25_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.25.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_26_wasm>", "[table_init_26_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.26.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_27_wasm>", "[table_init_27_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.27.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_28_wasm>", "[table_init_28_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.28.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_29_wasm>", "[table_init_29_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.29.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_3_wasm>", "[table_init_3_wasm_tests]" ) {
@@ -283,13 +328,17 @@ bkend("env", "test");
 BACKEND_TEST_CASE( "Testing wasm <table_init_30_wasm>", "[table_init_30_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.30.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_31_wasm>", "[table_init_31_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.31.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_32_wasm>", "[table_init_32_wasm_tests]" ) {
@@ -343,7 +392,39 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_39_wasm>", "[table_init_39_wasm_tes
 BACKEND_TEST_CASE( "Testing wasm <table_init_4_wasm>", "[table_init_4_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.4.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(7))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(8))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(9))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(10))->to_ui32() == UINT32_C(8));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(17)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_40_wasm>", "[table_init_40_wasm_tests]" ) {
@@ -409,7 +490,39 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_49_wasm>", "[table_init_49_wasm_tes
 BACKEND_TEST_CASE( "Testing wasm <table_init_5_wasm>", "[table_init_5_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.5.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(7)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(8)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(9)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(10)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(13))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(9));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(17))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(19)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(21)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(23)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(24)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_50_wasm>", "[table_init_50_wasm_tests]" ) {
@@ -475,7 +588,39 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_59_wasm>", "[table_init_59_wasm_tes
 BACKEND_TEST_CASE( "Testing wasm <table_init_6_wasm>", "[table_init_6_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.6.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+bkend("env", "test");
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(0)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(1)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(2))->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(3))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(4))->to_ui32() == UINT32_C(4));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(5))->to_ui32() == UINT32_C(1));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(6)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(7))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(8))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(9))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(10))->to_ui32() == UINT32_C(8));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(11)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(12))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(13)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(14))->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(15))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(16))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(17))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(18)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(19))->to_ui32() == UINT32_C(9));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(20)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(21))->to_ui32() == UINT32_C(7));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(22)), std::exception);
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(23))->to_ui32() == UINT32_C(8));
+   CHECK(bkend.call_with_return("env", "check", UINT32_C(24))->to_ui32() == UINT32_C(8));
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(25)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(26)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(27)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(28)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "check", UINT32_C(29)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_60_wasm>", "[table_init_60_wasm_tests]" ) {
@@ -607,9 +752,7 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_79_wasm>", "[table_init_79_wasm_tes
 BACKEND_TEST_CASE( "Testing wasm <table_init_8_wasm>", "[table_init_8_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.8.wasm");
-   backend_t bkend( code, &wa );
-
-bkend("env", "test");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <table_init_80_wasm>", "[table_init_80_wasm_tests]" ) {
@@ -645,6 +788,72 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_84_wasm>", "[table_init_84_wasm_tes
 BACKEND_TEST_CASE( "Testing wasm <table_init_85_wasm>", "[table_init_85_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_init.85.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_86_wasm>", "[table_init_86_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.86.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_87_wasm>", "[table_init_87_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.87.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_88_wasm>", "[table_init_88_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.88.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_89_wasm>", "[table_init_89_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.89.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_9_wasm>", "[table_init_9_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.9.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_90_wasm>", "[table_init_90_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.90.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_91_wasm>", "[table_init_91_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.91.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_92_wasm>", "[table_init_92_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.92.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_93_wasm>", "[table_init_93_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.93.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_94_wasm>", "[table_init_94_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.94.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <table_init_95_wasm>", "[table_init_95_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.95.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(24), UINT32_C(16)), std::exception);
@@ -682,9 +891,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_85_wasm>", "[table_init_85_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(31)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_init_86_wasm>", "[table_init_86_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_init_96_wasm>", "[table_init_96_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_init.86.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.96.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(25), UINT32_C(16)), std::exception);
@@ -722,9 +931,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_86_wasm>", "[table_init_86_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(31)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_init_87_wasm>", "[table_init_87_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_init_97_wasm>", "[table_init_97_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_init.87.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.97.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(96), UINT32_C(32)), std::exception);
@@ -890,9 +1099,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_87_wasm>", "[table_init_87_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(159)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_init_88_wasm>", "[table_init_88_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_init_98_wasm>", "[table_init_98_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_init.88.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.98.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(97), UINT32_C(31)), std::exception);
@@ -1058,9 +1267,9 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_88_wasm>", "[table_init_88_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(159)), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_init_89_wasm>", "[table_init_89_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <table_init_99_wasm>", "[table_init_99_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_init.89.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "table_init.99.wasm");
    backend_t bkend( code, &wa );
 
    CHECK_THROWS_AS(bkend("env", "run", UINT32_C(48), UINT32_C(4294967280)), std::exception);
@@ -1128,44 +1337,5 @@ BACKEND_TEST_CASE( "Testing wasm <table_init_89_wasm>", "[table_init_89_wasm_tes
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(61)), std::exception);
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(62)), std::exception);
    CHECK_THROWS_AS(bkend("env", "test", UINT32_C(63)), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <table_init_9_wasm>", "[table_init_9_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_init.9.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK_THROWS_AS(bkend("env", "test"), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <table_init_90_wasm>", "[table_init_90_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_init.90.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK_THROWS_AS(bkend("env", "run", UINT32_C(0), UINT32_C(4294967292)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(1)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(2)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(3)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(4)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(5)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(6)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(7)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(8)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(9)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(10)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(11)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(12)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(13)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(14)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "test", UINT32_C(15)), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <table_init_91_wasm>", "[table_init_91_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_init.91.wasm");
-   backend_t bkend( code, &wa );
-
 }
 

@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -20,10 +20,10 @@ BACKEND_TEST_CASE( "Testing wasm <fac_0_wasm>", "[fac_0_wasm_tests]" ) {
    auto code = read_wasm( std::string(wasm_directory) + "fac.0.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "fac-rec", UINT64_C(25))->to_ui64() == UINT32_C(7034535277573963776));
-   CHECK(bkend.call_with_return("env", "fac-iter", UINT64_C(25))->to_ui64() == UINT32_C(7034535277573963776));
-   CHECK(bkend.call_with_return("env", "fac-rec-named", UINT64_C(25))->to_ui64() == UINT32_C(7034535277573963776));
-   CHECK(bkend.call_with_return("env", "fac-iter-named", UINT64_C(25))->to_ui64() == UINT32_C(7034535277573963776));
-   CHECK(bkend.call_with_return("env", "fac-opt", UINT64_C(25))->to_ui64() == UINT32_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fac-rec", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fac-iter", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fac-rec-named", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fac-iter-named", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fac-opt", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
 }
 

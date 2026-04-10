@@ -11,7 +11,7 @@
 #include <wasm_config.hpp>
 #include <psizam/backend.hpp>
 
-
+using namespace psizam;
 using namespace psizam;
 extern wasm_allocator wa;
 
@@ -21,30 +21,30 @@ BACKEND_TEST_CASE( "Testing wasm <call_0_wasm>", "[call_0_wasm_tests]" ) {
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "type-i32")->to_ui32() == UINT32_C(306));
-   CHECK(bkend.call_with_return("env", "type-i64")->to_ui64() == UINT32_C(356));
+   CHECK(bkend.call_with_return("env", "type-i64")->to_ui64() == UINT64_C(356));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-f32")->to_f32()) == UINT32_C(1165172736));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-f64")->to_f64()) == UINT64_C(4660882566700597248));
    CHECK(bkend.call_with_return("env", "type-first-i32")->to_ui32() == UINT32_C(32));
-   CHECK(bkend.call_with_return("env", "type-first-i64")->to_ui64() == UINT32_C(64));
+   CHECK(bkend.call_with_return("env", "type-first-i64")->to_ui64() == UINT64_C(64));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-first-f32")->to_f32()) == UINT32_C(1068037571));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-first-f64")->to_f64()) == UINT64_C(4610064722561534525));
    CHECK(bkend.call_with_return("env", "type-second-i32")->to_ui32() == UINT32_C(32));
-   CHECK(bkend.call_with_return("env", "type-second-i64")->to_ui64() == UINT32_C(64));
+   CHECK(bkend.call_with_return("env", "type-second-i64")->to_ui64() == UINT64_C(64));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-second-f32")->to_f32()) == UINT32_C(1107296256));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-second-f64")->to_f64()) == UINT64_C(4634211053438658150));
-   CHECK(bkend.call_with_return("env", "fac", UINT64_C(0))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fac", UINT64_C(1))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fac", UINT64_C(5))->to_ui64() == UINT32_C(120));
-   CHECK(bkend.call_with_return("env", "fac", UINT64_C(25))->to_ui64() == UINT32_C(7034535277573963776));
-   CHECK(bkend.call_with_return("env", "fac-acc", UINT64_C(0), UINT64_C(1))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fac-acc", UINT64_C(1), UINT64_C(1))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fac-acc", UINT64_C(5), UINT64_C(1))->to_ui64() == UINT32_C(120));
-   CHECK(bkend.call_with_return("env", "fac-acc", UINT64_C(25), UINT64_C(1))->to_ui64() == UINT32_C(7034535277573963776));
-   CHECK(bkend.call_with_return("env", "fib", UINT64_C(0))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fib", UINT64_C(1))->to_ui64() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "fib", UINT64_C(2))->to_ui64() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "fib", UINT64_C(5))->to_ui64() == UINT32_C(8));
-   CHECK(bkend.call_with_return("env", "fib", UINT64_C(20))->to_ui64() == UINT32_C(10946));
+   CHECK(bkend.call_with_return("env", "fac", UINT64_C(0))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fac", UINT64_C(1))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fac", UINT64_C(5))->to_ui64() == UINT64_C(120));
+   CHECK(bkend.call_with_return("env", "fac", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fac-acc", UINT64_C(0), UINT64_C(1))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fac-acc", UINT64_C(1), UINT64_C(1))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fac-acc", UINT64_C(5), UINT64_C(1))->to_ui64() == UINT64_C(120));
+   CHECK(bkend.call_with_return("env", "fac-acc", UINT64_C(25), UINT64_C(1))->to_ui64() == UINT64_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fib", UINT64_C(0))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fib", UINT64_C(1))->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "fib", UINT64_C(2))->to_ui64() == UINT64_C(2));
+   CHECK(bkend.call_with_return("env", "fib", UINT64_C(5))->to_ui64() == UINT64_C(8));
+   CHECK(bkend.call_with_return("env", "fib", UINT64_C(20))->to_ui64() == UINT64_C(10946));
    CHECK(bkend.call_with_return("env", "even", UINT64_C(0))->to_ui32() == UINT32_C(44));
    CHECK(bkend.call_with_return("env", "even", UINT64_C(1))->to_ui32() == UINT32_C(99));
    CHECK(bkend.call_with_return("env", "even", UINT64_C(100))->to_ui32() == UINT32_C(44));
@@ -80,7 +80,8 @@ BACKEND_TEST_CASE( "Testing wasm <call_0_wasm>", "[call_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "as-test-operand")->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "as-compare-left")->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "as-compare-right")->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "as-convert-operand")->to_ui64() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "as-convert-operand")->to_ui64() == UINT64_C(1));
+   CHECK(bkend.call_with_return("env", "return-from-long-argument-list", UINT32_C(42))->to_ui32() == UINT32_C(42));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <call_1_wasm>", "[call_1_wasm_tests]" ) {
