@@ -141,15 +141,17 @@ BACKEND_TEST_CASE( "Testing wasm <func_2_wasm>", "[func_2_wasm_tests]" ) {
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_20_wasm>", "[func_20_wasm_tests]" ) {
+   // Multi-value return type (i32, i32) with unreachable body — valid per multi-value proposal
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "func.20.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   CHECK_NOTHROW(backend_t(code, nullptr));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_21_wasm>", "[func_21_wasm_tests]" ) {
+   // Multi-value return type (i32, i32) with unreachable body — valid per multi-value proposal
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "func.21.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   CHECK_NOTHROW(backend_t(code, nullptr));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_22_wasm>", "[func_22_wasm_tests]" ) {

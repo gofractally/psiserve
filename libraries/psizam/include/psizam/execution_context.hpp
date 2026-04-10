@@ -871,6 +871,7 @@ namespace psizam {
       inline operand_stack_elem get_operand(uint32_t index) const { return get_operand_stack().get(_last_op_index + index); }
       inline void           eat_operands(uint32_t index) { get_operand_stack().eat(index); }
       inline void           compact_operand(uint32_t index) { get_operand_stack().compact(index); }
+      inline void           compact_operand_n(uint32_t index, uint32_t n) { get_operand_stack().compact_n(index, n); }
       inline void           set_operand(uint32_t index, const operand_stack_elem& el) { get_operand_stack().set(_last_op_index + index, el); }
       inline uint32_t       current_operands_index() const { return get_operand_stack().current_index(); }
       inline void           push_call(activation_frame&& el) { _as.push(std::move(el)); }
@@ -896,13 +897,13 @@ namespace psizam {
          const auto& af = _as.pop();
          _state.pc = af.pc;
          _last_op_index = af.last_op_index;
-         if (return_count)
+         if (return_count == 1)
             compact_operand(get_operand_stack().size() - num_locals - 1);
+         else if (return_count > 1)
+            compact_operand_n(get_operand_stack().size() - num_locals - return_count, return_count);
          else
             eat_operands(get_operand_stack().size() - num_locals);
-         {
-            _remaining_call_depth += frame_size;
-         }
+         _remaining_call_depth += frame_size;
       }
       inline operand_stack_elem  pop_operand() { return get_operand_stack().pop(); }
       inline operand_stack_elem& peek_operand(size_t i = 0) { return get_operand_stack().peek(i); }

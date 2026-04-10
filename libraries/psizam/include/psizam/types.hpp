@@ -43,9 +43,17 @@ namespace psizam {
    struct func_type {
       value_type                 form; // value for the func type constructor
       std::vector<value_type>    param_types;
-      uint8_t                    return_count;
-      value_type                 return_type;
+      std::vector<value_type>    return_types;
       uint64_t                   sig_hash = 0; // precomputed signature hash for fast call_indirect checks
+
+      // Convenience accessors for the common 0-or-1 return case
+      uint8_t    return_count  = 0;
+      value_type return_type   = 0;
+
+      void finalize_returns() {
+         return_count = static_cast<uint8_t>(return_types.size());
+         return_type  = return_types.empty() ? value_type(0) : return_types[0];
+      }
 
       void compute_sig_hash() {
          // FNV-1a over the signature components
@@ -55,8 +63,8 @@ namespace psizam {
          mix(static_cast<uint8_t>(param_types.size()));
          mix(static_cast<uint8_t>(param_types.size() >> 8));
          for (auto pt : param_types) mix(pt);
-         mix(return_count);
-         if (return_count) mix(return_type);
+         mix(static_cast<uint8_t>(return_types.size()));
+         for (auto rt : return_types) mix(rt);
          sig_hash = h;
       }
    };
@@ -66,8 +74,8 @@ namespace psizam {
       return lhs.form == rhs.form &&
         lhs.param_types.size() == rhs.param_types.size() &&
         std::equal(lhs.param_types.data(), lhs.param_types.data() + lhs.param_types.size(), rhs.param_types.data()) &&
-        lhs.return_count == rhs.return_count &&
-        (!lhs.return_count || lhs.return_type == rhs.return_type);
+        lhs.return_types.size() == rhs.return_types.size() &&
+        std::equal(lhs.return_types.data(), lhs.return_types.data() + lhs.return_types.size(), rhs.return_types.data());
    }
 
    union expr_value {

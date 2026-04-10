@@ -342,3 +342,70 @@ BACKEND_TEST_CASE("jit2 basic: spill with if/else", "[jit2_basic]") {
    // param=3 (<=5): (4+5) + 12 = 21
    CHECK(bkend.call_with_return("env", "spill_if", (uint32_t)3)->to_ui32() == 21);
 }
+
+// Multi-value return tests
+//
+// (module
+//   ;; Returns two i32 values: (42, 7)
+//   (func $pair (result i32 i32)
+//     i32.const 42
+//     i32.const 7)
+//
+//   ;; Calls pair, subtracts: 42 - 7 = 35
+//   (func (export "test_pair") (result i32)
+//     call $pair
+//     i32.sub)
+//
+//   ;; Swaps two values
+//   (func $swap (param i32 i32) (result i32 i32)
+//     local.get 1
+//     local.get 0)
+//
+//   ;; Calls swap(a, b), returns a - b of swapped values = b - a
+//   (func (export "test_swap") (param i32 i32) (result i32)
+//     local.get 0
+//     local.get 1
+//     call $swap
+//     i32.sub)
+// )
+static std::vector<uint8_t> multivalue_wasm = {
+   0x00,0x61,0x73,0x6d, 0x01,0x00,0x00,0x00, // magic + version
+   // Type section (id=1, size=23)
+   0x01, 0x17,
+   0x04,                                       // 4 types
+   0x60, 0x00, 0x02, 0x7f, 0x7f,              // type 0: () -> (i32, i32)
+   0x60, 0x00, 0x01, 0x7f,                    // type 1: () -> (i32)
+   0x60, 0x02, 0x7f, 0x7f, 0x02, 0x7f, 0x7f, // type 2: (i32, i32) -> (i32, i32)
+   0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,       // type 3: (i32, i32) -> (i32)
+   // Function section (id=3, size=5)
+   0x03, 0x05, 0x04, 0x00, 0x01, 0x02, 0x03,
+   // Export section (id=7, size=25)
+   0x07, 0x19,
+   0x02,                                       // 2 exports
+   0x09, 0x74,0x65,0x73,0x74,0x5f,0x70,0x61,0x69,0x72,  // "test_pair"
+   0x00, 0x01,                                 // func index 1
+   0x09, 0x74,0x65,0x73,0x74,0x5f,0x73,0x77,0x61,0x70,  // "test_swap"
+   0x00, 0x03,                                 // func index 3
+   // Code section (id=10, size=31)
+   0x0a, 0x1f,
+   0x04,                                       // 4 function bodies
+   // func 0: pair() -> (42, 7): size=6
+   0x06, 0x00, 0x41,0x2a, 0x41,0x07, 0x0b,
+   // func 1: test_pair() -> i32: size=5
+   0x05, 0x00, 0x10,0x00, 0x6b, 0x0b,
+   // func 2: swap(a,b) -> (b,a): size=6
+   0x06, 0x00, 0x20,0x01, 0x20,0x00, 0x0b,
+   // func 3: test_swap(a,b) -> i32: size=9
+   0x09, 0x00, 0x20,0x00, 0x20,0x01, 0x10,0x02, 0x6b, 0x0b,
+};
+
+TEST_CASE("multi-value returns: interpreter", "[multi_value]") {
+   using backend_t = backend<std::nullptr_t, psizam::interpreter>;
+   backend_t bkend(multivalue_wasm, &wa);
+   // pair() returns (42, 7), sub => 42 - 7 = 35
+   CHECK(bkend.call_with_return("env", "test_pair")->to_ui32() == 35);
+   // swap(10, 3) returns (3, 10), sub => 3 - 10 = -7 (as unsigned: 0xFFFFFFF9)
+   CHECK(bkend.call_with_return("env", "test_swap", (uint32_t)10, (uint32_t)3)->to_i32() == -7);
+   // swap(5, 5) returns (5, 5), sub => 5 - 5 = 0
+   CHECK(bkend.call_with_return("env", "test_swap", (uint32_t)5, (uint32_t)5)->to_i32() == 0);
+}

@@ -580,8 +580,8 @@ namespace psizam {
    inline bool operator==(const host_function& lhs, const Func_type& rhs) {
       return lhs.params.size() == rhs.param_types.size() &&
          std::equal(lhs.params.begin(), lhs.params.end(), rhs.param_types.data()) &&
-         lhs.ret.size() == rhs.return_count &&
-         (lhs.ret.size() == 0 || lhs.ret[0] == rhs.return_type);
+         lhs.ret.size() == rhs.return_types.size() &&
+         std::equal(lhs.ret.begin(), lhs.ret.end(), rhs.return_types.data());
    }
 
    template<typename TC, typename Args, std::size_t... Is>

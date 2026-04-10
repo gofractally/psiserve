@@ -556,14 +556,15 @@ namespace psizam {
                           wasm_parse_exception, "invalid function param type");
          }
          ft.param_types  = std::move(param_types);
-         ft.return_count = parse_varuint32(code);
-         PSIZAM_ASSERT(ft.return_count < 2, wasm_parse_exception, "invalid function return count");
-         if (ft.return_count > 0) {
-            uint8_t rt        = *code++;
-            ft.return_type = rt;
+         uint32_t return_count = parse_varuint32(code);
+         ft.return_types.resize(return_count);
+         for (uint32_t i = 0; i < return_count; ++i) {
+            uint8_t rt = *code++;
+            ft.return_types[i] = rt;
             PSIZAM_ASSERT(rt == types::i32 || rt == types::i64 || rt == types::f32 || rt == types::f64 || (rt == types::v128 && detail::get_enable_simd(_options)),
                           wasm_parse_exception, "invalid function return type");
          }
+         ft.finalize_returns();
       }
 
       void normalize_types() {
@@ -729,10 +730,13 @@ namespace psizam {
       using branch_t = decltype(std::declval<Writer>().emit_if());
       struct pc_element_t {
          uint32_t operand_depth;
-         uint32_t expected_result;
-         uint32_t label_result;
+         uint32_t expected_result;   // single result for blocks (backward compat)
+         uint32_t label_result;      // single label result for blocks
          bool is_if;
          std::variant<label_t, std::vector<branch_t>> relocations;
+         // For multi-value: non-empty when the block has >1 results
+         std::vector<uint8_t> expected_results;
+         std::vector<uint8_t> label_results;
       };
 
       static constexpr uint8_t any_type = 0x82;
@@ -800,7 +804,14 @@ namespace psizam {
             state.push_back(scope_tag);
          }
          void pop_scope(uint8_t expected_result = types::pseudo) {
-            pop(expected_result);
+            pop_scope_multi(expected_result == types::pseudo
+                            ? std::vector<uint8_t>{}
+                            : std::vector<uint8_t>{expected_result});
+         }
+         void pop_scope_multi(const std::vector<uint8_t>& expected_results) {
+            // Pop expected results in reverse order (top-of-stack first)
+            for (int i = static_cast<int>(expected_results.size()) - 1; i >= 0; --i)
+               pop(expected_results[i]);
             PSIZAM_ASSERT(!state.empty(), wasm_parse_exception, "unexpected end");
             if (state.back() == unreachable_tag) {
                local_bytes_checker.pop_unreachable();
@@ -808,9 +819,8 @@ namespace psizam {
             }
             PSIZAM_ASSERT(state.back() == scope_tag, wasm_parse_exception, "unexpected end");
             state.pop_back();
-            if (expected_result != types::pseudo) {
-               push(expected_result);
-            }
+            for (auto rt : expected_results)
+               push(rt);
          }
          void finish() {
             if (!state.empty() && state.back() == unreachable_tag) {
@@ -855,12 +865,17 @@ namespace psizam {
 
          // Initialize the control stack with the current function as the sole element
          operand_stack_type_tracker op_stack{local_bytes_checker, _options};
-         std::vector<pc_element_t> pc_stack{{
-               op_stack.depth(),
-               ft.return_count ? ft.return_type : static_cast<uint32_t>(types::pseudo),
-               ft.return_count ? ft.return_type : static_cast<uint32_t>(types::pseudo),
-               false,
-               std::vector<branch_t>{}}};
+         pc_element_t func_scope;
+         func_scope.operand_depth = op_stack.depth();
+         func_scope.expected_result = ft.return_count ? ft.return_type : static_cast<uint32_t>(types::pseudo);
+         func_scope.label_result = func_scope.expected_result;
+         func_scope.is_if = false;
+         func_scope.relocations = std::vector<branch_t>{};
+         if (ft.return_count > 1) {
+            func_scope.expected_results = ft.return_types;
+            func_scope.label_results = ft.return_types;
+         }
+         std::vector<pc_element_t> pc_stack{std::move(func_scope)};
 
          // writes the continuation of a label to address.  If the continuation
          // is not yet available, address will be recorded in the relocations
@@ -881,10 +896,18 @@ namespace psizam {
             PSIZAM_ASSERT(label < pc_stack.size(), wasm_parse_exception, "invalid label");
             pc_element_t& branch_target = pc_stack[pc_stack.size() - label - 1];
             auto result = op_stack.depth() - branch_target.operand_depth;
-            if(branch_target.label_result != types::pseudo) {
+            if (!branch_target.label_results.empty()) {
+               // Multi-value: validate all label results on the stack (top-down)
+               for (int i = static_cast<int>(branch_target.label_results.size()) - 1; i >= 0; --i)
+                  op_stack.top(branch_target.label_results[i]);
+            } else if(branch_target.label_result != types::pseudo) {
                op_stack.top(branch_target.label_result);
             }
-            return std::pair{result, branch_target.label_result};
+            // For multi-value, use the first label result for encoding (single-value compat)
+            uint8_t rt = !branch_target.label_results.empty()
+                         ? branch_target.label_results[0]
+                         : static_cast<uint8_t>(branch_target.label_result);
+            return std::pair{result, rt};
          };
 
          // Handles branches to the end of the scope and pops the pc_stack
@@ -899,7 +922,10 @@ namespace psizam {
                   code_writer.fix_branch(branch_op, end_pos);
                }
             }
-            op_stack.pop_scope(pc_stack.back().expected_result);
+            if (!pc_stack.back().expected_results.empty())
+               op_stack.pop_scope_multi(pc_stack.back().expected_results);
+            else
+               op_stack.pop_scope(pc_stack.back().expected_result);
             pc_stack.pop_back();
          };
 
@@ -1039,9 +1065,8 @@ namespace psizam {
                   const func_type& ft = _mod->get_function_type(funcnum);
                   for(uint32_t i = 0; i < ft.param_types.size(); ++i)
                      op_stack.pop(ft.param_types[ft.param_types.size() - i - 1]);
-                  PSIZAM_ASSERT(ft.return_count <= 1, wasm_parse_exception, "unsupported");
-                  if(ft.return_count)
-                     op_stack.push(ft.return_type);
+                  for(auto rt : ft.return_types)
+                     op_stack.push(rt);
                   code_writer.emit_call(ft, funcnum);
                } break;
                case opcodes::call_indirect: {
@@ -1052,9 +1077,8 @@ namespace psizam {
                   op_stack.pop(types::i32);
                   for(uint32_t i = 0; i < ft.param_types.size(); ++i)
                      op_stack.pop(ft.param_types[ft.param_types.size() - i - 1]);
-                  PSIZAM_ASSERT(ft.return_count <= 1, wasm_parse_exception, "unsupported");
-                  if(ft.return_count)
-                     op_stack.push(ft.return_type);
+                  for(auto rt : ft.return_types)
+                     op_stack.push(rt);
                   uint32_t table_idx = parse_varuint32(code);
                   PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "call_indirect table index out of range");
                   code_writer.emit_call_indirect(ft, type_aliases[functypeidx], table_idx);

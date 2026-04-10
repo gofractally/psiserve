@@ -53,6 +53,12 @@ namespace psizam {
          _store[index] = _store[_index-1];
          _index = index+1;
       }
+      // compact the last N elements to start at index
+      void compact_n(uint32_t index, uint32_t n) {
+         for (uint32_t i = 0; i < n; ++i)
+            _store[index + i] = _store[_index - n + i];
+         _index = index + n;
+      }
       size_t       current_index() const { return _index; }
       ElemT&       peek() { return _store[_index - 1]; }
       const ElemT& peek() const { return _store[_index - 1]; }

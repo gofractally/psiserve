@@ -47,4 +47,19 @@ const void* __psizam_resolve_indirect(void* ctx, uint32_t type_idx,
    return entry.code_ptr;
 }
 
+void __psizam_table_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n,
+                          uint32_t dst_table, uint32_t src_table) {
+   auto& c = as_ctx(ctx);
+   auto* s = c.get_table_ptr(src, n, src_table);
+   auto* d = c.get_table_ptr(dest, n, dst_table);
+   if (n > 0)
+      std::memmove(d, s, n * sizeof(psizam::table_entry));
+}
+
+void __psizam_table_init(void* ctx, uint32_t elem_idx,
+                          uint32_t dest, uint32_t src, uint32_t n,
+                          uint32_t table_idx) {
+   as_ctx(ctx).init_table(elem_idx, dest, src, n, table_idx);
+}
+
 } // extern "C"
