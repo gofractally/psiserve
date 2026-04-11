@@ -19,6 +19,15 @@ target_link_libraries(hello-driver psizam psizam-runtime)
 add_executable(psizam-addr2line addr2line.cpp)
 target_link_libraries(psizam-addr2line psizam psizam-runtime)
 
+add_executable(bench-compile ${CMAKE_CURRENT_SOURCE_DIR}/bench_compile.cpp)
+target_compile_definitions(bench-compile PRIVATE PSIZAM_COMPILE_ONLY)
+target_link_libraries(bench-compile psizam psizam-runtime)
+
+if(TARGET psizam-llvm)
+   target_link_libraries(bench-compile psizam-llvm)
+   target_compile_definitions(bench-compile PRIVATE PSIZAM_ENABLE_LLVM_BACKEND)
+endif()
+
 add_executable(pzam-compile pzam_compile.cpp)
 target_compile_definitions(pzam-compile PRIVATE PSIZAM_COMPILE_ONLY)
 target_link_libraries(pzam-compile psizam psizam-runtime)

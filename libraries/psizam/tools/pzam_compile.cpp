@@ -114,6 +114,11 @@ static bool compile_wasm(
 
    mod.finalize();
 
+   if (!compile_result.error.empty()) {
+      std::cerr << "Error: " << compile_result.error << "\n";
+      return false;
+   }
+
    auto pzam_bytes = write_pzam(mod, mod.allocator, compile_result,
                                  wasm_bytes, target_arch);
 

@@ -644,7 +644,8 @@ namespace psizam {
             fast_functions[i] = type_aliases.at(_mod->imports[i].type.func_t);
          }
          for (uint32_t i = 0; i < _mod->functions.size(); ++i) {
-            fast_functions[i + imported_functions_size] = type_aliases.at(_mod->functions[i]);
+            PSIZAM_ASSERT(_mod->functions[i] < type_aliases.size(), wasm_parse_exception, "function type index out of range");
+            fast_functions[i + imported_functions_size] = type_aliases[_mod->functions[i]];
          }
       }
 
@@ -693,9 +694,9 @@ namespace psizam {
          } else {
             for (uint32_t i = 0; i < size; i++) {
                uint32_t index    = parse_varuint32(code);
+               PSIZAM_ASSERT(index < _mod->get_functions_total(), wasm_parse_exception,  "elem for undefined function");
                elems.at(i).type  = fast_functions.at(index);
                elems.at(i).index = index;
-               PSIZAM_ASSERT(index < _mod->get_functions_total(), wasm_parse_exception,  "elem for undefined function");
             }
          }
          es.type  = elem_reftype;
@@ -839,7 +840,8 @@ namespace psizam {
          _current_function_index++;
          PSIZAM_ASSERT(local_cnt <= detail::get_max_local_sets(_options), wasm_parse_exception, "Number of local sets exceeds limit");
          decltype(fb.locals) locals(local_cnt);
-         func_type& ft = _mod->types.at(_mod->functions.at(idx));
+         PSIZAM_ASSERT(idx < _mod->functions.size(), wasm_parse_exception, "function index out of range");
+         func_type& ft = _mod->types.at(_mod->functions[idx]);
          detail::max_func_local_bytes_checker<Options> local_checker(_options, ft);
          // parse the local entries
          for (size_t i = 0; i < local_cnt; i++) {
@@ -1428,6 +1430,8 @@ namespace psizam {
                case opcodes::call: {
                   check_in_bounds();
                   uint32_t funcnum = parse_varuint32(code);
+                  PSIZAM_ASSERT(funcnum < _mod->get_imported_functions_size() + _mod->functions.size(),
+                                wasm_parse_exception, "call function index out of range");
                   const func_type& ft = _mod->get_function_type(funcnum);
                   for(uint32_t i = 0; i < ft.param_types.size(); ++i)
                      op_stack.pop(ft.param_types[ft.param_types.size() - i - 1]);
@@ -1438,7 +1442,8 @@ namespace psizam {
                case opcodes::call_indirect: {
                   check_in_bounds();
                   uint32_t functypeidx = parse_varuint32(code);
-                  const func_type& ft = _mod->types.at(functypeidx);
+                  PSIZAM_ASSERT(functypeidx < _mod->types.size(), wasm_parse_exception, "call_indirect type index out of range");
+                  const func_type& ft = _mod->types[functypeidx];
                   PSIZAM_ASSERT(_mod->tables.size() > 0, wasm_parse_exception, "call_indirect requires a table");
                   op_stack.pop(types::i32);
                   for(uint32_t i = 0; i < ft.param_types.size(); ++i)
@@ -1516,14 +1521,16 @@ namespace psizam {
                } break;
                case opcodes::get_global: {
                   uint32_t global_idx = parse_varuint32(code);
-                  op_stack.push(_mod->globals.at(global_idx).type.content_type);
+                  PSIZAM_ASSERT(global_idx < _mod->globals.size(), wasm_parse_exception, "global index out of range");
+                  op_stack.push(_mod->globals[global_idx].type.content_type);
                   code_writer.emit_get_global(global_idx);
                } break;
                case opcodes::set_global: {
                   check_in_bounds();
                   uint32_t global_idx = parse_varuint32(code);
-                  PSIZAM_ASSERT(_mod->globals.at(global_idx).type.mutability, wasm_parse_exception, "cannot set const global");
-                  op_stack.pop(_mod->globals.at(global_idx).type.content_type);
+                  PSIZAM_ASSERT(global_idx < _mod->globals.size(), wasm_parse_exception, "global index out of range");
+                  PSIZAM_ASSERT(_mod->globals[global_idx].type.mutability, wasm_parse_exception, "cannot set const global");
+                  op_stack.pop(_mod->globals[global_idx].type.content_type);
                   code_writer.emit_set_global(global_idx);
                } break;
                case opcodes::ref_null: {

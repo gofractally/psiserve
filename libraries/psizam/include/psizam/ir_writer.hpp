@@ -30,6 +30,7 @@ namespace psizam {
       std::vector<uint8_t>         code_blob;          // filled by LLVM AOT path
       std::vector<std::pair<uint32_t, uint32_t>> function_offsets; // (offset, size) per function
       std::string                  target_triple;       // set by caller for LLVM AOT
+      std::string                  error;               // non-empty on failure (e.g. LLVM AOT)
    };
 
    template<typename CodeGen>
@@ -453,6 +454,7 @@ namespace psizam {
                   if (!target_entry.is_loop && target_entry.result_count > 1) {
                      // Pop N results from vstack and mov to merge vregs (reverse order)
                      uint32_t n = std::min<uint32_t>(result_count, target_entry.result_count);
+                     if (n > _func->vstack_top) n = _func->vstack_top;
                      uint32_t base_depth = _func->vstack_top - n;
                      for (uint32_t i = 0; i < n; ++i) {
                         uint32_t src = _func->vstack[base_depth + i];

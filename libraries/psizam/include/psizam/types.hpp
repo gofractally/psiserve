@@ -366,7 +366,9 @@ namespace psizam {
       auto& get_function_type(uint32_t index) const {
          if (index < get_imported_functions_size())
             return types[imports[index].type.func_t];
-         return types.at(functions.at(index - get_imported_functions_size()));
+         uint32_t local_idx = index - get_imported_functions_size();
+         PSIZAM_ASSERT(local_idx < functions.size(), wasm_parse_exception, "function index out of range");
+         return types.at(functions[local_idx]);
       }
 
       uint32_t get_function_stack_size(uint32_t index) const {
