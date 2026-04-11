@@ -85,7 +85,9 @@ namespace psiserve
          {
             // Check if any fibers are still alive
             bool any_alive = std::any_of(_fibers.begin(), _fibers.end(),
-               [](const auto& f) { return f->state != FiberState::Done; });
+               [](const auto& f) {
+                  return f->state != FiberState::Done;
+               });
 
             if (!any_alive)
                break;
@@ -120,14 +122,63 @@ namespace psiserve
       _io->removeFdEvents(fd, events);
    }
 
+   void Scheduler::sleep(std::chrono::milliseconds duration)
+   {
+      _current->state     = FiberState::Sleeping;
+      _current->wake_time = std::chrono::steady_clock::now() + duration;
+
+      // Suspend this fiber, return to the scheduler's run() loop
+      auto& sched = *_current->sched_cont;
+      sched = sched.resume();
+   }
+
    void Scheduler::pollAndUnblock(bool blocking)
    {
-      IoEvent events[64];
-      auto    timeout = blocking
-                           ? std::optional<std::chrono::milliseconds>{std::chrono::seconds{1}}
-                           : std::optional<std::chrono::milliseconds>{std::chrono::milliseconds{0}};
+      auto now = std::chrono::steady_clock::now();
 
-      int n = _io->poll(events, timeout);
+      // Wake sleeping fibers whose time has come
+      for (auto& fiber : _fibers)
+      {
+         if (fiber->state == FiberState::Sleeping && fiber->wake_time <= now)
+         {
+            fiber->state = FiberState::Ready;
+            _ready.push_back(fiber.get());
+         }
+      }
+
+      // If we just woke some fibers, don't block on poll
+      if (!_ready.empty())
+         blocking = false;
+
+      // Compute poll timeout: use nearest sleeping fiber's wake time
+      std::optional<std::chrono::milliseconds> timeout;
+      if (!blocking)
+      {
+         timeout = std::chrono::milliseconds{0};
+      }
+      else
+      {
+         // Find the nearest sleeping fiber
+         auto nearest = std::chrono::steady_clock::time_point::max();
+         for (auto& fiber : _fibers)
+         {
+            if (fiber->state == FiberState::Sleeping && fiber->wake_time < nearest)
+               nearest = fiber->wake_time;
+         }
+
+         if (nearest != std::chrono::steady_clock::time_point::max())
+         {
+            auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(nearest - now);
+            timeout = std::max(delta, std::chrono::milliseconds{1});
+         }
+         else
+         {
+            timeout = std::chrono::seconds{1};
+         }
+      }
+
+      IoEvent events[64];
+      int     n = _io->poll(events, timeout);
 
       for (int i = 0; i < n; ++i)
       {

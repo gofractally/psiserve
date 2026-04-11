@@ -45,6 +45,10 @@ namespace psiserve
       /// When this returns, the fd is ready.
       void yield(RealFd fd, EventKind events);
 
+      /// Called by host functions to sleep the current fiber for a duration.
+      /// Suspends the fiber and resumes it after the specified time elapses.
+      void sleep(std::chrono::milliseconds duration);
+
       /// The currently executing fiber (valid only while a fiber is running).
       Fiber* currentFiber() { return _current; }
 

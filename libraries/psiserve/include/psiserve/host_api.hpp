@@ -79,6 +79,18 @@ namespace psiserve
       /// and sets __stack_pointer automatically.
       void psiSpawn(WasmPtr func_table_idx, WasmPtr arg);
 
+      /// psi.clock(clock_id: i32) -> i64
+      /// Returns nanoseconds for the requested clock.
+      ///   clock_id 0 = REALTIME  (wall-clock, ns since Unix epoch)
+      ///   clock_id 1 = MONOTONIC (steady clock, ns since arbitrary origin)
+      int64_t psiClock(int32_t clock_id);
+
+      /// psi.sleep_until(deadline_ns: i64)
+      /// Suspends the current fiber until the monotonic clock reaches
+      /// `deadline_ns` nanoseconds.  Use psi.clock(1) to get the current
+      /// monotonic time for computing absolute deadlines.
+      void psiSleepUntil(int64_t deadline_ns);
+
      private:
       Process*    _proc;
       Scheduler*  _sched;

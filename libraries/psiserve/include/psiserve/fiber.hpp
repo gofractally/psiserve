@@ -4,6 +4,7 @@
 
 #include <boost/context/continuation.hpp>
 
+#include <chrono>
 #include <cstdint>
 
 namespace psiserve
@@ -15,7 +16,8 @@ namespace psiserve
    {
       Ready,
       Running,
-      Blocked,
+      Blocked,   // waiting on I/O (fd readiness)
+      Sleeping,  // waiting on a timer (wake_time)
       Done
    };
 
@@ -43,6 +45,9 @@ namespace psiserve
       /// What this fiber is blocked on (valid when state == Blocked).
       RealFd    blocked_fd     = invalid_real_fd;
       EventKind blocked_events = {};
+
+      /// When this fiber should wake up (valid when state == Sleeping).
+      std::chrono::steady_clock::time_point wake_time;
    };
 
 }  // namespace psiserve

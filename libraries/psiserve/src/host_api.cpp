@@ -379,4 +379,36 @@ namespace psiserve
       _fiberRunner(*func_table_idx, static_cast<int32_t>(*arg));
    }
 
+   int64_t HostApi::psiClock(int32_t clock_id)
+   {
+      if (clock_id == 0)
+      {
+         // REALTIME — wall clock, ns since Unix epoch
+         auto now = std::chrono::system_clock::now();
+         return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   now.time_since_epoch())
+            .count();
+      }
+      else
+      {
+         // MONOTONIC — steady clock, ns since arbitrary origin
+         auto now = std::chrono::steady_clock::now();
+         return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   now.time_since_epoch())
+            .count();
+      }
+   }
+
+   void HostApi::psiSleepUntil(int64_t deadline_ns)
+   {
+      auto deadline = std::chrono::steady_clock::time_point(
+         std::chrono::nanoseconds{deadline_ns});
+
+      auto now = std::chrono::steady_clock::now();
+      if (deadline <= now)
+         return;
+
+      _sched->sleep(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now));
+   }
+
 }  // namespace psiserve
