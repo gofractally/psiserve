@@ -808,24 +808,29 @@ namespace psizam {
          // Extended const expression — continue parsing remaining instructions,
          // then store the entire expression as raw bytes for evaluation at instantiation.
          PSIZAM_ASSERT(type == types::i32 || type == types::i64, wasm_parse_exception, "extended const expressions only produce i32 or i64");
+         uint32_t stack_depth = 1; // first instruction already pushed one value
          while (*code != opcodes::end) {
             uint8_t op = *code++;
             switch (op) {
-               case opcodes::i32_const: parse_varint32(code); break;
-               case opcodes::i64_const: parse_varint64(code); break;
+               case opcodes::i32_const: parse_varint32(code); ++stack_depth; break;
+               case opcodes::i64_const: parse_varint64(code); ++stack_depth; break;
                case opcodes::get_global: {
                   uint32_t global_idx = parse_varuint32(code);
                   PSIZAM_ASSERT(global_idx < _mod->num_imported_globals, wasm_parse_exception, "global.get in init must reference an imported global");
                   PSIZAM_ASSERT(!_mod->globals[global_idx].type.mutability, wasm_parse_exception, "global.get in init must reference an immutable global");
+                  ++stack_depth;
                   break;
                }
                case opcodes::i32_add: case opcodes::i32_sub: case opcodes::i32_mul:
                case opcodes::i64_add: case opcodes::i64_sub: case opcodes::i64_mul:
-                  break; // no immediates
+                  PSIZAM_ASSERT(stack_depth >= 2, wasm_parse_exception, "stack underflow in constant expression");
+                  --stack_depth; // pops 2, pushes 1 = net -1
+                  break;
                default:
                   PSIZAM_ASSERT(false, wasm_parse_exception, "invalid opcode in extended constant expression");
             }
          }
+         PSIZAM_ASSERT(stack_depth == 1, wasm_parse_exception, "constant expression must produce exactly one value");
          ++code; // consume end
          // Store everything from expr_start through end (inclusive)
          ie.raw_expr.assign(expr_start, code.raw());
