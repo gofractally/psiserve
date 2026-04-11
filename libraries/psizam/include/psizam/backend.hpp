@@ -32,7 +32,7 @@
 //   data.drop                    🟢     🟢       🟢        🟢      🟢
 //
 // SIMD (v128)
-//   full v128 ops                🟢     🟢       🟢        🟡      🔴
+//   full v128 ops                🟢     🟢       🟢        🟡      🟡
 //
 // REFERENCE TYPES
 //   ref.null / ref.is_null       🟢     🟢       🟢        🟢      🟢

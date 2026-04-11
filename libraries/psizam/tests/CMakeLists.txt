@@ -112,6 +112,9 @@ endforeach()
 
 add_executable(psizam_simd_tests main.cpp ${SPEC_TESTS})
 target_link_libraries(psizam_simd_tests psizam psizam-runtime Catch2::Catch2)
+if(PSIZAM_ENABLE_LLVM)
+   target_link_libraries(psizam_simd_tests psizam-llvm)
+endif()
 target_include_directories(psizam_simd_tests PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include

@@ -579,6 +579,13 @@ namespace psizam {
                   _mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset);
                psizam::invoke_with_signal_handler([&]() {
                   result.scalar.i64 = entry(this, base_type::linear_memory(), args_raw);
+                  // For v128 returns, the entry wrapper stores the full v128 into args_raw
+                  // LLVM stores <2 x i64> as [elem0, elem1] in memory order.
+                  // v128_t is {low, high} so elem0 → low, elem1 → high.
+                  if (ft.return_type == types::v128) {
+                     result.vector.low  = args_raw[0].i64;
+                     result.vector.high = args_raw[1].i64;
+                  }
                }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
             } else {
                // Native JIT path: use assembly trampoline at _code_base

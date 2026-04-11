@@ -52,6 +52,15 @@ namespace psizam {
       llvm::Type* f32_ty    = nullptr;
       llvm::Type* f64_ty    = nullptr;
       llvm::Type* ptr_ty    = nullptr;
+      llvm::Type* i128_ty   = nullptr;
+      // SIMD vector types
+      llvm::VectorType* v128_ty    = nullptr; // <2 x i64> — storage type
+      llvm::VectorType* v16xi8_ty  = nullptr;
+      llvm::VectorType* v8xi16_ty  = nullptr;
+      llvm::VectorType* v4xi32_ty  = nullptr;
+      llvm::VectorType* v2xi64_ty  = nullptr;
+      llvm::VectorType* v4xf32_ty  = nullptr;
+      llvm::VectorType* v2xf64_ty  = nullptr;
 
       // WASM function declarations (indexed by function index)
       std::vector<llvm::Function*> wasm_funcs;
@@ -72,6 +81,14 @@ namespace psizam {
          f32_ty  = llvm::Type::getFloatTy(*ctx);
          f64_ty  = llvm::Type::getDoubleTy(*ctx);
          ptr_ty  = llvm::PointerType::get(*ctx, 0);
+         i128_ty = llvm::Type::getInt128Ty(*ctx);
+         v128_ty   = llvm::FixedVectorType::get(i64_ty, 2);
+         v16xi8_ty = llvm::FixedVectorType::get(i8_ty, 16);
+         v8xi16_ty = llvm::FixedVectorType::get(i16_ty, 8);
+         v4xi32_ty = llvm::FixedVectorType::get(i32_ty, 4);
+         v2xi64_ty = llvm::FixedVectorType::get(i64_ty, 2);
+         v4xf32_ty = llvm::FixedVectorType::get(f32_ty, 4);
+         v2xf64_ty = llvm::FixedVectorType::get(f64_ty, 2);
 
          // Pre-declare all WASM functions
          declare_functions();
@@ -193,6 +210,7 @@ namespace psizam {
             case types::i64:  return i64_ty;
             case types::f32:  return f32_ty;
             case types::f64:  return f64_ty;
+            case types::v128: return v128_ty;
             default:          return i64_ty; // fallback
          }
       }
@@ -234,11 +252,12 @@ namespace psizam {
       // Determine the LLVM type for a vreg based on the IR type byte
       llvm::Type* ir_type_to_llvm(uint8_t ty) {
          switch (ty) {
-            case types::i32: return i32_ty;
-            case types::i64: return i64_ty;
-            case types::f32: return f32_ty;
-            case types::f64: return f64_ty;
-            default:         return i64_ty;
+            case types::i32:  return i32_ty;
+            case types::i64:  return i64_ty;
+            case types::f32:  return f32_ty;
+            case types::f64:  return f64_ty;
+            // v128 uses separate storage (v128_slots), not scalar vregs
+            default:          return i64_ty;
          }
       }
 
@@ -302,7 +321,7 @@ namespace psizam {
                 inst.opcode != ir_op::block_start && inst.opcode != ir_op::block_end &&
                 inst.opcode != ir_op::br_table) {
                if (inst.type != types::pseudo && inst.type != types::ret_void &&
-                   vreg_types[inst.dest] == 0) {
+                   inst.type != types::v128 && vreg_types[inst.dest] == 0) {
                   vreg_types[inst.dest] = inst.type;
                }
             }
@@ -331,29 +350,98 @@ namespace psizam {
             if (vreg_types[i] == 0) vreg_types[i] = types::i64;
          }
 
-         // Create allocas for all virtual registers
+         // Create allocas for all virtual registers (scalar)
          std::vector<llvm::AllocaInst*> vregs(func.next_vreg, nullptr);
          for (uint32_t i = 0; i < func.next_vreg; i++) {
             vregs[i] = builder.CreateAlloca(ir_type_to_llvm(vreg_types[i]), nullptr,
                                              "v" + std::to_string(i));
          }
 
-         // Create allocas for local variables
-         uint32_t num_locals = func.num_params + func.num_locals;
-         std::vector<llvm::AllocaInst*> locals(num_locals, nullptr);
-         // Get function type to determine local types
-         const auto& ft = *func.type;
-         for (uint32_t i = 0; i < num_locals; i++) {
-            llvm::Type* local_ty;
-            if (i < func.num_params) {
-               local_ty = wasm_type_to_llvm(ft.param_types[i]);
-            } else {
-               // Local declarations - we need to determine their type.
-               // WASM locals after params are zero-initialized.
-               // The type is tracked in the module's code section.
-               local_ty = i64_ty; // default; will be overridden by usage
+         // Separate v128 storage, pre-allocated for all SIMD vregs
+         std::vector<bool> is_v128(func.next_vreg, false);
+         {
+            // Mark vreg v0 as v128 if function returns v128 (v0 is the merge result vreg)
+            if (fn->getReturnType() == v128_ty && func.next_vreg > 0) {
+               is_v128[0] = true;
             }
-            locals[i] = builder.CreateAlloca(local_ty, nullptr, "local" + std::to_string(i));
+            // Pass 1: mark direct SIMD vregs
+            for (uint32_t i = 0; i < func.inst_count; i++) {
+               const auto& sinst = func.insts[i];
+               if (sinst.opcode == ir_op::const_v128) {
+                  if (sinst.dest < func.next_vreg) is_v128[sinst.dest] = true;
+               } else if (sinst.opcode == ir_op::v128_op) {
+                  auto ssub = static_cast<simd_sub>(sinst.dest);
+                  if (sinst.simd.v_src1 < func.next_vreg) is_v128[sinst.simd.v_src1] = true;
+                  if (sinst.simd.v_src2 < func.next_vreg && sinst.simd.v_src2 != 0xFFFF)
+                     is_v128[sinst.simd.v_src2] = true;
+                  if (!simd_produces_scalar(ssub) && sinst.simd.v_dest < func.next_vreg)
+                     is_v128[sinst.simd.v_dest] = true;
+                  // bitselect and relaxed ternary ops store mask/third operand in addr
+                  if (ssub == simd_sub::v128_bitselect ||
+                      ssub == simd_sub::f32x4_relaxed_madd || ssub == simd_sub::f32x4_relaxed_nmadd ||
+                      ssub == simd_sub::f64x2_relaxed_madd || ssub == simd_sub::f64x2_relaxed_nmadd ||
+                      ssub == simd_sub::i32x4_relaxed_dot_i8x16_i7x16_add_s) {
+                     if (sinst.simd.addr < func.next_vreg) is_v128[sinst.simd.addr] = true;
+                  }
+               } else if (sinst.opcode == ir_op::nop && sinst.type == types::v128 &&
+                           sinst.dest != ir_vreg_none && sinst.dest < func.next_vreg) {
+                  is_v128[sinst.dest] = true;
+               } else if (sinst.opcode == ir_op::arg && sinst.type == types::v128 &&
+                           sinst.rr.src1 < func.next_vreg) {
+                  is_v128[sinst.rr.src1] = true;
+               } else if (sinst.opcode == ir_op::local_get && sinst.type == types::v128 &&
+                           sinst.dest != ir_vreg_none && sinst.dest < func.next_vreg) {
+                  is_v128[sinst.dest] = true;
+               } else if ((sinst.opcode == ir_op::call || sinst.opcode == ir_op::call_indirect) &&
+                           sinst.type == types::v128 &&
+                           sinst.dest != ir_vreg_none && sinst.dest < func.next_vreg) {
+                  is_v128[sinst.dest] = true;
+               }
+            }
+            // Pass 2: propagate through movs (repeat until stable)
+            bool changed = true;
+            while (changed) {
+               changed = false;
+               for (uint32_t i = 0; i < func.inst_count; i++) {
+                  const auto& sinst = func.insts[i];
+                  if (sinst.opcode == ir_op::mov &&
+                      sinst.rr.src1 < func.next_vreg && is_v128[sinst.rr.src1] &&
+                      sinst.dest != ir_vreg_none && sinst.dest < func.next_vreg &&
+                      !is_v128[sinst.dest]) {
+                     is_v128[sinst.dest] = true;
+                     changed = true;
+                  }
+               }
+            }
+         }
+         // Create v128 allocas
+         std::vector<llvm::AllocaInst*> v128_slots(func.next_vreg, nullptr);
+         for (uint32_t i = 0; i < func.next_vreg; i++) {
+            if (is_v128[i])
+               v128_slots[i] = builder.CreateAlloca(v128_ty, nullptr,
+                  "s" + std::to_string(i));
+         }
+
+         // Build a flat array of WASM types for all locals (params + declared locals)
+         uint32_t num_locals = func.num_params + func.num_locals;
+         const auto& ft = *func.type;
+         std::vector<uint8_t> local_wasm_types(num_locals, types::i64);
+         for (uint32_t i = 0; i < func.num_params; i++)
+            local_wasm_types[i] = ft.param_types[i];
+         {
+            const auto& body_locals = wasm_mod.code[func.func_index].locals;
+            uint32_t idx = func.num_params;
+            for (const auto& le : body_locals) {
+               for (uint32_t c = 0; c < le.count && idx < num_locals; c++, idx++)
+                  local_wasm_types[idx] = le.type;
+            }
+         }
+
+         // Create allocas for local variables
+         std::vector<llvm::AllocaInst*> locals(num_locals, nullptr);
+         for (uint32_t i = 0; i < num_locals; i++) {
+            locals[i] = builder.CreateAlloca(wasm_type_to_llvm(local_wasm_types[i]), nullptr,
+                                              "local" + std::to_string(i));
          }
 
          // Store function parameters into param locals
@@ -498,6 +586,31 @@ namespace psizam {
             builder.CreateStore(val, vregs[vreg]);
          };
 
+         // ── v128 helpers ──
+         // Load a v128 vreg as the specified vector type (from separate v128 storage)
+         auto load_v128 = [&](uint16_t vreg, llvm::VectorType* as_ty) -> llvm::Value* {
+            if (vreg >= v128_slots.size() || !v128_slots[vreg])
+               return llvm::Constant::getNullValue(as_ty);
+            auto* raw = builder.CreateLoad(v128_ty, v128_slots[vreg]);
+            if (raw->getType() == as_ty) return raw;
+            return builder.CreateBitCast(raw, as_ty);
+         };
+         auto store_v128 = [&](uint16_t vreg, llvm::Value* val) {
+            if (vreg >= v128_slots.size() || !v128_slots[vreg]) return;
+            if (val->getType() != v128_ty)
+               val = builder.CreateBitCast(val, v128_ty);
+            builder.CreateStore(val, v128_slots[vreg]);
+         };
+         // Compute effective memory address: mem_ptr + zext(trunc(addr_vreg, i32) + offset)
+         auto simd_mem_addr = [&](uint32_t addr_vreg, uint32_t offset) -> llvm::Value* {
+            auto* addr = load_vreg(addr_vreg);
+            if (!addr) addr = builder.getInt64(0);
+            auto* addr32 = builder.CreateTrunc(addr, i32_ty);
+            auto* eff = builder.CreateAdd(addr32, builder.getInt32(offset));
+            auto* eff64 = builder.CreateZExt(eff, i64_ty);
+            return builder.CreateGEP(i8_ty, mem_ptr, eff64);
+         };
+
          // Track which block we're currently emitting into, for fallthrough
          uint32_t current_block = UINT32_MAX;
 
@@ -513,6 +626,9 @@ namespace psizam {
 
          // Collect call arguments from 'arg' pseudo-instructions
          std::vector<llvm::Value*> call_args;
+
+         // Pending v128 result from shuffle (whose immv128 overlay prevents using simd.v_dest)
+         llvm::Value* pending_v128_result = nullptr;
 
          // br_table state
          bool in_br_table = false;
@@ -541,6 +657,11 @@ namespace psizam {
 
             switch (inst.opcode) {
                case ir_op::nop:
+                  // Consume pending v128 result from shuffle (whose immv128 overlay prevents simd.v_dest)
+                  if (pending_v128_result && inst.dest != ir_vreg_none) {
+                     store_v128(static_cast<uint16_t>(inst.dest), pending_v128_result);
+                     pending_v128_result = nullptr;
+                  }
                   break;
 
                case ir_op::unreachable:
@@ -758,7 +879,15 @@ namespace psizam {
 
                case ir_op::return_: {
                   if (inst.rr.src1 != ir_vreg_none) {
-                     llvm::Value* ret_val = load_vreg(inst.rr.src1);
+                     llvm::Value* ret_val;
+                     // Check if returning a v128 value
+                     if (fn->getReturnType() == v128_ty &&
+                         (inst.type == types::v128 ||
+                          (inst.rr.src1 < v128_slots.size() && v128_slots[inst.rr.src1]))) {
+                        ret_val = load_v128(static_cast<uint16_t>(inst.rr.src1), v128_ty);
+                     } else {
+                        ret_val = load_vreg(inst.rr.src1);
+                     }
                      if (ret_val) {
                         ret_val = convert_type(ret_val, fn->getReturnType());
                         builder.CreateRet(ret_val);
@@ -776,8 +905,14 @@ namespace psizam {
 
                // ──── Mov (phi-node merge) ────
                case ir_op::mov: {
-                  llvm::Value* val = load_vreg(inst.rr.src1);
-                  if (val) store_vreg(inst.dest, val);
+                  // Check if source is a v128 vreg — propagate through v128 storage
+                  if (inst.rr.src1 < v128_slots.size() && v128_slots[inst.rr.src1]) {
+                     auto* val = load_v128(static_cast<uint16_t>(inst.rr.src1), v128_ty);
+                     store_v128(static_cast<uint16_t>(inst.dest), val);
+                  } else {
+                     llvm::Value* val = load_vreg(inst.rr.src1);
+                     if (val) store_vreg(inst.dest, val);
+                  }
                   break;
                }
 
@@ -815,27 +950,38 @@ namespace psizam {
                   if (li < locals.size() && locals[li]) {
                      llvm::Value* val = builder.CreateLoad(
                         locals[li]->getAllocatedType(), locals[li]);
-                     store_vreg(inst.dest, val);
+                     if (inst.type == types::v128 && inst.dest != ir_vreg_none) {
+                        store_v128(static_cast<uint16_t>(inst.dest), val);
+                     } else {
+                        store_vreg(inst.dest, val);
+                     }
                   }
                   break;
                }
 
                case ir_op::local_set: {
                   uint32_t li = inst.local.index;
-                  llvm::Value* val = load_vreg(inst.local.src1);
-                  if (li < locals.size() && locals[li] && val) {
-                     llvm::Type* local_ty = locals[li]->getAllocatedType();
-                     if (val->getType() != local_ty) {
-                        if (val->getType()->isIntegerTy() && local_ty->isIntegerTy()) {
-                           unsigned src_bits = val->getType()->getIntegerBitWidth();
-                           unsigned dst_bits = local_ty->getIntegerBitWidth();
-                           if (src_bits < dst_bits)
-                              val = builder.CreateZExt(val, local_ty);
-                           else if (src_bits > dst_bits)
-                              val = builder.CreateTrunc(val, local_ty);
+                  if (li < locals.size() && locals[li]) {
+                     if (inst.type == types::v128) {
+                        auto* val = load_v128(static_cast<uint16_t>(inst.local.src1), v128_ty);
+                        builder.CreateStore(val, locals[li]);
+                     } else {
+                        llvm::Value* val = load_vreg(inst.local.src1);
+                        if (val) {
+                           llvm::Type* local_ty = locals[li]->getAllocatedType();
+                           if (val->getType() != local_ty) {
+                              if (val->getType()->isIntegerTy() && local_ty->isIntegerTy()) {
+                                 unsigned src_bits = val->getType()->getIntegerBitWidth();
+                                 unsigned dst_bits = local_ty->getIntegerBitWidth();
+                                 if (src_bits < dst_bits)
+                                    val = builder.CreateZExt(val, local_ty);
+                                 else if (src_bits > dst_bits)
+                                    val = builder.CreateTrunc(val, local_ty);
+                              }
+                           }
+                           builder.CreateStore(val, locals[li]);
                         }
                      }
-                     builder.CreateStore(val, locals[li]);
                   }
                   break;
                }
@@ -843,20 +989,27 @@ namespace psizam {
                case ir_op::local_tee: {
                   // Same as local_set but value stays on stack (already handled by ir_writer)
                   uint32_t li = inst.local.index;
-                  llvm::Value* val = load_vreg(inst.local.src1);
-                  if (li < locals.size() && locals[li] && val) {
-                     llvm::Type* local_ty = locals[li]->getAllocatedType();
-                     if (val->getType() != local_ty) {
-                        if (val->getType()->isIntegerTy() && local_ty->isIntegerTy()) {
-                           unsigned src_bits = val->getType()->getIntegerBitWidth();
-                           unsigned dst_bits = local_ty->getIntegerBitWidth();
-                           if (src_bits < dst_bits)
-                              val = builder.CreateZExt(val, local_ty);
-                           else if (src_bits > dst_bits)
-                              val = builder.CreateTrunc(val, local_ty);
+                  if (li < locals.size() && locals[li]) {
+                     if (inst.type == types::v128) {
+                        auto* val = load_v128(static_cast<uint16_t>(inst.local.src1), v128_ty);
+                        builder.CreateStore(val, locals[li]);
+                     } else {
+                        llvm::Value* val = load_vreg(inst.local.src1);
+                        if (val) {
+                           llvm::Type* local_ty = locals[li]->getAllocatedType();
+                           if (val->getType() != local_ty) {
+                              if (val->getType()->isIntegerTy() && local_ty->isIntegerTy()) {
+                                 unsigned src_bits = val->getType()->getIntegerBitWidth();
+                                 unsigned dst_bits = local_ty->getIntegerBitWidth();
+                                 if (src_bits < dst_bits)
+                                    val = builder.CreateZExt(val, local_ty);
+                                 else if (src_bits > dst_bits)
+                                    val = builder.CreateTrunc(val, local_ty);
+                              }
+                           }
+                           builder.CreateStore(val, locals[li]);
                         }
                      }
-                     builder.CreateStore(val, locals[li]);
                   }
                   break;
                }
@@ -921,7 +1074,14 @@ namespace psizam {
 
                // ──── Call argument pseudo-instruction ────
                case ir_op::arg: {
-                  llvm::Value* val = load_vreg(inst.rr.src1);
+                  llvm::Value* val;
+                  if (inst.type == types::v128 ||
+                      (inst.rr.src1 < is_v128.size() && is_v128[inst.rr.src1])) {
+                     // v128 arg — load from v128 storage
+                     val = load_v128(static_cast<uint16_t>(inst.rr.src1), v128_ty);
+                  } else {
+                     val = load_vreg(inst.rr.src1);
+                  }
                   if (val) call_args.push_back(val);
                   break;
                }
@@ -998,7 +1158,11 @@ namespace psizam {
                      if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
                         auto* result = builder.CreateCall(wasm_funcs[funcnum], args);
                         if (inst.dest != ir_vreg_none && !result->getType()->isVoidTy()) {
-                           store_vreg(inst.dest, result);
+                           if (inst.type == types::v128) {
+                              store_v128(static_cast<uint16_t>(inst.dest), result);
+                           } else {
+                              store_vreg(inst.dest, result);
+                           }
                         }
                      }
                   }
@@ -2102,11 +2266,1072 @@ namespace psizam {
                   break;
                }
 
-               // ──── SIMD (stub) ────
-               case ir_op::v128_op:
-               case ir_op::const_v128:
-                  // TODO: Phase 4e — SIMD support
+               // ──── SIMD: v128 constant ────
+               case ir_op::const_v128: {
+                  // immv128 stores {low, high} as two i64s
+                  llvm::Constant* lo = builder.getInt64(inst.immv128.low);
+                  llvm::Constant* hi = builder.getInt64(inst.immv128.high);
+                  llvm::Value* vec = llvm::ConstantVector::get({lo, hi});
+                  store_v128(static_cast<uint16_t>(inst.dest), vec);
                   break;
+               }
+
+               // ──── SIMD: all v128 operations ────
+               case ir_op::v128_op: {
+                  auto sub = static_cast<simd_sub>(inst.dest);
+
+                  // ── Memory loads ──
+                  switch (sub) {
+                  case simd_sub::v128_load: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* val = builder.CreateAlignedLoad(v128_ty, ptr, llvm::Align(1));
+                     store_v128(inst.simd.v_dest, val);
+                     break;
+                  }
+                  case simd_sub::v128_store: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* val = load_v128(inst.simd.v_src1, v128_ty);
+                     builder.CreateAlignedStore(val, ptr, llvm::Align(1));
+                     break;
+                  }
+                  case simd_sub::v128_load8x8_s: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* v8 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i8_ty, 8), ptr, llvm::Align(1));
+                     auto* ext = builder.CreateSExt(v8, v8xi16_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load8x8_u: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* v8 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i8_ty, 8), ptr, llvm::Align(1));
+                     auto* ext = builder.CreateZExt(v8, v8xi16_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load16x4_s: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* v4 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i16_ty, 4), ptr, llvm::Align(1));
+                     auto* ext = builder.CreateSExt(v4, v4xi32_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load16x4_u: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* v4 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i16_ty, 4), ptr, llvm::Align(1));
+                     auto* ext = builder.CreateZExt(v4, v4xi32_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load32x2_s: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* v2 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i32_ty, 2), ptr, llvm::Align(1));
+                     auto* ext = builder.CreateSExt(v2, v2xi64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load32x2_u: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* v2 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i32_ty, 2), ptr, llvm::Align(1));
+                     auto* ext = builder.CreateZExt(v2, v2xi64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load8_splat: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateLoad(i8_ty, ptr);
+                     llvm::Value* vec = builder.CreateVectorSplat(16, scalar);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(vec, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load16_splat: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateAlignedLoad(i16_ty, ptr, llvm::Align(1));
+                     llvm::Value* vec = builder.CreateVectorSplat(8, scalar);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(vec, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load32_splat: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
+                     llvm::Value* vec = builder.CreateVectorSplat(4, scalar);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(vec, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load64_splat: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
+                     llvm::Value* vec = builder.CreateVectorSplat(2, scalar);
+                     store_v128(inst.simd.v_dest, vec);
+                     break;
+                  }
+                  case simd_sub::v128_load32_zero: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
+                     auto* zero = llvm::Constant::getNullValue(v4xi32_ty);
+                     auto* vec = builder.CreateInsertElement(zero, scalar, builder.getInt32(0));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(vec, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load64_zero: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
+                     auto* zero = llvm::Constant::getNullValue(v2xi64_ty);
+                     auto* vec = builder.CreateInsertElement(zero, scalar, builder.getInt32(0));
+                     store_v128(inst.simd.v_dest, vec);
+                     break;
+                  }
+                  case simd_sub::v128_load8_lane: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateLoad(i8_ty, ptr);
+                     auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load16_lane: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateAlignedLoad(i16_ty, ptr, llvm::Align(1));
+                     auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load32_lane: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
+                     auto* vec = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::v128_load64_lane: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
+                     auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, result);
+                     break;
+                  }
+                  case simd_sub::v128_store8_lane: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     builder.CreateStore(scalar, ptr);
+                     break;
+                  }
+                  case simd_sub::v128_store16_lane: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     break;
+                  }
+                  case simd_sub::v128_store32_lane: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* vec = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     break;
+                  }
+                  case simd_sub::v128_store64_lane: {
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     break;
+                  }
+
+                  // ── Shuffle/Swizzle ──
+                  case simd_sub::i8x16_shuffle: {
+                     // Shuffle uses immv128 overlay (not simd struct) for the 16 mask bytes.
+                     // Two preceding arg instructions pushed v128 sources into call_args.
+                     llvm::Value* src1_raw = nullptr;
+                     llvm::Value* src2_raw = nullptr;
+                     if (call_args.size() >= 2) {
+                        src1_raw = call_args[call_args.size() - 2];
+                        src2_raw = call_args[call_args.size() - 1];
+                        call_args.resize(call_args.size() - 2);
+                     }
+                     auto to_v16i8 = [&](llvm::Value* v) -> llvm::Value* {
+                        if (!v) return llvm::Constant::getNullValue(v16xi8_ty);
+                        if (v->getType() == v16xi8_ty) return v;
+                        if (v->getType()->isVectorTy() || v->getType() == v128_ty)
+                           return builder.CreateBitCast(v, v16xi8_ty);
+                        // Scalar i64 vreg — load from its alloca as v128
+                        return llvm::Constant::getNullValue(v16xi8_ty);
+                     };
+                     auto* a = to_v16i8(src1_raw);
+                     auto* b = to_v16i8(src2_raw);
+                     // Read 16 mask bytes from immv128
+                     uint8_t mask_bytes[16];
+                     std::memcpy(mask_bytes, &inst.immv128, 16);
+                     int mask[16];
+                     for (int j = 0; j < 16; j++)
+                        mask[j] = static_cast<int>(mask_bytes[j]);
+                     auto* result = builder.CreateShuffleVector(a, b, llvm::ArrayRef<int>(mask, 16));
+                     // Can't use simd.v_dest (immv128 overlay) — store for next nop marker
+                     pending_v128_result = builder.CreateBitCast(result, v128_ty);
+                     break;
+                  }
+                  case simd_sub::i8x16_swizzle: {
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* idx = load_v128(inst.simd.v_src2, v16xi8_ty);
+                     // WASM swizzle: for each lane, if index >= 16, result is 0
+                     // Use LLVM intrinsic or manual implementation
+                     // Manual: clamp indices, do shuffle, then zero out-of-range lanes
+                     auto* sixteen = builder.CreateVectorSplat(16, builder.getInt8(16));
+                     auto* oob = builder.CreateICmpUGE(idx, sixteen);
+                     // Use intrinsic: aarch64.neon.tbl1 or x86 pshufb
+                     // Portable approach: element-by-element extraction
+                     // Actually, we can use @llvm.experimental.vector.extract or build manually.
+                     // Simplest portable: alloca, store, indexed load
+                     auto* arr = builder.CreateAlloca(v16xi8_ty, nullptr, "swiz_src");
+                     builder.CreateStore(a, arr);
+                     auto* arr_ptr = builder.CreateBitCast(arr, ptr_ty);
+                     llvm::Value* result = llvm::Constant::getNullValue(v16xi8_ty);
+                     for (int j = 0; j < 16; j++) {
+                        auto* lane_idx = builder.CreateExtractElement(idx, builder.getInt32(j));
+                        auto* clamped = builder.CreateAnd(lane_idx, builder.getInt8(15));
+                        auto* elem_ptr = builder.CreateGEP(i8_ty, arr_ptr, builder.CreateZExt(clamped, i32_ty));
+                        auto* elem = builder.CreateLoad(i8_ty, elem_ptr);
+                        auto* is_oob = builder.CreateExtractElement(oob, builder.getInt32(j));
+                        auto* val = builder.CreateSelect(is_oob, builder.getInt8(0), elem);
+                        result = builder.CreateInsertElement(result, val, builder.getInt32(j));
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  // ── Extract lane ──
+                  case simd_sub::i8x16_extract_lane_s: {
+                     auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* elem = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(builder.CreateSExt(elem, i32_ty), i64_ty));
+                     break;
+                  }
+                  case simd_sub::i8x16_extract_lane_u: {
+                     auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* elem = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(elem, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_extract_lane_s: {
+                     auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* elem = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(builder.CreateSExt(elem, i32_ty), i64_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_extract_lane_u: {
+                     auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* elem = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(elem, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_extract_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* elem = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(elem, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i64x2_extract_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* elem = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     store_vreg(inst.simd.addr, elem);
+                     break;
+                  }
+                  case simd_sub::f32x4_extract_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     auto* elem = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     store_vreg(inst.simd.addr, builder.CreateBitCast(elem, i32_ty));
+                     break;
+                  }
+                  case simd_sub::f64x2_extract_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     auto* elem = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
+                     store_vreg(inst.simd.addr, builder.CreateBitCast(elem, i64_ty));
+                     break;
+                  }
+
+                  // ── Replace lane ──
+                  case simd_sub::i8x16_replace_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* scalar = load_vreg(inst.simd.offset); // offset holds scalar vreg
+                     auto* elem = convert_type(scalar, i8_ty);
+                     auto* result = builder.CreateInsertElement(vec, elem, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_replace_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* elem = convert_type(scalar, i16_ty);
+                     auto* result = builder.CreateInsertElement(vec, elem, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_replace_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* elem = convert_type(scalar, i32_ty);
+                     auto* result = builder.CreateInsertElement(vec, elem, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i64x2_replace_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, result);
+                     break;
+                  }
+                  case simd_sub::f32x4_replace_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* elem = convert_type(scalar, f32_ty);
+                     auto* result = builder.CreateInsertElement(vec, elem, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::f64x2_replace_lane: {
+                     auto* vec = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* elem = convert_type(scalar, f64_ty);
+                     auto* result = builder.CreateInsertElement(vec, elem, builder.getInt32(inst.simd.lane));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  // ── Splat ──
+                  case simd_sub::i8x16_splat: {
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* elem = convert_type(scalar, i8_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(16, elem), v128_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_splat: {
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* elem = convert_type(scalar, i16_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(8, elem), v128_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_splat: {
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* elem = convert_type(scalar, i32_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(4, elem), v128_ty));
+                     break;
+                  }
+                  case simd_sub::i64x2_splat: {
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* elem = convert_type(scalar, i64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(2, elem), v128_ty));
+                     break;
+                  }
+                  case simd_sub::f32x4_splat: {
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* f = convert_type(scalar, f32_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(4, f), v128_ty));
+                     break;
+                  }
+                  case simd_sub::f64x2_splat: {
+                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* f = convert_type(scalar, f64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(2, f), v128_ty));
+                     break;
+                  }
+
+                  // ── Logical ──
+                  case simd_sub::v128_not: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateNot(a));
+                     break;
+                  }
+                  case simd_sub::v128_and: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v2xi64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateAnd(a, b));
+                     break;
+                  }
+                  case simd_sub::v128_andnot: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v2xi64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateAnd(a, builder.CreateNot(b)));
+                     break;
+                  }
+                  case simd_sub::v128_or: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v2xi64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateOr(a, b));
+                     break;
+                  }
+                  case simd_sub::v128_xor: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v2xi64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateXor(a, b));
+                     break;
+                  }
+                  case simd_sub::v128_bitselect: {
+                     // WASM bitselect: result = (val1 & mask) | (val2 & ~mask)
+                     // IR layout: v_src1=val1, v_src2=val2, addr=mask vreg
+                     auto* val1 = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* val2 = load_v128(inst.simd.v_src2, v2xi64_ty);
+                     auto* mask = load_v128(static_cast<uint16_t>(inst.simd.addr), v2xi64_ty);
+                     store_v128(inst.simd.v_dest, builder.CreateOr(
+                        builder.CreateAnd(val1, mask),
+                        builder.CreateAnd(val2, builder.CreateNot(mask))));
+                     break;
+                  }
+                  case simd_sub::v128_any_true: {
+                     auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* or_val = builder.CreateOr(
+                        builder.CreateExtractElement(vec, builder.getInt32(0)),
+                        builder.CreateExtractElement(vec, builder.getInt32(1)));
+                     auto* cmp = builder.CreateICmpNE(or_val, builder.getInt64(0));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(cmp, i64_ty));
+                     break;
+                  }
+
+                  // ── Integer comparisons ──
+                  // i8x16
+                  case simd_sub::i8x16_eq: case simd_sub::i8x16_ne:
+                  case simd_sub::i8x16_lt_s: case simd_sub::i8x16_lt_u:
+                  case simd_sub::i8x16_gt_s: case simd_sub::i8x16_gt_u:
+                  case simd_sub::i8x16_le_s: case simd_sub::i8x16_le_u:
+                  case simd_sub::i8x16_ge_s: case simd_sub::i8x16_ge_u:
+                  // i16x8
+                  case simd_sub::i16x8_eq: case simd_sub::i16x8_ne:
+                  case simd_sub::i16x8_lt_s: case simd_sub::i16x8_lt_u:
+                  case simd_sub::i16x8_gt_s: case simd_sub::i16x8_gt_u:
+                  case simd_sub::i16x8_le_s: case simd_sub::i16x8_le_u:
+                  case simd_sub::i16x8_ge_s: case simd_sub::i16x8_ge_u:
+                  // i32x4
+                  case simd_sub::i32x4_eq: case simd_sub::i32x4_ne:
+                  case simd_sub::i32x4_lt_s: case simd_sub::i32x4_lt_u:
+                  case simd_sub::i32x4_gt_s: case simd_sub::i32x4_gt_u:
+                  case simd_sub::i32x4_le_s: case simd_sub::i32x4_le_u:
+                  case simd_sub::i32x4_ge_s: case simd_sub::i32x4_ge_u:
+                  // i64x2
+                  case simd_sub::i64x2_eq: case simd_sub::i64x2_ne:
+                  case simd_sub::i64x2_lt_s: case simd_sub::i64x2_gt_s:
+                  case simd_sub::i64x2_le_s: case simd_sub::i64x2_ge_s: {
+                     // Determine vector type based on sub-opcode
+                     llvm::VectorType* vty;
+                     if (sub >= simd_sub::i8x16_eq && sub <= simd_sub::i8x16_ge_u) vty = v16xi8_ty;
+                     else if (sub >= simd_sub::i16x8_eq && sub <= simd_sub::i16x8_ge_u) vty = v8xi16_ty;
+                     else if (sub >= simd_sub::i32x4_eq && sub <= simd_sub::i32x4_ge_u) vty = v4xi32_ty;
+                     else vty = v2xi64_ty;
+
+                     auto* a = load_v128(inst.simd.v_src1, vty);
+                     auto* b = load_v128(inst.simd.v_src2, vty);
+                     llvm::Value* cmp;
+                     switch (sub) {
+                     case simd_sub::i8x16_eq: case simd_sub::i16x8_eq:
+                     case simd_sub::i32x4_eq: case simd_sub::i64x2_eq:
+                        cmp = builder.CreateICmpEQ(a, b); break;
+                     case simd_sub::i8x16_ne: case simd_sub::i16x8_ne:
+                     case simd_sub::i32x4_ne: case simd_sub::i64x2_ne:
+                        cmp = builder.CreateICmpNE(a, b); break;
+                     case simd_sub::i8x16_lt_s: case simd_sub::i16x8_lt_s:
+                     case simd_sub::i32x4_lt_s: case simd_sub::i64x2_lt_s:
+                        cmp = builder.CreateICmpSLT(a, b); break;
+                     case simd_sub::i8x16_lt_u: case simd_sub::i16x8_lt_u:
+                     case simd_sub::i32x4_lt_u:
+                        cmp = builder.CreateICmpULT(a, b); break;
+                     case simd_sub::i8x16_gt_s: case simd_sub::i16x8_gt_s:
+                     case simd_sub::i32x4_gt_s: case simd_sub::i64x2_gt_s:
+                        cmp = builder.CreateICmpSGT(a, b); break;
+                     case simd_sub::i8x16_gt_u: case simd_sub::i16x8_gt_u:
+                     case simd_sub::i32x4_gt_u:
+                        cmp = builder.CreateICmpUGT(a, b); break;
+                     case simd_sub::i8x16_le_s: case simd_sub::i16x8_le_s:
+                     case simd_sub::i32x4_le_s: case simd_sub::i64x2_le_s:
+                        cmp = builder.CreateICmpSLE(a, b); break;
+                     case simd_sub::i8x16_le_u: case simd_sub::i16x8_le_u:
+                     case simd_sub::i32x4_le_u:
+                        cmp = builder.CreateICmpULE(a, b); break;
+                     case simd_sub::i8x16_ge_s: case simd_sub::i16x8_ge_s:
+                     case simd_sub::i32x4_ge_s: case simd_sub::i64x2_ge_s:
+                        cmp = builder.CreateICmpSGE(a, b); break;
+                     case simd_sub::i8x16_ge_u: case simd_sub::i16x8_ge_u:
+                     case simd_sub::i32x4_ge_u:
+                        cmp = builder.CreateICmpUGE(a, b); break;
+                     default: cmp = builder.CreateICmpEQ(a, b); break;
+                     }
+                     // WASM: comparison results are all-ones (-1) for true, all-zeros for false
+                     auto* result = builder.CreateSExt(cmp, vty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  // ── Float comparisons ──
+                  case simd_sub::f32x4_eq: case simd_sub::f32x4_ne:
+                  case simd_sub::f32x4_lt: case simd_sub::f32x4_gt:
+                  case simd_sub::f32x4_le: case simd_sub::f32x4_ge:
+                  case simd_sub::f64x2_eq: case simd_sub::f64x2_ne:
+                  case simd_sub::f64x2_lt: case simd_sub::f64x2_gt:
+                  case simd_sub::f64x2_le: case simd_sub::f64x2_ge: {
+                     bool is_f64 = (sub >= simd_sub::f64x2_eq && sub <= simd_sub::f64x2_ge);
+                     auto* fvty = is_f64 ? (llvm::VectorType*)v2xf64_ty : (llvm::VectorType*)v4xf32_ty;
+                     auto* ivty = is_f64 ? (llvm::VectorType*)v2xi64_ty : (llvm::VectorType*)v4xi32_ty;
+                     auto* a = load_v128(inst.simd.v_src1, fvty);
+                     auto* b = load_v128(inst.simd.v_src2, fvty);
+                     llvm::Value* cmp;
+                     switch (sub) {
+                     case simd_sub::f32x4_eq: case simd_sub::f64x2_eq:
+                        cmp = builder.CreateFCmpOEQ(a, b); break;
+                     case simd_sub::f32x4_ne: case simd_sub::f64x2_ne:
+                        cmp = builder.CreateFCmpUNE(a, b); break;
+                     case simd_sub::f32x4_lt: case simd_sub::f64x2_lt:
+                        cmp = builder.CreateFCmpOLT(a, b); break;
+                     case simd_sub::f32x4_gt: case simd_sub::f64x2_gt:
+                        cmp = builder.CreateFCmpOGT(a, b); break;
+                     case simd_sub::f32x4_le: case simd_sub::f64x2_le:
+                        cmp = builder.CreateFCmpOLE(a, b); break;
+                     case simd_sub::f32x4_ge: case simd_sub::f64x2_ge:
+                        cmp = builder.CreateFCmpOGE(a, b); break;
+                     default: cmp = builder.CreateFCmpOEQ(a, b); break;
+                     }
+                     auto* result = builder.CreateSExt(cmp, ivty);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  // ── Integer arithmetic: abs, neg ──
+                  case simd_sub::i8x16_abs: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* neg = builder.CreateNeg(a); auto* cmp = builder.CreateICmpSLT(a, llvm::Constant::getNullValue(v16xi8_ty)); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(cmp, neg, a), v128_ty)); break; }
+                  case simd_sub::i16x8_abs: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* neg = builder.CreateNeg(a); auto* cmp = builder.CreateICmpSLT(a, llvm::Constant::getNullValue(v8xi16_ty)); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(cmp, neg, a), v128_ty)); break; }
+                  case simd_sub::i32x4_abs: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* neg = builder.CreateNeg(a); auto* cmp = builder.CreateICmpSLT(a, llvm::Constant::getNullValue(v4xi32_ty)); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(cmp, neg, a), v128_ty)); break; }
+                  case simd_sub::i64x2_abs: { auto* a = load_v128(inst.simd.v_src1, v2xi64_ty); auto* neg = builder.CreateNeg(a); auto* cmp = builder.CreateICmpSLT(a, llvm::Constant::getNullValue(v2xi64_ty)); store_v128(inst.simd.v_dest, builder.CreateSelect(cmp, neg, a)); break; }
+                  case simd_sub::i8x16_neg: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateNeg(a), v128_ty)); break; }
+                  case simd_sub::i16x8_neg: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateNeg(a), v128_ty)); break; }
+                  case simd_sub::i32x4_neg: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateNeg(a), v128_ty)); break; }
+                  case simd_sub::i64x2_neg: { auto* a = load_v128(inst.simd.v_src1, v2xi64_ty); store_v128(inst.simd.v_dest, builder.CreateNeg(a)); break; }
+
+                  // ── i8x16 popcnt ──
+                  case simd_sub::i8x16_popcnt: {
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* intrinsic = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ctpop, {v16xi8_ty});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(intrinsic, {a}), v128_ty));
+                     break;
+                  }
+
+                  // ── all_true, bitmask ──
+                  case simd_sub::i8x16_all_true: {
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* zero = llvm::Constant::getNullValue(v16xi8_ty);
+                     auto* cmp = builder.CreateICmpNE(a, zero);
+                     // Reduce AND all lanes
+                     llvm::Value* result = builder.CreateExtractElement(cmp, builder.getInt32(0));
+                     for (int j = 1; j < 16; j++)
+                        result = builder.CreateAnd(result, builder.CreateExtractElement(cmp, builder.getInt32(j)));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(result, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_all_true: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* zero = llvm::Constant::getNullValue(v8xi16_ty);
+                     auto* cmp = builder.CreateICmpNE(a, zero);
+                     llvm::Value* result = builder.CreateExtractElement(cmp, builder.getInt32(0));
+                     for (int j = 1; j < 8; j++)
+                        result = builder.CreateAnd(result, builder.CreateExtractElement(cmp, builder.getInt32(j)));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(result, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_all_true: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* zero = llvm::Constant::getNullValue(v4xi32_ty);
+                     auto* cmp = builder.CreateICmpNE(a, zero);
+                     llvm::Value* result = builder.CreateExtractElement(cmp, builder.getInt32(0));
+                     for (int j = 1; j < 4; j++)
+                        result = builder.CreateAnd(result, builder.CreateExtractElement(cmp, builder.getInt32(j)));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(result, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i64x2_all_true: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     auto* zero = llvm::Constant::getNullValue(v2xi64_ty);
+                     auto* cmp = builder.CreateICmpNE(a, zero);
+                     auto* r = builder.CreateAnd(
+                        builder.CreateExtractElement(cmp, builder.getInt32(0)),
+                        builder.CreateExtractElement(cmp, builder.getInt32(1)));
+                     store_vreg(inst.simd.addr, builder.CreateZExt(r, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i8x16_bitmask: {
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     llvm::Value* mask = builder.getInt32(0);
+                     for (int j = 0; j < 16; j++) {
+                        auto* elem = builder.CreateExtractElement(a, builder.getInt32(j));
+                        auto* bit = builder.CreateICmpSLT(elem, builder.getInt8(0));
+                        auto* shifted = builder.CreateShl(builder.CreateZExt(bit, i32_ty), builder.getInt32(j));
+                        mask = builder.CreateOr(mask, shifted);
+                     }
+                     store_vreg(inst.simd.addr, builder.CreateZExt(mask, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_bitmask: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     llvm::Value* mask = builder.getInt32(0);
+                     for (int j = 0; j < 8; j++) {
+                        auto* elem = builder.CreateExtractElement(a, builder.getInt32(j));
+                        auto* bit = builder.CreateICmpSLT(elem, builder.getInt16(0));
+                        auto* shifted = builder.CreateShl(builder.CreateZExt(bit, i32_ty), builder.getInt32(j));
+                        mask = builder.CreateOr(mask, shifted);
+                     }
+                     store_vreg(inst.simd.addr, builder.CreateZExt(mask, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_bitmask: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     llvm::Value* mask = builder.getInt32(0);
+                     for (int j = 0; j < 4; j++) {
+                        auto* elem = builder.CreateExtractElement(a, builder.getInt32(j));
+                        auto* bit = builder.CreateICmpSLT(elem, builder.getInt32(0));
+                        auto* shifted = builder.CreateShl(builder.CreateZExt(bit, i32_ty), builder.getInt32(j));
+                        mask = builder.CreateOr(mask, shifted);
+                     }
+                     store_vreg(inst.simd.addr, builder.CreateZExt(mask, i64_ty));
+                     break;
+                  }
+                  case simd_sub::i64x2_bitmask: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xi64_ty);
+                     llvm::Value* mask = builder.getInt32(0);
+                     for (int j = 0; j < 2; j++) {
+                        auto* elem = builder.CreateExtractElement(a, builder.getInt32(j));
+                        auto* bit = builder.CreateICmpSLT(elem, builder.getInt64(0));
+                        auto* shifted = builder.CreateShl(builder.CreateZExt(bit, i32_ty), builder.getInt32(j));
+                        mask = builder.CreateOr(mask, shifted);
+                     }
+                     store_vreg(inst.simd.addr, builder.CreateZExt(mask, i64_ty));
+                     break;
+                  }
+
+                  // ── Narrow ──
+                  case simd_sub::i8x16_narrow_i16x8_s: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v8xi16_ty);
+                     // Saturate each i16 to [-128,127] then truncate
+                     auto* lo = builder.getInt16(-128); auto* hi = builder.getInt16(127);
+                     auto* lo_v = builder.CreateVectorSplat(8, lo); auto* hi_v = builder.CreateVectorSplat(8, hi);
+                     auto* clamped_a = builder.CreateSelect(builder.CreateICmpSLT(a, lo_v), lo_v, builder.CreateSelect(builder.CreateICmpSGT(a, hi_v), hi_v, a));
+                     auto* clamped_b = builder.CreateSelect(builder.CreateICmpSLT(b, lo_v), lo_v, builder.CreateSelect(builder.CreateICmpSGT(b, hi_v), hi_v, b));
+                     auto* trunc_a = builder.CreateTrunc(clamped_a, llvm::FixedVectorType::get(i8_ty, 8));
+                     auto* trunc_b = builder.CreateTrunc(clamped_b, llvm::FixedVectorType::get(i8_ty, 8));
+                     auto* result = builder.CreateShuffleVector(trunc_a, trunc_b, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i8x16_narrow_i16x8_u: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v8xi16_ty);
+                     auto* lo = builder.getInt16(0); auto* hi = builder.getInt16(255);
+                     auto* lo_v = builder.CreateVectorSplat(8, lo); auto* hi_v = builder.CreateVectorSplat(8, hi);
+                     auto* clamped_a = builder.CreateSelect(builder.CreateICmpSLT(a, lo_v), lo_v, builder.CreateSelect(builder.CreateICmpSGT(a, hi_v), hi_v, a));
+                     auto* clamped_b = builder.CreateSelect(builder.CreateICmpSLT(b, lo_v), lo_v, builder.CreateSelect(builder.CreateICmpSGT(b, hi_v), hi_v, b));
+                     auto* trunc_a = builder.CreateTrunc(clamped_a, llvm::FixedVectorType::get(i8_ty, 8));
+                     auto* trunc_b = builder.CreateTrunc(clamped_b, llvm::FixedVectorType::get(i8_ty, 8));
+                     auto* result = builder.CreateShuffleVector(trunc_a, trunc_b, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_narrow_i32x4_s: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v4xi32_ty);
+                     auto* lo_v = builder.CreateVectorSplat(4, builder.getInt32(-32768));
+                     auto* hi_v = builder.CreateVectorSplat(4, builder.getInt32(32767));
+                     auto* clamped_a = builder.CreateSelect(builder.CreateICmpSLT(a, lo_v), lo_v, builder.CreateSelect(builder.CreateICmpSGT(a, hi_v), hi_v, a));
+                     auto* clamped_b = builder.CreateSelect(builder.CreateICmpSLT(b, lo_v), lo_v, builder.CreateSelect(builder.CreateICmpSGT(b, hi_v), hi_v, b));
+                     auto* trunc_a = builder.CreateTrunc(clamped_a, llvm::FixedVectorType::get(i16_ty, 4));
+                     auto* trunc_b = builder.CreateTrunc(clamped_b, llvm::FixedVectorType::get(i16_ty, 4));
+                     auto* result = builder.CreateShuffleVector(trunc_a, trunc_b, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_narrow_i32x4_u: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v4xi32_ty);
+                     auto* lo_v = builder.CreateVectorSplat(4, builder.getInt32(0));
+                     auto* hi_v = builder.CreateVectorSplat(4, builder.getInt32(65535));
+                     auto* clamped_a = builder.CreateSelect(builder.CreateICmpSLT(a, lo_v), lo_v, builder.CreateSelect(builder.CreateICmpSGT(a, hi_v), hi_v, a));
+                     auto* clamped_b = builder.CreateSelect(builder.CreateICmpSLT(b, lo_v), lo_v, builder.CreateSelect(builder.CreateICmpSGT(b, hi_v), hi_v, b));
+                     auto* trunc_a = builder.CreateTrunc(clamped_a, llvm::FixedVectorType::get(i16_ty, 4));
+                     auto* trunc_b = builder.CreateTrunc(clamped_b, llvm::FixedVectorType::get(i16_ty, 4));
+                     auto* result = builder.CreateShuffleVector(trunc_a, trunc_b, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  // ── Shifts ──
+                  case simd_sub::i8x16_shl: case simd_sub::i8x16_shr_s: case simd_sub::i8x16_shr_u:
+                  case simd_sub::i16x8_shl: case simd_sub::i16x8_shr_s: case simd_sub::i16x8_shr_u:
+                  case simd_sub::i32x4_shl: case simd_sub::i32x4_shr_s: case simd_sub::i32x4_shr_u:
+                  case simd_sub::i64x2_shl: case simd_sub::i64x2_shr_s: case simd_sub::i64x2_shr_u: {
+                     llvm::VectorType* vty;
+                     unsigned lanes, bits;
+                     if (sub >= simd_sub::i8x16_shl && sub <= simd_sub::i8x16_shr_u) { vty = v16xi8_ty; lanes = 16; bits = 8; }
+                     else if (sub >= simd_sub::i16x8_shl && sub <= simd_sub::i16x8_shr_u) { vty = v8xi16_ty; lanes = 8; bits = 16; }
+                     else if (sub >= simd_sub::i32x4_shl && sub <= simd_sub::i32x4_shr_u) { vty = v4xi32_ty; lanes = 4; bits = 32; }
+                     else { vty = v2xi64_ty; lanes = 2; bits = 64; }
+
+                     auto* vec = load_v128(inst.simd.v_src1, vty);
+                     auto* shift_scalar = load_vreg(inst.simd.offset); // shift amount vreg
+                     // WASM: shift amount is mod lane_bits
+                     auto* elem_ty = vty->getElementType();
+                     auto* shift_trunc = convert_type(shift_scalar, elem_ty);
+                     auto* mod_val = llvm::ConstantInt::get(elem_ty, bits);
+                     auto* shift_mod = builder.CreateURem(shift_trunc, mod_val);
+                     auto* shift_vec = builder.CreateVectorSplat(lanes, shift_mod);
+
+                     llvm::Value* result;
+                     bool is_shl = (sub == simd_sub::i8x16_shl || sub == simd_sub::i16x8_shl ||
+                                    sub == simd_sub::i32x4_shl || sub == simd_sub::i64x2_shl);
+                     bool is_shr_s = (sub == simd_sub::i8x16_shr_s || sub == simd_sub::i16x8_shr_s ||
+                                      sub == simd_sub::i32x4_shr_s || sub == simd_sub::i64x2_shr_s);
+                     if (is_shl) result = builder.CreateShl(vec, shift_vec);
+                     else if (is_shr_s) result = builder.CreateAShr(vec, shift_vec);
+                     else result = builder.CreateLShr(vec, shift_vec);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  // ── Integer add/sub/mul ──
+                  case simd_sub::i8x16_add: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateAdd(a, b), v128_ty)); break; }
+                  case simd_sub::i16x8_add: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateAdd(a, b), v128_ty)); break; }
+                  case simd_sub::i32x4_add: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateAdd(a, b), v128_ty)); break; }
+                  case simd_sub::i64x2_add: { auto* a = load_v128(inst.simd.v_src1, v2xi64_ty); auto* b = load_v128(inst.simd.v_src2, v2xi64_ty); store_v128(inst.simd.v_dest, builder.CreateAdd(a, b)); break; }
+                  case simd_sub::i8x16_sub: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSub(a, b), v128_ty)); break; }
+                  case simd_sub::i16x8_sub: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSub(a, b), v128_ty)); break; }
+                  case simd_sub::i32x4_sub: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSub(a, b), v128_ty)); break; }
+                  case simd_sub::i64x2_sub: { auto* a = load_v128(inst.simd.v_src1, v2xi64_ty); auto* b = load_v128(inst.simd.v_src2, v2xi64_ty); store_v128(inst.simd.v_dest, builder.CreateSub(a, b)); break; }
+                  case simd_sub::i16x8_mul: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(a, b), v128_ty)); break; }
+                  case simd_sub::i32x4_mul: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(a, b), v128_ty)); break; }
+                  case simd_sub::i64x2_mul: { auto* a = load_v128(inst.simd.v_src1, v2xi64_ty); auto* b = load_v128(inst.simd.v_src2, v2xi64_ty); store_v128(inst.simd.v_dest, builder.CreateMul(a, b)); break; }
+
+                  // ── Saturating add/sub ──
+                  case simd_sub::i8x16_add_sat_s: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sadd_sat, {v16xi8_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i8x16_add_sat_u: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::uadd_sat, {v16xi8_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i8x16_sub_sat_s: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ssub_sat, {v16xi8_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i8x16_sub_sat_u: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::usub_sat, {v16xi8_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i16x8_add_sat_s: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sadd_sat, {v8xi16_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i16x8_add_sat_u: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::uadd_sat, {v8xi16_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i16x8_sub_sat_s: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ssub_sat, {v8xi16_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i16x8_sub_sat_u: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::usub_sat, {v8xi16_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+
+                  // ── Min/Max ──
+                  case simd_sub::i8x16_min_s: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::smin, {v16xi8_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i8x16_min_u: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::umin, {v16xi8_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i8x16_max_s: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::smax, {v16xi8_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i8x16_max_u: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::umax, {v16xi8_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i16x8_min_s: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::smin, {v8xi16_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i16x8_min_u: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::umin, {v8xi16_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i16x8_max_s: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::smax, {v8xi16_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i16x8_max_u: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::umax, {v8xi16_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i32x4_min_s: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::smin, {v4xi32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i32x4_min_u: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::umin, {v4xi32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i32x4_max_s: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::smax, {v4xi32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::i32x4_max_u: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::umax, {v4xi32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+
+                  // ── avgr_u ──
+                  case simd_sub::i8x16_avgr_u: {
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty);
+                     auto* wide_ty = llvm::FixedVectorType::get(i16_ty, 16);
+                     auto* wa = builder.CreateZExt(a, wide_ty); auto* wb = builder.CreateZExt(b, wide_ty);
+                     auto* sum = builder.CreateAdd(builder.CreateAdd(wa, wb), builder.CreateVectorSplat(16, builder.getInt16(1)));
+                     auto* avg = builder.CreateLShr(sum, builder.CreateVectorSplat(16, builder.getInt16(1)));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateTrunc(avg, v16xi8_ty), v128_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_avgr_u: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty);
+                     auto* wide_ty = llvm::FixedVectorType::get(i32_ty, 8);
+                     auto* wa = builder.CreateZExt(a, wide_ty); auto* wb = builder.CreateZExt(b, wide_ty);
+                     auto* sum = builder.CreateAdd(builder.CreateAdd(wa, wb), builder.CreateVectorSplat(8, builder.getInt32(1)));
+                     auto* avg = builder.CreateLShr(sum, builder.CreateVectorSplat(8, builder.getInt32(1)));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateTrunc(avg, v8xi16_ty), v128_ty));
+                     break;
+                  }
+
+                  // ── Extend (widen) low/high ──
+                  case simd_sub::i16x8_extend_low_i8x16_s: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSExt(half, v8xi16_ty), v128_ty)); break; }
+                  case simd_sub::i16x8_extend_high_i8x16_s: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{8,9,10,11,12,13,14,15}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSExt(half, v8xi16_ty), v128_ty)); break; }
+                  case simd_sub::i16x8_extend_low_i8x16_u: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateZExt(half, v8xi16_ty), v128_ty)); break; }
+                  case simd_sub::i16x8_extend_high_i8x16_u: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{8,9,10,11,12,13,14,15}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateZExt(half, v8xi16_ty), v128_ty)); break; }
+                  case simd_sub::i32x4_extend_low_i16x8_s: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1,2,3}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSExt(half, v4xi32_ty), v128_ty)); break; }
+                  case simd_sub::i32x4_extend_high_i16x8_s: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{4,5,6,7}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSExt(half, v4xi32_ty), v128_ty)); break; }
+                  case simd_sub::i32x4_extend_low_i16x8_u: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1,2,3}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateZExt(half, v4xi32_ty), v128_ty)); break; }
+                  case simd_sub::i32x4_extend_high_i16x8_u: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{4,5,6,7}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateZExt(half, v4xi32_ty), v128_ty)); break; }
+                  case simd_sub::i64x2_extend_low_i32x4_s: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1}); store_v128(inst.simd.v_dest, builder.CreateSExt(half, v2xi64_ty)); break; }
+                  case simd_sub::i64x2_extend_high_i32x4_s: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{2,3}); store_v128(inst.simd.v_dest, builder.CreateSExt(half, v2xi64_ty)); break; }
+                  case simd_sub::i64x2_extend_low_i32x4_u: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1}); store_v128(inst.simd.v_dest, builder.CreateZExt(half, v2xi64_ty)); break; }
+                  case simd_sub::i64x2_extend_high_i32x4_u: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* half = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{2,3}); store_v128(inst.simd.v_dest, builder.CreateZExt(half, v2xi64_ty)); break; }
+
+                  // ── Extended multiply ──
+                  case simd_sub::i16x8_extmul_low_i8x16_s: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* al = builder.CreateSExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7}), v8xi16_ty); auto* bl = builder.CreateSExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7}), v8xi16_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(al, bl), v128_ty)); break; }
+                  case simd_sub::i16x8_extmul_high_i8x16_s: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* ah = builder.CreateSExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{8,9,10,11,12,13,14,15}), v8xi16_ty); auto* bh = builder.CreateSExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{8,9,10,11,12,13,14,15}), v8xi16_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(ah, bh), v128_ty)); break; }
+                  case simd_sub::i16x8_extmul_low_i8x16_u: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* al = builder.CreateZExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7}), v8xi16_ty); auto* bl = builder.CreateZExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{0,1,2,3,4,5,6,7}), v8xi16_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(al, bl), v128_ty)); break; }
+                  case simd_sub::i16x8_extmul_high_i8x16_u: { auto* a = load_v128(inst.simd.v_src1, v16xi8_ty); auto* b = load_v128(inst.simd.v_src2, v16xi8_ty); auto* ah = builder.CreateZExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{8,9,10,11,12,13,14,15}), v8xi16_ty); auto* bh = builder.CreateZExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{8,9,10,11,12,13,14,15}), v8xi16_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(ah, bh), v128_ty)); break; }
+                  case simd_sub::i32x4_extmul_low_i16x8_s: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* al = builder.CreateSExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1,2,3}), v4xi32_ty); auto* bl = builder.CreateSExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{0,1,2,3}), v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(al, bl), v128_ty)); break; }
+                  case simd_sub::i32x4_extmul_high_i16x8_s: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* ah = builder.CreateSExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{4,5,6,7}), v4xi32_ty); auto* bh = builder.CreateSExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{4,5,6,7}), v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(ah, bh), v128_ty)); break; }
+                  case simd_sub::i32x4_extmul_low_i16x8_u: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* al = builder.CreateZExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1,2,3}), v4xi32_ty); auto* bl = builder.CreateZExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{0,1,2,3}), v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(al, bl), v128_ty)); break; }
+                  case simd_sub::i32x4_extmul_high_i16x8_u: { auto* a = load_v128(inst.simd.v_src1, v8xi16_ty); auto* b = load_v128(inst.simd.v_src2, v8xi16_ty); auto* ah = builder.CreateZExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{4,5,6,7}), v4xi32_ty); auto* bh = builder.CreateZExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{4,5,6,7}), v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateMul(ah, bh), v128_ty)); break; }
+                  case simd_sub::i64x2_extmul_low_i32x4_s: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); auto* al = builder.CreateSExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1}), v2xi64_ty); auto* bl = builder.CreateSExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{0,1}), v2xi64_ty); store_v128(inst.simd.v_dest, builder.CreateMul(al, bl)); break; }
+                  case simd_sub::i64x2_extmul_high_i32x4_s: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); auto* ah = builder.CreateSExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{2,3}), v2xi64_ty); auto* bh = builder.CreateSExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{2,3}), v2xi64_ty); store_v128(inst.simd.v_dest, builder.CreateMul(ah, bh)); break; }
+                  case simd_sub::i64x2_extmul_low_i32x4_u: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); auto* al = builder.CreateZExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1}), v2xi64_ty); auto* bl = builder.CreateZExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{0,1}), v2xi64_ty); store_v128(inst.simd.v_dest, builder.CreateMul(al, bl)); break; }
+                  case simd_sub::i64x2_extmul_high_i32x4_u: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); auto* b = load_v128(inst.simd.v_src2, v4xi32_ty); auto* ah = builder.CreateZExt(builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{2,3}), v2xi64_ty); auto* bh = builder.CreateZExt(builder.CreateShuffleVector(b, b, llvm::ArrayRef<int>{2,3}), v2xi64_ty); store_v128(inst.simd.v_dest, builder.CreateMul(ah, bh)); break; }
+
+                  // ── Extended add pairwise ──
+                  case simd_sub::i16x8_extadd_pairwise_i8x16_s: {
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* wide = builder.CreateSExt(a, llvm::FixedVectorType::get(i16_ty, 16));
+                     llvm::Value* result = llvm::Constant::getNullValue(v8xi16_ty);
+                     for (int j = 0; j < 8; j++) {
+                        auto* e0 = builder.CreateExtractElement(wide, builder.getInt32(j*2));
+                        auto* e1 = builder.CreateExtractElement(wide, builder.getInt32(j*2+1));
+                        result = builder.CreateInsertElement(result, builder.CreateAdd(e0, e1), builder.getInt32(j));
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_extadd_pairwise_i8x16_u: {
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* wide = builder.CreateZExt(a, llvm::FixedVectorType::get(i16_ty, 16));
+                     llvm::Value* result = llvm::Constant::getNullValue(v8xi16_ty);
+                     for (int j = 0; j < 8; j++) {
+                        auto* e0 = builder.CreateExtractElement(wide, builder.getInt32(j*2));
+                        auto* e1 = builder.CreateExtractElement(wide, builder.getInt32(j*2+1));
+                        result = builder.CreateInsertElement(result, builder.CreateAdd(e0, e1), builder.getInt32(j));
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_extadd_pairwise_i16x8_s: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* wide = builder.CreateSExt(a, llvm::FixedVectorType::get(i32_ty, 8));
+                     llvm::Value* result = llvm::Constant::getNullValue(v4xi32_ty);
+                     for (int j = 0; j < 4; j++) {
+                        auto* e0 = builder.CreateExtractElement(wide, builder.getInt32(j*2));
+                        auto* e1 = builder.CreateExtractElement(wide, builder.getInt32(j*2+1));
+                        result = builder.CreateInsertElement(result, builder.CreateAdd(e0, e1), builder.getInt32(j));
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_extadd_pairwise_i16x8_u: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* wide = builder.CreateZExt(a, llvm::FixedVectorType::get(i32_ty, 8));
+                     llvm::Value* result = llvm::Constant::getNullValue(v4xi32_ty);
+                     for (int j = 0; j < 4; j++) {
+                        auto* e0 = builder.CreateExtractElement(wide, builder.getInt32(j*2));
+                        auto* e1 = builder.CreateExtractElement(wide, builder.getInt32(j*2+1));
+                        result = builder.CreateInsertElement(result, builder.CreateAdd(e0, e1), builder.getInt32(j));
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  // ── q15mulr_sat_s ──
+                  case simd_sub::i16x8_q15mulr_sat_s: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v8xi16_ty);
+                     auto* wide_ty = llvm::FixedVectorType::get(i32_ty, 8);
+                     auto* wa = builder.CreateSExt(a, wide_ty);
+                     auto* wb = builder.CreateSExt(b, wide_ty);
+                     auto* prod = builder.CreateAdd(builder.CreateMul(wa, wb), builder.CreateVectorSplat(8, builder.getInt32(0x4000)));
+                     auto* shifted = builder.CreateAShr(prod, builder.CreateVectorSplat(8, builder.getInt32(15)));
+                     // Saturate to i16 range
+                     auto* min_v = builder.CreateVectorSplat(8, builder.getInt32(-32768));
+                     auto* max_v = builder.CreateVectorSplat(8, builder.getInt32(32767));
+                     auto* clamped = builder.CreateSelect(builder.CreateICmpSLT(shifted, min_v), min_v,
+                        builder.CreateSelect(builder.CreateICmpSGT(shifted, max_v), max_v, shifted));
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateTrunc(clamped, v8xi16_ty), v128_ty));
+                     break;
+                  }
+
+                  // ── dot product ──
+                  case simd_sub::i32x4_dot_i16x8_s: {
+                     auto* a = load_v128(inst.simd.v_src1, v8xi16_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v8xi16_ty);
+                     auto* wa = builder.CreateSExt(a, llvm::FixedVectorType::get(i32_ty, 8));
+                     auto* wb = builder.CreateSExt(b, llvm::FixedVectorType::get(i32_ty, 8));
+                     auto* prod = builder.CreateMul(wa, wb);
+                     llvm::Value* result = llvm::Constant::getNullValue(v4xi32_ty);
+                     for (int j = 0; j < 4; j++) {
+                        auto* e0 = builder.CreateExtractElement(prod, builder.getInt32(j*2));
+                        auto* e1 = builder.CreateExtractElement(prod, builder.getInt32(j*2+1));
+                        result = builder.CreateInsertElement(result, builder.CreateAdd(e0, e1), builder.getInt32(j));
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  // ── Float arithmetic ──
+                  case simd_sub::f32x4_abs: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f64x2_abs: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f32x4_neg: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFNeg(a), v128_ty)); break; }
+                  case simd_sub::f64x2_neg: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFNeg(a), v128_ty)); break; }
+                  case simd_sub::f32x4_sqrt: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f64x2_sqrt: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+
+                  case simd_sub::f32x4_add: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFAdd(a, b), v128_ty)); break; }
+                  case simd_sub::f64x2_add: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFAdd(a, b), v128_ty)); break; }
+                  case simd_sub::f32x4_sub: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFSub(a, b), v128_ty)); break; }
+                  case simd_sub::f64x2_sub: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFSub(a, b), v128_ty)); break; }
+                  case simd_sub::f32x4_mul: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFMul(a, b), v128_ty)); break; }
+                  case simd_sub::f64x2_mul: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFMul(a, b), v128_ty)); break; }
+                  case simd_sub::f32x4_div: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFDiv(a, b), v128_ty)); break; }
+                  case simd_sub::f64x2_div: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFDiv(a, b), v128_ty)); break; }
+
+                  case simd_sub::f32x4_min: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::f64x2_min: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::f32x4_max: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::f64x2_max: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::f32x4_pmin: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(builder.CreateFCmpOLT(b, a), b, a), v128_ty)); break; }
+                  case simd_sub::f64x2_pmin: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(builder.CreateFCmpOLT(b, a), b, a), v128_ty)); break; }
+                  case simd_sub::f32x4_pmax: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(builder.CreateFCmpOLT(a, b), b, a), v128_ty)); break; }
+                  case simd_sub::f64x2_pmax: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(builder.CreateFCmpOLT(a, b), b, a), v128_ty)); break; }
+
+                  // ── Float rounding ──
+                  case simd_sub::f32x4_ceil: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f64x2_ceil: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f32x4_floor: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f64x2_floor: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f32x4_trunc: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f64x2_trunc: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f32x4_nearest: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f64x2_nearest: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+
+                  // ── Conversions ──
+                  case simd_sub::i32x4_trunc_sat_f32x4_s: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fptosi_sat, {v4xi32_ty, v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::i32x4_trunc_sat_f32x4_u: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fptoui_sat, {v4xi32_ty, v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f32x4_convert_i32x4_s: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSIToFP(a, v4xf32_ty), v128_ty)); break; }
+                  case simd_sub::f32x4_convert_i32x4_u: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateUIToFP(a, v4xf32_ty), v128_ty)); break; }
+                  case simd_sub::i32x4_trunc_sat_f64x2_s_zero: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fptosi_sat, {llvm::FixedVectorType::get(i32_ty, 2), v2xf64_ty});
+                     auto* trunc2 = builder.CreateCall(fn, {a});
+                     auto* zero2 = llvm::Constant::getNullValue(llvm::FixedVectorType::get(i32_ty, 2));
+                     auto* result = builder.CreateShuffleVector(trunc2, zero2, llvm::ArrayRef<int>{0,1,2,3});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_trunc_sat_f64x2_u_zero: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fptoui_sat, {llvm::FixedVectorType::get(i32_ty, 2), v2xf64_ty});
+                     auto* trunc2 = builder.CreateCall(fn, {a});
+                     auto* zero2 = llvm::Constant::getNullValue(llvm::FixedVectorType::get(i32_ty, 2));
+                     auto* result = builder.CreateShuffleVector(trunc2, zero2, llvm::ArrayRef<int>{0,1,2,3});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::f64x2_convert_low_i32x4_s: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSIToFP(low2, v2xf64_ty), v128_ty));
+                     break;
+                  }
+                  case simd_sub::f64x2_convert_low_i32x4_u: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateUIToFP(low2, v2xf64_ty), v128_ty));
+                     break;
+                  }
+                  case simd_sub::f32x4_demote_f64x2_zero: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     auto* narrow2 = builder.CreateFPTrunc(a, llvm::FixedVectorType::get(f32_ty, 2));
+                     auto* zero2 = llvm::Constant::getNullValue(llvm::FixedVectorType::get(f32_ty, 2));
+                     auto* result = builder.CreateShuffleVector(narrow2, zero2, llvm::ArrayRef<int>{0,1,2,3});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::f64x2_promote_low_f32x4: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFPExt(low2, v2xf64_ty), v128_ty));
+                     break;
+                  }
+
+                  // ── Relaxed SIMD ──
+                  case simd_sub::f32x4_relaxed_madd: {
+                     // relaxed_madd: a * b + c. Third operand c is in addr.
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v4xf32_ty);
+                     auto* c = load_v128(static_cast<uint16_t>(inst.simd.addr), v4xf32_ty);
+                     auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fma, {v4xf32_ty});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b, c}), v128_ty));
+                     break;
+                  }
+                  case simd_sub::f32x4_relaxed_nmadd: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v4xf32_ty);
+                     auto* c = load_v128(static_cast<uint16_t>(inst.simd.addr), v4xf32_ty);
+                     auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fma, {v4xf32_ty});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {builder.CreateFNeg(a), b, c}), v128_ty));
+                     break;
+                  }
+                  case simd_sub::f64x2_relaxed_madd: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v2xf64_ty);
+                     auto* c = load_v128(static_cast<uint16_t>(inst.simd.addr), v2xf64_ty);
+                     auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fma, {v2xf64_ty});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b, c}), v128_ty));
+                     break;
+                  }
+                  case simd_sub::f64x2_relaxed_nmadd: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v2xf64_ty);
+                     auto* c = load_v128(static_cast<uint16_t>(inst.simd.addr), v2xf64_ty);
+                     auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fma, {v2xf64_ty});
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {builder.CreateFNeg(a), b, c}), v128_ty));
+                     break;
+                  }
+                  case simd_sub::i16x8_relaxed_dot_i8x16_i7x16_s: {
+                     // Relaxed: multiply i8 lanes, add pairwise to i16
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v16xi8_ty);
+                     auto* wa = builder.CreateSExt(a, llvm::FixedVectorType::get(i16_ty, 16));
+                     // b is unsigned (i7x16)
+                     auto* wb = builder.CreateZExt(b, llvm::FixedVectorType::get(i16_ty, 16));
+                     auto* prod = builder.CreateMul(wa, wb);
+                     llvm::Value* result = llvm::Constant::getNullValue(v8xi16_ty);
+                     for (int j = 0; j < 8; j++) {
+                        auto* e0 = builder.CreateExtractElement(prod, builder.getInt32(j*2));
+                        auto* e1 = builder.CreateExtractElement(prod, builder.getInt32(j*2+1));
+                        auto* sum = builder.CreateAdd(e0, e1);
+                        // Saturate to i16 range
+                        auto* sat_fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sadd_sat, {i16_ty});
+                        (void)sat_fn;
+                        result = builder.CreateInsertElement(result, sum, builder.getInt32(j));
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+                  case simd_sub::i32x4_relaxed_dot_i8x16_i7x16_add_s: {
+                     // Relaxed: multiply i8*u8 pairwise to i16, then add pairs to i32, then add accumulator (c)
+                     auto* a = load_v128(inst.simd.v_src1, v16xi8_ty);
+                     auto* b = load_v128(inst.simd.v_src2, v16xi8_ty);
+                     auto* c = load_v128(static_cast<uint16_t>(inst.simd.addr), v4xi32_ty);
+                     auto* wa = builder.CreateSExt(a, llvm::FixedVectorType::get(i32_ty, 16));
+                     auto* wb = builder.CreateZExt(b, llvm::FixedVectorType::get(i32_ty, 16));
+                     auto* prod = builder.CreateMul(wa, wb);
+                     llvm::Value* result = llvm::Constant::getNullValue(v4xi32_ty);
+                     for (int j = 0; j < 4; j++) {
+                        auto* sum = builder.CreateAdd(
+                           builder.CreateAdd(builder.CreateExtractElement(prod, builder.getInt32(j*4)),
+                                             builder.CreateExtractElement(prod, builder.getInt32(j*4+1))),
+                           builder.CreateAdd(builder.CreateExtractElement(prod, builder.getInt32(j*4+2)),
+                                             builder.CreateExtractElement(prod, builder.getInt32(j*4+3))));
+                        result = builder.CreateInsertElement(result, sum, builder.getInt32(j));
+                     }
+                     // Add accumulator
+                     result = builder.CreateAdd(result, c);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
+                     break;
+                  }
+
+                  default:
+                     // Unhandled SIMD sub-opcode — no-op
+                     break;
+                  } // end switch(sub)
+                  break;
+               } // end case ir_op::v128_op
 
                // ──── Atomic operations ────
                case ir_op::atomic_op: {
@@ -2242,6 +3467,10 @@ namespace psizam {
                // Function exit block — return merge vreg v0
                if (fn->getReturnType()->isVoidTy()) {
                   builder.CreateRetVoid();
+               } else if (fn->getReturnType() == v128_ty &&
+                          v128_slots.size() > 0 && v128_slots[0]) {
+                  auto* ret_val = load_v128(0, v128_ty);
+                  builder.CreateRet(ret_val);
                } else {
                   llvm::Value* ret_val = load_vreg(0);
                   if (ret_val) {
@@ -2293,23 +3522,36 @@ namespace psizam {
             call_args.push_back(ctx_arg);
             call_args.push_back(mem_arg);
 
+            // Track cumulative slot offset since v128 params occupy 2 slots
+            uint32_t slot_offset = 0;
             for (uint32_t p = 0; p < ft.param_types.size(); p++) {
-               // Each element in the args array is a native_value (8 bytes / i64)
-               auto* elem_ptr = b.CreateGEP(i64_ty, arr_arg, b.getInt32(p));
-               llvm::Value* raw = b.CreateLoad(i64_ty, elem_ptr);
-
-               // Convert to the expected parameter type
                llvm::Type* param_ty = wasm_type_to_llvm(ft.param_types[p]);
-               if (param_ty == i32_ty) {
-                  raw = b.CreateTrunc(raw, i32_ty);
-               } else if (param_ty == f32_ty) {
-                  auto* as_i32 = b.CreateTrunc(raw, i32_ty);
-                  raw = b.CreateBitCast(as_i32, f32_ty);
-               } else if (param_ty == f64_ty) {
-                  raw = b.CreateBitCast(raw, f64_ty);
+               if (param_ty == v128_ty) {
+                  // v128: args_raw stores [high, low]. LLVM <2 x i64> is [elem0, elem1].
+                  // We want elem0=low, elem1=high, so swap.
+                  auto* lo_ptr = b.CreateGEP(i64_ty, arr_arg, b.getInt32(slot_offset + 1));
+                  auto* hi_ptr = b.CreateGEP(i64_ty, arr_arg, b.getInt32(slot_offset));
+                  auto* lo = b.CreateLoad(i64_ty, lo_ptr);
+                  auto* hi = b.CreateLoad(i64_ty, hi_ptr);
+                  llvm::Value* vec = llvm::UndefValue::get(v128_ty);
+                  vec = b.CreateInsertElement(vec, lo, b.getInt32(0));
+                  vec = b.CreateInsertElement(vec, hi, b.getInt32(1));
+                  call_args.push_back(vec);
+                  slot_offset += 2;
+               } else {
+                  auto* elem_ptr = b.CreateGEP(i64_ty, arr_arg, b.getInt32(slot_offset));
+                  llvm::Value* raw = b.CreateLoad(i64_ty, elem_ptr);
+                  if (param_ty == i32_ty) {
+                     raw = b.CreateTrunc(raw, i32_ty);
+                  } else if (param_ty == f32_ty) {
+                     auto* as_i32 = b.CreateTrunc(raw, i32_ty);
+                     raw = b.CreateBitCast(as_i32, f32_ty);
+                  } else if (param_ty == f64_ty) {
+                     raw = b.CreateBitCast(raw, f64_ty);
+                  }
+                  call_args.push_back(raw);
+                  slot_offset += 1;
                }
-               // i64 stays as-is
-               call_args.push_back(raw);
             }
 
             auto* call_result = b.CreateCall(real_fn, call_args);
@@ -2320,7 +3562,12 @@ namespace psizam {
             } else {
                llvm::Value* ret = call_result;
                llvm::Type* ret_ty = wasm_type_to_llvm(ft.return_type);
-               if (ret_ty == i32_ty) {
+               if (ret_ty == v128_ty) {
+                  // Store full v128 result into args_raw buffer (caller reads it)
+                  b.CreateStore(ret, arr_arg);
+                  // Return low i64 for scalar result path
+                  ret = b.CreateExtractElement(ret, b.getInt32(0));
+               } else if (ret_ty == i32_ty) {
                   ret = b.CreateZExt(ret, i64_ty);
                } else if (ret_ty == f32_ty) {
                   auto* as_i32 = b.CreateBitCast(ret, i32_ty);
