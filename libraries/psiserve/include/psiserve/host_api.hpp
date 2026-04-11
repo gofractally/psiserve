@@ -91,6 +91,21 @@ namespace psiserve
       /// monotonic time for computing absolute deadlines.
       void psiSleepUntil(int64_t deadline_ns);
 
+      /// psi.sendfile(sock_fd: i32, file_fd: i32, len: i64) -> i32
+      /// Transfers `len` bytes from `file_fd` to `sock_fd` using zero-copy
+      /// OS sendfile when possible. Falls back to buffered copy for TLS.
+      /// Returns total bytes sent.
+      PsiResult psiSendFile(VirtualFd sock_fd, VirtualFd file_fd, int64_t len);
+
+      /// psi.cork(fd: i32)
+      /// Enables TCP_CORK (TCP_NOPUSH on macOS) on a socket.
+      /// Buffers small writes into a single TCP segment until uncork.
+      void psiCork(VirtualFd fd);
+
+      /// psi.uncork(fd: i32)
+      /// Disables TCP_CORK and flushes buffered data.
+      void psiUncork(VirtualFd fd);
+
       /// psi.udp_bind(port: i32) -> i32
       /// Creates a UDP socket bound to 0.0.0.0:port.
       /// Returns virtual fd on success, or -PsiError on error.

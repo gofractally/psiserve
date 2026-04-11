@@ -69,6 +69,9 @@ namespace psiserve
       table.add<&HostApi::psiSpawn>("psi", "spawn");
       table.add<&HostApi::psiClock>("psi", "clock");
       table.add<&HostApi::psiSleepUntil>("psi", "sleep_until");
+      table.add<&HostApi::psiSendFile>("psi", "sendfile");
+      table.add<&HostApi::psiCork>("psi", "cork");
+      table.add<&HostApi::psiUncork>("psi", "uncork");
       table.add<&HostApi::psiUdpBind>("psi", "udp_bind");
       table.add<&HostApi::psiRecvFrom>("psi", "recvfrom");
       table.add<&HostApi::psiSendTo>("psi", "sendto");

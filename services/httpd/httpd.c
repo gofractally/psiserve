@@ -1,37 +1,26 @@
 /*
  * httpd.c — Static file HTTP/1.1 server for psiserve
  *
- * Imports psi.accept, psi.read, psi.write, psi.close, psi.open, psi.fstat.
+ * Uses psi-sdk host declarations.  Spawns per-connection fibers for
+ * concurrent request handling.  Uses sendfile for zero-copy file
+ * transfer and cork/uncork to batch response headers.
+ *
  *   fd 0 = listen socket (pre-opened by runtime)
  *   fd 1 = webroot directory (pre-opened by runtime)
  *
  * Compile:
- *   clang --target=wasm32 -nostdlib -O2 \
+ *   clang --target=wasm32 -nostdlib -O2 -fno-builtin \
+ *       -I libraries/psi-sdk/include \
  *       -Wl,--no-entry -Wl,--export=_start \
- *       -o httpd.wasm httpd.c
+ *       -Wl,--export=__stack_pointer \
+ *       -Wl,--export=handle_connection \
+ *       -Wl,--export-table \
+ *       -o services/httpd/httpd.wasm services/httpd/httpd.c
  */
 
-/* ── Host imports ─────────────────────────────────────────────────────────── */
+#include <psi/host.h>
 
-__attribute__((import_module("psi"), import_name("accept")))
-int psi_accept(int listen_fd);
-
-__attribute__((import_module("psi"), import_name("read")))
-int psi_read(int fd, void* buf, int len);
-
-__attribute__((import_module("psi"), import_name("write")))
-int psi_write(int fd, const void* buf, int len);
-
-__attribute__((import_module("psi"), import_name("open")))
-int psi_open(int dir_fd, const void* path, int path_len);
-
-__attribute__((import_module("psi"), import_name("fstat")))
-int psi_fstat(int fd, void* out);
-
-__attribute__((import_module("psi"), import_name("close")))
-void psi_close(int fd);
-
-/* ── Utilities ────────────────────────────────────────────────────────────── */
+/* ── Utilities ────────────────────────────────────────────────────── */
 
 static int str_len(const char* s)
 {
@@ -47,23 +36,11 @@ static int str_eq(const char* a, const char* b, int len)
    return 1;
 }
 
-static void write_all(int fd, const char* buf, int len)
-{
-   while (len > 0)
-   {
-      int n = psi_write(fd, buf, len);
-      if (n <= 0) break;
-      buf += n;
-      len -= n;
-   }
-}
-
 static void write_str(int fd, const char* s)
 {
-   write_all(fd, s, str_len(s));
+   psi_write_all(fd, s, str_len(s));
 }
 
-/* Simple integer to decimal string, returns length written */
 static int itoa(unsigned long long val, char* buf, int buflen)
 {
    if (val == 0)
@@ -84,19 +61,14 @@ static int itoa(unsigned long long val, char* buf, int buflen)
    return n;
 }
 
-/* ── MIME type detection ──────────────────────────────────────────────────── */
+/* ── MIME type detection ──────────────────────────────────────────── */
 
 static const char* content_type_for(const char* path, int path_len)
 {
-   /* Find last '.' */
    int dot = -1;
    for (int i = path_len - 1; i >= 0; --i)
    {
-      if (path[i] == '.')
-      {
-         dot = i;
-         break;
-      }
+      if (path[i] == '.') { dot = i; break; }
       if (path[i] == '/') break;
    }
 
@@ -127,15 +99,11 @@ static const char* content_type_for(const char* path, int path_len)
    return "application/octet-stream";
 }
 
-/* ── Buffers ──────────────────────────────────────────────────────────────── */
-
-static char req_buf[8192];    /* HTTP request read buffer */
-static char io_buf[16384];    /* File read / response write buffer */
-
-/* ── Request handling ─────────────────────────────────────────────────────── */
+/* ── Request handling ─────────────────────────────────────────────── */
 
 static void send_error(int conn, const char* status, const char* body)
 {
+   psi_cork(conn);
    write_str(conn, "HTTP/1.1 ");
    write_str(conn, status);
    write_str(conn, "\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n");
@@ -144,19 +112,18 @@ static void send_error(int conn, const char* status, const char* body)
    write_str(conn, "</h1><p>");
    write_str(conn, body);
    write_str(conn, "</p>\n");
+   psi_uncork(conn);
 }
 
 static void handle_request(int conn, const char* method, int method_len,
                            const char* path, int path_len)
 {
-   /* Only GET supported */
    if (method_len != 3 || !str_eq(method, "GET", 3))
    {
       send_error(conn, "405 Method Not Allowed", "Only GET is supported.");
       return;
    }
 
-   /* Default / to /index.html */
    const char* file_path = path;
    int         file_path_len = path_len;
    if (path_len == 1 && path[0] == '/')
@@ -165,7 +132,6 @@ static void handle_request(int conn, const char* method, int method_len,
       file_path_len = 11;
    }
 
-   /* Open file relative to webroot (fd 1) */
    int file_fd = psi_open(1, file_path, file_path_len);
    if (file_fd < 0)
    {
@@ -173,7 +139,6 @@ static void handle_request(int conn, const char* method, int method_len,
       return;
    }
 
-   /* Get file size */
    unsigned long long file_size = 0;
    if (psi_fstat(file_fd, &file_size) < 0)
    {
@@ -182,46 +147,39 @@ static void handle_request(int conn, const char* method, int method_len,
       return;
    }
 
-   /* Send response headers */
+   /* Send response headers — corked so they go in one TCP segment */
    const char* ctype = content_type_for(file_path, file_path_len);
    char size_str[20];
    int  size_str_len = itoa(file_size, size_str, sizeof(size_str));
 
+   psi_cork(conn);
    write_str(conn, "HTTP/1.1 200 OK\r\nContent-Type: ");
    write_str(conn, ctype);
    write_str(conn, "\r\nContent-Length: ");
-   write_all(conn, size_str, size_str_len);
+   psi_write_all(conn, size_str, size_str_len);
    write_str(conn, "\r\nConnection: close\r\n\r\n");
+   psi_uncork(conn);
 
-   /* Send file body */
-   for (;;)
-   {
-      int n = psi_read(file_fd, io_buf, sizeof(io_buf));
-      if (n <= 0) break;
-      write_all(conn, io_buf, n);
-   }
+   /* Send file body — zero-copy via OS sendfile */
+   psi_sendfile(conn, file_fd, (long long)file_size);
 
    psi_close(file_fd);
 }
 
-/* ── HTTP request parser (minimal) ────────────────────────────────────────── */
+/* ── HTTP request parser ──────────────────────────────────────────── */
 
-/*
- * Reads bytes until we have a complete request line (first line of HTTP).
- * Extracts method and path.  Discards headers (reads until blank line).
- */
+static char req_buf[8192];
+
 static void process_connection(int conn)
 {
    int total = 0;
 
-   /* Read until we have the full request headers (ending with \r\n\r\n) */
    while (total < (int)sizeof(req_buf) - 1)
    {
       int n = psi_read(conn, req_buf + total, (int)sizeof(req_buf) - 1 - total);
-      if (n <= 0) return;  /* Client disconnected */
+      if (n <= 0) return;
       total += n;
 
-      /* Check for end of headers */
       for (int i = 0; i + 3 < total; ++i)
       {
          if (req_buf[i] == '\r' && req_buf[i+1] == '\n' &&
@@ -231,7 +189,6 @@ static void process_connection(int conn)
    }
 
 headers_done:
-   /* Parse request line: METHOD SP PATH SP HTTP/x.x */
    {
       int method_start = 0;
       int method_end = 0;
@@ -255,7 +212,15 @@ headers_done:
    }
 }
 
-/* ── Main ─────────────────────────────────────────────────────────────────── */
+/* ── Per-connection fiber handler ─────────────────────────────────── */
+
+void handle_connection(int conn)
+{
+   process_connection(conn);
+   psi_close(conn);
+}
+
+/* ── Main ─────────────────────────────────────────────────────────── */
 
 void _start(void)
 {
@@ -264,7 +229,6 @@ void _start(void)
       int conn = psi_accept(0);
       if (conn < 0) return;
 
-      process_connection(conn);
-      psi_close(conn);
+      psi_spawn(handle_connection, conn);
    }
 }

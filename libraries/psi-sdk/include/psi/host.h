@@ -33,6 +33,22 @@ int psi_fstat(int fd, void* out);
 __attribute__((import_module("psi"), import_name("close")))
 void psi_close(int fd);
 
+/* ── High-performance I/O ─────────────────────────────────────────── */
+
+/* Zero-copy file-to-socket transfer.  Uses OS sendfile for plain TCP,
+ * falls back to buffered copy for TLS connections.
+ * Returns total bytes sent, or negative PsiError. */
+__attribute__((import_module("psi"), import_name("sendfile")))
+int psi_sendfile(int sock_fd, int file_fd, long long len);
+
+/* TCP cork: buffer small writes into one TCP segment.
+ * Call psi_cork before a burst of small writes, psi_uncork after. */
+__attribute__((import_module("psi"), import_name("cork")))
+void psi_cork(int fd);
+
+__attribute__((import_module("psi"), import_name("uncork")))
+void psi_uncork(int fd);
+
 /* ── UDP ─────────────────────────────────────────────────────────── */
 
 /* Peer address for recvfrom/sendto — 8 bytes, network byte order. */

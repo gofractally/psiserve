@@ -6,12 +6,19 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <climits>
 #include <cstring>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#ifdef __APPLE__
+#include <sys/types.h>
+#include <sys/uio.h>
+#endif
 
 namespace psiserve
 {
@@ -115,6 +122,10 @@ namespace psiserve
 
       RealFd real_conn{raw_conn};
 
+      // Set non-blocking — required for try-before-yield I/O pattern
+      int conn_flags = ::fcntl(raw_conn, F_GETFL, 0);
+      ::fcntl(raw_conn, F_SETFL, conn_flags | O_NONBLOCK);
+
       // TLS handshake if listener has an SSL_CTX
       SSL* ssl = nullptr;
       if (ssl_ctx)
@@ -208,13 +219,17 @@ namespace psiserve
          }
          else
          {
-            // Plain TCP
-            if (auto r = waitReady(*_sched, sock->real_fd, Readable); r.isErr())
-               return r;
-            ssize_t n = ::read(*sock->real_fd, dst, *len);
-            if (n < 0)
-               return PsiResult::fromErrno();
-            return PsiResult::ok(static_cast<int32_t>(n));
+            // Plain TCP — try first, yield only on EAGAIN
+            for (;;)
+            {
+               ssize_t n = ::read(*sock->real_fd, dst, *len);
+               if (n >= 0)
+                  return PsiResult::ok(static_cast<int32_t>(n));
+               if (errno != EAGAIN && errno != EWOULDBLOCK)
+                  return PsiResult::fromErrno();
+               if (auto r = waitReady(*_sched, sock->real_fd, Readable); r.isErr())
+                  return r;
+            }
          }
       }
       else if (auto* file = std::get_if<FileFd>(entry))
@@ -264,13 +279,17 @@ namespace psiserve
       }
       else
       {
-         // Plain TCP
-         if (auto r = waitReady(*_sched, sock->real_fd, Writable); r.isErr())
-            return r;
-         ssize_t n = ::write(*sock->real_fd, src, *len);
-         if (n < 0)
-            return PsiResult::fromErrno();
-         return PsiResult::ok(static_cast<int32_t>(n));
+         // Plain TCP — try first, yield only on EAGAIN
+         for (;;)
+         {
+            ssize_t n = ::write(*sock->real_fd, src, *len);
+            if (n >= 0)
+               return PsiResult::ok(static_cast<int32_t>(n));
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+               return PsiResult::fromErrno();
+            if (auto r = waitReady(*_sched, sock->real_fd, Writable); r.isErr())
+               return r;
+         }
       }
    }
 
@@ -289,7 +308,6 @@ namespace psiserve
       uint32_t    len        = *path_len;
 
       // Reject path traversal: no ".." components
-      // Check for ".." at start, "/.." anywhere, or lone ".."
       for (uint32_t i = 0; i + 1 < len; ++i)
       {
          if (path_start[i] == '.' && path_start[i + 1] == '.')
@@ -314,9 +332,41 @@ namespace psiserve
       std::memcpy(path_buf, path_start, len);
       path_buf[len] = '\0';
 
+#ifdef __linux__
+      // Linux: kernel-enforced sandbox via openat2 + RESOLVE_BENEATH.
+      // Rejects any path that escapes dir_fd's subtree, including via
+      // symlinks, ".." after symlink resolution, or mount-point traversal.
+      struct open_how how = {};
+      how.flags   = O_RDONLY;
+      how.resolve = RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS;
+      int raw_fd  = ::syscall(SYS_openat2, *dir->real_fd, path_buf, &how, sizeof(how));
+#else
+      // macOS: openat + post-open path verification.
       int raw_fd = ::openat(*dir->real_fd, path_buf, O_RDONLY);
+#endif
       if (raw_fd < 0)
          return PsiResult::fromErrno();
+
+#ifndef __linux__
+      // Verify the opened file's real path is under the sandbox directory.
+      // This catches symlink escapes that the string-level ".." check misses.
+      char real_path[PATH_MAX];
+      char dir_path[PATH_MAX];
+      if (::fcntl(raw_fd, F_GETPATH, real_path) < 0 ||
+          ::fcntl(*dir->real_fd, F_GETPATH, dir_path) < 0)
+      {
+         ::close(raw_fd);
+         return PsiResult::err(PsiError::bad_fd);
+      }
+
+      size_t dir_len = std::strlen(dir_path);
+      if (std::strncmp(real_path, dir_path, dir_len) != 0 ||
+          (real_path[dir_len] != '/' && real_path[dir_len] != '\0'))
+      {
+         ::close(raw_fd);
+         return PsiResult::err(PsiError::bad_fd);
+      }
+#endif
 
       VirtualFd vfd = _proc->fds.alloc(FileFd{RealFd{raw_fd}});
       if (vfd == invalid_virtual_fd)
@@ -413,6 +463,134 @@ namespace psiserve
          return;
 
       _sched->sleep(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now));
+   }
+
+   PsiResult HostApi::psiSendFile(VirtualFd sock_fd, VirtualFd file_fd, int64_t len)
+   {
+      auto* sock_entry = _proc->fds.get(sock_fd);
+      if (!sock_entry)
+         return PsiResult::err(PsiError::bad_fd);
+      auto* sock = std::get_if<SocketFd>(sock_entry);
+      if (!sock)
+         return PsiResult::err(PsiError::not_socket);
+
+      auto* file_entry = _proc->fds.get(file_fd);
+      if (!file_entry)
+         return PsiResult::err(PsiError::bad_fd);
+      auto* file = std::get_if<FileFd>(file_entry);
+      if (!file)
+         return PsiResult::err(PsiError::bad_fd);
+
+      int64_t total_sent = 0;
+
+      if (sock->ssl)
+      {
+         // TLS: can't use OS sendfile — must copy through user-space buffer
+         // for OpenSSL to encrypt.
+         char buf[32768];
+         while (total_sent < len)
+         {
+            size_t  chunk = std::min(static_cast<int64_t>(sizeof(buf)), len - total_sent);
+            ssize_t nr    = ::read(*file->real_fd, buf, chunk);
+            if (nr <= 0)
+               break;
+
+            int offset = 0;
+            while (offset < nr)
+            {
+               int nw = SSL_write(sock->ssl, buf + offset, static_cast<int>(nr - offset));
+               if (nw > 0)
+               {
+                  offset += nw;
+                  continue;
+               }
+               int err = SSL_get_error(sock->ssl, nw);
+               if (err == SSL_ERROR_WANT_WRITE)
+                  _sched->yield(sock->real_fd, Writable);
+               else if (err == SSL_ERROR_WANT_READ)
+                  _sched->yield(sock->real_fd, Readable);
+               else
+                  return PsiResult::ok(static_cast<int32_t>(total_sent));
+            }
+            total_sent += nr;
+         }
+      }
+      else
+      {
+         // Plain TCP: use OS sendfile for zero-copy transfer
+         while (total_sent < len)
+         {
+#ifdef __APPLE__
+            off_t sbytes = len - total_sent;
+            int   rc     = ::sendfile(*file->real_fd, *sock->real_fd,
+                                      total_sent, &sbytes, nullptr, 0);
+            if (sbytes > 0)
+               total_sent += sbytes;
+            if (rc < 0)
+            {
+               if (errno == EAGAIN || errno == EWOULDBLOCK)
+               {
+                  _sched->yield(sock->real_fd, Writable);
+                  continue;
+               }
+               break;
+            }
+#else
+            ssize_t n = ::sendfile(*sock->real_fd, *file->real_fd, nullptr,
+                                   static_cast<size_t>(len - total_sent));
+            if (n > 0)
+            {
+               total_sent += n;
+               continue;
+            }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            {
+               _sched->yield(sock->real_fd, Writable);
+               continue;
+            }
+            break;
+#endif
+         }
+      }
+
+      return PsiResult::ok(static_cast<int32_t>(total_sent));
+   }
+
+   void HostApi::psiCork(VirtualFd fd)
+   {
+      auto* entry = _proc->fds.get(fd);
+      if (!entry)
+         return;
+      auto* sock = std::get_if<SocketFd>(entry);
+      if (!sock)
+         return;
+
+#ifdef __APPLE__
+      // macOS: TCP_NOPUSH is the equivalent of TCP_CORK
+      int on = 1;
+      ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_NOPUSH, &on, sizeof(on));
+#else
+      int on = 1;
+      ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_CORK, &on, sizeof(on));
+#endif
+   }
+
+   void HostApi::psiUncork(VirtualFd fd)
+   {
+      auto* entry = _proc->fds.get(fd);
+      if (!entry)
+         return;
+      auto* sock = std::get_if<SocketFd>(entry);
+      if (!sock)
+         return;
+
+#ifdef __APPLE__
+      int off = 0;
+      ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_NOPUSH, &off, sizeof(off));
+#else
+      int off = 0;
+      ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_CORK, &off, sizeof(off));
+#endif
    }
 
    PsiResult HostApi::psiUdpBind(int32_t port)
