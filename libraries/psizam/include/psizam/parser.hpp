@@ -781,11 +781,21 @@ namespace psizam {
          }
 
          if (*code == opcodes::end) {
-            // Simple single-instruction expression
-            if (ie.opcode == opcodes::i32_const || ie.opcode == opcodes::get_global)
-               PSIZAM_ASSERT(type == types::i32 || type == types::i64 || type == types::funcref || type == types::externref, wasm_parse_exception, "type mismatch in initializer");
-            if (ie.opcode == opcodes::i64_const)
-               PSIZAM_ASSERT(type == types::i64, wasm_parse_exception, "expected i64 initializer");
+            // Simple single-instruction expression — validate type consistency
+            switch (ie.opcode) {
+               case opcodes::i32_const:
+                  PSIZAM_ASSERT(type == types::i32, wasm_parse_exception, "expected i32 initializer");
+                  break;
+               case opcodes::i64_const:
+                  PSIZAM_ASSERT(type == types::i64, wasm_parse_exception, "expected i64 initializer");
+                  break;
+               case opcodes::get_global:
+                  // global.get type is validated elsewhere (the referenced global's type must match)
+                  break;
+               default:
+                  // f32_const, f64_const, v128_const, ref_null, ref_func — already validated above
+                  break;
+            }
             ++code; // consume end
             return;
          }

@@ -247,6 +247,7 @@ namespace psizam {
          }
 
          // reset tables (multi-table support)
+         _extra_tables.clear();
          _table_data.resize(mod.tables.size());
          _table_sizes.resize(mod.tables.size());
          for (uint32_t t = 0; t < mod.tables.size(); ++t) {
@@ -257,12 +258,11 @@ namespace psizam {
                char* table_location = _linear_memory + wasm_allocator::table_offset();
                table_entry* table_start;
                if (_mod->indirect_table(0)) {
-                  if (!_alt_table) {
-                     _alt_table.reset(new table_entry[tsize]);
-                  }
+                  _alt_table.reset(new table_entry[tsize]);
                   table_start = _alt_table.get();
                   std::memcpy(table_location, &table_start, sizeof(table_start));
                } else {
+                  _alt_table.reset();
                   table_start = new (table_location) table_entry[tsize];
                }
                std::memset(table_start, 0xff, tsize * sizeof(table_entry));

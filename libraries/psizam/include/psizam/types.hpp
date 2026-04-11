@@ -100,64 +100,77 @@ namespace psizam {
             }
             return value;
          }
-         // Mini stack machine for extended const expressions
-         int64_t stack[8];
+         // Mini stack machine for extended const expressions.
+         // Max depth is bounded by the parser (only const/global.get push, add/sub/mul are net-zero).
+         static constexpr int max_stack = 16;
+         int64_t stack[max_stack];
          int sp = 0;
          size_t pos = 0;
+         auto read_leb_i32 = [&]() -> int32_t {
+            int32_t v = 0;
+            unsigned shift = 0;
+            uint8_t b;
+            do {
+               assert(pos < raw_expr.size());
+               b = raw_expr[pos++];
+               v |= static_cast<int32_t>(b & 0x7f) << shift;
+               shift += 7;
+            } while (b & 0x80);
+            if (shift < 32 && (b & 0x40))
+               v |= -(static_cast<int32_t>(1) << shift);
+            return v;
+         };
+         auto read_leb_u32 = [&]() -> uint32_t {
+            uint32_t v = 0;
+            unsigned shift = 0;
+            uint8_t b;
+            do {
+               assert(pos < raw_expr.size());
+               b = raw_expr[pos++];
+               v |= static_cast<uint32_t>(b & 0x7f) << shift;
+               shift += 7;
+            } while (b & 0x80);
+            return v;
+         };
+         auto read_leb_i64 = [&]() -> int64_t {
+            int64_t v = 0;
+            unsigned shift = 0;
+            uint8_t b;
+            do {
+               assert(pos < raw_expr.size());
+               b = raw_expr[pos++];
+               v |= static_cast<int64_t>(b & 0x7f) << shift;
+               shift += 7;
+            } while (b & 0x80);
+            if (shift < 64 && (b & 0x40))
+               v |= -(static_cast<int64_t>(1) << shift);
+            return v;
+         };
+         auto push = [&](int64_t v) { assert(sp < max_stack); stack[sp++] = v; };
+         auto pop  = [&]() -> int64_t { assert(sp > 0); return stack[--sp]; };
          while (pos < raw_expr.size()) {
             uint8_t op = raw_expr[pos++];
             switch (op) {
-               case opcodes::i32_const: {
-                  int32_t v = 0;
-                  unsigned shift = 0;
-                  uint8_t b;
-                  do {
-                     b = raw_expr[pos++];
-                     v |= static_cast<int32_t>(b & 0x7f) << shift;
-                     shift += 7;
-                  } while (b & 0x80);
-                  if (shift < 32 && (b & 0x40))
-                     v |= -(static_cast<int32_t>(1) << shift);
-                  stack[sp++] = v;
-                  break;
-               }
-               case opcodes::i64_const: {
-                  int64_t v = 0;
-                  unsigned shift = 0;
-                  uint8_t b;
-                  do {
-                     b = raw_expr[pos++];
-                     v |= static_cast<int64_t>(b & 0x7f) << shift;
-                     shift += 7;
-                  } while (b & 0x80);
-                  if (shift < 64 && (b & 0x40))
-                     v |= -(static_cast<int64_t>(1) << shift);
-                  stack[sp++] = v;
-                  break;
-               }
+               case opcodes::i32_const: push(read_leb_i32()); break;
+               case opcodes::i64_const: push(read_leb_i64()); break;
                case opcodes::get_global: {
-                  uint32_t idx = 0;
-                  unsigned shift = 0;
-                  uint8_t b;
-                  do {
-                     b = raw_expr[pos++];
-                     idx |= static_cast<uint32_t>(b & 0x7f) << shift;
-                     shift += 7;
-                  } while (b & 0x80);
-                  stack[sp++] = globals[idx].value.i64;
+                  uint32_t idx = read_leb_u32();
+                  assert(idx < globals.size());
+                  push(globals[idx].value.i64);
                   break;
                }
-               case opcodes::i32_add: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = static_cast<int32_t>(static_cast<int32_t>(a) + static_cast<int32_t>(b)); break; }
-               case opcodes::i32_sub: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = static_cast<int32_t>(static_cast<int32_t>(a) - static_cast<int32_t>(b)); break; }
-               case opcodes::i32_mul: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = static_cast<int32_t>(static_cast<int32_t>(a) * static_cast<int32_t>(b)); break; }
-               case opcodes::i64_add: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = a + b; break; }
-               case opcodes::i64_sub: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = a - b; break; }
-               case opcodes::i64_mul: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = a * b; break; }
-               case opcodes::end: goto done;
-               default: break;
+               case opcodes::i32_add: { auto b = pop(); auto a = pop(); push(static_cast<int32_t>(static_cast<int32_t>(a) + static_cast<int32_t>(b))); break; }
+               case opcodes::i32_sub: { auto b = pop(); auto a = pop(); push(static_cast<int32_t>(static_cast<int32_t>(a) - static_cast<int32_t>(b))); break; }
+               case opcodes::i32_mul: { auto b = pop(); auto a = pop(); push(static_cast<int32_t>(static_cast<int32_t>(a) * static_cast<int32_t>(b))); break; }
+               case opcodes::i64_add: { auto b = pop(); auto a = pop(); push(a + b); break; }
+               case opcodes::i64_sub: { auto b = pop(); auto a = pop(); push(a - b); break; }
+               case opcodes::i64_mul: { auto b = pop(); auto a = pop(); push(a * b); break; }
+               case opcodes::end:
+               default:
+                  pos = raw_expr.size(); // exit loop
+                  break;
             }
          }
-         done:
          expr_value result;
          result.i64 = (sp > 0) ? stack[0] : 0;
          return result;
