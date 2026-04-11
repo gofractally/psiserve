@@ -560,7 +560,9 @@ namespace psizam {
          // Calling execute() with no `args` (i.e. `execute(host_type,jit_visitor,uint32_t)`) results in a "statement has no
          // effect [-Werror=unused-value]" warning on this line. Dissable warning.
          constexpr std::size_t args_count = (0 + ... + (to_wasm_type_v<TC, Args> == types::v128 ? 2 : 1));
-         native_value args_raw[args_count];
+         // Ensure at least 2 slots: LLVM entry wrapper stores v128 result (16 bytes) back into args_raw
+         constexpr std::size_t buf_count = args_count < 2 ? 2 : args_count;
+         native_value args_raw[buf_count];
          {
             native_value* p = args_raw;
             ((append_arg<TC>(static_cast<Args&&>(args), p)), ...);

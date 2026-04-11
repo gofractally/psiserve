@@ -25,6 +25,16 @@ void __psizam_global_set(void* ctx, uint32_t idx, int64_t value) {
    as_ctx(ctx).get_global(idx).value.i64 = value;
 }
 
+void __psizam_global_get_v128(void* ctx, uint32_t idx, void* out) {
+   auto& v = as_ctx(ctx).get_global(idx).value.v128;
+   std::memcpy(out, &v, 16);
+}
+
+void __psizam_global_set_v128(void* ctx, uint32_t idx, const void* in) {
+   auto& v = as_ctx(ctx).get_global(idx).value.v128;
+   std::memcpy(&v, in, 16);
+}
+
 int32_t __psizam_memory_size(void* ctx) {
    return as_ctx(ctx).current_linear_memory();
 }

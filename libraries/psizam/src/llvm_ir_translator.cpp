@@ -97,8 +97,10 @@ namespace psizam {
       }
 
       // Runtime helper function declarations
-      llvm::Function* rt_global_get    = nullptr;
-      llvm::Function* rt_global_set    = nullptr;
+      llvm::Function* rt_global_get       = nullptr;
+      llvm::Function* rt_global_set       = nullptr;
+      llvm::Function* rt_global_get_v128  = nullptr;
+      llvm::Function* rt_global_set_v128  = nullptr;
       llvm::Function* rt_memory_size   = nullptr;
       llvm::Function* rt_memory_grow   = nullptr;
       llvm::Function* rt_call_host     = nullptr;
@@ -130,6 +132,14 @@ namespace psizam {
          // void __psizam_global_set(void* ctx, uint32_t idx, int64_t value)
          rt_global_set = decl("__psizam_global_set",
             llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i64_ty}, false));
+
+         // void __psizam_global_get_v128(void* ctx, uint32_t idx, void* out)
+         rt_global_get_v128 = decl("__psizam_global_get_v128",
+            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, ptr_ty}, false));
+
+         // void __psizam_global_set_v128(void* ctx, uint32_t idx, const void* in)
+         rt_global_set_v128 = decl("__psizam_global_set_v128",
+            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, ptr_ty}, false));
 
          // int32_t __psizam_memory_size(void* ctx)
          rt_memory_size = decl("__psizam_memory_size",
@@ -396,6 +406,14 @@ namespace psizam {
                            sinst.type == types::v128 &&
                            sinst.dest != ir_vreg_none && sinst.dest < func.next_vreg) {
                   is_v128[sinst.dest] = true;
+               } else if (sinst.opcode == ir_op::global_get && sinst.type == types::v128 &&
+                           sinst.dest != ir_vreg_none && sinst.dest < func.next_vreg) {
+                  is_v128[sinst.dest] = true;
+               } else if (sinst.opcode == ir_op::select && sinst.type == types::v128) {
+                  if (sinst.dest != ir_vreg_none && sinst.dest < func.next_vreg)
+                     is_v128[sinst.dest] = true;
+                  if (sinst.sel.val1 < func.next_vreg) is_v128[sinst.sel.val1] = true;
+                  if (sinst.sel.val2 < func.next_vreg) is_v128[sinst.sel.val2] = true;
                }
             }
             // Pass 2: propagate through movs (repeat until stable)
@@ -1016,41 +1034,59 @@ namespace psizam {
 
                case ir_op::global_get: {
                   uint32_t gidx = inst.local.index;
-                  llvm::Value* raw = builder.CreateCall(rt_global_get,
-                     {ctx_ptr, builder.getInt32(gidx)});
-                  // Truncate/bitcast to the expected type
-                  llvm::Type* target_ty = ir_type_to_llvm(inst.type);
-                  llvm::Value* result;
-                  if (target_ty == i32_ty) {
-                     result = builder.CreateTrunc(raw, i32_ty);
-                  } else if (target_ty == f32_ty) {
-                     result = builder.CreateBitCast(builder.CreateTrunc(raw, i32_ty), f32_ty);
-                  } else if (target_ty == f64_ty) {
-                     result = builder.CreateBitCast(raw, f64_ty);
+                  if (inst.type == types::v128) {
+                     // v128 global: use pointer-based helper
+                     auto* tmp = builder.CreateAlloca(v128_ty);
+                     builder.CreateCall(rt_global_get_v128,
+                        {ctx_ptr, builder.getInt32(gidx), tmp});
+                     auto* val = builder.CreateLoad(v128_ty, tmp);
+                     store_v128(static_cast<uint16_t>(inst.dest), val);
                   } else {
-                     result = raw; // i64
+                     llvm::Value* raw = builder.CreateCall(rt_global_get,
+                        {ctx_ptr, builder.getInt32(gidx)});
+                     // Truncate/bitcast to the expected type
+                     llvm::Type* target_ty = ir_type_to_llvm(inst.type);
+                     llvm::Value* result;
+                     if (target_ty == i32_ty) {
+                        result = builder.CreateTrunc(raw, i32_ty);
+                     } else if (target_ty == f32_ty) {
+                        result = builder.CreateBitCast(builder.CreateTrunc(raw, i32_ty), f32_ty);
+                     } else if (target_ty == f64_ty) {
+                        result = builder.CreateBitCast(raw, f64_ty);
+                     } else {
+                        result = raw; // i64
+                     }
+                     store_vreg(inst.dest, result);
                   }
-                  store_vreg(inst.dest, result);
                   break;
                }
 
                case ir_op::global_set: {
                   uint32_t gidx = inst.local.index;
-                  llvm::Value* val = load_vreg(inst.local.src1);
-                  if (!val) break;
-                  // Extend/bitcast to i64 for the runtime helper
-                  llvm::Value* i64_val;
-                  if (val->getType() == i32_ty) {
-                     i64_val = builder.CreateZExt(val, i64_ty);
-                  } else if (val->getType() == f32_ty) {
-                     i64_val = builder.CreateZExt(builder.CreateBitCast(val, i32_ty), i64_ty);
-                  } else if (val->getType() == f64_ty) {
-                     i64_val = builder.CreateBitCast(val, i64_ty);
+                  if (inst.type == types::v128) {
+                     // v128 global: use pointer-based helper
+                     auto* val = load_v128(static_cast<uint16_t>(inst.local.src1), v128_ty);
+                     auto* tmp = builder.CreateAlloca(v128_ty);
+                     builder.CreateStore(val, tmp);
+                     builder.CreateCall(rt_global_set_v128,
+                        {ctx_ptr, builder.getInt32(gidx), tmp});
                   } else {
-                     i64_val = val;
+                     llvm::Value* val = load_vreg(inst.local.src1);
+                     if (!val) break;
+                     // Extend/bitcast to i64 for the runtime helper
+                     llvm::Value* i64_val;
+                     if (val->getType() == i32_ty) {
+                        i64_val = builder.CreateZExt(val, i64_ty);
+                     } else if (val->getType() == f32_ty) {
+                        i64_val = builder.CreateZExt(builder.CreateBitCast(val, i32_ty), i64_ty);
+                     } else if (val->getType() == f64_ty) {
+                        i64_val = builder.CreateBitCast(val, i64_ty);
+                     } else {
+                        i64_val = val;
+                     }
+                     builder.CreateCall(rt_global_set,
+                        {ctx_ptr, builder.getInt32(gidx), i64_val});
                   }
-                  builder.CreateCall(rt_global_set,
-                     {ctx_ptr, builder.getInt32(gidx), i64_val});
                   break;
                }
 
@@ -1061,13 +1097,25 @@ namespace psizam {
 
                case ir_op::select: {
                   llvm::Value* cond = load_vreg(inst.sel.cond);
-                  llvm::Value* val1 = load_vreg(inst.sel.val1);
-                  llvm::Value* val2 = load_vreg(inst.sel.val2);
-                  if (cond && val1 && val2) {
-                     llvm::Value* cmp = builder.CreateICmpNE(cond,
-                        llvm::Constant::getNullValue(cond->getType()));
-                     llvm::Value* result = builder.CreateSelect(cmp, val1, val2);
-                     store_vreg(inst.dest, result);
+                  if (inst.type == types::v128) {
+                     auto* v128_ty_local = llvm::FixedVectorType::get(builder.getInt64Ty(), 2);
+                     llvm::Value* val1 = load_v128(inst.sel.val1, v128_ty_local);
+                     llvm::Value* val2 = load_v128(inst.sel.val2, v128_ty_local);
+                     if (cond && val1 && val2) {
+                        llvm::Value* cmp = builder.CreateICmpNE(cond,
+                           llvm::Constant::getNullValue(cond->getType()));
+                        llvm::Value* result = builder.CreateSelect(cmp, val1, val2);
+                        store_v128(static_cast<uint16_t>(inst.dest), result);
+                     }
+                  } else {
+                     llvm::Value* val1 = load_vreg(inst.sel.val1);
+                     llvm::Value* val2 = load_vreg(inst.sel.val2);
+                     if (cond && val1 && val2) {
+                        llvm::Value* cmp = builder.CreateICmpNE(cond,
+                           llvm::Constant::getNullValue(cond->getType()));
+                        llvm::Value* result = builder.CreateSelect(cmp, val1, val2);
+                        store_vreg(inst.dest, result);
+                     }
                   }
                   break;
                }
@@ -2603,37 +2651,37 @@ namespace psizam {
 
                   // ── Splat ──
                   case simd_sub::i8x16_splat: {
-                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* scalar = load_vreg(inst.simd.addr);
                      auto* elem = convert_type(scalar, i8_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(16, elem), v128_ty));
                      break;
                   }
                   case simd_sub::i16x8_splat: {
-                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* scalar = load_vreg(inst.simd.addr);
                      auto* elem = convert_type(scalar, i16_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(8, elem), v128_ty));
                      break;
                   }
                   case simd_sub::i32x4_splat: {
-                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* scalar = load_vreg(inst.simd.addr);
                      auto* elem = convert_type(scalar, i32_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(4, elem), v128_ty));
                      break;
                   }
                   case simd_sub::i64x2_splat: {
-                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* scalar = load_vreg(inst.simd.addr);
                      auto* elem = convert_type(scalar, i64_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(2, elem), v128_ty));
                      break;
                   }
                   case simd_sub::f32x4_splat: {
-                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* scalar = load_vreg(inst.simd.addr);
                      auto* f = convert_type(scalar, f32_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(4, f), v128_ty));
                      break;
                   }
                   case simd_sub::f64x2_splat: {
-                     auto* scalar = load_vreg(inst.simd.offset);
+                     auto* scalar = load_vreg(inst.simd.addr);
                      auto* f = convert_type(scalar, f64_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateVectorSplat(2, f), v128_ty));
                      break;

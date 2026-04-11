@@ -71,8 +71,10 @@ namespace psizam {
          };
       };
 
-      add_sym("__psizam_global_get",     reinterpret_cast<void*>(&__psizam_global_get));
-      add_sym("__psizam_global_set",     reinterpret_cast<void*>(&__psizam_global_set));
+      add_sym("__psizam_global_get",       reinterpret_cast<void*>(&__psizam_global_get));
+      add_sym("__psizam_global_set",       reinterpret_cast<void*>(&__psizam_global_set));
+      add_sym("__psizam_global_get_v128",  reinterpret_cast<void*>(&__psizam_global_get_v128));
+      add_sym("__psizam_global_set_v128",  reinterpret_cast<void*>(&__psizam_global_set_v128));
       add_sym("__psizam_memory_size",    reinterpret_cast<void*>(&__psizam_memory_size));
       add_sym("__psizam_memory_grow",    reinterpret_cast<void*>(&__psizam_memory_grow));
       add_sym("__psizam_call_host",      reinterpret_cast<void*>(&__psizam_call_host));

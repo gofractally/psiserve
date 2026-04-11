@@ -32,7 +32,7 @@
 //   data.drop                    🟢     🟢       🟢        🟢      🟢
 //
 // SIMD (v128)
-//   full v128 ops                🟢     🟢       🟢        🟡      🟡
+//   full v128 ops                🟢     🟢       🟢        🟡      🟢
 //
 // REFERENCE TYPES
 //   ref.null / ref.is_null       🟢     🟢       🟢        🟢      🟢
@@ -68,6 +68,9 @@
 //
 // RELAXED SIMD
 //   relaxed simd ops             🟢     🟢       🟢        🟢      🟢
+//
+// MEMORY BOUNDS CHECKING
+//   OOB traps                   🟢     🟢       🟢        🟢      🔴
 //
 // KNOWN BUGS 🐛
 //   [B1] SIMD float ops incomplete on aarch64 softfloat (~60 spec failures)

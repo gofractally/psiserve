@@ -10,6 +10,8 @@ extern "C" {
    // Global variable access
    int64_t  __psizam_global_get(void* ctx, uint32_t idx);
    void     __psizam_global_set(void* ctx, uint32_t idx, int64_t value);
+   void     __psizam_global_get_v128(void* ctx, uint32_t idx, void* out);
+   void     __psizam_global_set_v128(void* ctx, uint32_t idx, const void* in);
 
    // Memory management
    int32_t  __psizam_memory_size(void* ctx);
