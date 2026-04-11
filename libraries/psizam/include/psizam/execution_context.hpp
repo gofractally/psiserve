@@ -579,6 +579,10 @@ namespace psizam {
                using llvm_entry_fn_t = int64_t(*)(void*, void*, native_value*);
                auto entry = reinterpret_cast<llvm_entry_fn_t>(
                   _mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset);
+               // Save call depth — LLVM code uses C++ exceptions for traps, which
+               // skip the generated depth_inc cleanup code during unwinding.
+               auto saved_call_depth = this->_remaining_call_depth;
+               auto depth_guard = scope_guard([&](){ this->_remaining_call_depth = saved_call_depth; });
                psizam::invoke_with_signal_handler([&]() {
                   result.scalar.i64 = entry(this, base_type::linear_memory(), args_raw);
                   // For v128 returns, the entry wrapper stores the full v128 into args_raw

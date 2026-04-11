@@ -86,6 +86,8 @@ namespace psizam {
       add_sym("__psizam_elem_drop",      reinterpret_cast<void*>(&__psizam_elem_drop));
       add_sym("__psizam_table_copy",     reinterpret_cast<void*>(&__psizam_table_copy));
       add_sym("__psizam_call_indirect",  reinterpret_cast<void*>(&__psizam_call_indirect));
+      add_sym("__psizam_call_depth_dec", reinterpret_cast<void*>(&__psizam_call_depth_dec));
+      add_sym("__psizam_call_depth_inc", reinterpret_cast<void*>(&__psizam_call_depth_inc));
       add_sym("__psizam_trap",           reinterpret_cast<void*>(&__psizam_trap));
 
       if (auto err = jd.define(llvm::orc::absoluteSymbols(std::move(runtime_syms)))) {

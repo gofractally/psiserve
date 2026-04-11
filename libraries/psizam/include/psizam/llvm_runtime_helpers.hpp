@@ -58,6 +58,12 @@ extern "C" {
    uint64_t __psizam_atomic_rmw(void* ctx, uint8_t sub, uint32_t addr, uint32_t offset,
                                  uint64_t val1, uint64_t val2);
 
+   // Call depth tracking
+   // Decrements remaining call depth by 1 and traps on overflow (stack overflow).
+   void __psizam_call_depth_dec(void* ctx);
+   // Increments remaining call depth by 1 (called on function return).
+   void __psizam_call_depth_inc(void* ctx);
+
    // Trap — throws a WASM trap exception. Does not return.
    [[noreturn]] void __psizam_trap(void* ctx, uint32_t trap_code);
    // trap codes: 0=unreachable, 1=div_by_zero, 2=int_overflow,

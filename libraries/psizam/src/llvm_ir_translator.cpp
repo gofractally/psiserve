@@ -118,6 +118,8 @@ namespace psizam {
       llvm::Function* rt_table_size    = nullptr;
       llvm::Function* rt_table_fill    = nullptr;
       llvm::Function* rt_trap           = nullptr;
+      llvm::Function* rt_call_depth_dec = nullptr;
+      llvm::Function* rt_call_depth_inc = nullptr;
 
       void declare_runtime_helpers() {
          auto decl = [&](const char* name, llvm::FunctionType* ty) -> llvm::Function* {
@@ -212,6 +214,14 @@ namespace psizam {
          rt_trap = decl("__psizam_trap",
             llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty}, false));
          rt_trap->setDoesNotReturn();
+
+         // void __psizam_call_depth_dec(void* ctx) — decrements and traps on overflow
+         rt_call_depth_dec = decl("__psizam_call_depth_dec",
+            llvm::FunctionType::get(void_ty, {ptr_ty}, false));
+
+         // void __psizam_call_depth_inc(void* ctx) — increments on return
+         rt_call_depth_inc = decl("__psizam_call_depth_inc",
+            llvm::FunctionType::get(void_ty, {ptr_ty}, false));
       }
 
       llvm::Type* wasm_type_to_llvm(uint8_t wt) {
@@ -1140,6 +1150,9 @@ namespace psizam {
                   uint32_t funcnum = inst.call.index;
                   uint32_t num_imports = wasm_mod.get_imported_functions_size();
 
+                  // Call depth tracking for all calls (host and WASM)
+                  builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
+
                   if (funcnum < num_imports) {
                      // Host function call — go through runtime helper
                      uint32_t nargs = static_cast<uint32_t>(call_args.size());
@@ -1215,6 +1228,8 @@ namespace psizam {
                         }
                      }
                   }
+                  // Restore call depth after either host or WASM call
+                  builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
                   break;
                }
 
@@ -1258,9 +1273,13 @@ namespace psizam {
                         table_elem = builder.CreateTrunc(table_elem, i32_ty);
                   }
 
+                  builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
+
                   llvm::Value* raw = builder.CreateCall(rt_call_indirect,
                      {ctx_ptr, mem_ptr, builder.getInt32(type_idx),
                       table_elem, args_array, builder.getInt32(nargs)});
+
+                  builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
 
                   if (inst.dest != ir_vreg_none) {
                      llvm::Type* target_ty = ir_type_to_llvm(inst.type);

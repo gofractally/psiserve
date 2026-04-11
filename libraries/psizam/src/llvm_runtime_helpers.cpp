@@ -137,6 +137,24 @@ int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
    }
 }
 
+void __psizam_call_depth_dec(void* ctx) {
+   auto& c = as_ctx(ctx);
+   uint32_t depth = c.get_remaining_call_depth();
+   if (depth == 0) {
+      throw psizam::wasm_interpreter_exception{"stack overflow"};
+   }
+   uint32_t new_depth = depth - 1;
+   c.set_max_call_depth(new_depth);
+   if (new_depth == 0) {
+      throw psizam::wasm_interpreter_exception{"stack overflow"};
+   }
+}
+
+void __psizam_call_depth_inc(void* ctx) {
+   auto& c = as_ctx(ctx);
+   c.set_max_call_depth(c.get_remaining_call_depth() + 1);
+}
+
 void __psizam_trap(void* ctx, uint32_t trap_code) {
    switch (trap_code) {
       case 0:  throw psizam::wasm_interpreter_exception{"unreachable"};
