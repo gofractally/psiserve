@@ -289,7 +289,7 @@ namespace psizam {
          const auto& data_seg = mod.data[x];
          auto data_len = _dropped_data[x]? 0 : data_seg.data.size();
          if (std::uint64_t{s} + n > data_len)
-            throw_<wasm_memory_exception>("data out of range");
+            signal_throw<wasm_memory_exception>("data out of range");
          void* dest = get_interface().template validate_pointer<unsigned char>(d, n);
          if (data_len)
             std::memcpy(dest, data_seg.data.data() + s, n);
@@ -323,9 +323,9 @@ namespace psizam {
          const auto& elem_seg = mod.elements[x];
          auto elem_len = _dropped_elems[x]? 0 : elem_seg.elems.size();
          if (std::uint64_t{s} + n > elem_len)
-            throw_<wasm_memory_exception>("elem out of range");
+            signal_throw<wasm_memory_exception>("elem out of range");
          if (std::uint64_t{d} + n > _table_sizes[table_idx])
-            throw_<wasm_memory_exception>("wasm memory out-of-bounds");
+            signal_throw<wasm_memory_exception>("wasm memory out-of-bounds");
          if (elem_len)
             std::memcpy(get_table_base(table_idx) + d, elem_seg.elems.data() + s, n * sizeof(table_entry));
       }
@@ -338,7 +338,7 @@ namespace psizam {
 
       table_entry* get_table_ptr(uint32_t base, uint32_t size, uint32_t table_idx = 0) {
          if (std::uint64_t{base} + size > _table_sizes[table_idx])
-            throw_<wasm_memory_exception>("table out of range");
+            signal_throw<wasm_memory_exception>("table out of range");
          return get_table_base(table_idx) + base;
       }
 
@@ -380,7 +380,7 @@ namespace psizam {
       // table.fill: fill n entries starting at i with value val
       void table_fill(uint32_t table_idx, uint32_t i, table_entry val, uint32_t n) {
          if (std::uint64_t{i} + n > _table_sizes[table_idx])
-            throw_<wasm_memory_exception>("table out of range");
+            signal_throw<wasm_memory_exception>("table out of range");
          auto* base = get_table_base(table_idx);
          for (uint32_t j = 0; j < n; ++j)
             base[i + j] = val;
@@ -1189,6 +1189,7 @@ namespace psizam {
             PSIZAM_RETURN_OP(CREATE_TABLE_ENTRY)
             PSIZAM_CALL_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_CALL_IMM_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_EH_CATCH_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_PARAMETRIC_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_VARIABLE_ACCESS_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_MEMORY_OPS(CREATE_TABLE_ENTRY)
@@ -1224,6 +1225,7 @@ namespace psizam {
              PSIZAM_RETURN_OP(CREATE_LABEL);
              PSIZAM_CALL_OPS(CREATE_LABEL);
              PSIZAM_CALL_IMM_OPS(CREATE_LABEL);
+             PSIZAM_EH_CATCH_OPS(CREATE_LABEL);
              PSIZAM_PARAMETRIC_OPS(CREATE_LABEL);
              PSIZAM_VARIABLE_ACCESS_OPS(CREATE_LABEL);
              PSIZAM_MEMORY_OPS(CREATE_LABEL);
@@ -1267,11 +1269,27 @@ namespace psizam {
          bool     exiting          = false;
       };
 
+      // Exception handler entry for WASM EH
+      struct eh_handler {
+         uint32_t tag_index;      // tag to catch (UINT32_MAX = catch_all)
+         uint32_t catch_pc;       // bitcode PC of catch handler
+         uint32_t operand_depth;  // operand stack depth to restore
+         uint32_t call_depth;     // call stack depth at try entry
+      };
+
+      // WASM exception payload
+      struct wasm_exception_t {
+         uint32_t tag_index = UINT32_MAX;
+         std::vector<uint64_t> values;  // payload values
+      };
+
       execution_state _state;
       uint32_t                        _last_op_index    = 0;
       call_stack                      _as;
       opcode                          _halt;
       void*                           _host = nullptr;
       uint32_t                        _remaining_call_depth;
+      std::vector<eh_handler>         _eh_stack;       // exception handler stack
+      std::vector<wasm_exception_t>   _eh_exn_stack;   // caught exception stack (for rethrow)
    };
 } // namespace psizam

@@ -1082,6 +1082,37 @@ namespace psizam {
          }
       }
 
+      // ──── Exception handling ────
+      void emit_try(uint8_t = 0x40, uint32_t = 0) {} // structural, like block
+      void* emit_catch(uint32_t /*tag_index*/) {
+         // During normal flow, catch acts like else — jump to end
+         COUNT_INSTR();
+         auto icount = fixed_size_instr(5);
+         void* result = emit_br(0, types::pseudo);
+         set_branch_target();
+         return result;
+      }
+      void* emit_catch_all() {
+         COUNT_INSTR();
+         auto icount = fixed_size_instr(5);
+         void* result = emit_br(0, types::pseudo);
+         set_branch_target();
+         return result;
+      }
+      void emit_throw(uint32_t /*tag_index*/) {
+         COUNT_INSTR();
+         auto icount = fixed_size_instr(16);
+         emit_error_handler(&on_unreachable);
+      }
+      void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
+         COUNT_INSTR();
+         auto icount = fixed_size_instr(16);
+         emit_error_handler(&on_unreachable);
+      }
+      void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
+         // delegate acts as end of try — structural no-op in JIT
+      }
+
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
          COUNT_INSTR();
          auto icount = variable_size_instr(25, 43);
@@ -6838,14 +6869,14 @@ namespace psizam {
       static uint32_t table_get_helper(void* ctx, uint32_t table_idx, uint32_t elem_idx) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          if (elem_idx >= context->get_table_size(table_idx))
-            psizam::throw_<wasm_interpreter_exception>("table index out of range");
+            psizam::signal_throw<wasm_interpreter_exception>("table index out of range");
          return context->get_table_base(table_idx)[elem_idx].index;
       }
 
       static void table_set_helper(void* ctx, uint32_t table_idx, uint32_t elem_idx, uint32_t val) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          if (elem_idx >= context->get_table_size(table_idx))
-            psizam::throw_<wasm_interpreter_exception>("table index out of range");
+            psizam::signal_throw<wasm_interpreter_exception>("table index out of range");
          auto& entry = context->get_table_base(table_idx)[elem_idx];
          entry.index = val;
          entry.type = UINT32_MAX;
@@ -6972,13 +7003,13 @@ namespace psizam {
          }
       }
 
-      static void on_memory_error() { throw_<wasm_memory_exception>("wasm memory out-of-bounds"); }
+      static void on_memory_error() { signal_throw<wasm_memory_exception>("wasm memory out-of-bounds"); }
 
-      static void on_unreachable() { psizam::throw_<wasm_interpreter_exception>( "unreachable" ); }
-      static void on_fp_error() { psizam::throw_<wasm_interpreter_exception>( "floating point error" ); }
-      static void on_call_indirect_error() { psizam::throw_<wasm_interpreter_exception>( "call_indirect out of range" ); }
-      static void on_type_error() { psizam::throw_<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
-      static void on_stack_overflow() { psizam::throw_<wasm_interpreter_exception>( "stack overflow" ); }
+      static void on_unreachable() { psizam::signal_throw<wasm_interpreter_exception>( "unreachable" ); }
+      static void on_fp_error() { psizam::signal_throw<wasm_interpreter_exception>( "floating point error" ); }
+      static void on_call_indirect_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect out of range" ); }
+      static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
+      static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>( "stack overflow" ); }
    };
    
 }

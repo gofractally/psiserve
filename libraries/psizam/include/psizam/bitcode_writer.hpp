@@ -55,6 +55,32 @@ namespace psizam {
          return &instr.pc;
       }
 
+      // Exception handling
+      void emit_try(uint8_t = 0x40, uint32_t = 0) {}
+      // catch emits a catch_t with pc pointing to the catch handler, tag_index in data
+      uint32_t* emit_catch(uint32_t tag_index) {
+         auto& instr = append_instr(catch_t{});
+         instr.data = tag_index;
+         return &instr.pc;
+      }
+      uint32_t* emit_catch_all() {
+         auto& instr = append_instr(catch_all_t{});
+         instr.data = UINT32_MAX; // marker for catch_all
+         return &instr.pc;
+      }
+      void emit_throw(uint32_t tag_index) {
+         auto& instr = append_instr(throw_t{});
+         instr.data = tag_index;
+      }
+      void emit_rethrow(uint32_t depth_change, uint8_t rt, uint32_t label, uint32_t result_count = UINT32_MAX) {
+         auto& instr = append_instr(rethrow_t{});
+         instr.data = label; // catch label depth
+      }
+      void emit_delegate(uint32_t depth_change, uint8_t rt, uint32_t label, uint32_t result_count = UINT32_MAX) {
+         auto& instr = append_instr(delegate_t{});
+         instr.data = label;
+      }
+
       struct br_table_parser;
       friend struct br_table_parser;
       struct br_table_parser {

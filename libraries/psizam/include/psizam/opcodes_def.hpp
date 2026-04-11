@@ -11,10 +11,10 @@
    opcode_macro(loop, 0x03)                     \
    opcode_macro(if_, 0x04)                      \
    opcode_macro(else_, 0x05)                    \
-   opcode_macro(padding_cf_0, 0x06)             \
-   opcode_macro(padding_cf_1, 0x07)             \
-   opcode_macro(padding_cf_2, 0x08)             \
-   opcode_macro(padding_cf_3, 0x09)             \
+   opcode_macro(try_, 0x06)                     \
+   opcode_macro(catch_, 0x07)                   \
+   opcode_macro(throw_, 0x08)                   \
+   opcode_macro(rethrow_, 0x09)                 \
    opcode_macro(padding_cf_4, 0x0A)             \
    opcode_macro(end, 0x0B)                      \
    opcode_macro(br, 0x0C)                       \
@@ -32,9 +32,10 @@
    opcode_macro(call_indirect_imm, 0x14)        \
    opcode_macro(padding_call_1, 0x15)           \
    opcode_macro(padding_call_2, 0x16)           \
-   opcode_macro(padding_call_3, 0x17)           \
-   opcode_macro(padding_call_4, 0x18)           \
-   opcode_macro(padding_call_5, 0x19)
+   opcode_macro(padding_call_3, 0x17)
+#define PSIZAM_EH_CATCH_OPS(opcode_macro)       \
+   opcode_macro(catch_all_, 0x18)               \
+   opcode_macro(delegate_, 0x19)
 #define PSIZAM_PARAMETRIC_OPS(opcode_macro)     \
    opcode_macro(drop, 0x1A)                     \
    opcode_macro(select, 0x1B)                   \
@@ -582,6 +583,12 @@
 #define PSIZAM_OPCODE_NAME_if_
 #define PSIZAM_OPCODE_NAME_else_
 #define PSIZAM_OPCODE_NAME_return_
+#define PSIZAM_OPCODE_NAME_try_
+#define PSIZAM_OPCODE_NAME_catch_
+#define PSIZAM_OPCODE_NAME_throw_
+#define PSIZAM_OPCODE_NAME_rethrow_
+#define PSIZAM_OPCODE_NAME_catch_all_
+#define PSIZAM_OPCODE_NAME_delegate_
 
 #define PSIZAM_OPCODE_NAME_TEST() 1
 #define PSIZAM_OPCODE_NAME_TEST_PSIZAM_OPCODE_NAME_TEST 0,

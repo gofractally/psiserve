@@ -28,7 +28,7 @@ TEST_CASE("Testing throw", "[signal_handler_throw]") {
    psizam::growable_allocator code_alloc;
    psizam::wasm_allocator wasm_alloc;
    CHECK_THROWS_AS(psizam::invoke_with_signal_handler([](){
-      psizam::throw_<psizam::wasm_exit_exception>( "Exiting" );
+      psizam::signal_throw<psizam::wasm_exit_exception>( "Exiting" );
    }, [](int){}, code_alloc, &wasm_alloc), psizam::wasm_exit_exception);
 }
 

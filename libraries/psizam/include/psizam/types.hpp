@@ -20,7 +20,7 @@
 namespace psizam {
    enum types { i32 = 0x7f, i64 = 0x7e, f32 = 0x7d, f64 = 0x7c, v128 = 0x7b, anyfunc = 0x70, funcref = anyfunc, externref = 0x6f, func = 0x60, pseudo = 0x40, ret_void };
 
-   enum external_kind { Function = 0, Table = 1, Memory = 2, Global = 3 };
+   enum external_kind { Function = 0, Table = 1, Memory = 2, Global = 3, Tag = 4 };
 
    typedef uint8_t value_type;
    typedef uint8_t block_type;
@@ -115,6 +115,11 @@ namespace psizam {
 
    struct memory_type {
       resizable_limits limits;
+   };
+
+   struct tag_type {
+      uint8_t  attribute;   // always 0 (exception)
+      uint32_t type_index;  // index into module.types (params = exception payload)
    };
 
    union import_type {
@@ -217,6 +222,7 @@ namespace psizam {
       std::vector<elem_segment>       elements;
       std::vector<function_body>      code;
       std::vector<data_segment>       data;
+      std::vector<tag_type>           tags;
 
       // Custom sections:
       std::optional<name_section> names;

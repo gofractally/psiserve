@@ -18,6 +18,12 @@ namespace psizam {
       [[gnu::always_inline]] inline void operator()(const br_t& ) {}
       [[gnu::always_inline]] inline void operator()(const br_if_t& ) {}
       [[gnu::always_inline]] inline void operator()(const br_table_t& ) {}
+      [[gnu::always_inline]] inline void operator()(const try_t& ) {}
+      [[gnu::always_inline]] inline void operator()(const catch_t& ) {}
+      [[gnu::always_inline]] inline void operator()(const throw_t& ) {}
+      [[gnu::always_inline]] inline void operator()(const rethrow_t& ) {}
+      [[gnu::always_inline]] inline void operator()(const catch_all_t& ) {}
+      [[gnu::always_inline]] inline void operator()(const delegate_t& ) {}
       [[gnu::always_inline]] inline void operator()(const call_t& ) {}
       [[gnu::always_inline]] inline void operator()(const call_indirect_t& ) {}
       [[gnu::always_inline]] inline void operator()(const drop_t& ) {}

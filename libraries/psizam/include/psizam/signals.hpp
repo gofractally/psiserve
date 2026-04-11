@@ -145,7 +145,7 @@ namespace psizam {
    }
 
    template<typename E>
-   [[noreturn]] inline void throw_(const char* msg) {
+   [[noreturn]] inline void signal_throw(const char* msg) {
       saved_exception = std::make_exception_ptr(E{msg});
       sigset_t block_mask;
       sigemptyset(&block_mask);

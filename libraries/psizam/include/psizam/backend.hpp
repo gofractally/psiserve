@@ -50,7 +50,7 @@
 //   mutable global import        🟢     🟢       🟢        🟢      🟢
 //
 // EXCEPTION HANDLING
-//   try/catch/throw              🔴     🔴       🔴        🔴      🔴
+//   try/catch/throw              🟢     🟢       🟢        🟢      🟢
 //
 // THREADS / ATOMICS
 //   atomic ops                   🟢     🟢       🟢        🟢      🟢

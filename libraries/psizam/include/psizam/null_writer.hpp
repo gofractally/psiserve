@@ -475,6 +475,14 @@ class null_writer {
    void emit_table_fill(std::uint32_t) {}
    void emit_atomic_op(atomic_sub, uint32_t, uint32_t) {}
 
+   // Exception handling
+   void emit_try(uint8_t = 0x40, uint32_t = 0) {}
+   branch_t emit_catch(uint32_t) { return {}; }
+   branch_t emit_catch_all() { return {}; }
+   void emit_throw(uint32_t) {}
+   void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {}
+   void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {}
+
    void fix_branch(branch_t, label_t) {}
    void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& /*locals*/, uint32_t /*idx*/) {}
    void emit_epilogue(const func_type& /*ft*/, const std::vector<local_entry>& /*locals*/, uint32_t /*idx*/) {}

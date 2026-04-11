@@ -3051,6 +3051,45 @@ namespace psizam {
          context.table_fill(op.index, i, te, n);
          context.inc_pc();
       }
+
+      // ── Exception handling ──
+      [[gnu::always_inline]] inline void operator()(const try_t& op) {
+         // try acts like block but pushes a handler.
+         // The bitcode for the try body is followed by catch/catch_all/end.
+         // op.pc points to the first catch handler (or end if no catch).
+         // op.data holds the number of catch clauses that follow.
+         // We register each catch target later when we encounter catch/catch_all opcodes.
+         // For now, just advance PC. The parser emits catch_t opcodes inline.
+         context.inc_pc();
+      }
+
+      [[gnu::always_inline]] inline void operator()(const catch_t& op) {
+         // Reached during normal flow (try body completed without exception).
+         // Jump past all catch handlers to the end.
+         context.set_relative_pc(op.pc);
+      }
+
+      [[gnu::always_inline]] inline void operator()(const throw_t& op) {
+         context.inc_pc();
+         // For a minimal EH implementation, throw traps unconditionally.
+         // A full implementation would search _eh_stack for matching handlers.
+         throw wasm_interpreter_exception{ "unhandled wasm exception" };
+      }
+
+      [[gnu::always_inline]] inline void operator()(const rethrow_t& op) {
+         context.inc_pc();
+         throw wasm_interpreter_exception{ "unhandled wasm exception (rethrow)" };
+      }
+
+      [[gnu::always_inline]] inline void operator()(const catch_all_t& op) {
+         // Reached during normal flow — jump to end
+         context.set_relative_pc(op.pc);
+      }
+
+      [[gnu::always_inline]] inline void operator()(const delegate_t& op) {
+         // Reached during normal flow — acts as end of try block
+         context.inc_pc();
+      }
    };
 
 } // namespace psizam

@@ -6218,7 +6218,7 @@ namespace psizam {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->grow_linear_memory(pages);
       }
-      static void on_memory_error() { throw_<wasm_memory_exception>("wasm memory out-of-bounds"); }
+      static void on_memory_error() { signal_throw<wasm_memory_exception>("wasm memory out-of-bounds"); }
 
       // Bulk memory helpers with explicit bounds checking.
       // Called via longjmp_on_exception since they may throw.
@@ -6228,7 +6228,7 @@ namespace psizam {
             uint64_t end = static_cast<uint64_t>(dest) + count;
             uint64_t mem_size = static_cast<uint64_t>(context->current_linear_memory()) * 65536ULL;
             if (end > mem_size)
-               throw_<wasm_memory_exception>("memory.fill out of bounds");
+               signal_throw<wasm_memory_exception>("memory.fill out of bounds");
             if (count > 0)
                std::memset(context->linear_memory() + dest, static_cast<uint8_t>(val), count);
          });
@@ -6241,7 +6241,7 @@ namespace psizam {
             uint64_t dst_end = static_cast<uint64_t>(dest) + count;
             uint64_t mem_size = static_cast<uint64_t>(context->current_linear_memory()) * 65536ULL;
             if (src_end > mem_size || dst_end > mem_size)
-               throw_<wasm_memory_exception>("memory.copy out of bounds");
+               signal_throw<wasm_memory_exception>("memory.copy out of bounds");
             if (count > 0)
                std::memmove(context->linear_memory() + dest, context->linear_memory() + src, count);
          });
@@ -6288,8 +6288,8 @@ namespace psizam {
          });
       }
 
-      static void on_unreachable() { psizam::throw_<wasm_interpreter_exception>("unreachable"); }
-      static void on_fp_error() { psizam::throw_<wasm_interpreter_exception>("floating point error"); }
+      static void on_unreachable() { psizam::signal_throw<wasm_interpreter_exception>("unreachable"); }
+      static void on_fp_error() { psizam::signal_throw<wasm_interpreter_exception>("floating point error"); }
 
       // Saturating float-to-int conversions for trunc_sat (no trap, clamp to min/max, NaN→0)
       static uint64_t trunc_sat_f32_i32s(uint64_t v) { float f; memcpy(&f, &v, 4); if (f != f) return 0; if (f >= 2147483648.0f) return (uint32_t)INT32_MAX; if (f <= -2147483649.0f) return (uint32_t)INT32_MIN; return (uint32_t)(int32_t)f; }
@@ -6310,9 +6310,9 @@ namespace psizam {
       static uint64_t trunc_f32_i64u(uint64_t v) { uint64_t r = 0; float f; memcpy(&f, &v, 4); psizam::longjmp_on_exception([&](){ r = static_cast<uint64_t>(_psizam_f32_trunc_i64u(f)); }); return r; }
       static uint64_t trunc_f64_i64s(uint64_t v) { uint64_t r = 0; double f; memcpy(&f, &v, 8); psizam::longjmp_on_exception([&](){ r = static_cast<uint64_t>(_psizam_f64_trunc_i64s(f)); }); return r; }
       static uint64_t trunc_f64_i64u(uint64_t v) { uint64_t r = 0; double f; memcpy(&f, &v, 8); psizam::longjmp_on_exception([&](){ r = static_cast<uint64_t>(_psizam_f64_trunc_i64u(f)); }); return r; }
-      static void on_call_indirect_error() { psizam::throw_<wasm_interpreter_exception>("call_indirect out of range"); }
-      static void on_type_error() { psizam::throw_<wasm_interpreter_exception>("call_indirect incorrect function type"); }
-      static void on_stack_overflow() { psizam::throw_<wasm_interpreter_exception>("stack overflow"); }
+      static void on_call_indirect_error() { psizam::signal_throw<wasm_interpreter_exception>("call_indirect out of range"); }
+      static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>("call_indirect incorrect function type"); }
+      static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>("stack overflow"); }
 
       // ──────── State ────────
       growable_allocator& _allocator;        // code only (executable, permanent)

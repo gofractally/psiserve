@@ -3423,12 +3423,12 @@ namespace psizam {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->grow_linear_memory(pages);
       }
-      static void on_memory_error() { throw_<wasm_memory_exception>("wasm memory out-of-bounds"); }
-      static void on_unreachable() { psizam::throw_<wasm_interpreter_exception>("unreachable"); }
-      static void on_fp_error() { psizam::throw_<wasm_interpreter_exception>("floating point error"); }
-      static void on_call_indirect_error() { psizam::throw_<wasm_interpreter_exception>("call_indirect out of range"); }
-      static void on_type_error() { psizam::throw_<wasm_interpreter_exception>("call_indirect incorrect function type"); }
-      static void on_stack_overflow() { psizam::throw_<wasm_interpreter_exception>("stack overflow"); }
+      static void on_memory_error() { signal_throw<wasm_memory_exception>("wasm memory out-of-bounds"); }
+      static void on_unreachable() { psizam::signal_throw<wasm_interpreter_exception>("unreachable"); }
+      static void on_fp_error() { psizam::signal_throw<wasm_interpreter_exception>("floating point error"); }
+      static void on_call_indirect_error() { psizam::signal_throw<wasm_interpreter_exception>("call_indirect out of range"); }
+      static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>("call_indirect incorrect function type"); }
+      static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>("stack overflow"); }
 
       // Bulk memory/table runtime helpers
       static void memory_init_impl(void* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
@@ -3474,7 +3474,7 @@ namespace psizam {
             char* mem = context->linear_memory();
             uint32_t mem_size = static_cast<uint32_t>(context->current_linear_memory()) * 65536u;
             if (uint64_t(dest) + count > mem_size || uint64_t(src) + count > mem_size)
-               psizam::throw_<wasm_memory_exception>("out of bounds memory access");
+               psizam::signal_throw<wasm_memory_exception>("out of bounds memory access");
             if (count > 0)
                std::memmove(mem + dest, mem + src, count);
          });
@@ -3485,7 +3485,7 @@ namespace psizam {
             char* mem = context->linear_memory();
             uint32_t mem_size = static_cast<uint32_t>(context->current_linear_memory()) * 65536u;
             if (uint64_t(dest) + count > mem_size)
-               psizam::throw_<wasm_memory_exception>("out of bounds memory access");
+               psizam::signal_throw<wasm_memory_exception>("out of bounds memory access");
             if (count > 0)
                std::memset(mem + dest, static_cast<uint8_t>(val), count);
          });

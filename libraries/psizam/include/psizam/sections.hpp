@@ -15,6 +15,7 @@ namespace psizam {
       code_section       = 10,
       data_section       = 11,
       data_count_section = 12,
+      tag_section        = 13,
       num_of_elems
    };
 } // namespace psizam

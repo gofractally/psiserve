@@ -1920,6 +1920,46 @@ namespace psizam {
          }
       }
 
+      // ──── Exception handling ────
+      void emit_try(uint8_t result_type = types::pseudo, uint32_t result_count = 0) {
+         // Treat as block
+         emit_block(result_type, result_count);
+      }
+      branch_t emit_catch(uint32_t /*tag_index*/) {
+         // During normal flow, emit a jump to the end (like else)
+         // Then start a new basic block for the catch handler
+         ir_inst inst{};
+         inst.opcode = ir_op::br;
+         inst.type = types::pseudo;
+         inst.flags = IR_SIDE_EFFECT;
+         inst.dest = ir_vreg_none;
+         inst.br.target = UINT32_MAX;
+         uint32_t inst_idx = _func->current_inst_index();
+         _func->emit(inst);
+         uint32_t blk = _func->new_block();
+         _func->start_block(blk);
+         return inst_idx;
+      }
+      branch_t emit_catch_all() {
+         return emit_catch(UINT32_MAX);
+      }
+      void emit_throw(uint32_t /*tag_index*/) {
+         // Emit unreachable (trap)
+         ir_inst inst{};
+         inst.opcode = ir_op::unreachable;
+         inst.flags = IR_SIDE_EFFECT;
+         _func->emit(inst);
+      }
+      void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
+         ir_inst inst{};
+         inst.opcode = ir_op::unreachable;
+         inst.flags = IR_SIDE_EFFECT;
+         _func->emit(inst);
+      }
+      void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
+         // Structural no-op — the parser will call exit_scope() after this
+      }
+
       // ──── Branch fixup ────
       // Patch a br/br_if IR instruction's target to the resolved block index.
       void fix_branch(branch_t inst_idx, label_t block_idx) {

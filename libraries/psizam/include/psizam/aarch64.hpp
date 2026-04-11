@@ -1289,6 +1289,27 @@ namespace psizam {
          }
       }
 
+      // ──── Exception handling ────
+      void emit_try(uint8_t = 0x40, uint32_t = 0) {} // structural, like block
+      void* emit_catch(uint32_t /*tag_index*/) {
+         void* result = emit_br(0, types::pseudo);
+         return result;
+      }
+      void* emit_catch_all() {
+         void* result = emit_br(0, types::pseudo);
+         return result;
+      }
+      void emit_throw(uint32_t /*tag_index*/) {
+         // Trap: call unreachable handler
+         emit_mov_imm64(X16, reinterpret_cast<uint64_t>(&on_unreachable));
+         emit32(0xD61F0200); // BR X16
+      }
+      void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
+         emit_mov_imm64(X16, reinterpret_cast<uint64_t>(&on_unreachable));
+         emit32(0xD61F0200); // BR X16
+      }
+      void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {}
+
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
          // Pop n, s, d from WASM stack
          emit_pop_x(X4);  // n
@@ -5083,13 +5104,13 @@ namespace psizam {
       }
 
       static void on_memory_error() {
-         throw_<wasm_memory_exception>("wasm memory out-of-bounds");
+         signal_throw<wasm_memory_exception>("wasm memory out-of-bounds");
       }
-      static void on_unreachable() { psizam::throw_<wasm_interpreter_exception>( "unreachable" ); }
-      static void on_fp_error() { psizam::throw_<wasm_interpreter_exception>( "floating point error" ); }
-      static void on_call_indirect_error() { psizam::throw_<wasm_interpreter_exception>( "call_indirect out of range" ); }
-      static void on_type_error() { psizam::throw_<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
-      static void on_stack_overflow() { psizam::throw_<wasm_interpreter_exception>( "stack overflow" ); }
+      static void on_unreachable() { psizam::signal_throw<wasm_interpreter_exception>( "unreachable" ); }
+      static void on_fp_error() { psizam::signal_throw<wasm_interpreter_exception>( "floating point error" ); }
+      static void on_call_indirect_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect out of range" ); }
+      static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
+      static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>( "stack overflow" ); }
 
       static void unimplemented() { PSIZAM_ASSERT(false, wasm_parse_exception, "Sorry, not implemented."); }
 

@@ -351,7 +351,7 @@ namespace psizam {
       static constexpr auto make_section_order() {
          std::array<std::uint8_t, section_id::num_of_elems> result{};
          std::uint8_t i = 1;
-         for (std::uint8_t sec : {type_section, import_section, function_section, table_section, memory_section, global_section, export_section, start_section, element_section, data_count_section, code_section, data_section}) {
+         for (std::uint8_t sec : {type_section, import_section, function_section, table_section, memory_section, tag_section, global_section, export_section, start_section, element_section, data_count_section, code_section, data_section}) {
             result[sec] = i++;
          }
          return result;
@@ -400,6 +400,7 @@ namespace psizam {
                case section_id::code_section: parse_section<section_id::code_section>(code_ptr, mod.code); break;
                case section_id::data_section: parse_section<section_id::data_section>(code_ptr, mod.data); break;
                case section_id::data_count_section: parse_section<section_id::data_count_section>(code_ptr, _datacount); break;
+               case section_id::tag_section: parse_section<section_id::tag_section>(code_ptr, mod.tags); break;
                default: PSIZAM_ASSERT(false, wasm_parse_exception, "error invalid section id");
             }
          }
@@ -483,7 +484,17 @@ namespace psizam {
                entry.type.func_t = type;
                PSIZAM_ASSERT(type < _mod->types.size(), wasm_parse_exception, "Invalid function type");
                break;
-            default: PSIZAM_ASSERT(false, wasm_unsupported_import_exception, "only function imports are supported");
+            case external_kind::Tag: {
+               // Tag import: attribute byte (must be 0) was consumed as part of varuint for type
+               // Actually, tag imports have: attribute (byte 0) + type_index (varuint32)
+               // The 'type' variable already has the attribute byte value
+               PSIZAM_ASSERT(type == 0, wasm_parse_exception, "invalid tag attribute");
+               uint32_t tag_type_index = parse_varuint32(code);
+               PSIZAM_ASSERT(tag_type_index < _mod->types.size(), wasm_parse_exception, "invalid tag type index");
+               _mod->tags.push_back(tag_type{static_cast<uint8_t>(type), tag_type_index});
+               break;
+            }
+            default: PSIZAM_ASSERT(false, wasm_unsupported_import_exception, "only function and tag imports are supported");
          }
       }
 
@@ -543,6 +554,9 @@ namespace psizam {
             case external_kind::Memory: PSIZAM_ASSERT(entry.index < _mod->memories.size(), wasm_parse_exception, "memory export out of range"); break;
             case external_kind::Global:
                PSIZAM_ASSERT(entry.index < _mod->globals.size(), wasm_parse_exception, "global export out of range");
+               break;
+            case external_kind::Tag:
+               PSIZAM_ASSERT(entry.index < _mod->tags.size(), wasm_parse_exception, "tag export out of range");
                break;
             default: PSIZAM_ASSERT(false, wasm_parse_exception, "Unknown export kind"); break;
          }
@@ -1138,6 +1152,108 @@ namespace psizam {
                   _nested_checker.on_control(_options);
                   break;
                }
+               // ── Exception handling opcodes ──
+               case opcodes::try_: {
+                  // try has the same structure as block (block_type immediate)
+                  check_in_bounds();
+                  uint8_t first_byte = *code;
+                  uint8_t single_type = types::pseudo;
+                  std::vector<uint8_t> bp, br;
+                  if (first_byte == types::pseudo || first_byte == types::i32 || first_byte == types::i64 ||
+                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128) {
+                     code++;
+                     single_type = first_byte;
+                  } else {
+                     int32_t type_idx = parse_varint32(code);
+                     PSIZAM_ASSERT(type_idx >= 0 && static_cast<uint32_t>(type_idx) < _mod->types.size(),
+                                   wasm_parse_exception, "invalid block type index");
+                     const func_type& ft = _mod->types[type_idx];
+                     bp.assign(ft.param_types.begin(), ft.param_types.end());
+                     br.assign(ft.return_types.begin(), ft.return_types.end());
+                     single_type = ft.return_count ? ft.return_type : types::pseudo;
+                  }
+                  for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
+                     op_stack.pop(bp[i]);
+                  pc_element_t elem{};
+                  elem.operand_depth = op_stack.depth();
+                  elem.expected_result = single_type;
+                  elem.label_result = single_type;
+                  elem.is_if = false;
+                  elem.relocations = std::vector<branch_t>{};
+                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
+                  elem.block_params = std::move(bp);
+                  pc_stack.push_back(std::move(elem));
+                  code_writer.emit_try(single_type, static_cast<uint32_t>(br.size()));
+                  op_stack.push_scope();
+                  for (auto p : pc_stack.back().block_params)
+                     op_stack.push(p);
+                  _nested_checker.on_control(_options);
+               } break;
+               case opcodes::catch_: {
+                  check_in_bounds();
+                  uint32_t tag_index = parse_varuint32(code);
+                  PSIZAM_ASSERT(tag_index < _mod->tags.size(), wasm_parse_exception, "invalid tag index");
+                  auto& old_index = pc_stack.back();
+                  // Pop results from try body
+                  if (!old_index.expected_results.empty()) {
+                     for (int i = static_cast<int>(old_index.expected_results.size()) - 1; i >= 0; --i)
+                        op_stack.pop(old_index.expected_results[i]);
+                  } else {
+                     op_stack.pop(old_index.expected_result);
+                  }
+                  op_stack.pop_scope();
+                  op_stack.push_scope();
+                  // The catch handler receives the tag's parameter types as values
+                  const func_type& tag_ft = _mod->types[_mod->tags[tag_index].type_index];
+                  for (auto pt : tag_ft.param_types)
+                     op_stack.push(pt);
+                  auto& relocations = std::get<std::vector<branch_t>>(old_index.relocations);
+                  relocations.push_back(code_writer.emit_catch(tag_index));
+                  _nested_checker.on_control(_options);
+               } break;
+               case opcodes::throw_: {
+                  check_in_bounds();
+                  uint32_t tag_index = parse_varuint32(code);
+                  PSIZAM_ASSERT(tag_index < _mod->tags.size(), wasm_parse_exception, "invalid tag index");
+                  // Pop the tag's parameter types from the stack
+                  const func_type& tag_ft = _mod->types[_mod->tags[tag_index].type_index];
+                  for (int i = static_cast<int>(tag_ft.param_types.size()) - 1; i >= 0; --i)
+                     op_stack.pop(tag_ft.param_types[i]);
+                  code_writer.emit_throw(tag_index);
+                  op_stack.start_unreachable();
+               } break;
+               case opcodes::rethrow_: {
+                  check_in_bounds();
+                  uint32_t label = parse_varuint32(code);
+                  auto [depth_change,rt,rc] = compute_depth_change(label);
+                  code_writer.emit_rethrow(depth_change, rt, label, rc);
+                  op_stack.start_unreachable();
+               } break;
+               case opcodes::catch_all_: {
+                  check_in_bounds();
+                  auto& old_index = pc_stack.back();
+                  if (!old_index.expected_results.empty()) {
+                     for (int i = static_cast<int>(old_index.expected_results.size()) - 1; i >= 0; --i)
+                        op_stack.pop(old_index.expected_results[i]);
+                  } else {
+                     op_stack.pop(old_index.expected_result);
+                  }
+                  op_stack.pop_scope();
+                  op_stack.push_scope();
+                  // catch_all receives no values
+                  auto& relocations = std::get<std::vector<branch_t>>(old_index.relocations);
+                  relocations.push_back(code_writer.emit_catch_all());
+                  _nested_checker.on_control(_options);
+               } break;
+               case opcodes::delegate_: {
+                  check_in_bounds();
+                  uint32_t label = parse_varuint32(code);
+                  auto [depth_change,rt,rc] = compute_depth_change(label);
+                  code_writer.emit_delegate(depth_change, rt, label, rc);
+                  // delegate acts as end of the try block
+                  exit_scope();
+                  _nested_checker.on_end(_options);
+               } break;
                case opcodes::br: {
                   check_in_bounds();
                   uint32_t label = parse_varuint32(code);
@@ -2462,6 +2578,18 @@ namespace psizam {
       inline void parse_section(wasm_code_ptr& code, std::optional<std::uint32_t>& n)
       {
          n = parse_varuint32(code);
+      }
+
+      template <uint8_t id>
+      requires (id == section_id::tag_section)
+      inline void parse_section(wasm_code_ptr& code, std::vector<tag_type>& elems) {
+         parse_section_impl(code, elems, detail::get_max_section_elements(_options),
+                            [&](wasm_code_ptr& code, tag_type& tt, std::size_t /*idx*/) {
+            tt.attribute = *code++;
+            PSIZAM_ASSERT(tt.attribute == 0, wasm_parse_exception, "invalid tag attribute");
+            tt.type_index = parse_varuint32(code);
+            PSIZAM_ASSERT(tt.type_index < _mod->types.size(), wasm_parse_exception, "invalid tag type index");
+         });
       }
 
       template <size_t N>
