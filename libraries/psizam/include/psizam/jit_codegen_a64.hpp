@@ -89,11 +89,11 @@ namespace psizam {
          // Error handlers
          buf = _allocator.alloc<unsigned char>(256);
          code = buf;
-         fpe_handler = emit_error_handler(&on_fp_error);
-         call_indirect_handler = emit_error_handler(&on_call_indirect_error);
-         type_error_handler = emit_error_handler(&on_type_error);
-         stack_overflow_handler = emit_error_handler(&on_stack_overflow);
-         memory_handler = emit_error_handler(&on_memory_error);
+         fpe_handler = emit_error_handler(&on_fp_error, reloc_symbol::on_fp_error);
+         call_indirect_handler = emit_error_handler(&on_call_indirect_error, reloc_symbol::on_call_indirect_error);
+         type_error_handler = emit_error_handler(&on_type_error, reloc_symbol::on_type_error);
+         stack_overflow_handler = emit_error_handler(&on_stack_overflow, reloc_symbol::on_stack_overflow);
+         memory_handler = emit_error_handler(&on_memory_error, reloc_symbol::on_memory_error);
 
          // Host function stubs
          const uint32_t num_imported = _mod.get_imported_functions_size();
@@ -307,6 +307,45 @@ namespace psizam {
          }
       }
 
+      /// Record a relocation at the given code offset.
+      void emit_reloc(uint32_t offset, reloc_symbol sym,
+                      reloc_type type = reloc_type::abs64, int32_t addend = 0) {
+         _reloc_recorder.record(offset, sym, type, addend);
+      }
+
+      /// Emit a relocatable 64-bit immediate load.
+      /// Always emits 4 instructions (MOVZ + 3 MOVK) with relocations for each.
+      /// The placeholder value is used for non-cross-compilation (native JIT).
+      void emit_reloc_mov_imm64(uint32_t rd, reloc_symbol sym, uint64_t placeholder = 0) {
+         uint32_t base_offset = code_offset();
+         // MOVZ Xd, #g0, LSL #0
+         emit32(0xD2800000 | (static_cast<uint32_t>(static_cast<uint16_t>(placeholder)) << 5) | rd);
+         emit_reloc(base_offset, sym, reloc_type::aarch64_movw_uabs_g0_nc);
+         // MOVK Xd, #g1, LSL #16
+         emit32(0xF2A00000 | (static_cast<uint32_t>(static_cast<uint16_t>(placeholder >> 16)) << 5) | rd);
+         emit_reloc(base_offset + 4, sym, reloc_type::aarch64_movw_uabs_g1_nc);
+         // MOVK Xd, #g2, LSL #32
+         emit32(0xF2C00000 | (static_cast<uint32_t>(static_cast<uint16_t>(placeholder >> 32)) << 5) | rd);
+         emit_reloc(base_offset + 8, sym, reloc_type::aarch64_movw_uabs_g2_nc);
+         // MOVK Xd, #g3, LSL #48
+         emit32(0xF2E00000 | (static_cast<uint32_t>(static_cast<uint16_t>(placeholder >> 48)) << 5) | rd);
+         emit_reloc(base_offset + 12, sym, reloc_type::aarch64_movw_uabs_g3);
+      }
+
+      /// Current code position as offset from code segment base.
+      uint32_t code_offset() const {
+         return static_cast<uint32_t>(
+            reinterpret_cast<uintptr_t>(code) -
+            reinterpret_cast<uintptr_t>(_code_segment_base));
+      }
+
+      /// Offset of a code pointer within the code segment.
+      uint32_t offset_of(void* ptr) const {
+         return static_cast<uint32_t>(
+            reinterpret_cast<uintptr_t>(ptr) -
+            reinterpret_cast<uintptr_t>(_code_segment_base));
+      }
+
       // ADD Xd, Xn, #imm (unsigned)
       void emit_add_imm(uint32_t rd, uint32_t rn, uint32_t imm) {
          if (imm <= 4095) {
@@ -502,13 +541,17 @@ namespace psizam {
 
       // ──────── Error handlers ────────
 
-      void* emit_error_handler(void (*handler)()) {
+      void* emit_error_handler(void (*handler)(), reloc_symbol sym = reloc_symbol::unknown) {
          void* result = code;
          // Align SP
          emit32(0x910003E8); // MOV X8, SP
          emit32(0x927CED08); // AND X8, X8, #~0xF
          emit32(0x9100011F); // MOV SP, X8
-         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(handler));
+         if (sym != reloc_symbol::unknown) {
+            emit_reloc_mov_imm64(X8, sym, reinterpret_cast<uint64_t>(handler));
+         } else {
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(handler));
+         }
          emit32(0xD63F0100); // BLR X8
          return result;
       }
@@ -521,7 +564,13 @@ namespace psizam {
             // Invert condition, skip trampoline
             void* skip = code;
             emit32(0x54000000 | invert_condition(cond)); // B.inv skip
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(handler));
+            emit_reloc_mov_imm64(X8, reloc_symbol::code_blob_self,
+               reinterpret_cast<uint64_t>(handler));
+            // Addend = handler offset within code blob
+            auto& entries = _reloc_recorder.entries();
+            uint32_t handler_off = offset_of(handler);
+            for (int k = static_cast<int>(entries.size()) - 4; k < static_cast<int>(entries.size()); ++k)
+               entries[k].addend = static_cast<int32_t>(handler_off);
             emit32(0xD61F0100); // BR X8
             fix_branch(skip, code);
          }
@@ -537,7 +586,12 @@ namespace psizam {
             // CBNZ Xn, skip; B handler
             void* skip = code;
             emit32(0xB5000000 | reg); // CBNZ Xn, skip (placeholder)
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(handler));
+            emit_reloc_mov_imm64(X8, reloc_symbol::code_blob_self,
+               reinterpret_cast<uint64_t>(handler));
+            auto& entries = _reloc_recorder.entries();
+            uint32_t handler_off = offset_of(handler);
+            for (int k = static_cast<int>(entries.size()) - 4; k < static_cast<int>(entries.size()); ++k)
+               entries[k].addend = static_cast<int32_t>(handler_off);
             emit32(0xD61F0100); // BR X8
             fix_branch(skip, code);
          }
@@ -592,7 +646,8 @@ namespace psizam {
          emit32(0x2A1503E3);                // MOV W3, W21 (remaining call depth)
          emit32(0xAA1303E0);                // MOV X0, X19 (context)
 
-         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&call_host_function));
+         emit_reloc_mov_imm64(X8, reloc_symbol::call_host_function,
+            reinterpret_cast<uint64_t>(&call_host_function));
          emit32(0xD63F0100); // BLR X8
 
          if (buf_size > 0) {
@@ -1604,7 +1659,7 @@ namespace psizam {
             break;
          }
          case ir_op::unreachable:
-            emit_error_handler(&on_unreachable);
+            emit_error_handler(&on_unreachable, reloc_symbol::on_unreachable);
             break;
 
          // ── Multi-value return store ──
@@ -1691,7 +1746,8 @@ namespace psizam {
                emit_mov_imm32(X1, fti);         // W1 = type_idx
                emit_mov_imm32(X2, table_idx);   // W2 = table_idx
                emit_push(X19); emit_push(X20);
-               emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_resolve_indirect));
+               emit_reloc_mov_imm64(X8, reloc_symbol::llvm_resolve_indirect,
+                  reinterpret_cast<uint64_t>(&__psizam_resolve_indirect));
                emit32(0xD63F0100); // BLR X8
                emit_pop(X20); emit_pop(X19);
                // X0 = code_ptr (null on error)
@@ -1871,7 +1927,8 @@ namespace psizam {
          case ir_op::memory_size:
             emit_push(X19); emit_push(X20);
             emit_mov_reg(X0, X19);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&current_memory));
+            emit_reloc_mov_imm64(X8, reloc_symbol::current_memory,
+               reinterpret_cast<uint64_t>(&current_memory));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             store_x0_vreg(inst.dest);
@@ -1881,7 +1938,8 @@ namespace psizam {
             emit_push(X19); emit_push(X20);
             emit_mov_reg(X1, X0); // pages
             emit_mov_reg(X0, X19); // context
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&grow_memory));
+            emit_reloc_mov_imm64(X8, reloc_symbol::grow_memory,
+               reinterpret_cast<uint64_t>(&grow_memory));
             emit32(0xD63F0100);
             emit_pop(X20); emit_pop(X19);
             store_x0_vreg(inst.dest);
@@ -2031,7 +2089,8 @@ namespace psizam {
             emit_pop(X1); // dest
             emit_mov_reg(X0, X19); // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&memory_fill_checked));
+            emit_reloc_mov_imm64(X8, reloc_symbol::memory_fill,
+               reinterpret_cast<uint64_t>(&memory_fill_impl));
             emit32(0xD63F0100);
             emit_pop(X20); emit_pop(X19);
             break;
@@ -2043,7 +2102,8 @@ namespace psizam {
             emit_pop(X1); // dest
             emit_mov_reg(X0, X19); // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&memory_copy_checked));
+            emit_reloc_mov_imm64(X8, reloc_symbol::memory_copy,
+               reinterpret_cast<uint64_t>(&memory_copy_impl));
             emit32(0xD63F0100);
             emit_pop(X20); emit_pop(X19);
             break;
@@ -2058,10 +2118,13 @@ namespace psizam {
             emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // seg_idx
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
-            auto fn = (inst.opcode == ir_op::memory_init)
-               ? reinterpret_cast<uint64_t>(&memory_init_impl)
-               : reinterpret_cast<uint64_t>(&table_init_impl);
-            emit_mov_imm64(X8, fn);
+            if (inst.opcode == ir_op::memory_init) {
+               emit_reloc_mov_imm64(X8, reloc_symbol::memory_init,
+                  reinterpret_cast<uint64_t>(&memory_init_impl));
+            } else {
+               emit_reloc_mov_imm64(X8, reloc_symbol::table_init,
+                  reinterpret_cast<uint64_t>(&table_init_impl));
+            }
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             break;
@@ -2071,10 +2134,13 @@ namespace psizam {
             emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // seg_idx
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
-            auto fn = (inst.opcode == ir_op::data_drop)
-               ? reinterpret_cast<uint64_t>(&data_drop_impl)
-               : reinterpret_cast<uint64_t>(&elem_drop_impl);
-            emit_mov_imm64(X8, fn);
+            if (inst.opcode == ir_op::data_drop) {
+               emit_reloc_mov_imm64(X8, reloc_symbol::data_drop,
+                  reinterpret_cast<uint64_t>(&data_drop_impl));
+            } else {
+               emit_reloc_mov_imm64(X8, reloc_symbol::elem_drop,
+                  reinterpret_cast<uint64_t>(&elem_drop_impl));
+            }
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             break;
@@ -2087,7 +2153,8 @@ namespace psizam {
             emit_mov_imm32(X4, static_cast<uint32_t>(inst.ri.imm)); // packed table indices
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&table_copy_impl));
+            emit_reloc_mov_imm64(X8, reloc_symbol::table_copy,
+               reinterpret_cast<uint64_t>(&table_copy_impl));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             break;
@@ -2098,7 +2165,8 @@ namespace psizam {
             emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_get));
+            emit_reloc_mov_imm64(X8, reloc_symbol::llvm_table_get,
+               reinterpret_cast<uint64_t>(&__psizam_table_get));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             emit_push(X0); // push result
@@ -2110,7 +2178,8 @@ namespace psizam {
             emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_set));
+            emit_reloc_mov_imm64(X8, reloc_symbol::llvm_table_set,
+               reinterpret_cast<uint64_t>(&__psizam_table_set));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             break;
@@ -2122,7 +2191,8 @@ namespace psizam {
             emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_grow));
+            emit_reloc_mov_imm64(X8, reloc_symbol::llvm_table_grow,
+               reinterpret_cast<uint64_t>(&__psizam_table_grow));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             emit_push(X0); // push result
@@ -2132,7 +2202,8 @@ namespace psizam {
             emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_size));
+            emit_reloc_mov_imm64(X8, reloc_symbol::llvm_table_size,
+               reinterpret_cast<uint64_t>(&__psizam_table_size));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             emit_push(X0); // push result
@@ -2146,7 +2217,8 @@ namespace psizam {
             emit_mov_imm32(X1, static_cast<uint32_t>(inst.ri.imm)); // table_idx → arg2
             emit_mov_reg(X0, X19);  // ctx
             emit_push(X19); emit_push(X20);
-            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_table_fill));
+            emit_reloc_mov_imm64(X8, reloc_symbol::llvm_table_fill,
+               reinterpret_cast<uint64_t>(&__psizam_table_fill));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             break;
@@ -2220,7 +2292,8 @@ namespace psizam {
                emit_mov_reg(X0, X19); // ctx
                emit_mov_imm32(X1, asub); // sub
                emit_mov_imm32(X3, inst.simd.offset); // offset
-               emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_atomic_rmw));
+               emit_reloc_mov_imm64(X8, reloc_symbol::llvm_atomic_rmw,
+               reinterpret_cast<uint64_t>(&__psizam_atomic_rmw));
                emit32(0xD63F0100); // BLR X8
                emit_pop(X20); emit_pop(X19);
                emit_push(X0); // push old value
@@ -3419,7 +3492,8 @@ namespace psizam {
          r.pending = nullptr;
       }
 
-      // ──────── Static callbacks ────────
+   public:
+      // ──────── Static callbacks (public for relocation resolution) ────────
 
       static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
@@ -3486,7 +3560,7 @@ namespace psizam {
                std::memmove(d, s, count * sizeof(table_entry));
          });
       }
-      static void memory_copy_checked(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
+      static void memory_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          psizam::longjmp_on_exception([&]() {
             char* mem = context->linear_memory();
@@ -3497,7 +3571,7 @@ namespace psizam {
                std::memmove(mem + dest, mem + src, count);
          });
       }
-      static void memory_fill_checked(void* ctx, uint32_t dest, uint32_t val, uint32_t count) {
+      static void memory_fill_impl(void* ctx, uint32_t dest, uint32_t val, uint32_t count) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          psizam::longjmp_on_exception([&]() {
             char* mem = context->linear_memory();
@@ -3548,11 +3622,9 @@ namespace psizam {
       uint32_t _fixup_pool_next = 0;
       uint32_t _fixup_pool_size = 0;
 
-      // Stub — a64 codegen does not yet track absolute address relocations for .pzam.
-      // TODO: Add emit_reloc() calls throughout the a64 codegen to enable cross-compilation output.
-      relocation_recorder _reloc_recorder_stub;
+      relocation_recorder _reloc_recorder;
     public:
-      const relocation_recorder& relocations() const { return _reloc_recorder_stub; }
+      const relocation_recorder& relocations() const { return _reloc_recorder; }
    };
 
 } // namespace psizam

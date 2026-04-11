@@ -51,8 +51,15 @@ namespace psizam {
       uint8_t  softfloat            = 0;
       uint8_t  async_backtrace      = 0;
       uint8_t  stack_limit_is_bytes = 0;
+      uint32_t page_size            = 4096;  // compile-time page_size for memory layout offsets
    };
-   PSIO_REFLECT(pzam_compile_opts, definitionWillNotChange(), softfloat, async_backtrace, stack_limit_is_bytes)
+   PSIO_REFLECT(pzam_compile_opts, softfloat, async_backtrace, stack_limit_is_bytes, page_size)
+
+   /// Backend type identifier — determines calling convention for function dispatch.
+   enum class pzam_backend : uint8_t {
+      llvm = 0,   // LLVM entry wrappers: int64_t(*)(void* ctx, void* mem, native_value* args)
+      jit2 = 1,   // JIT trampoline at offset 0: entry via _code_base
+   };
 
    /// Top-level .pzam file structure.
    struct pzam_file {
@@ -66,9 +73,10 @@ namespace psizam {
       std::vector<pzam_func_entry>   functions;
       std::vector<pzam_relocation>   relocations;
       std::vector<uint8_t>           code_blob;       // PIC native machine code
+      uint8_t                        backend         = 0;  // pzam_backend
    };
    PSIO_REFLECT(pzam_file, magic, format_version, arch, opts, max_stack,
-                input_hash, compiler_hash, functions, relocations, code_blob)
+                input_hash, compiler_hash, functions, relocations, code_blob, backend)
 
    /// Serialize a pzam_file to fracpack bytes.
    inline std::vector<char> pzam_save(const pzam_file& file) {

@@ -339,7 +339,9 @@ namespace psizam {
 
    class growable_allocator {
     public:
-      static constexpr size_t max_memory_size = 16ULL * 1024 * 1024 * 1024; // 16GB
+      static constexpr size_t max_memory_size = sizeof(size_t) >= 8
+         ? size_t(16) * 1024 * 1024 * 1024   // 16GB on 64-bit
+         : size_t(1) * 1024 * 1024 * 1024;   // 1GB on 32-bit (wasm32)
       template<std::size_t align_amt>
       static constexpr size_t align_offset(size_t offset) { return (offset + align_amt - 1) & ~(align_amt - 1); }
 

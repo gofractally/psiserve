@@ -46,11 +46,18 @@ static std::vector<char> write_pzam(
 #endif
    file.opts.async_backtrace = 0;
    file.opts.stack_limit_is_bytes = mod.stack_limit_is_bytes ? 1 : 0;
+   // Record compile-time page_size for memory layout offset matching
+#ifdef PSIZAM_COMPILE_ONLY
+   file.opts.page_size = wasm_allocator::page_size_val;
+#else
+   file.opts.page_size = static_cast<uint32_t>(wasm_allocator::table_size());
+#endif
    file.max_stack = static_cast<uint32_t>(mod.maximum_stack);
    file.input_hash = pzam_cache::hash_wasm(wasm_bytes);
    file.compiler_hash = pzam_cache::compiler_identity(target_arch);
 
    bool llvm_aot = !result.code_blob.empty();
+   file.backend = static_cast<uint8_t>(llvm_aot ? pzam_backend::llvm : pzam_backend::jit2);
 
    // Function table
    file.functions.resize(mod.code.size());
@@ -189,16 +196,11 @@ int main(int argc, char** argv) {
 
    bool ok;
    if (backend_str == "jit2") {
-#if !defined(__wasm__)
       if (target_arch == pzam_arch::x86_64) {
          ok = compile_wasm<ir_writer_x64>(wasm_bytes, target_arch, output_file);
       } else {
          ok = compile_wasm<ir_writer_a64>(wasm_bytes, target_arch, output_file);
       }
-#else
-      std::cerr << "Error: jit2 backend not available on this platform\n";
-      return 1;
-#endif
    } else if (backend_str == "llvm") {
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       ok = compile_wasm<ir_writer_llvm_aot>(wasm_bytes, target_arch, output_file, target_triple);

@@ -96,10 +96,7 @@ namespace psizam {
    /// Used when loading .pzam files compiled with the LLVM backend.
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND) && !defined(PSIZAM_COMPILE_ONLY)
    inline void build_llvm_symbol_table(void** table) {
-      // Zero-initialize
-      std::memset(table, 0, static_cast<size_t>(reloc_symbol::NUM_SYMBOLS) * sizeof(void*));
-
-      // LLVM runtime helpers
+      // LLVM runtime helpers (does not zero-init — caller or build_symbol_table handles that)
       table[static_cast<uint32_t>(reloc_symbol::llvm_global_get)]       = reinterpret_cast<void*>(&__psizam_global_get);
       table[static_cast<uint32_t>(reloc_symbol::llvm_global_set)]       = reinterpret_cast<void*>(&__psizam_global_set);
       table[static_cast<uint32_t>(reloc_symbol::llvm_global_get_v128)]  = reinterpret_cast<void*>(&__psizam_global_get_v128);

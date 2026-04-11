@@ -132,9 +132,35 @@ int main(int argc, char** argv) {
    // Resolve WASI imports
    table.resolve(mod);
 
-   // Build LLVM symbol table for relocation
+   // Build symbol table for relocation
    // code_blob_self is set after we know the code base address (below)
    void* symbol_table[static_cast<size_t>(reloc_symbol::NUM_SYMBOLS)];
+#if defined(__aarch64__)
+   // aarch64 codegen doesn't have trunc helpers (uses hardware instructions),
+   // so we populate symbols manually instead of using build_symbol_table
+   std::memset(symbol_table, 0, sizeof(symbol_table));
+   using jit_cg = jit_codegen_a64;
+   symbol_table[static_cast<uint32_t>(reloc_symbol::call_host_function)]     = reinterpret_cast<void*>(&jit_cg::call_host_function);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::current_memory)]         = reinterpret_cast<void*>(&jit_cg::current_memory);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::grow_memory)]            = reinterpret_cast<void*>(&jit_cg::grow_memory);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::memory_fill)]            = reinterpret_cast<void*>(&jit_cg::memory_fill_impl);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::memory_copy)]            = reinterpret_cast<void*>(&jit_cg::memory_copy_impl);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::memory_init)]            = reinterpret_cast<void*>(&jit_cg::memory_init_impl);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::data_drop)]              = reinterpret_cast<void*>(&jit_cg::data_drop_impl);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::table_init)]             = reinterpret_cast<void*>(&jit_cg::table_init_impl);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::elem_drop)]              = reinterpret_cast<void*>(&jit_cg::elem_drop_impl);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::table_copy)]             = reinterpret_cast<void*>(&jit_cg::table_copy_impl);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::on_unreachable)]         = reinterpret_cast<void*>(&jit_cg::on_unreachable);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::on_fp_error)]            = reinterpret_cast<void*>(&jit_cg::on_fp_error);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::on_memory_error)]        = reinterpret_cast<void*>(&jit_cg::on_memory_error);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::on_call_indirect_error)] = reinterpret_cast<void*>(&jit_cg::on_call_indirect_error);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::on_type_error)]          = reinterpret_cast<void*>(&jit_cg::on_type_error);
+   symbol_table[static_cast<uint32_t>(reloc_symbol::on_stack_overflow)]      = reinterpret_cast<void*>(&jit_cg::on_stack_overflow);
+#else
+   build_symbol_table<jit_codegen>(symbol_table);
+#endif
+
+   // Overlay LLVM runtime symbols (separate enum range, no conflicts)
    build_llvm_symbol_table(symbol_table);
 
    // Load and validate .pzam file
@@ -275,17 +301,43 @@ int main(int argc, char** argv) {
                            static_cast<char*>(exec_code) + total_code_size);
 #endif
 
-   // Update module function entries with absolute addresses
-   // LLVM path: _code_base stays null, jit_code_offset = absolute address
-   auto code_base_addr = reinterpret_cast<uintptr_t>(exec_code);
-   for (size_t j = 0; j < pzam.functions.size(); j++) {
-      mod.code[j].jit_code_offset = code_base_addr + pzam.functions[j].code_offset;
-      mod.code[j].jit_code_size = pzam.functions[j].code_size;
-      mod.code[j].stack_size = pzam.functions[j].stack_size;
+   // Update module function entries based on backend type
+   bool is_jit = static_cast<pzam_backend>(pzam.backend) == pzam_backend::jit2;
+   if (is_jit) {
+      // JIT path: _code_base points to trampoline at offset 0, jit_code_offset is relative
+      mod.allocator._code_base = static_cast<char*>(exec_code);
+      for (size_t j = 0; j < pzam.functions.size(); j++) {
+         mod.code[j].jit_code_offset = pzam.functions[j].code_offset;
+         mod.code[j].jit_code_size = pzam.functions[j].code_size;
+         mod.code[j].stack_size = pzam.functions[j].stack_size;
+      }
+   } else {
+      // LLVM path: _code_base stays null, jit_code_offset = absolute address
+      auto code_base_addr = reinterpret_cast<uintptr_t>(exec_code);
+      for (size_t j = 0; j < pzam.functions.size(); j++) {
+         mod.code[j].jit_code_offset = code_base_addr + pzam.functions[j].code_offset;
+         mod.code[j].jit_code_size = pzam.functions[j].code_size;
+         mod.code[j].stack_size = pzam.functions[j].stack_size;
+      }
    }
    mod.maximum_stack = pzam.max_stack;
    mod.stack_limit_is_bytes = pzam.opts.stack_limit_is_bytes;
 
+   // Fix up element segment code_ptr fields before table initialization.
+   // null_writer leaves code_ptr null; JIT dispatch needs actual function addresses.
+   if (is_jit) {
+      uint32_t num_imports = mod.get_imported_functions_size();
+      for (auto& elem_seg : mod.elements) {
+         for (auto& entry : elem_seg.elems) {
+            if (entry.index < num_imports + pzam.functions.size()) {
+               uint32_t code_idx = entry.index - num_imports;
+               if (entry.index >= num_imports && code_idx < pzam.functions.size()) {
+                  entry.code_ptr = mod.allocator._code_base + pzam.functions[code_idx].code_offset;
+               }
+            }
+         }
+      }
+   }
 
    // Set up execution context
    wasm_allocator wa;
@@ -294,6 +346,53 @@ int main(int argc, char** argv) {
    ctx.set_host_table(&table);
    ctx.reset();
 
+   // If the .pzam was compiled with a different page_size, the generated code
+   // accesses globals/tables at different offsets. Write pointers at both offsets.
+   if (is_jit && pzam.opts.page_size != 0) {
+      uint32_t compile_ps = pzam.opts.page_size;
+      uint32_t runtime_ps = static_cast<uint32_t>(wasm_allocator::table_size());
+      if (compile_ps != runtime_ps) {
+         char* linear_memory = wa.get_base_ptr<char>();
+
+         // Make guard page writable for pointer fixups
+         char* guard_page = linear_memory - runtime_ps;
+         mprotect(guard_page, runtime_ps, PROT_READ | PROT_WRITE);
+
+         // Copy globals pointer from runtime offset to compile-time offset
+         int32_t compile_globals_off = -static_cast<int32_t>(compile_ps) - static_cast<int32_t>(sizeof(void*));
+         int32_t runtime_globals_off = wasm_allocator::globals_end() - static_cast<int32_t>(sizeof(void*));
+         void* globals_ptr;
+         std::memcpy(&globals_ptr, linear_memory + runtime_globals_off, sizeof(void*));
+         std::memcpy(linear_memory + compile_globals_off, &globals_ptr, sizeof(void*));
+
+         // Copy table data from runtime offset to compile-time offset.
+         // WASI compiles always use direct table access (indirect_table=false),
+         // so table entries must physically be at the compile-time offset.
+         int32_t compile_table_off = -static_cast<int32_t>(2 * compile_ps);
+         int32_t runtime_table_off = wasm_allocator::table_offset();
+         if (compile_table_off != runtime_table_off && !mod.tables.empty()) {
+            uint32_t tsize = mod.tables[0].limits.initial;
+            size_t table_bytes = tsize * sizeof(table_entry);
+            // Resolve actual table data location (may be indirect at runtime)
+            char* runtime_table_loc = linear_memory + runtime_table_off;
+            char* src;
+            if (mod.indirect_table(0)) {
+               std::memcpy(&src, runtime_table_loc, sizeof(src));
+            } else {
+               src = runtime_table_loc;
+            }
+            // Copy table entries to compile-time location (within guard page)
+            std::memcpy(linear_memory + compile_table_off, src, table_bytes);
+         }
+
+         // Restore guard page to read-only
+         mprotect(guard_page, runtime_ps, PROT_READ);
+      }
+   }
+
+   // Find _start
+   uint32_t start_idx = mod.get_exported_function("_start");
+
    // Run _start (WASI entry point) — also handles module start function
    try {
       // Module start function (if any)
@@ -301,7 +400,6 @@ int main(int argc, char** argv) {
          ctx.execute(&wasi, jit_visitor{nullptr}, mod.start);
       }
 
-      uint32_t start_idx = mod.get_exported_function("_start");
       ctx.execute(&wasi, jit_visitor{nullptr}, start_idx);
    } catch (const wasi_host::wasi_exit_exception& e) {
       return e.code;

@@ -48,7 +48,6 @@ if(TARGET psizam-llvm)
 endif()
 
 add_executable(pzam-compile pzam_compile.cpp)
-target_compile_definitions(pzam-compile PRIVATE PSIZAM_COMPILE_ONLY)
 target_link_libraries(pzam-compile psizam psizam-runtime)
 
 if(TARGET psizam-llvm)
