@@ -2,6 +2,8 @@
 
 #include <psiserve/types.hpp>
 
+#include <openssl/ssl.h>
+
 #include <array>
 #include <chrono>
 #include <variant>
@@ -21,9 +23,17 @@ namespace psiserve
    /// An fd backed by a real OS socket (TCP stream or listener).
    /// The runtime translates WASM read/write/accept calls into POSIX
    /// operations on `real_fd`.
+   ///
+   /// TLS fields (both null for plain TCP):
+   ///   ssl_ctx — non-null on TLS listen sockets; tells psiAccept to
+   ///             wrap accepted connections in TLS.
+   ///   ssl     — non-null on TLS connections; tells psiRead/psiWrite
+   ///             to use SSL_read/SSL_write instead of ::read/::write.
    struct SocketFd
    {
-      RealFd real_fd = invalid_real_fd;
+      RealFd   real_fd = invalid_real_fd;
+      SSL_CTX* ssl_ctx = nullptr;  ///< TLS context (listen sockets only, not owned)
+      SSL*     ssl     = nullptr;  ///< TLS connection state (owned, freed on close)
    };
 
    /// An fd backed by a virtual timer (not yet implemented).

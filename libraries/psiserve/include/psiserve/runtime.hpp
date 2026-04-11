@@ -24,6 +24,8 @@ namespace psiserve
          std::filesystem::path wasm_path;  ///< Path to the .wasm module to load.
          Port                  port{8080}; ///< TCP port to listen on.
          std::filesystem::path webroot;    ///< Directory to serve files from (fd 1).
+         std::filesystem::path tls_cert;   ///< PEM certificate file (empty = no TLS).
+         std::filesystem::path tls_key;    ///< PEM private key file.
       };
 
       explicit Runtime(Config cfg);

@@ -1,4 +1,8 @@
 #include <psiserve/host_api.hpp>
+#include <psiserve/log.hpp>
+
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 
 #include <cerrno>
 #include <cstring>
@@ -95,7 +99,8 @@ namespace psiserve
       if (!sock)
          return PsiResult::err(PsiError::not_socket);
 
-      RealFd real_listen = sock->real_fd;
+      RealFd   real_listen = sock->real_fd;
+      SSL_CTX* ssl_ctx     = sock->ssl_ctx;  // non-null if TLS listener
 
       if (auto r = waitReady(*_sched, real_listen, Readable); r.isErr())
          return r;
@@ -108,9 +113,58 @@ namespace psiserve
 
       RealFd real_conn{raw_conn};
 
-      VirtualFd vfd = _proc->fds.alloc(SocketFd{real_conn});
+      // TLS handshake if listener has an SSL_CTX
+      SSL* ssl = nullptr;
+      if (ssl_ctx)
+      {
+         ssl = SSL_new(ssl_ctx);
+         if (!ssl)
+         {
+            ::close(*real_conn);
+            return PsiResult::err(PsiError::io_failure);
+         }
+         SSL_set_fd(ssl, *real_conn);
+
+         for (;;)
+         {
+            int ret = SSL_accept(ssl);
+            if (ret == 1)
+               break;  // handshake complete
+
+            int err = SSL_get_error(ssl, ret);
+            if (err == SSL_ERROR_WANT_READ)
+            {
+               if (auto r = waitReady(*_sched, real_conn, Readable); r.isErr())
+               {
+                  SSL_free(ssl);
+                  ::close(*real_conn);
+                  return r;
+               }
+            }
+            else if (err == SSL_ERROR_WANT_WRITE)
+            {
+               if (auto r = waitReady(*_sched, real_conn, Writable); r.isErr())
+               {
+                  SSL_free(ssl);
+                  ::close(*real_conn);
+                  return r;
+               }
+            }
+            else
+            {
+               PSI_DEBUG("TLS handshake failed: {}", ERR_reason_error_string(ERR_get_error()));
+               SSL_free(ssl);
+               ::close(*real_conn);
+               return PsiResult::err(PsiError::io_failure);
+            }
+         }
+      }
+
+      VirtualFd vfd = _proc->fds.alloc(SocketFd{real_conn, nullptr, ssl});
       if (vfd == invalid_virtual_fd)
       {
+         if (ssl)
+            SSL_free(ssl);
          ::close(*real_conn);
          return PsiResult::err(PsiError::too_many_fds);
       }
@@ -126,29 +180,51 @@ namespace psiserve
       if (!entry)
          return PsiResult::err(PsiError::bad_fd);
 
-      RealFd real_fd = invalid_real_fd;
+      char* dst = _wasm_memory + *buf;
 
       if (auto* sock = std::get_if<SocketFd>(entry))
       {
-         real_fd = sock->real_fd;
-         if (auto r = waitReady(*_sched, real_fd, Readable); r.isErr())
-            return r;
+         if (sock->ssl)
+         {
+            // TLS read — retry on WANT_READ/WANT_WRITE
+            for (;;)
+            {
+               int n = SSL_read(sock->ssl, dst, *len);
+               if (n > 0)
+                  return PsiResult::ok(n);
+               if (n == 0)
+                  return PsiResult::ok(0);  // EOF / clean shutdown
+
+               int err = SSL_get_error(sock->ssl, n);
+               if (err == SSL_ERROR_WANT_READ)
+                  _sched->yield(sock->real_fd, Readable);
+               else if (err == SSL_ERROR_WANT_WRITE)
+                  _sched->yield(sock->real_fd, Writable);
+               else
+                  return PsiResult::err(PsiError::io_failure);
+            }
+         }
+         else
+         {
+            // Plain TCP
+            if (auto r = waitReady(*_sched, sock->real_fd, Readable); r.isErr())
+               return r;
+            ssize_t n = ::read(*sock->real_fd, dst, *len);
+            if (n < 0)
+               return PsiResult::fromErrno();
+            return PsiResult::ok(static_cast<int32_t>(n));
+         }
       }
       else if (auto* file = std::get_if<FileFd>(entry))
       {
-         real_fd = file->real_fd;
          // Regular files are always ready — no poll needed
-      }
-      else
-      {
-         return PsiResult::err(PsiError::bad_fd);
+         ssize_t n = ::read(*file->real_fd, dst, *len);
+         if (n < 0)
+            return PsiResult::fromErrno();
+         return PsiResult::ok(static_cast<int32_t>(n));
       }
 
-      char*   dst = _wasm_memory + *buf;
-      ssize_t n   = ::read(*real_fd, dst, *len);
-      if (n < 0)
-         return PsiResult::fromErrno();
-      return PsiResult::ok(static_cast<int32_t>(n));
+      return PsiResult::err(PsiError::bad_fd);
    }
 
    PsiResult HostApi::psiWrite(VirtualFd fd, WasmPtr buf, WasmSize len)
@@ -164,16 +240,36 @@ namespace psiserve
       if (!sock)
          return PsiResult::err(PsiError::not_socket);
 
-      RealFd real_fd = sock->real_fd;
-
-      if (auto r = waitReady(*_sched, real_fd, Writable); r.isErr())
-         return r;
-
       const char* src = _wasm_memory + *buf;
-      ssize_t     n   = ::write(*real_fd, src, *len);
-      if (n < 0)
-         return PsiResult::fromErrno();
-      return PsiResult::ok(static_cast<int32_t>(n));
+
+      if (sock->ssl)
+      {
+         // TLS write — retry on WANT_READ/WANT_WRITE
+         for (;;)
+         {
+            int n = SSL_write(sock->ssl, src, *len);
+            if (n > 0)
+               return PsiResult::ok(n);
+
+            int err = SSL_get_error(sock->ssl, n);
+            if (err == SSL_ERROR_WANT_READ)
+               _sched->yield(sock->real_fd, Readable);
+            else if (err == SSL_ERROR_WANT_WRITE)
+               _sched->yield(sock->real_fd, Writable);
+            else
+               return PsiResult::err(PsiError::io_failure);
+         }
+      }
+      else
+      {
+         // Plain TCP
+         if (auto r = waitReady(*_sched, sock->real_fd, Writable); r.isErr())
+            return r;
+         ssize_t n = ::write(*sock->real_fd, src, *len);
+         if (n < 0)
+            return PsiResult::fromErrno();
+         return PsiResult::ok(static_cast<int32_t>(n));
+      }
    }
 
    PsiResult HostApi::psiOpen(VirtualFd dir_fd, WasmPtr path_ptr, WasmSize path_len)
@@ -262,7 +358,14 @@ namespace psiserve
          return;
 
       if (auto* sock = std::get_if<SocketFd>(entry))
+      {
+         if (sock->ssl)
+         {
+            SSL_shutdown(sock->ssl);
+            SSL_free(sock->ssl);
+         }
          ::close(*sock->real_fd);
+      }
       else if (auto* file = std::get_if<FileFd>(entry))
          ::close(*file->real_fd);
       else if (auto* dir = std::get_if<DirFd>(entry))

@@ -15,6 +15,8 @@ int main(int argc, char** argv)
       ("help,h", "Show help")
       ("port,p", po::value<uint16_t>()->default_value(8080), "Listen port")
       ("webroot,w", po::value<std::string>(), "Directory to serve files from (fd 1)")
+      ("tls-cert,c", po::value<std::string>(), "PEM certificate file (enables TLS)")
+      ("tls-key,k", po::value<std::string>(), "PEM private key file")
       ("wasm",   po::value<std::string>(), "WASM module file");
 
    po::positional_options_description pos;
@@ -47,6 +49,16 @@ int main(int argc, char** argv)
    cfg.port      = psiserve::Port{vm["port"].as<uint16_t>()};
    if (vm.count("webroot"))
       cfg.webroot = vm["webroot"].as<std::string>();
+   if (vm.count("tls-cert"))
+      cfg.tls_cert = vm["tls-cert"].as<std::string>();
+   if (vm.count("tls-key"))
+      cfg.tls_key = vm["tls-key"].as<std::string>();
+
+   if (!cfg.tls_cert.empty() != !cfg.tls_key.empty())
+   {
+      std::cerr << "Error: --tls-cert and --tls-key must be specified together\n";
+      return 1;
+   }
 
    try
    {

@@ -24,6 +24,10 @@ target_link_libraries(psiserve PUBLIC
 find_package(Boost REQUIRED COMPONENTS context)
 target_link_libraries(psiserve PUBLIC Boost::boost Boost::context)
 
+# OpenSSL for TLS
+find_package(OpenSSL REQUIRED)
+target_link_libraries(psiserve PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+
 # Link LLVM backend when enabled
 if(TARGET psizam-llvm)
    target_link_libraries(psiserve PUBLIC psizam-llvm)

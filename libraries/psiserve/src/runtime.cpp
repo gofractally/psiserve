@@ -1,5 +1,6 @@
 #include <psiserve/log.hpp>
 #include <psiserve/runtime.hpp>
+#include <psiserve/tls.hpp>
 
 #include <psizam/error_codes.hpp>
 #include <psizam/host_function_table.hpp>
@@ -69,7 +70,18 @@ namespace psiserve
 
       // Create listen socket
       RealFd listen_fd = createListenSocket(_cfg.port);
-      PSI_INFO("Listening on port {}", *_cfg.port);
+
+      // TLS setup (optional)
+      std::unique_ptr<TlsListenContext> tls;
+      SSL_CTX*                          ssl_ctx = nullptr;
+      if (!_cfg.tls_cert.empty())
+      {
+         tls     = std::make_unique<TlsListenContext>(_cfg.tls_cert, _cfg.tls_key);
+         ssl_ctx = tls->get();
+         PSI_INFO("TLS enabled: cert={} key={}", _cfg.tls_cert.string(), _cfg.tls_key.string());
+      }
+
+      PSI_INFO("Listening on port {} ({})", *_cfg.port, tls ? "https" : "http");
 
       // Set up I/O engine and scheduler
       auto io = std::make_unique<KqueueEngine>();
@@ -81,7 +93,7 @@ namespace psiserve
       // Set up process with listen socket as fd 0, webroot as fd 1
       Process proc;
       proc.name = _process_name.c_str();
-      proc.fds.alloc(SocketFd{listen_fd});  // fd 0 = listen socket
+      proc.fds.alloc(SocketFd{listen_fd, ssl_ctx, nullptr});  // fd 0 = listen socket
 
       if (!_cfg.webroot.empty())
       {
