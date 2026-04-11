@@ -14,8 +14,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
-#include <exception>
-#include <stdexcept>
+#include <iostream>
 
 namespace psizam {
 
@@ -29,10 +28,12 @@ namespace psizam {
       }
 
       ~ir_writer_llvm_aot() noexcept {
+#ifdef __EXCEPTIONS
          if (std::uncaught_exceptions() > 0) return;
+#endif
          if (!_compile_result) return;
 
-         try {
+         auto do_compile = [&]() {
             if (_compile_result->target_triple.empty()) {
                _compile_result->error = "ir_writer_llvm_aot: target_triple not set on compile_result";
                return;
@@ -63,15 +64,28 @@ namespace psizam {
             auto aot_result = llvm_aot_compile(std::move(llvm_mod), std::move(llvm_ctx),
                                                 get_ir_module(), _compile_result->target_triple);
 
+            if (!aot_result.error.empty()) {
+               _compile_result->error = std::move(aot_result.error);
+               return;
+            }
+
             // Step 3: Store results
             _compile_result->relocs = std::move(aot_result.relocations);
             _compile_result->code_blob = std::move(aot_result.code);
             _compile_result->function_offsets = std::move(aot_result.function_offsets);
+         };
+
+#ifdef __EXCEPTIONS
+         try {
+            do_compile();
          } catch (const std::exception& ex) {
             _compile_result->error = ex.what();
          } catch (...) {
             _compile_result->error = "unknown error during LLVM AOT compilation";
          }
+#else
+         do_compile();
+#endif
       }
    };
 

@@ -29,13 +29,25 @@ namespace psizam {
    // helper to read a wasm file into a vector of bytes
    inline std::vector<uint8_t> read_wasm(const std::string& fname) {
       std::ifstream wasm_file(fname, std::ios::binary);
-      if (!wasm_file.is_open())
+      if (!wasm_file.is_open()) {
+#ifdef __EXCEPTIONS
          throw std::runtime_error("wasm file not found");
+#else
+         std::fprintf(stderr, "Fatal: wasm file not found: %s\n", fname.c_str());
+         std::abort();
+#endif
+      }
       wasm_file.seekg(0, std::ios::end);
       std::vector<uint8_t> wasm;
       int                  len = wasm_file.tellg();
-      if (len < 0)
+      if (len < 0) {
+#ifdef __EXCEPTIONS
          throw std::runtime_error("wasm file length is -1");
+#else
+         std::fprintf(stderr, "Fatal: wasm file length is -1\n");
+         std::abort();
+#endif
+      }
       wasm.resize(len);
       wasm_file.seekg(0, std::ios::beg);
       wasm_file.read((char*)wasm.data(), wasm.size());

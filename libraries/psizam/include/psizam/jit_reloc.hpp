@@ -107,6 +107,12 @@ namespace psizam {
       llvm_call_depth_dec,
       llvm_call_depth_inc,
       llvm_trap,
+      llvm_get_memory,
+
+      // Self-reference: resolved to the code blob's own base address.
+      // Used for internal data references (e.g., .rodata merged into the blob).
+      // The addend encodes the offset within the blob.
+      code_blob_self,
 
       // Generic/unknown (for addresses not yet categorized)
       unknown,
@@ -123,6 +129,11 @@ namespace psizam {
       aarch64_movw_uabs_g1_nc = 4, // MOVK bits 16-31
       aarch64_movw_uabs_g2_nc = 5, // MOVK bits 32-47
       aarch64_movw_uabs_g3 = 6,    // MOVK bits 48-63
+      aarch64_adr_prel_pg_hi21 = 7,// ADRP page-relative (bits 5-23, 29-30)
+      aarch64_add_abs_lo12_nc = 8, // ADD immediate low 12 bits (bits 10-21)
+      aarch64_ldst8_abs_lo12_nc = 9,  // LDR/STR 8-bit low 12 (bits 10-21, no scale)
+      aarch64_ldst32_abs_lo12_nc = 10, // LDR/STR 32-bit low 12 (bits 10-21, scale 4)
+      aarch64_ldst64_abs_lo12_nc = 11, // LDR/STR 64-bit low 12 (bits 10-21, scale 8)
    };
 
    /// A single relocation entry: records where an absolute address was embedded.
@@ -166,9 +177,11 @@ namespace psizam {
          char* patch_site = code_base + r.code_offset;
 
          switch (r.type) {
-            case reloc_type::abs64:
-               std::memcpy(patch_site, &target, 8);
+            case reloc_type::abs64: {
+               uint64_t val = target + r.addend;
+               std::memcpy(patch_site, &val, 8);
                break;
+            }
 
             case reloc_type::x86_64_pc32: {
                // PC-relative 32-bit: value = target - (patch_site + 4) + addend
@@ -194,11 +207,61 @@ namespace psizam {
             case reloc_type::aarch64_movw_uabs_g2_nc:
             case reloc_type::aarch64_movw_uabs_g3: {
                // Patch 16-bit immediate in MOVZ/MOVK instruction (bits 5-20)
+               uint64_t resolved = target + r.addend;
                int shift = (static_cast<int>(r.type) - static_cast<int>(reloc_type::aarch64_movw_uabs_g0_nc)) * 16;
-               uint16_t imm16 = static_cast<uint16_t>((target >> shift) & 0xFFFF);
+               uint16_t imm16 = static_cast<uint16_t>((resolved >> shift) & 0xFFFF);
                uint32_t insn;
                std::memcpy(&insn, patch_site, 4);
                insn = (insn & ~(0xFFFFu << 5)) | (static_cast<uint32_t>(imm16) << 5);
+               std::memcpy(patch_site, &insn, 4);
+               break;
+            }
+
+            case reloc_type::aarch64_adr_prel_pg_hi21: {
+               // ADRP: Page(S+A) - Page(P), encoded in bits 5-23 (immlo) and 29-30 (immhi)
+               uint64_t resolved = target + r.addend;
+               int64_t page_delta = static_cast<int64_t>((resolved & ~0xFFFULL) -
+                                    (reinterpret_cast<uint64_t>(patch_site) & ~0xFFFULL));
+               int32_t imm21 = static_cast<int32_t>(page_delta >> 12);
+               uint32_t insn;
+               std::memcpy(&insn, patch_site, 4);
+               uint32_t immlo = static_cast<uint32_t>(imm21) & 0x3u;
+               uint32_t immhi = (static_cast<uint32_t>(imm21) >> 2) & 0x7FFFFu;
+               insn = (insn & 0x9F00001Fu) | (immlo << 29) | (immhi << 5);
+               std::memcpy(patch_site, &insn, 4);
+               break;
+            }
+
+            case reloc_type::aarch64_add_abs_lo12_nc:
+            case reloc_type::aarch64_ldst8_abs_lo12_nc: {
+               // ADD/LDR8: low 12 bits of (S+A), in bits 10-21
+               uint64_t resolved = target + r.addend;
+               uint32_t imm12 = static_cast<uint32_t>(resolved) & 0xFFFu;
+               uint32_t insn;
+               std::memcpy(&insn, patch_site, 4);
+               insn = (insn & ~(0xFFFu << 10)) | (imm12 << 10);
+               std::memcpy(patch_site, &insn, 4);
+               break;
+            }
+
+            case reloc_type::aarch64_ldst32_abs_lo12_nc: {
+               // LDR/STR 32-bit: low 12 bits of (S+A) >> 2, in bits 10-21
+               uint64_t resolved = target + r.addend;
+               uint32_t imm12 = (static_cast<uint32_t>(resolved) & 0xFFFu) >> 2;
+               uint32_t insn;
+               std::memcpy(&insn, patch_site, 4);
+               insn = (insn & ~(0xFFFu << 10)) | (imm12 << 10);
+               std::memcpy(patch_site, &insn, 4);
+               break;
+            }
+
+            case reloc_type::aarch64_ldst64_abs_lo12_nc: {
+               // LDR/STR 64-bit: low 12 bits of (S+A) >> 3, in bits 10-21
+               uint64_t resolved = target + r.addend;
+               uint32_t imm12 = (static_cast<uint32_t>(resolved) & 0xFFFu) >> 3;
+               uint32_t insn;
+               std::memcpy(&insn, patch_site, 4);
+               insn = (insn & ~(0xFFFu << 10)) | (imm12 << 10);
                std::memcpy(patch_site, &insn, 4);
                break;
             }

@@ -26,6 +26,7 @@ namespace psizam {
       std::vector<uint8_t> code;                   // native code blob
       std::vector<code_relocation> relocations;     // relocations against runtime symbols
       std::vector<std::pair<uint32_t, uint32_t>> function_offsets; // (offset, size) per entry wrapper
+      std::string error;                            // non-empty on failure
    };
 
    /// Compile an LLVM module to a relocatable code blob.

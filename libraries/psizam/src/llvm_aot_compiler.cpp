@@ -31,7 +31,8 @@ extern "C" {
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/Support/SmallVectorMemoryBuffer.h>
 
-#include <stdexcept>
+#include <iostream>
+#include <optional>
 #include <unordered_map>
 
 namespace psizam {
@@ -81,6 +82,7 @@ namespace psizam {
          {"__psizam_call_depth_dec",   reloc_symbol::llvm_call_depth_dec},
          {"__psizam_call_depth_inc",   reloc_symbol::llvm_call_depth_inc},
          {"__psizam_trap",             reloc_symbol::llvm_trap},
+         {"__psizam_get_memory",       reloc_symbol::llvm_get_memory},
       };
       auto it = sym_map.find(name.str());
       if (it != sym_map.end()) return it->second;
@@ -96,7 +98,8 @@ namespace psizam {
             case 2:  return reloc_type::x86_64_pc32;     // R_X86_64_PC32
             case 4:  return reloc_type::x86_64_pc32;     // R_X86_64_PLT32 (same encoding)
             default:
-               throw std::runtime_error("Unsupported x86_64 ELF relocation type: " + std::to_string(elf_type));
+               std::cerr << "Fatal: Unsupported x86_64 ELF relocation type: " << elf_type << "\n";
+               std::abort();
          }
       } else {
          // ELF aarch64 relocation types (from AArch64.def)
@@ -111,8 +114,15 @@ namespace psizam {
             case 267:                                                // R_AARCH64_MOVW_UABS_G2
             case 268: return reloc_type::aarch64_movw_uabs_g2_nc;  // R_AARCH64_MOVW_UABS_G2_NC
             case 269: return reloc_type::aarch64_movw_uabs_g3;     // R_AARCH64_MOVW_UABS_G3
+            case 260: return reloc_type::aarch64_adr_prel_pg_hi21; // R_AARCH64_ADR_PREL_PG_HI21
+            case 261: return reloc_type::aarch64_adr_prel_pg_hi21; // R_AARCH64_ADR_PREL_PG_HI21_NC
+            case 275: return reloc_type::aarch64_add_abs_lo12_nc;  // R_AARCH64_ADD_ABS_LO12_NC
+            case 278: return reloc_type::aarch64_ldst8_abs_lo12_nc;  // R_AARCH64_LDST8_ABS_LO12_NC
+            case 284: return reloc_type::aarch64_ldst32_abs_lo12_nc; // R_AARCH64_LDST32_ABS_LO12_NC
+            case 286: return reloc_type::aarch64_ldst64_abs_lo12_nc; // R_AARCH64_LDST64_ABS_LO12_NC
             default:
-               throw std::runtime_error("Unsupported aarch64 ELF relocation type: " + std::to_string(elf_type));
+               std::cerr << "Fatal: Unsupported aarch64 ELF relocation type: " << elf_type << "\n";
+               std::abort();
          }
       }
    }
@@ -132,7 +142,7 @@ namespace psizam {
       std::string error;
       auto* target = llvm::TargetRegistry::lookupTarget(triple, error);
       if (!target) {
-         throw std::runtime_error("LLVM target lookup failed: " + error);
+         return llvm_aot_result{.error = "LLVM target lookup failed: " + error};
       }
 
       // Create target machine with large code model for absolute addressing
@@ -143,11 +153,14 @@ namespace psizam {
       auto cm = llvm::CodeModel::Large;
       // x86-64-v2 includes SSE4.1/4.2 — avoids libc calls for ceil/floor/etc.
       std::string cpu = is_x86_64 ? "x86-64-v2" : "";
+      // On aarch64, reserve x18 — macOS uses it as a platform register.
+      // We keep the linux-gnu triple for ELF output but must not clobber x18.
+      std::string features = is_x86_64 ? "" : "+reserve-x18";
       auto tm = std::unique_ptr<llvm::TargetMachine>(
-         target->createTargetMachine(triple, cpu, "", opts, rm, cm,
+         target->createTargetMachine(triple, cpu, features, opts, rm, cm,
                                      llvm::CodeGenOptLevel::Default));
       if (!tm) {
-         throw std::runtime_error("Failed to create LLVM TargetMachine");
+         return llvm_aot_result{.error = "Failed to create LLVM TargetMachine"};
       }
 
       llvm_mod->setDataLayout(tm->createDataLayout());
@@ -160,7 +173,7 @@ namespace psizam {
 
       if (tm->addPassesToEmitFile(pm, obj_stream, nullptr,
                                    llvm::CodeGenFileType::ObjectFile)) {
-         throw std::runtime_error("TargetMachine cannot emit object file");
+         return llvm_aot_result{.error = "TargetMachine cannot emit object file"};
       }
       pm.run(*llvm_mod);
 
@@ -171,13 +184,20 @@ namespace psizam {
          std::string msg;
          llvm::raw_string_ostream os(msg);
          os << obj_or_err.takeError();
-         throw std::runtime_error("Failed to parse emitted object: " + msg);
+         return llvm_aot_result{.error = "Failed to parse emitted object: " + msg};
       }
       auto& obj = **obj_or_err;
 
-      // Find the .text section
+      // Find the .text section and merge any .rodata sections into the code blob.
+      // LLVM may place jump tables and constant pools in .rodata, which must be
+      // accessible from the code at runtime. We append .rodata after .text with
+      // alignment, and emit code_blob_self relocations for cross-section references.
       llvm_aot_result result;
-      const llvm::object::SectionRef* text_section = nullptr;
+      std::optional<llvm::object::SectionRef> text_section;
+      uint64_t rodata_blob_offset = 0;  // offset of .rodata within the merged code blob
+
+      // Track section index → blob offset for resolving internal relocations
+      std::unordered_map<uint64_t, uint64_t> section_blob_offsets;
 
       for (const auto& section : obj.sections()) {
          auto name_or_err = section.getName();
@@ -186,18 +206,39 @@ namespace psizam {
          if (*name_or_err == ".text" || *name_or_err == ".ltext") {
             auto contents_or_err = section.getContents();
             if (!contents_or_err) {
-               throw std::runtime_error("Failed to read code section");
+               return llvm_aot_result{.error = "Failed to read code section"};
             }
             if (!contents_or_err->empty()) {
                result.code.assign(contents_or_err->begin(), contents_or_err->end());
-               text_section = &section;
+               text_section = section;
+               section_blob_offsets[section.getIndex()] = 0;
                break;
             }
          }
       }
 
+      // Append .rodata sections to the code blob
+      for (const auto& section : obj.sections()) {
+         auto name_or_err = section.getName();
+         if (!name_or_err) continue;
+         auto name = *name_or_err;
+         if (name == ".rodata" || name.starts_with(".rodata.")) {
+            auto contents_or_err = section.getContents();
+            if (!contents_or_err || contents_or_err->empty()) continue;
+
+            // Align to 16 bytes for data sections
+            size_t align_pad = (16 - (result.code.size() % 16)) % 16;
+            result.code.resize(result.code.size() + align_pad, 0);
+            uint64_t offset = result.code.size();
+            result.code.insert(result.code.end(), contents_or_err->begin(), contents_or_err->end());
+            section_blob_offsets[section.getIndex()] = offset;
+            if (name == ".rodata")
+               rodata_blob_offset = offset;
+         }
+      }
+
       if (!text_section || result.code.empty()) {
-         throw std::runtime_error("No .text section found in emitted object");
+         return llvm_aot_result{.error = "No .text section found in emitted object"};
       }
 
       // Build symbol name → index map from the object's symbol table
@@ -233,16 +274,77 @@ namespace psizam {
 
             auto psizam_sym = map_llvm_symbol(sym_name);
 
-            // Skip internal symbols (wasm function cross-references within the blob)
+            // Handle unknown symbols — either internal references or data section refs
             if (psizam_sym == reloc_symbol::unknown) {
-               // Check if it's a wasm_entry_* or wasm_func_* internal reference,
-               // a local label (.L*), or a section symbol (.text, .ltext, etc.)
-               if (sym_name.starts_with("wasm_entry_") || sym_name.starts_with("wasm_func_") ||
-                   sym_name.starts_with(".L") || sym_name.starts_with(".") ||
-                   sym_name.starts_with("_")) {
-                  continue; // internal reference, resolved within the blob
+               // Check which section the symbol belongs to
+               auto sec_or_err = sym_it->getSection();
+               bool is_internal_code = false;
+               bool is_data_section = false;
+               uint64_t data_section_blob_offset = 0;
+
+               if (sec_or_err && *sec_or_err != obj.section_end()) {
+                  auto sn = (*sec_or_err)->getName();
+                  if (sn) {
+                     // Check if this symbol is in a data section we merged into the blob
+                     auto blob_it = section_blob_offsets.find((*sec_or_err)->getIndex());
+                     if (blob_it != section_blob_offsets.end()) {
+                        auto text_name = text_section ? text_section->getName() : llvm::Expected<llvm::StringRef>(llvm::StringRef(""));
+                        if (*sec_or_err == *text_section) {
+                           is_internal_code = true; // reference within .text
+                        } else {
+                           is_data_section = true;
+                           data_section_blob_offset = blob_it->second;
+                        }
+                     }
+                  }
                }
-               throw std::runtime_error("Unknown external symbol in LLVM object: " + sym_name);
+
+               if (is_data_section) {
+                  // Cross-section reference to merged data (e.g., .rodata jump tables).
+                  // Emit a code_blob_self relocation so the loader resolves it to
+                  // code_base + data_offset + symbol_value_within_section + addend.
+                  auto val_or_err = llvm::object::ELFRelocationRef(reloc).getAddend();
+                  int32_t elf_addend = val_or_err ? static_cast<int32_t>(*val_or_err) : 0;
+                  auto sym_val_or_err = sym_it->getValue();
+                  uint64_t sym_val = sym_val_or_err ? *sym_val_or_err : 0;
+
+                  code_relocation cr;
+                  cr.code_offset = static_cast<uint32_t>(reloc.getOffset());
+                  cr.symbol = reloc_symbol::code_blob_self;
+                  cr.type = map_elf_reloc_type(reloc.getType(), is_x86_64);
+                  cr.addend = static_cast<int32_t>(data_section_blob_offset + sym_val) + elf_addend;
+                  result.relocations.push_back(cr);
+                  continue;
+               }
+
+               // Internal code reference (wasm functions, local labels within .text)
+               // The assembler already resolves intra-section relocations in .text,
+               // so the instructions have correct relative offsets. Skip them.
+               if (is_internal_code ||
+                   sym_name.starts_with("wasm_entry_") || sym_name.starts_with("wasm_func_") ||
+                   sym_name.starts_with(".L") || sym_name.starts_with(".")) {
+                  continue;
+               }
+
+               // Map libc/compiler-rt symbols to known reloc_symbols
+               reloc_symbol mapped = reloc_symbol::unknown;
+               if (sym_name == "memset")
+                  mapped = reloc_symbol::libc_memset;
+               else if (sym_name == "memmove" || sym_name == "memcpy")
+                  mapped = reloc_symbol::libc_memmove;
+
+               if (mapped != reloc_symbol::unknown) {
+                  code_relocation cr;
+                  cr.code_offset = static_cast<uint32_t>(reloc.getOffset());
+                  cr.symbol = mapped;
+                  cr.type = map_elf_reloc_type(reloc.getType(), is_x86_64);
+                  auto val_or_err = llvm::object::ELFRelocationRef(reloc).getAddend();
+                  cr.addend = val_or_err ? static_cast<int32_t>(*val_or_err) : 0;
+                  result.relocations.push_back(cr);
+                  continue;
+               }
+
+               return llvm_aot_result{.error = "Unknown external symbol in LLVM object: " + sym_name};
             }
 
             code_relocation cr;

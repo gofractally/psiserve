@@ -125,6 +125,7 @@ namespace psizam {
       table[static_cast<uint32_t>(reloc_symbol::llvm_call_depth_dec)]   = reinterpret_cast<void*>(&__psizam_call_depth_dec);
       table[static_cast<uint32_t>(reloc_symbol::llvm_call_depth_inc)]   = reinterpret_cast<void*>(&__psizam_call_depth_inc);
       table[static_cast<uint32_t>(reloc_symbol::llvm_trap)]             = reinterpret_cast<void*>(&__psizam_trap);
+      table[static_cast<uint32_t>(reloc_symbol::llvm_get_memory)]       = reinterpret_cast<void*>(&__psizam_get_memory);
    }
 #endif
 
@@ -221,11 +222,15 @@ namespace psizam {
          if (!pzam_validate(pzam_data)) return false;
 
          pzam_file file;
+#ifdef __EXCEPTIONS
          try {
             file = pzam_load(pzam_data);
          } catch (...) {
             return false;
          }
+#else
+         file = pzam_load(pzam_data);
+#endif
 
          // Validate magic and version
          if (file.magic != PZAM_MAGIC) return false;

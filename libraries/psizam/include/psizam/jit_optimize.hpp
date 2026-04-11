@@ -532,9 +532,6 @@ namespace psizam {
          auto try_replace = [&](uint32_t& field) {
             if (field == old_vreg) { field = new_vreg; found = true; }
          };
-         auto try_replace16 = [&](uint16_t& field) {
-            if (field == old_vreg) { field = static_cast<uint16_t>(new_vreg); found = true; }
-         };
          switch (inst.opcode) {
          // rr format: binary ops, comparisons, unary ops, mov, br_table, return, arg, drop, memory_grow
          case ir_op::i32_add: case ir_op::i32_sub: case ir_op::i32_mul:
@@ -621,11 +618,11 @@ namespace psizam {
          case ir_op::local_set: case ir_op::local_tee: case ir_op::global_set:
             try_replace(inst.local.src1);
             break;
-         // select: 3 packed 16-bit vregs
+         // select: 3 vreg fields
          case ir_op::select:
-            try_replace16(inst.sel.val1);
-            try_replace16(inst.sel.val2);
-            try_replace16(inst.sel.cond);
+            try_replace(inst.sel.val1);
+            try_replace(inst.sel.val2);
+            try_replace(inst.sel.cond);
             break;
          default:
             break;

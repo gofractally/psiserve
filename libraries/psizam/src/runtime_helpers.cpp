@@ -1,6 +1,8 @@
 // Runtime helper functions for JIT backends.
 // These are called from JIT-generated native code (both custom JIT and LLVM backends).
 // They do NOT depend on LLVM — they only use psizam core types.
+//
+// See llvm_runtime_helpers.cpp for the exception escape rationale.
 
 #include <psizam/llvm_runtime_helpers.hpp>
 #include <psizam/execution_context.hpp>
@@ -13,6 +15,16 @@ namespace {
 
    ctx_t& as_ctx(void* ctx) {
       return *static_cast<ctx_t*>(ctx);
+   }
+
+   template<typename E>
+   [[noreturn]] void escape_or_throw(const char* msg) {
+      sigjmp_buf* dest = std::atomic_load(&psizam::signal_dest);
+      if (dest) {
+         psizam::saved_exception = std::make_exception_ptr(E{msg});
+         siglongjmp(*dest, -1);
+      }
+      throw E{msg};
    }
 }
 
@@ -65,14 +77,14 @@ void __psizam_table_init(void* ctx, uint32_t elem_idx,
 uint32_t __psizam_table_get(void* ctx, uint32_t table_idx, uint32_t elem_idx) {
    auto& c = as_ctx(ctx);
    if (elem_idx >= c.get_table_size(table_idx))
-      throw psizam::wasm_interpreter_exception{"table index out of range"};
+      escape_or_throw<psizam::wasm_interpreter_exception>("table index out of range");
    return c.get_table_base(table_idx)[elem_idx].index;
 }
 
 void __psizam_table_set(void* ctx, uint32_t table_idx, uint32_t elem_idx, uint32_t val) {
    auto& c = as_ctx(ctx);
    if (elem_idx >= c.get_table_size(table_idx))
-      throw psizam::wasm_interpreter_exception{"table index out of range"};
+      escape_or_throw<psizam::wasm_interpreter_exception>("table index out of range");
    auto& entry = c.get_table_base(table_idx)[elem_idx];
    entry.index = val;
    entry.type = UINT32_MAX;

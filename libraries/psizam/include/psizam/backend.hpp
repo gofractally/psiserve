@@ -359,6 +359,28 @@ namespace psizam {
          ctx->set_max_pages(detail::get_max_pages(options));
          construct();
       }
+      /// Construct with a pre-built host_function_table.
+      /// The table resolves imports directly; no registered_host_functions needed.
+      /// Use call(void* host, func_name) to invoke exports.
+      backend(wasm_code& code, host_function_table table, void* host, wasm_allocator* alloc, const Options& options = Options{})
+         : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{parse_module(code, options), detail::choose_stack_limit(options)}), mod_sharable{true}, _host_table(std::move(table)) {
+         ctx->set_max_pages(detail::get_max_pages(options));
+         mod->finalize();
+         if (ctx.owns) {
+            ctx->set_wasm_allocator(memory_alloc);
+         }
+         _host_table.resolve(*mod);
+         ctx->set_host_table(&_host_table);
+         if (ctx.owns) {
+            ctx->initialize_globals();
+            if constexpr (!std::is_same_v<Impl, null_backend>) {
+               if (memory_alloc) {
+                  ctx->reset();
+                  ctx->execute_start(host, interpret_visitor(*ctx));
+               }
+            }
+         }
+      }
       template <typename XDebugInfo>
       backend(wasm_code& code, wasm_allocator* alloc, const Options& options, XDebugInfo& debug)
          : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{(parse_module(code, options, debug)), detail::choose_stack_limit(options)}), mod_sharable{true} {
@@ -544,6 +566,18 @@ namespace psizam {
             ctx->template execute<tc_t>(nullptr, debug_visitor(*ctx), func, std::forward<Args>(args)...);
          } else {
             ctx->template execute<tc_t>(nullptr, interpret_visitor(*ctx), func, std::forward<Args>(args)...);
+         }
+         return true;
+      }
+
+      /// Call an exported function by name with an opaque host pointer.
+      /// The host pointer is forwarded to host function trampolines as void*.
+      template <typename... Args>
+      inline bool call(void* host, const std::string_view& func, Args&&... args) {
+         if constexpr (psizam_debug) {
+            ctx->template execute<tc_t>(host, debug_visitor(*ctx), func, std::forward<Args>(args)...);
+         } else {
+            ctx->template execute<tc_t>(host, interpret_visitor(*ctx), func, std::forward<Args>(args)...);
          }
          return true;
       }

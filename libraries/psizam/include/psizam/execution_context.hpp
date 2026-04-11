@@ -176,7 +176,7 @@ namespace psizam {
       inline void    exit(std::error_code err = std::error_code()) {
          // FIXME: system_error?
          _error_code = err;
-         throw wasm_exit_exception{"Exiting"};
+         PSIZAM_THROW(wasm_exit_exception, "Exiting");
       }
 
       inline void        set_module(module* mod) {
@@ -482,7 +482,7 @@ namespace psizam {
             /* TODO fix this */
             assert(!"??????");
          }
-         throw wasm_memory_exception{ "wasm memory out-of-bounds" };
+         PSIZAM_THROW(wasm_memory_exception, "wasm memory out-of-bounds");
       }
 
       char*                           _linear_memory    = nullptr;
@@ -672,6 +672,7 @@ namespace psizam {
                auto fn = reinterpret_cast<native_value (*)(void*, void*)>(_mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset + _mod->allocator._code_base);
 
                if constexpr(EnableBacktrace) {
+#ifndef PSIZAM_COMPILE_ONLY
                   sigset_t block_mask;
                   sigemptyset(&block_mask);
                   sigaddset(&block_mask, SIGPROF);
@@ -685,6 +686,7 @@ namespace psizam {
                   psizam::invoke_with_signal_handler([&]() {
                      result = execute<args_count>(args_raw, fn, this, base_type::linear_memory(), stack, ft.return_type);
                   }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
+#endif
                } else {
                   psizam::invoke_with_signal_handler([&]() {
                      result = execute<args_count>(args_raw, fn, this, base_type::linear_memory(), stack, ft.return_type);
@@ -996,7 +998,7 @@ namespace psizam {
             case types::f32: return f32_const_t{ _globals[index].value.f32 };
             case types::f64: return f64_const_t{ _globals[index].value.f64 };
             case types::v128: return v128_const_t{ _globals[index].value.v128 };
-            default: throw wasm_interpreter_exception{ "invalid global type" };
+            default: PSIZAM_THROW(wasm_interpreter_exception, "invalid global type");
          }
       }
 
@@ -1029,14 +1031,14 @@ namespace psizam {
                                                  "expected v128 global type");
                                    _globals[index].value.v128 = v.data;
                                 },
-                                [](auto) { throw wasm_interpreter_exception{ "invalid global type" }; } },
+                                [](auto) { PSIZAM_THROW(wasm_interpreter_exception, "invalid global type"); } },
                     el);
       }
 
       inline bool is_true(const operand_stack_elem& el) {
          bool ret_val = false;
          visit(overloaded{ [&](const i32_const_t& i32) { ret_val = i32.data.ui; },
-                           [&](auto) { throw wasm_invalid_element{ "should be an i32 type" }; } },
+                           [&](auto) { PSIZAM_THROW(wasm_invalid_element, "should be an i32 type"); } },
                     el);
          return ret_val;
       }
@@ -1064,7 +1066,7 @@ namespace psizam {
                                       PSIZAM_ASSERT(ft.param_types[i] == types::v128, wasm_interpreter_exception,
                                                     "function param type mismatch");
                                    },
-                                   [&](auto) { throw wasm_interpreter_exception{ "function param invalid type" }; } },
+                                   [&](auto) { PSIZAM_THROW(wasm_interpreter_exception, "function param invalid type"); } },
                        op);
          }
       }
@@ -1238,7 +1240,7 @@ namespace psizam {
                   case types::f32: push_operand(f32_const_t{ (uint32_t)0 }); break;
                   case types::f64: push_operand(f64_const_t{ (uint64_t)0 }); break;
                   case types::v128: push_operand(v128_const_t{ v128_t{} }); break;
-                  default: throw wasm_interpreter_exception{ "invalid function param type" };
+                  default: PSIZAM_THROW(wasm_interpreter_exception, "invalid function param type");
                }
          }
       }
@@ -1251,7 +1253,7 @@ namespace psizam {
 #define CREATE_EXIT_LABEL(NAME, CODE) ev_label_##NAME : \
       return;
 #define CREATE_EMPTY_LABEL(NAME, CODE) ev_label_##NAME :  \
-      throw wasm_interpreter_exception{"empty operand"};
+      PSIZAM_THROW(wasm_interpreter_exception, "empty operand");
 
       template <typename Visitor>
       void execute(Visitor&& visitor) {
@@ -1325,7 +1327,7 @@ namespace psizam {
              goto* dispatch_table[ev_variant->index()];
              PSIZAM_ERROR_OPS(CREATE_LABEL);
              __ev_last:
-                throw wasm_interpreter_exception{"should never reach here"};
+                PSIZAM_THROW(wasm_interpreter_exception, "should never reach here");
          }
       }
 

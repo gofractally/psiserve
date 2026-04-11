@@ -148,6 +148,13 @@ namespace psizam {
       uint32_t size() const { return static_cast<uint32_t>(_entries.size()); }
       const std::vector<entry>& entries() const { return _entries; }
 
+      /// Add a pre-built entry (for custom trampolines, e.g. WASI host).
+      void add_entry(entry e) {
+         uint32_t idx = static_cast<uint32_t>(_entries.size());
+         _name_map[{e.module_name, e.func_name}] = idx;
+         _entries.push_back(std::move(e));
+      }
+
    private:
       std::vector<entry>                                                _entries;
       std::unordered_map<host_func_pair, uint32_t, host_func_pair_hash> _name_map;

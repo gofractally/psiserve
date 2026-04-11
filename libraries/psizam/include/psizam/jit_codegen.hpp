@@ -2587,18 +2587,16 @@ namespace psizam {
          case ir_op::select: {
             if (inst.type == types::v128) {
                // v128 select: pick val1 (cond != 0) or val2 (cond == 0)
+               // Load both to XMM first to avoid spill-slot aliasing with dest
+               load_v128_to_xmm(inst.sel.val1, xmm0);
+               load_v128_to_xmm(inst.sel.val2, xmm1);
                load_vreg_rax(inst.sel.cond);
                this->emit(base::TEST, eax, eax);
                void* skip = this->emit_branch8(base::JNZ);
-               // condition is zero: dest = val2
-               load_v128_to_xmm(inst.sel.val2, xmm0);
-               store_xmm_to_v128(xmm0, inst.dest);
-               void* done = this->emit_branch8(base::JMP_8);
+               // condition is zero: use val2 (xmm1)
+               this->emit(base::VMOVDQU_A, xmm1, xmm0);
                base::fix_branch8(skip, code);
-               // condition is nonzero: dest = val1
-               load_v128_to_xmm(inst.sel.val1, xmm0);
                store_xmm_to_v128(xmm0, inst.dest);
-               base::fix_branch8(done, code);
                return true;
             }
             load_vreg_rax(inst.sel.cond);  // condition

@@ -72,7 +72,11 @@ target_compile_options(psizam INTERFACE
    $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fbracket-depth=1024>
 )
 
-target_link_libraries(psizam INTERFACE Threads::Threads psio)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+   target_link_libraries(psizam INTERFACE psio)
+else()
+   target_link_libraries(psizam INTERFACE Threads::Threads psio)
+endif()
 
 if(PSIZAM_ENABLE_SOFTFLOAT)
    target_compile_definitions(psizam INTERFACE PSIZAM_SOFTFLOAT)
@@ -84,35 +88,65 @@ if(PSIZAM_FULL_DEBUG)
 endif()
 
 # ── Runtime helpers (non-LLVM, needed by all JIT backends) ────────────────────
-add_library(psizam-runtime STATIC
-   src/runtime_helpers.cpp
-   src/call_on_stack.cpp
-)
-target_link_libraries(psizam-runtime PUBLIC psizam)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
+   add_library(psizam-runtime STATIC
+      src/runtime_helpers.cpp
+      src/call_on_stack.cpp
+   )
+   target_link_libraries(psizam-runtime PUBLIC psizam)
+endif()
 
-# ── LLVM Backend (opt-in) ──────────────────────────────────────────────────────
-option(PSIZAM_ENABLE_LLVM "Build LLVM JIT backend" OFF)
+# ── LLVM Backend (opt-in) ─────────────────────────────────────────────────────
+option(PSIZAM_ENABLE_LLVM "Build LLVM AOT/JIT backend" OFF)
 
 if(PSIZAM_ENABLE_LLVM)
-   find_package(LLVM REQUIRED CONFIG)
-   message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
+   if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+      # WASI: use pre-built LLVM WASI libraries
+      if(NOT LLVM_WASI_PREFIX)
+         message(FATAL_ERROR "PSIZAM_ENABLE_LLVM=ON for WASI requires -DLLVM_WASI_PREFIX=<path>")
+      endif()
+      cmake_path(ABSOLUTE_PATH LLVM_WASI_PREFIX BASE_DIRECTORY "${CMAKE_SOURCE_DIR}" OUTPUT_VARIABLE _LLVM_WASI_ABS)
+      set(LLVM_DIR "${_LLVM_WASI_ABS}/lib/cmake/llvm")
+      find_package(LLVM REQUIRED CONFIG NO_CMAKE_FIND_ROOT_PATH)
+      message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} (WASI) at ${LLVM_DIR}")
 
-   llvm_map_components_to_libnames(LLVM_LIBS
-      core support orcjit native
-      passes instcombine scalaropts
-      x86codegen x86asmparser x86desc x86info
-      aarch64codegen aarch64asmparser aarch64desc aarch64info
-      object
-   )
+      llvm_map_components_to_libnames(LLVM_LIBS
+         core support
+         passes instcombine scalaropts
+         x86codegen x86asmparser x86desc x86info
+         aarch64codegen aarch64asmparser aarch64desc aarch64info
+         object
+      )
 
-   add_library(psizam-llvm STATIC
-      src/llvm_ir_translator.cpp
-      src/llvm_jit_compiler.cpp
-      src/llvm_compile.cpp
-      src/llvm_runtime_helpers.cpp
-      src/llvm_aot_compiler.cpp
-   )
-   target_link_libraries(psizam-llvm PUBLIC psizam psizam-runtime ${LLVM_LIBS})
+      # AOT-only sources (no JIT, no runtime helpers)
+      add_library(psizam-llvm STATIC
+         src/llvm_ir_translator.cpp
+         src/llvm_aot_compiler.cpp
+      )
+      target_link_libraries(psizam-llvm PUBLIC psizam ${LLVM_LIBS})
+   else()
+      # Native: full LLVM with ORC JIT
+      find_package(LLVM REQUIRED CONFIG)
+      message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
+
+      llvm_map_components_to_libnames(LLVM_LIBS
+         core support orcjit native
+         passes instcombine scalaropts
+         x86codegen x86asmparser x86desc x86info
+         aarch64codegen aarch64asmparser aarch64desc aarch64info
+         object
+      )
+
+      add_library(psizam-llvm STATIC
+         src/llvm_ir_translator.cpp
+         src/llvm_jit_compiler.cpp
+         src/llvm_compile.cpp
+         src/llvm_runtime_helpers.cpp
+         src/llvm_aot_compiler.cpp
+      )
+      target_link_libraries(psizam-llvm PUBLIC psizam psizam-runtime ${LLVM_LIBS})
+   endif()
+
    target_include_directories(psizam-llvm PUBLIC ${LLVM_INCLUDE_DIRS})
    target_compile_definitions(psizam-llvm PUBLIC PSIZAM_ENABLE_LLVM_BACKEND)
 
@@ -128,12 +162,12 @@ if(PSIZAM_ENABLE_TOOLS)
 endif()
 
 # ── Benchmarks ─────────────────────────────────────────────────────────────────
-if(PSIZAM_ENABLE_BENCHMARKS)
+if(PSIZAM_ENABLE_BENCHMARKS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    add_subdirectory(benchmarks)
 endif()
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
-if(PSIZAM_ENABLE_TESTS)
+if(PSIZAM_ENABLE_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    include(CTest)
    set(CATCH_BUILD_TESTING OFF CACHE BOOL "disable building Catch2 tests")
    set(CATCH_INSTALL_DOCS OFF CACHE BOOL "disable installing Catch2 docs")

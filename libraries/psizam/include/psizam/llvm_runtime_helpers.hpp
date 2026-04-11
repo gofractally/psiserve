@@ -15,6 +15,7 @@ extern "C" {
    void     __psizam_global_set_v128(void* ctx, uint32_t idx, const void* in);
 
    // Memory management
+   void*    __psizam_get_memory(void* ctx);
    int32_t  __psizam_memory_size(void* ctx);
    int32_t  __psizam_memory_grow(void* ctx, int32_t pages, void** new_mem_out);
 

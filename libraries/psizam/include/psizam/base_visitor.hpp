@@ -187,7 +187,7 @@ namespace psizam {
       [[gnu::always_inline]] inline void operator()(const f64_reinterpret_i64_t& ) {}
       template <typename T>
       [[gnu::always_inline]] inline void operator()(T val) {
-         throw wasm_interpreter_exception{"invalid opcode"};
+         PSIZAM_THROW(wasm_interpreter_exception, "invalid opcode");
       }
    };
 

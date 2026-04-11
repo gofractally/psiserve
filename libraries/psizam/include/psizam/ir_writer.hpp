@@ -10,9 +10,12 @@
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
+#if !defined(__wasm__)
 #include <psizam/jit_codegen.hpp>
 #include <psizam/jit_codegen_a64.hpp>
+#endif
 #include <psizam/jit_ir.hpp>
+#include <psizam/jit_reloc.hpp>
 #include <psizam/jit_optimize.hpp>
 #include <psizam/jit_regalloc.hpp>
 #include <psizam/types.hpp>
@@ -64,9 +67,11 @@ namespace psizam {
       ~ir_writer_impl() {
          // If destructor runs during stack unwinding (parsing threw an exception),
          // skip compilation — some functions may not have been parsed.
+#ifdef __EXCEPTIONS
          if (std::uncaught_exceptions() > 0) {
             return;
          }
+#endif
 
          // If a subclass handles codegen (e.g., LLVM), skip native codegen.
          // The scratch allocator destructor will clean up IR data.
@@ -921,9 +926,9 @@ namespace psizam {
             inst.opcode = ir_op::select;
             inst.type = type;
             inst.dest = dest;
-            inst.sel.val1 = static_cast<uint16_t>(val1);
-            inst.sel.val2 = static_cast<uint16_t>(val2);
-            inst.sel.cond = static_cast<uint16_t>(cond);
+            inst.sel.val1 = val1;
+            inst.sel.val2 = val2;
+            inst.sel.cond = cond;
             _func->emit(inst);
             _func->vpush(dest);
             if (type == types::v128) {
@@ -2260,14 +2265,32 @@ namespace psizam {
    };
 
    // Architecture-specific aliases
+#if !defined(__wasm__)
    using ir_writer_x64 = ir_writer_impl<jit_codegen>;
    using ir_writer_a64 = ir_writer_impl<jit_codegen_a64>;
+#endif
+
+   // Null codegen for compile-only platforms (e.g., WASI) where only _skip_codegen=true
+   // paths are used (LLVM AOT). The codegen methods are never called.
+   struct null_codegen {
+      null_codegen(growable_allocator&, module&, growable_allocator&, bool, bool) {}
+      void emit_entry_and_error_handlers() {}
+      void compile_function(ir_function&, function_body&) {}
+      void finalize_code() {}
+      struct null_relocs {
+         auto entries() const { return std::vector<code_relocation>{}; }
+      };
+      null_relocs relocations() const { return {}; }
+   };
+   using ir_writer_null = ir_writer_impl<null_codegen>;
 
    // Default alias for the native platform
 #ifdef __aarch64__
    using ir_writer = ir_writer_a64;
 #elif defined(__x86_64__)
    using ir_writer = ir_writer_x64;
+#else
+   using ir_writer = ir_writer_null;
 #endif
 
 } // namespace psizam

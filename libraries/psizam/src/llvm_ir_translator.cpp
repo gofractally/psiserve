@@ -10,6 +10,8 @@
 #include <psizam/llvm_ir_translator.hpp>
 
 #include <llvm/IR/IRBuilder.h>
+#include <cstdlib>
+#include <iostream>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -120,6 +122,7 @@ namespace psizam {
       llvm::Function* rt_trap           = nullptr;
       llvm::Function* rt_call_depth_dec = nullptr;
       llvm::Function* rt_call_depth_inc = nullptr;
+      llvm::Function* rt_get_memory     = nullptr;
 
       void declare_runtime_helpers() {
          auto decl = [&](const char* name, llvm::FunctionType* ty) -> llvm::Function* {
@@ -222,6 +225,10 @@ namespace psizam {
          // void __psizam_call_depth_inc(void* ctx) — increments on return
          rt_call_depth_inc = decl("__psizam_call_depth_inc",
             llvm::FunctionType::get(void_ty, {ptr_ty}, false));
+
+         // void* __psizam_get_memory(void* ctx) — returns current linear memory base
+         rt_get_memory = decl("__psizam_get_memory",
+            llvm::FunctionType::get(ptr_ty, {ptr_ty}, false));
       }
 
       llvm::Type* wasm_type_to_llvm(uint8_t wt) {
@@ -310,6 +317,7 @@ namespace psizam {
          auto* fn = wasm_funcs[func_idx];
          if (!fn) return;
 
+
          llvm::IRBuilder<> builder(*ctx);
 
          // In deterministic or softfloat mode, use constrained FP to prevent LLVM
@@ -329,8 +337,18 @@ namespace psizam {
          auto arg_it = fn->arg_begin();
          llvm::Value* ctx_ptr = &*arg_it++;
          ctx_ptr->setName("ctx");
-         llvm::Value* mem_ptr = &*arg_it++;
-         mem_ptr->setName("mem");
+         llvm::Value* mem_arg = &*arg_it++;
+         mem_arg->setName("mem");
+
+         // Store mem_ptr in an alloca so memory_grow can update it and LLVM's
+         // mem2reg pass inserts PHI nodes at control flow merges. Without this,
+         // reassigning the C++ variable after memory_grow creates a Load in one
+         // basic block that doesn't dominate uses in other blocks.
+         auto* mem_ptr_alloca = builder.CreateAlloca(ptr_ty, nullptr, "mem_ptr");
+         builder.CreateStore(mem_arg, mem_ptr_alloca);
+         auto load_mem_ptr = [&]() -> llvm::Value* {
+            return builder.CreateLoad(ptr_ty, mem_ptr_alloca, "mem");
+         };
 
          // Determine vreg types by scanning instructions.
          // Take the first non-pseudo type assignment for each vreg.
@@ -637,7 +655,7 @@ namespace psizam {
             auto* eff_addr = builder.CreateZExt(builder.CreateTrunc(addr, i32_ty), i64_ty);
             if (offset != 0)
                eff_addr = builder.CreateAdd(eff_addr, builder.getInt64(static_cast<uint64_t>(offset)));
-            return builder.CreateGEP(i8_ty, mem_ptr, eff_addr);
+            return builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
          };
 
          // Track which block we're currently emitting into, for fallthrough
@@ -1122,6 +1140,10 @@ namespace psizam {
                      llvm::Value* val1 = load_vreg(inst.sel.val1);
                      llvm::Value* val2 = load_vreg(inst.sel.val2);
                      if (cond && val1 && val2) {
+                        // Ensure both operands have matching types for LLVM select
+                        if (val1->getType() != val2->getType()) {
+                           val2 = convert_type(val2, val1->getType());
+                        }
                         llvm::Value* cmp = builder.CreateICmpNE(cond,
                            llvm::Constant::getNullValue(cond->getType()));
                         llvm::Value* result = builder.CreateSelect(cmp, val1, val2);
@@ -1195,13 +1217,14 @@ namespace psizam {
                         store_vreg(inst.dest, result);
                      }
                      // Reload mem_ptr after host call (it might have grown memory)
-                     // We can't easily do this without a helper, so we rely on
-                     // the caller to pass mem_ptr again. For now, keep existing ptr.
+                     builder.CreateStore(
+                        builder.CreateCall(rt_get_memory, {ctx_ptr}),
+                        mem_ptr_alloca);
                   } else {
                      // WASM-to-WASM call
                      std::vector<llvm::Value*> args;
                      args.push_back(ctx_ptr);
-                     args.push_back(mem_ptr);
+                     args.push_back(load_mem_ptr());
 
                      // Convert each arg to match callee's parameter types
                      if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
@@ -1226,6 +1249,10 @@ namespace psizam {
                               store_vreg(inst.dest, result);
                            }
                         }
+                        // Reload mem_ptr after WASM-to-WASM call (callee may grow memory)
+                        builder.CreateStore(
+                           builder.CreateCall(rt_get_memory, {ctx_ptr}),
+                           mem_ptr_alloca);
                      }
                   }
                   // Restore call depth after either host or WASM call
@@ -1276,10 +1303,15 @@ namespace psizam {
                   builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
 
                   llvm::Value* raw = builder.CreateCall(rt_call_indirect,
-                     {ctx_ptr, mem_ptr, builder.getInt32(type_idx),
+                     {ctx_ptr, load_mem_ptr(), builder.getInt32(type_idx),
                       table_elem, args_array, builder.getInt32(nargs)});
 
                   builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
+
+                  // Reload mem_ptr after call_indirect (callee may grow memory)
+                  builder.CreateStore(
+                     builder.CreateCall(rt_get_memory, {ctx_ptr}),
+                     mem_ptr_alloca);
 
                   if (inst.dest != ir_vreg_none) {
                      llvm::Type* target_ty = ir_type_to_llvm(inst.type);
@@ -1314,7 +1346,7 @@ namespace psizam {
                   if (offset != 0) {
                      eff_addr = builder.CreateAdd(eff_addr, builder.getInt64(static_cast<uint64_t>(offset)));
                   }
-                  llvm::Value* ptr = builder.CreateGEP(i8_ty, mem_ptr, eff_addr);
+                  llvm::Value* ptr = builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
 
                   // Determine load type
                   llvm::Type* load_ty;
@@ -1373,7 +1405,7 @@ namespace psizam {
                   if (offset != 0) {
                      eff_addr = builder.CreateAdd(eff_addr, builder.getInt64(static_cast<uint64_t>(offset)));
                   }
-                  llvm::Value* ptr = builder.CreateGEP(i8_ty, mem_ptr, eff_addr);
+                  llvm::Value* ptr = builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
 
                   // Truncate value if needed
                   switch (inst.opcode) {
@@ -1409,8 +1441,9 @@ namespace psizam {
                   llvm::Value* mem_out = builder.CreateAlloca(ptr_ty);
                   llvm::Value* result = builder.CreateCall(rt_memory_grow,
                      {ctx_ptr, pages, mem_out});
-                  // Update mem_ptr to the potentially new base
-                  mem_ptr = builder.CreateLoad(ptr_ty, mem_out);
+                  // Update mem_ptr alloca — mem2reg will insert PHI nodes
+                  llvm::Value* new_mem = builder.CreateLoad(ptr_ty, mem_out);
+                  builder.CreateStore(new_mem, mem_ptr_alloca);
                   store_vreg(inst.dest, result);
                   break;
                }
@@ -3443,7 +3476,7 @@ namespace psizam {
                      auto* offset = builder.getInt32(inst.simd.offset);
                      auto* eff = builder.CreateAdd(addr32, offset);
                      auto* eff64 = builder.CreateZExt(eff, builder.getInt64Ty());
-                     auto* ptr = builder.CreateGEP(builder.getInt8Ty(), mem_ptr, eff64);
+                     auto* ptr = builder.CreateGEP(builder.getInt8Ty(), load_mem_ptr(), eff64);
                      llvm::Value* val = nullptr;
                      switch(sub) {
                      case atomic_sub::i32_atomic_load: {
@@ -3484,7 +3517,7 @@ namespace psizam {
                      auto* offset = builder.getInt32(inst.simd.offset);
                      auto* eff = builder.CreateAdd(addr32, offset);
                      auto* eff64 = builder.CreateZExt(eff, builder.getInt64Ty());
-                     auto* ptr = builder.CreateGEP(builder.getInt8Ty(), mem_ptr, eff64);
+                     auto* ptr = builder.CreateGEP(builder.getInt8Ty(), load_mem_ptr(), eff64);
                      switch(sub) {
                      case atomic_sub::i32_atomic_store: {
                         auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt32Ty()));
@@ -3692,7 +3725,8 @@ namespace psizam {
       std::string err;
       llvm::raw_string_ostream err_stream(err);
       if (llvm::verifyModule(*_impl->llvm_mod, &err_stream)) {
-         throw std::runtime_error("LLVM module verification failed: " + err);
+         std::cerr << "Fatal: LLVM module verification failed: " << err << "\n";
+         std::abort();
       }
 
       // Run optimization passes

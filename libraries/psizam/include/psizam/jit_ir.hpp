@@ -13,7 +13,6 @@
 #include <psizam/vector.hpp>
 
 #include <cstdint>
-#include <sys/mman.h>
 
 namespace psizam {
 
@@ -330,7 +329,7 @@ namespace psizam {
          struct { uint32_t target; uint32_t src1; } br;
          struct { uint32_t index; uint32_t src1; }  call;
          struct { uint32_t index; uint32_t src1; }  local;
-         struct { uint16_t val1; uint16_t val2; uint16_t cond; uint16_t _pad; } sel;
+         struct { uint32_t val1; uint32_t val2; uint32_t cond; } sel;
          v128_t   immv128;
          // For v128_op: sub-opcode goes in dest field (cast from simd_sub).
          // offset: memarg offset or scalar vreg (shifts/replace_lane)

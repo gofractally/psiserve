@@ -20,6 +20,7 @@
 #include <psizam/execution_context.hpp>
 #include <psizam/jit_ir.hpp>
 #include <psizam/jit_regalloc.hpp>
+#include <psizam/jit_reloc.hpp>
 #include <psizam/llvm_runtime_helpers.hpp>
 #include <psizam/softfloat.hpp>
 #include <psizam/types.hpp>
@@ -1464,13 +1465,32 @@ namespace psizam {
 
          // ── Select ──
          case ir_op::select: {
-            load_vreg_x0(inst.sel.cond);
-            load_vreg_to(X1, inst.sel.val1);
-            load_vreg_to(X16, inst.sel.val2);
-            emit_cmp_imm32(X0, 0);
-            // CSEL X0, X1, X16, NE
-            emit32(0x9A900020 | (COND_NE << 12) | (X16 << 16) | (X1 << 5) | X0);
-            store_x0_vreg(inst.dest);
+            if (inst.type == types::v128) {
+               // v128 select: val1 (deeper) and val2 (TOS) are on the execution stack.
+               // Each v128 = 32 bytes (two 16-byte-aligned slots).
+               // Stack: SP+0=val2_low, SP+16=val2_high, SP+32=val1_low, SP+48=val1_high
+               load_vreg_x0(inst.sel.cond);
+               emit_cmp_imm32(X0, 0);
+               // B.NE skip — if cond != 0, keep val1
+               void* skip = code;
+               emit32(0x54000001); // B.NE placeholder
+               // cond == 0: copy val2 over val1
+               emit_ldr_offset(X0, SP, 0);    // val2_low
+               emit_ldr_offset(X1, SP, 16);   // val2_high
+               emit_str_offset(X0, SP, 32);   // overwrite val1_low
+               emit_str_offset(X1, SP, 48);   // overwrite val1_high
+               fix_branch(skip, code);
+               // Drop val2 (32 bytes), val1 remains at TOS
+               emit_add_imm(SP, SP, 32);
+            } else {
+               load_vreg_x0(inst.sel.cond);
+               load_vreg_to(X1, inst.sel.val1);
+               load_vreg_to(X16, inst.sel.val2);
+               emit_cmp_imm32(X0, 0);
+               // CSEL X0, X1, X16, NE
+               emit32(0x9A900020 | (COND_NE << 12) | (X16 << 16) | (X1 << 5) | X0);
+               store_x0_vreg(inst.dest);
+            }
             break;
          }
 

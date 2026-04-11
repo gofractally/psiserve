@@ -5924,7 +5924,12 @@ namespace psizam {
       void emit_operandf32(float val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
       void emit_operandf64(double val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
       template<class T>
-      void emit_operand_ptr(T* val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
+      void emit_operand_ptr(T* val) {
+         // Always emit 8 bytes — target is x86_64 regardless of host pointer size
+         uint64_t ptr = reinterpret_cast<uintptr_t>(val);
+         memcpy(code, &ptr, 8);
+         code += 8;
+      }
 
      void* emit_branch_target32() {
         void * result = code;

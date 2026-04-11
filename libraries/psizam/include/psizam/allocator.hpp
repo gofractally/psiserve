@@ -339,7 +339,7 @@ namespace psizam {
 
    class growable_allocator {
     public:
-      static constexpr size_t max_memory_size = 1024 * 1024 * 1024; // 1GB
+      static constexpr size_t max_memory_size = 16ULL * 1024 * 1024 * 1024; // 16GB
       template<std::size_t align_amt>
       static constexpr size_t align_offset(size_t offset) { return (offset + align_amt - 1) & ~(align_amt - 1); }
 
@@ -430,8 +430,9 @@ namespace psizam {
       void end_code(void * code_base) {
          assert((char*)code_base >= _base);
          assert((char*)code_base <= (_base+_offset));
-         _offset = align_to_page(_offset);
          _code_base = (char*)code_base;
+         _actual_code_size = _offset - ((char*)code_base - _base);
+         _offset = align_to_page(_offset);
          _code_size = _offset - ((char*)code_base - _base);
 #ifndef PSIZAM_COMPILE_ONLY
          if constexpr (IsJit) {
@@ -465,6 +466,8 @@ namespace psizam {
       const void* get_code_start() const { return _code_base; }
 
       span<std::byte> get_code_span() const {return {(std::byte*)_code_base, _code_size};}
+      /// Returns the actual code size before page alignment padding.
+      size_t get_actual_code_size() const { return _actual_code_size; }
 
       /* different semantics than free,
        * the memory must be at the end of the most recently allocated block.
@@ -527,6 +530,7 @@ namespace psizam {
       char*    _base                  = nullptr;
       char*    _code_base             = nullptr;
       size_t   _code_size             = 0;
+      size_t   _actual_code_size     = 0;
       bool     _is_jit                = false;
    };
 

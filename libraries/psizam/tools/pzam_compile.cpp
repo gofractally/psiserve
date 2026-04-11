@@ -74,14 +74,13 @@ static std::vector<char> write_pzam(
       file.relocations[i].addend      = result.relocs[i].addend;
    }
 
-   // Code blob
+   // Code blob — use actual size (no page-alignment padding)
    if (llvm_aot) {
       file.code_blob = result.code_blob;
    } else {
-      auto code_span = alloc.get_code_span();
-      file.code_blob.assign(
-         reinterpret_cast<const uint8_t*>(code_span.data()),
-         reinterpret_cast<const uint8_t*>(code_span.data()) + code_span.size());
+      auto code_start = reinterpret_cast<const uint8_t*>(alloc.get_code_start());
+      size_t actual_size = alloc.get_actual_code_size();
+      file.code_blob.assign(code_start, code_start + actual_size);
    }
 
    return pzam_save(file);
@@ -105,12 +104,16 @@ static bool compile_wasm(
    parser_t parser(mod.allocator, default_options{}, false, false);
    parser.set_compile_result(&compile_result);
 
+#ifdef __EXCEPTIONS
    try {
       parser.parse_module(wasm_bytes, mod, debug);
    } catch (const psizam::exception& ex) {
       std::cerr << "Error: " << ex.what() << " : " << ex.detail() << "\n";
       return false;
    }
+#else
+   parser.parse_module(wasm_bytes, mod, debug);
+#endif
 
    mod.finalize();
 
@@ -186,11 +189,16 @@ int main(int argc, char** argv) {
 
    bool ok;
    if (backend_str == "jit2") {
+#if !defined(__wasm__)
       if (target_arch == pzam_arch::x86_64) {
          ok = compile_wasm<ir_writer_x64>(wasm_bytes, target_arch, output_file);
       } else {
          ok = compile_wasm<ir_writer_a64>(wasm_bytes, target_arch, output_file);
       }
+#else
+      std::cerr << "Error: jit2 backend not available on this platform\n";
+      return 1;
+#endif
    } else if (backend_str == "llvm") {
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       ok = compile_wasm<ir_writer_llvm_aot>(wasm_bytes, target_arch, output_file, target_triple);

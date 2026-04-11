@@ -5,10 +5,25 @@
 #include <cstdint>
 #include <exception>
 
+#ifdef __EXCEPTIONS
 #define PSIZAM_ASSERT( expr, exc_type, msg ) \
    if (!UNLIKELY(expr)) {                    \
       throw exc_type{msg};                   \
    }
+#define PSIZAM_THROW( exc_type, msg ) throw exc_type{msg}
+#else
+#include <cstdlib>
+#include <iostream>
+#define PSIZAM_ASSERT( expr, exc_type, msg )         \
+   if (!UNLIKELY(expr)) {                            \
+      std::cerr << "Fatal: " << (msg) << "\n";       \
+      std::abort();                                  \
+   }
+#define PSIZAM_THROW( exc_type, msg ) do {            \
+      std::cerr << "Fatal: " << (msg) << "\n";       \
+      std::abort();                                  \
+   } while(0)
+#endif
 
 namespace psizam {
    struct exception : public std::exception {

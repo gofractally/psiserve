@@ -50,11 +50,11 @@ namespace psizam {
       struct dispatcher<false, Ret> {
          template <std::size_t I, typename Vis, typename Var>
          static constexpr Ret _case(Vis&&, Var&&) {
-            throw wasm_interpreter_exception("variant visit shouldn't be here");
+            PSIZAM_THROW(wasm_interpreter_exception, "variant visit shouldn't be here");
          }
          template <std::size_t I, typename Vis, typename Var>
          static constexpr Ret _switch(Vis&&, Var&&) {
-            throw wasm_interpreter_exception("variant visit shouldn't be here");
+            PSIZAM_THROW(wasm_interpreter_exception, "variant visit shouldn't be here");
          }
       };
 

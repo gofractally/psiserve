@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string_view>
 
@@ -17,10 +19,13 @@ namespace psio
    template <typename T>
    [[noreturn]] void abort_error(const T& msg)
    {
-#ifndef COMPILING_WASM
+#ifdef COMPILING_WASM
+      psibase::abortMessage(error_to_str(msg));
+#elif defined(__EXCEPTIONS)
       throw std::runtime_error((std::string)error_to_str(msg));
 #else
-      psibase::abortMessage(error_to_str(msg));
+      std::fprintf(stderr, "Fatal: %.*s\n", (int)error_to_str(msg).size(), error_to_str(msg).data());
+      std::abort();
 #endif
    }
 
