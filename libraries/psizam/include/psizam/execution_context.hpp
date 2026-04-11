@@ -143,7 +143,10 @@ namespace psizam {
          PSIZAM_ASSERT(_globals.empty(), wasm_memory_exception, "initialize_globals called on non-empty _globals");
          _globals.reserve(mod.globals.size());
          for (uint32_t i = 0; i < mod.globals.size(); i++) {
-            _globals.emplace_back(mod.globals[i].init);
+            init_expr evaluated;
+            evaluated.value = mod.globals[i].init.evaluate(_globals);
+            evaluated.opcode = mod.globals[i].init.opcode;
+            _globals.emplace_back(evaluated);
          }
       }
 
@@ -212,11 +215,26 @@ namespace psizam {
          } else
             _wasm_alloc->reset();
 
+         // Spec order: globals first (data/elem offsets may reference them via global.get)
+         _globals.clear();
+         _globals.reserve(mod.globals.size());
+         for (uint32_t i = 0; i < mod.globals.size(); i++) {
+            auto& gv = mod.globals[i];
+            init_expr evaluated;
+            evaluated.value = gv.init.evaluate(_globals);
+            evaluated.opcode = gv.init.opcode;
+            _globals.emplace_back(evaluated);
+         }
+         // Write a pointer to the globals into the context page
+         auto* globals_start = _globals.data();
+         char* globals_location = _linear_memory + wasm_allocator::globals_end();
+         std::memcpy(globals_location - sizeof(globals_start), &globals_start, sizeof(globals_start));
+
          _dropped_data.assign(mod.data.size(), false);
          for (uint32_t i = 0; i < mod.data.size(); i++) {
             auto& data_seg = mod.data[i];
-            uint32_t offset = data_seg.offset.value.i32; // force to unsigned
             if (!data_seg.passive) {
+               uint32_t offset = data_seg.offset.evaluate(_globals).i32;
                assert(!mod.memories.empty() && "Validation should ensure that an active data segment has a valid memory");
                auto available_memory =  mod.memories[0].limits.initial * static_cast<uint64_t>(page_size);
                auto required_memory = static_cast<uint64_t>(offset) + data_seg.data.size();
@@ -227,26 +245,6 @@ namespace psizam {
                _dropped_data[i] = true;
             }
          }
-
-         // Globals can be different from one WASM code to another.
-         // Need to clear _globals at the start of an execution.
-         _globals.clear();
-         _globals.reserve(mod.globals.size());
-         for (uint32_t i = 0; i < mod.globals.size(); i++) {
-            auto& gv = mod.globals[i];
-            if (gv.init.opcode == opcodes::get_global) {
-               // Initialize from another global's value
-               uint32_t src_idx = gv.init.value.i32;
-               assert(src_idx < i); // must reference an earlier global
-               _globals.emplace_back(_globals[src_idx]);
-            } else {
-               _globals.emplace_back(gv.init);
-            }
-         }
-         // Write a pointer to the globals into the context page
-         auto* globals_start = _globals.data();
-         char* globals_location = _linear_memory + wasm_allocator::globals_end();
-         std::memcpy(globals_location - sizeof(globals_start), &globals_start, sizeof(globals_start));
 
          // reset tables (multi-table support)
          _table_data.resize(mod.tables.size());
@@ -287,7 +285,7 @@ namespace psizam {
                } else {
                   uint32_t tidx = elem_seg.index;
                   PSIZAM_ASSERT(tidx < mod.tables.size(), wasm_memory_exception, "elem segment table index out of range");
-                  uint32_t offset = elem_seg.offset.value.i32;
+                  uint32_t offset = elem_seg.offset.evaluate(_globals).i32;
                   PSIZAM_ASSERT(static_cast<std::uint64_t>(offset) + elem_seg.elems.size() <= _table_sizes[tidx], wasm_memory_exception, "elem out of range");
                   if (elem_seg.elems.size())
                      std::memcpy(_table_data[tidx] + offset, elem_seg.elems.data(), elem_seg.elems.size() * sizeof(table_entry));

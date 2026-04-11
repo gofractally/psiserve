@@ -61,3 +61,62 @@ BACKEND_TEST_CASE("Test instantiating multiple instances of psizam",
       v.emplace_back(test_wasm, get_wasm_allocator());
 }
 #pragma GCC pop_options
+
+// Extended const expressions: i32.add, i32.sub, i32.mul, i64.add, i64.sub, i64.mul in global initializers
+BACKEND_TEST_CASE("Extended const: i32.add in global initializer",
+                  "[extended_const]") {
+   // Module with global initialized to i32.add(i32.const 10, i32.const 20) = 30
+   // Exports function "get" that returns global.get 0
+   std::vector<uint8_t> wasm = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic + version
+      0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,       // type section: () -> i32
+      0x03, 0x02, 0x01, 0x00,                           // function section: 1 func, type 0
+      0x06, 0x09, 0x01,                                 // global section: 1 global
+         0x7f, 0x00,                                     //   i32, immutable
+         0x41, 0x0a, 0x41, 0x14, 0x6a, 0x0b,            //   i32.const(10) i32.const(20) i32.add end
+      0x07, 0x07, 0x01, 0x03, 0x67, 0x65, 0x74, 0x00, 0x00, // export "get" -> func 0
+      0x0a, 0x06, 0x01, 0x04, 0x00, 0x23, 0x00, 0x0b  // code: global.get 0, end
+   };
+
+   using backend_t = backend<registered_host_functions<standalone_function_t>, TestType>;
+   backend_t bkend(wasm, get_wasm_allocator());
+   CHECK(bkend.call_with_return("env", "get")->to_ui32() == 30u);
+}
+
+BACKEND_TEST_CASE("Extended const: i32.mul in global initializer",
+                  "[extended_const]") {
+   // global = i32.mul(i32.const 6, i32.const 7) = 42
+   std::vector<uint8_t> wasm = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
+      0x03, 0x02, 0x01, 0x00,
+      0x06, 0x09, 0x01,
+         0x7f, 0x00,
+         0x41, 0x06, 0x41, 0x07, 0x6c, 0x0b,            // i32.const(6) i32.const(7) i32.mul end
+      0x07, 0x07, 0x01, 0x03, 0x67, 0x65, 0x74, 0x00, 0x00,
+      0x0a, 0x06, 0x01, 0x04, 0x00, 0x23, 0x00, 0x0b
+   };
+
+   using backend_t = backend<registered_host_functions<standalone_function_t>, TestType>;
+   backend_t bkend(wasm, get_wasm_allocator());
+   CHECK(bkend.call_with_return("env", "get")->to_ui32() == 42u);
+}
+
+BACKEND_TEST_CASE("Extended const: i32.sub in global initializer",
+                  "[extended_const]") {
+   // global = i32.sub(i32.const 100, i32.const 37) = 63
+   std::vector<uint8_t> wasm = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
+      0x03, 0x02, 0x01, 0x00,
+      0x06, 0x0a, 0x01,
+         0x7f, 0x00,
+         0x41, 0xe4, 0x00, 0x41, 0x25, 0x6b, 0x0b,      // i32.const(100) i32.const(37) i32.sub end
+      0x07, 0x07, 0x01, 0x03, 0x67, 0x65, 0x74, 0x00, 0x00,
+      0x0a, 0x06, 0x01, 0x04, 0x00, 0x23, 0x00, 0x0b
+   };
+
+   using backend_t = backend<registered_host_functions<standalone_function_t>, TestType>;
+   backend_t bkend(wasm, get_wasm_allocator());
+   CHECK(bkend.call_with_return("env", "get")->to_ui32() == 63u);
+}

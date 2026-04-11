@@ -734,15 +734,14 @@ namespace psizam {
       }
 
       void parse_init_expr(wasm_code_ptr& code, init_expr& ie, uint8_t type) {
+         auto* expr_start = code.raw();
          ie.opcode = *code++;
          switch (ie.opcode) {
             case opcodes::i32_const:
                ie.value.i32 = parse_varint32(code);
-               PSIZAM_ASSERT(type == types::i32, wasm_parse_exception, "expected i32 initializer");
                break;
             case opcodes::i64_const:
                ie.value.i64 = parse_varint64(code);
-               PSIZAM_ASSERT(type == types::i64, wasm_parse_exception, "expected i64 initializer");
                break;
             case opcodes::f32_const:
                ie.value.f32 = parse_raw<uint32_t>(code);
@@ -771,7 +770,6 @@ namespace psizam {
             }
             case opcodes::get_global: {
                uint32_t global_idx = parse_varuint32(code);
-               // Spec: global.get in init expressions may only reference imported immutable globals
                PSIZAM_ASSERT(global_idx < _mod->num_imported_globals, wasm_parse_exception, "global.get in init must reference an imported global");
                PSIZAM_ASSERT(!_mod->globals[global_idx].type.mutability, wasm_parse_exception, "global.get in init must reference an immutable global");
                ie.value.i32 = global_idx;
@@ -779,9 +777,44 @@ namespace psizam {
             }
             default:
                PSIZAM_ASSERT(false, wasm_parse_exception,
-                             "initializer expression can only acception i32.const, i64.const, f32.const, f64.const, v128.const, ref.null, ref.func, and global.get");
+                             "invalid opcode in constant expression");
          }
-         PSIZAM_ASSERT((*code++) == opcodes::end, wasm_parse_exception, "no end op found");
+
+         if (*code == opcodes::end) {
+            // Simple single-instruction expression
+            if (ie.opcode == opcodes::i32_const || ie.opcode == opcodes::get_global)
+               PSIZAM_ASSERT(type == types::i32 || type == types::i64 || type == types::funcref || type == types::externref, wasm_parse_exception, "type mismatch in initializer");
+            if (ie.opcode == opcodes::i64_const)
+               PSIZAM_ASSERT(type == types::i64, wasm_parse_exception, "expected i64 initializer");
+            ++code; // consume end
+            return;
+         }
+
+         // Extended const expression — continue parsing remaining instructions,
+         // then store the entire expression as raw bytes for evaluation at instantiation.
+         PSIZAM_ASSERT(type == types::i32 || type == types::i64, wasm_parse_exception, "extended const expressions only produce i32 or i64");
+         while (*code != opcodes::end) {
+            uint8_t op = *code++;
+            switch (op) {
+               case opcodes::i32_const: parse_varint32(code); break;
+               case opcodes::i64_const: parse_varint64(code); break;
+               case opcodes::get_global: {
+                  uint32_t global_idx = parse_varuint32(code);
+                  PSIZAM_ASSERT(global_idx < _mod->num_imported_globals, wasm_parse_exception, "global.get in init must reference an imported global");
+                  PSIZAM_ASSERT(!_mod->globals[global_idx].type.mutability, wasm_parse_exception, "global.get in init must reference an immutable global");
+                  break;
+               }
+               case opcodes::i32_add: case opcodes::i32_sub: case opcodes::i32_mul:
+               case opcodes::i64_add: case opcodes::i64_sub: case opcodes::i64_mul:
+                  break; // no immediates
+               default:
+                  PSIZAM_ASSERT(false, wasm_parse_exception, "invalid opcode in extended constant expression");
+            }
+         }
+         ++code; // consume end
+         // Store everything from expr_start through end (inclusive)
+         ie.raw_expr.assign(expr_start, code.raw());
+         ie.opcode = opcodes::i32_const; // placeholder — raw_expr non-empty signals extended eval
       }
 
       void parse_function_body(wasm_code_ptr& code, function_body& fb, std::size_t idx) {
@@ -2530,8 +2563,10 @@ namespace psizam {
          }
          auto len =  parse_varuint32(code);
          PSIZAM_ASSERT(len <= detail::get_max_data_segment_bytes(_options), wasm_parse_exception, "data segment too large.");
-         PSIZAM_ASSERT(static_cast<uint64_t>(static_cast<uint32_t>(ds.offset.value.i32)) + len <= detail::get_max_linear_memory_init(_options),
-                       wasm_parse_exception, "out-of-bounds data section");
+         if (ds.offset.raw_expr.empty()) {
+            PSIZAM_ASSERT(static_cast<uint64_t>(static_cast<uint32_t>(ds.offset.value.i32)) + len <= detail::get_max_linear_memory_init(_options),
+                          wasm_parse_exception, "out-of-bounds data section");
+         }
          auto guard = code.scoped_shrink_bounds(len);
          ds.data.assign(code.raw(), code.raw() + len);
          code += len;

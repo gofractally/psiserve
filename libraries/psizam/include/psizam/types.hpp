@@ -89,6 +89,79 @@ namespace psizam {
    struct init_expr {
       expr_value value;
       uint8_t    opcode;
+      std::vector<uint8_t> raw_expr; // non-empty for extended const expressions (i32.add/sub/mul, i64.add/sub/mul)
+
+      // Evaluate this init expression, resolving global.get references against the provided globals.
+      // For simple expressions, returns value directly. For extended expressions, runs a mini stack machine.
+      expr_value evaluate(const std::vector<init_expr>& globals) const {
+         if (raw_expr.empty()) {
+            if (opcode == opcodes::get_global) {
+               return globals[value.i32].value;
+            }
+            return value;
+         }
+         // Mini stack machine for extended const expressions
+         int64_t stack[8];
+         int sp = 0;
+         size_t pos = 0;
+         while (pos < raw_expr.size()) {
+            uint8_t op = raw_expr[pos++];
+            switch (op) {
+               case opcodes::i32_const: {
+                  int32_t v = 0;
+                  unsigned shift = 0;
+                  uint8_t b;
+                  do {
+                     b = raw_expr[pos++];
+                     v |= static_cast<int32_t>(b & 0x7f) << shift;
+                     shift += 7;
+                  } while (b & 0x80);
+                  if (shift < 32 && (b & 0x40))
+                     v |= -(static_cast<int32_t>(1) << shift);
+                  stack[sp++] = v;
+                  break;
+               }
+               case opcodes::i64_const: {
+                  int64_t v = 0;
+                  unsigned shift = 0;
+                  uint8_t b;
+                  do {
+                     b = raw_expr[pos++];
+                     v |= static_cast<int64_t>(b & 0x7f) << shift;
+                     shift += 7;
+                  } while (b & 0x80);
+                  if (shift < 64 && (b & 0x40))
+                     v |= -(static_cast<int64_t>(1) << shift);
+                  stack[sp++] = v;
+                  break;
+               }
+               case opcodes::get_global: {
+                  uint32_t idx = 0;
+                  unsigned shift = 0;
+                  uint8_t b;
+                  do {
+                     b = raw_expr[pos++];
+                     idx |= static_cast<uint32_t>(b & 0x7f) << shift;
+                     shift += 7;
+                  } while (b & 0x80);
+                  stack[sp++] = globals[idx].value.i64;
+                  break;
+               }
+               case opcodes::i32_add: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = static_cast<int32_t>(static_cast<int32_t>(a) + static_cast<int32_t>(b)); break; }
+               case opcodes::i32_sub: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = static_cast<int32_t>(static_cast<int32_t>(a) - static_cast<int32_t>(b)); break; }
+               case opcodes::i32_mul: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = static_cast<int32_t>(static_cast<int32_t>(a) * static_cast<int32_t>(b)); break; }
+               case opcodes::i64_add: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = a + b; break; }
+               case opcodes::i64_sub: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = a - b; break; }
+               case opcodes::i64_mul: { auto b = stack[--sp]; auto a = stack[--sp]; stack[sp++] = a * b; break; }
+               case opcodes::end: goto done;
+               default: break;
+            }
+         }
+         done:
+         expr_value result;
+         result.i64 = (sp > 0) ? stack[0] : 0;
+         return result;
+      }
    };
 
    struct global_type {
