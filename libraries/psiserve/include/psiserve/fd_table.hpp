@@ -60,6 +60,13 @@ namespace psiserve
       RealFd real_fd = invalid_real_fd;
    };
 
+   /// An fd backed by a real OS UDP socket.
+   /// Supports recvfrom/sendto operations for datagram protocols.
+   struct UdpFd
+   {
+      RealFd real_fd = invalid_real_fd;
+   };
+
    /// Sentinel variant indicating the fd slot is unused.
    /// FdTable::alloc() scans for ClosedFd slots; FdTable::close() writes
    /// this value back to release the slot.
@@ -68,7 +75,7 @@ namespace psiserve
    };
 
    /// The discriminated union stored in each FdTable slot.
-   using FdEntry = std::variant<ClosedFd, SocketFd, TimerFd, FileFd, DirFd>;
+   using FdEntry = std::variant<ClosedFd, SocketFd, TimerFd, FileFd, DirFd, UdpFd>;
 
    // ── FdTable ───────────────────────────────────────────────────────────────
    //

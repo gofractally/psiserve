@@ -91,6 +91,22 @@ namespace psiserve
       /// monotonic time for computing absolute deadlines.
       void psiSleepUntil(int64_t deadline_ns);
 
+      /// psi.udp_bind(port: i32) -> i32
+      /// Creates a UDP socket bound to 0.0.0.0:port.
+      /// Returns virtual fd on success, or -PsiError on error.
+      PsiResult psiUdpBind(int32_t port);
+
+      /// psi.recvfrom(fd: i32, buf: i32, len: i32, addr: i32) -> i32
+      /// Blocks until a datagram arrives on the UDP socket `fd`.
+      /// Writes sender address (8 bytes: ip4 + port + pad) to `addr`.
+      /// Returns bytes received, or -PsiError on error.
+      PsiResult psiRecvFrom(VirtualFd fd, WasmPtr buf, WasmSize len, WasmPtr addr);
+
+      /// psi.sendto(fd: i32, buf: i32, len: i32, addr: i32) -> i32
+      /// Sends a datagram via UDP socket `fd` to the address at `addr`.
+      /// Returns bytes sent, or -PsiError on error.
+      PsiResult psiSendTo(VirtualFd fd, WasmPtr buf, WasmSize len, WasmPtr addr);
+
      private:
       Process*    _proc;
       Scheduler*  _sched;

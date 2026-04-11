@@ -33,6 +33,25 @@ int psi_fstat(int fd, void* out);
 __attribute__((import_module("psi"), import_name("close")))
 void psi_close(int fd);
 
+/* ── UDP ─────────────────────────────────────────────────────────── */
+
+/* Peer address for recvfrom/sendto — 8 bytes, network byte order. */
+struct psi_addr
+{
+   unsigned int   ip4;    /* IPv4 address */
+   unsigned short port;   /* port number */
+   unsigned short _pad;
+};
+
+__attribute__((import_module("psi"), import_name("udp_bind")))
+int psi_udp_bind(int port);
+
+__attribute__((import_module("psi"), import_name("recvfrom")))
+int psi_recvfrom(int fd, void* buf, int len, struct psi_addr* addr);
+
+__attribute__((import_module("psi"), import_name("sendto")))
+int psi_sendto(int fd, const void* buf, int len, const struct psi_addr* addr);
+
 /* ── Concurrency ──────────────────────────────────────────────────── */
 
 __attribute__((import_module("psi"), import_name("spawn")))

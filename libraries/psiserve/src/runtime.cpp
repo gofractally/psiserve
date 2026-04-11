@@ -69,6 +69,9 @@ namespace psiserve
       table.add<&HostApi::psiSpawn>("psi", "spawn");
       table.add<&HostApi::psiClock>("psi", "clock");
       table.add<&HostApi::psiSleepUntil>("psi", "sleep_until");
+      table.add<&HostApi::psiUdpBind>("psi", "udp_bind");
+      table.add<&HostApi::psiRecvFrom>("psi", "recvfrom");
+      table.add<&HostApi::psiSendTo>("psi", "sendto");
 
       // Create listen socket
       RealFd listen_fd = createListenSocket(_cfg.port);

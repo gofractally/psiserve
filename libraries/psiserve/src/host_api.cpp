@@ -4,9 +4,11 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
+#include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -366,6 +368,8 @@ namespace psiserve
          }
          ::close(*sock->real_fd);
       }
+      else if (auto* udp = std::get_if<UdpFd>(entry))
+         ::close(*udp->real_fd);
       else if (auto* file = std::get_if<FileFd>(entry))
          ::close(*file->real_fd);
       else if (auto* dir = std::get_if<DirFd>(entry))
@@ -409,6 +413,95 @@ namespace psiserve
          return;
 
       _sched->sleep(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now));
+   }
+
+   PsiResult HostApi::psiUdpBind(int32_t port)
+   {
+      int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+      if (fd < 0)
+         return PsiResult::fromErrno();
+
+      struct sockaddr_in addr = {};
+      addr.sin_family      = AF_INET;
+      addr.sin_addr.s_addr = INADDR_ANY;
+      addr.sin_port        = htons(static_cast<uint16_t>(port));
+
+      if (::bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+      {
+         ::close(fd);
+         return PsiResult::fromErrno();
+      }
+
+      // Set non-blocking for kqueue/epoll integration
+      int flags = ::fcntl(fd, F_GETFL, 0);
+      ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+      VirtualFd vfd = _proc->fds.alloc(UdpFd{RealFd{fd}});
+      if (vfd == invalid_virtual_fd)
+      {
+         ::close(fd);
+         return PsiResult::err(PsiError::too_many_fds);
+      }
+      return PsiResult::ok(*vfd);
+   }
+
+   PsiResult HostApi::psiRecvFrom(VirtualFd fd, WasmPtr buf, WasmSize len, WasmPtr addr_ptr)
+   {
+      auto* entry = _proc->fds.get(fd);
+      if (!entry)
+         return PsiResult::err(PsiError::bad_fd);
+
+      auto* udp = std::get_if<UdpFd>(entry);
+      if (!udp)
+         return PsiResult::err(PsiError::not_socket);
+
+      // Wait for readability
+      if (auto r = waitReady(*_sched, udp->real_fd, Readable); r.isErr())
+         return r;
+
+      struct sockaddr_in sender = {};
+      socklen_t          slen   = sizeof(sender);
+      char*              dst    = _wasm_memory + *buf;
+
+      ssize_t n = ::recvfrom(*udp->real_fd, dst, *len, 0,
+                             (struct sockaddr*)&sender, &slen);
+      if (n < 0)
+         return PsiResult::fromErrno();
+
+      // Write sender address to WASM memory: { uint32_t ip4; uint16_t port; uint16_t pad; }
+      char* addr_out = _wasm_memory + *addr_ptr;
+      std::memcpy(addr_out, &sender.sin_addr.s_addr, 4);
+      std::memcpy(addr_out + 4, &sender.sin_port, 2);
+      std::memset(addr_out + 6, 0, 2);
+
+      return PsiResult::ok(static_cast<int32_t>(n));
+   }
+
+   PsiResult HostApi::psiSendTo(VirtualFd fd, WasmPtr buf, WasmSize len, WasmPtr addr_ptr)
+   {
+      auto* entry = _proc->fds.get(fd);
+      if (!entry)
+         return PsiResult::err(PsiError::bad_fd);
+
+      auto* udp = std::get_if<UdpFd>(entry);
+      if (!udp)
+         return PsiResult::err(PsiError::not_socket);
+
+      // Read destination address from WASM memory
+      const char* addr_in = _wasm_memory + *addr_ptr;
+
+      struct sockaddr_in dest = {};
+      dest.sin_family = AF_INET;
+      std::memcpy(&dest.sin_addr.s_addr, addr_in, 4);
+      std::memcpy(&dest.sin_port, addr_in + 4, 2);
+
+      const char* src = _wasm_memory + *buf;
+      ssize_t     n   = ::sendto(*udp->real_fd, src, *len, 0,
+                                 (struct sockaddr*)&dest, sizeof(dest));
+      if (n < 0)
+         return PsiResult::fromErrno();
+
+      return PsiResult::ok(static_cast<int32_t>(n));
    }
 
 }  // namespace psiserve
