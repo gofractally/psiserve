@@ -233,7 +233,15 @@ namespace psizam {
          _globals.clear();
          _globals.reserve(mod.globals.size());
          for (uint32_t i = 0; i < mod.globals.size(); i++) {
-            _globals.emplace_back(mod.globals[i].init);
+            auto& gv = mod.globals[i];
+            if (gv.init.opcode == opcodes::get_global) {
+               // Initialize from another global's value
+               uint32_t src_idx = gv.init.value.i32;
+               assert(src_idx < i); // must reference an earlier global
+               _globals.emplace_back(_globals[src_idx]);
+            } else {
+               _globals.emplace_back(gv.init);
+            }
          }
          // Write a pointer to the globals into the context page
          auto* globals_start = _globals.data();

@@ -478,23 +478,51 @@ namespace psizam {
          entry.module_str = parse_utf8_string(code, detail::get_max_symbol_bytes(_options));
          entry.field_str = parse_utf8_string(code, detail::get_max_symbol_bytes(_options));
          entry.kind = (external_kind)(*code++);
-         auto type  = parse_varuint32(code);
          switch ((uint8_t)entry.kind) {
-            case external_kind::Function:
+            case external_kind::Function: {
+               auto type = parse_varuint32(code);
                entry.type.func_t = type;
                PSIZAM_ASSERT(type < _mod->types.size(), wasm_parse_exception, "Invalid function type");
                break;
+            }
+            case external_kind::Table: {
+               parse_table_type(code, entry.type.table_t);
+               // Prepend imported table to the tables vector so index space is correct
+               _mod->tables.push_back(entry.type.table_t);
+               _mod->num_imported_tables++;
+               break;
+            }
+            case external_kind::Memory: {
+               parse_memory_type(code, entry.type.mem_t);
+               _mod->memories.push_back(entry.type.mem_t);
+               _mod->num_imported_memories++;
+               break;
+            }
+            case external_kind::Global: {
+               uint8_t ct = *code++;
+               entry.type.global_t.content_type = ct;
+               PSIZAM_ASSERT(ct == types::i32 || ct == types::i64 || ct == types::f32 || ct == types::f64 ||
+                             ct == types::externref || ct == types::funcref ||
+                             (ct == types::v128 && detail::get_enable_simd(_options)),
+                             wasm_parse_exception, "invalid global content type");
+               entry.type.global_t.mutability = parse_varuint1(code);
+               // Add imported global with zero-initialized value
+               global_variable gv;
+               gv.type = entry.type.global_t;
+               gv.init = {};
+               _mod->globals.push_back(gv);
+               _mod->num_imported_globals++;
+               break;
+            }
             case external_kind::Tag: {
-               // Tag import: attribute byte (must be 0) was consumed as part of varuint for type
-               // Actually, tag imports have: attribute (byte 0) + type_index (varuint32)
-               // The 'type' variable already has the attribute byte value
+               auto type = parse_varuint32(code);
                PSIZAM_ASSERT(type == 0, wasm_parse_exception, "invalid tag attribute");
                uint32_t tag_type_index = parse_varuint32(code);
                PSIZAM_ASSERT(tag_type_index < _mod->types.size(), wasm_parse_exception, "invalid tag type index");
                _mod->tags.push_back(tag_type{static_cast<uint8_t>(type), tag_type_index});
                break;
             }
-            default: PSIZAM_ASSERT(false, wasm_unsupported_import_exception, "only function and tag imports are supported");
+            default: PSIZAM_ASSERT(false, wasm_unsupported_import_exception, "unsupported import kind");
          }
       }
 
@@ -518,7 +546,9 @@ namespace psizam {
       void parse_global_variable(wasm_code_ptr& code, global_variable& gv) {
          uint8_t ct           = *code++;
          gv.type.content_type = ct;
-         PSIZAM_ASSERT(ct == types::i32 || ct == types::i64 || ct == types::f32 || ct == types::f64 || (ct == types::v128 && detail::get_enable_simd(_options)),
+         PSIZAM_ASSERT(ct == types::i32 || ct == types::i64 || ct == types::f32 || ct == types::f64 ||
+                       ct == types::funcref || ct == types::externref ||
+                       (ct == types::v128 && detail::get_enable_simd(_options)),
                        wasm_parse_exception, "invalid global content type");
 
          gv.type.mutability = parse_varuint1(code);
@@ -666,9 +696,22 @@ namespace psizam {
                PSIZAM_ASSERT(te.index < _mod->get_functions_total(), wasm_parse_exception, "elem for undefined function");
                te.type = fast_functions.at(te.index);
                break;
+            case opcodes::get_global: {
+               uint32_t global_idx = parse_varuint32(code);
+               PSIZAM_ASSERT(global_idx < _mod->globals.size(), wasm_parse_exception, "global.get index out of range in elem");
+               // The global holds a funcref; resolve at instantiation time.
+               // For now store the function index from the global's init value.
+               auto& gv = _mod->globals[global_idx];
+               te.index = gv.init.value.i32;
+               if (te.index < _mod->get_functions_total())
+                  te.type = fast_functions.at(te.index);
+               else
+                  te.type = std::numeric_limits<std::uint32_t>::max();
+               break;
+            }
             default:
                PSIZAM_ASSERT(false, wasm_parse_exception,
-                             "elem expression can only acception ref.null and ref.func");
+                             "elem expression can only accept ref.null, ref.func, and global.get");
          }
          PSIZAM_ASSERT((*code++) == opcodes::end, wasm_parse_exception, "no end op found");
       }
@@ -698,9 +741,27 @@ namespace psizam {
                ie.value.v128 = parse_v128(code);
                PSIZAM_ASSERT(type == types::v128, wasm_parse_exception, "expected v128 initializer");
                break;
+            case opcodes::ref_null:
+               PSIZAM_ASSERT(type == types::funcref || type == types::externref, wasm_parse_exception, "expected reference type for ref.null");
+               ie.value.i64 = 0;
+               ++code; // consume the reference type byte
+               break;
+            case opcodes::ref_func: {
+               uint32_t func_idx = parse_varuint32(code);
+               PSIZAM_ASSERT(type == types::funcref, wasm_parse_exception, "expected funcref for ref.func");
+               ie.value.i32 = func_idx;
+               break;
+            }
+            case opcodes::get_global: {
+               uint32_t global_idx = parse_varuint32(code);
+               PSIZAM_ASSERT(global_idx < _mod->globals.size(), wasm_parse_exception, "global.get index out of range");
+               // For global.get init, store the index and handle at instantiation
+               ie.value.i32 = global_idx;
+               break;
+            }
             default:
                PSIZAM_ASSERT(false, wasm_parse_exception,
-                             "initializer expression can only acception i32.const, i64.const, f32.const, f64.const and v128.const");
+                             "initializer expression can only acception i32.const, i64.const, f32.const, f64.const, v128.const, ref.null, ref.func, and global.get");
          }
          PSIZAM_ASSERT((*code++) == opcodes::end, wasm_parse_exception, "no end op found");
       }

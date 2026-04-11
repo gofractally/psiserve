@@ -229,6 +229,9 @@ namespace psizam {
 
       // not part of the spec for WASM
       std::vector<uint32_t>    import_functions;
+      uint32_t                 num_imported_tables   = 0;
+      uint32_t                 num_imported_memories = 0;
+      uint32_t                 num_imported_globals  = 0;
       uint64_t                 maximum_stack    = 0;
       // The stack limit can be tracked as either frames or bytes
       bool                     stack_limit_is_bytes = false;

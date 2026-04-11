@@ -35,3 +35,9 @@ enable_testing()
 
 # ── Libraries ──────────────────────────────────────────────────────────────────
 add_subdirectory(libraries/psizam)
+
+option(PSISERVE_ENABLE "Build psiserve library and CLI" OFF)
+if(PSISERVE_ENABLE)
+   add_subdirectory(libraries/psiserve)
+   add_subdirectory(programs/psiserve-cli)
+endif()
