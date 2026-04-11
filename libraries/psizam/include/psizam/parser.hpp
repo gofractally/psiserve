@@ -754,8 +754,9 @@ namespace psizam {
             }
             case opcodes::get_global: {
                uint32_t global_idx = parse_varuint32(code);
-               PSIZAM_ASSERT(global_idx < _mod->globals.size(), wasm_parse_exception, "global.get index out of range");
-               // For global.get init, store the index and handle at instantiation
+               // Spec: global.get in init expressions may only reference imported immutable globals
+               PSIZAM_ASSERT(global_idx < _mod->num_imported_globals, wasm_parse_exception, "global.get in init must reference an imported global");
+               PSIZAM_ASSERT(!_mod->globals[global_idx].type.mutability, wasm_parse_exception, "global.get in init must reference an immutable global");
                ie.value.i32 = global_idx;
                break;
             }
