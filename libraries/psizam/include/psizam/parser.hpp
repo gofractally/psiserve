@@ -29,6 +29,8 @@ namespace psizam {
           return 4;
        case types::i64:
        case types::f64:
+       case types::funcref:
+       case types::externref:
           return 8;
        case types::v128:
           return 16;
@@ -534,7 +536,9 @@ namespace psizam {
       void parse_table_type(wasm_code_ptr& code, table_type& tt) {
          tt.element_type   = *code++;
          PSIZAM_ASSERT(tt.element_type == types::funcref || tt.element_type == types::externref, wasm_parse_exception, "table must have type funcref or externref");
-         tt.limits.flags   = parse_flags(code);
+         auto raw_flags    = parse_flags(code);
+         PSIZAM_ASSERT(raw_flags <= 0x01, wasm_parse_exception, "invalid table limits flags");
+         tt.limits.flags   = raw_flags;
          tt.limits.initial = parse_varuint32(code);
          if (tt.limits.flags) {
             tt.limits.maximum = parse_varuint32(code);
@@ -599,7 +603,9 @@ namespace psizam {
          for (size_t i = 0; i < param_types.size(); i++) {
             uint8_t pt        = *code++;
             param_types.at(i) = pt;
-            PSIZAM_ASSERT(pt == types::i32 || pt == types::i64 || pt == types::f32 || pt == types::f64 || (pt == types::v128 && detail::get_enable_simd(_options)),
+            PSIZAM_ASSERT(pt == types::i32 || pt == types::i64 || pt == types::f32 || pt == types::f64 ||
+                          pt == types::funcref || pt == types::externref ||
+                          (pt == types::v128 && detail::get_enable_simd(_options)),
                           wasm_parse_exception, "invalid function param type");
          }
          ft.param_types  = std::move(param_types);
@@ -608,7 +614,9 @@ namespace psizam {
          for (uint32_t i = 0; i < return_count; ++i) {
             uint8_t rt = *code++;
             ft.return_types[i] = rt;
-            PSIZAM_ASSERT(rt == types::i32 || rt == types::i64 || rt == types::f32 || rt == types::f64 || (rt == types::v128 && detail::get_enable_simd(_options)),
+            PSIZAM_ASSERT(rt == types::i32 || rt == types::i64 || rt == types::f32 || rt == types::f64 ||
+                          rt == types::funcref || rt == types::externref ||
+                          (rt == types::v128 && detail::get_enable_simd(_options)),
                           wasm_parse_exception, "invalid function return type");
          }
          ft.finalize_returns();
@@ -658,19 +666,25 @@ namespace psizam {
                es.mode = elem_mode::passive;
             }
          }
+         uint8_t elem_reftype = types::funcref; // default for flags 0, 4
          if (flags == 1 || flags == 2 || flags == 3) {
             auto elemkind = *code++;
             PSIZAM_ASSERT(elemkind == 0x00, wasm_parse_exception, "elemkind must be funcref");
+            elem_reftype = types::funcref;
          } else if (flags == 5 || flags == 6 || flags == 7) {
-            auto reftype = *code++;
-            PSIZAM_ASSERT(reftype == types::funcref || reftype == types::externref, wasm_parse_exception, "elem type must be funcref or externref");
+            elem_reftype = *code++;
+            PSIZAM_ASSERT(elem_reftype == types::funcref || elem_reftype == types::externref, wasm_parse_exception, "elem type must be funcref or externref");
+         }
+         // For active segments, element type must match target table's element type
+         if (tt) {
+            PSIZAM_ASSERT(elem_reftype == tt->element_type, wasm_parse_exception, "type mismatch");
          }
          uint32_t           size  = parse_varuint32(code);
          PSIZAM_ASSERT(size <= detail::get_max_element_segment_elements(_options), wasm_parse_exception, "elem segment too large");
          decltype(es.elems) elems(size);
          if (flags & 4) {
             for (uint32_t i = 0; i < size; i++) {
-               parse_elem_expr(code, elems.at(i));
+               parse_elem_expr(code, elems.at(i), elem_reftype);
             }
          } else {
             for (uint32_t i = 0; i < size; i++) {
@@ -680,18 +694,21 @@ namespace psizam {
                PSIZAM_ASSERT(index < _mod->get_functions_total(), wasm_parse_exception,  "elem for undefined function");
             }
          }
+         es.type  = elem_reftype;
          es.elems = std::move(elems);
       }
 
-      void parse_elem_expr(wasm_code_ptr& code, table_entry& te) {
+      void parse_elem_expr(wasm_code_ptr& code, table_entry& te, uint8_t expected_reftype = types::funcref) {
          auto opcode = *code++;
          switch (opcode) {
             case opcodes::ref_null:
                te.type = te.index = std::numeric_limits<std::uint32_t>::max();
                PSIZAM_ASSERT(*code == types::funcref || *code == types::externref, wasm_parse_exception, "Unknown type for elem");
+               PSIZAM_ASSERT(*code == expected_reftype, wasm_parse_exception, "type mismatch");
                ++code;
                break;
             case opcodes::ref_func:
+               PSIZAM_ASSERT(expected_reftype == types::funcref, wasm_parse_exception, "type mismatch");
                te.index = parse_varuint32(code);
                PSIZAM_ASSERT(te.index < _mod->get_functions_total(), wasm_parse_exception, "elem for undefined function");
                te.type = fast_functions.at(te.index);
@@ -781,7 +798,9 @@ namespace psizam {
          for (size_t i = 0; i < local_cnt; i++) {
             auto count = parse_varuint32(code);
             auto type = *code++;
-            PSIZAM_ASSERT(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 || (type == types::v128 && detail::get_enable_simd(_options)),
+            PSIZAM_ASSERT(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 ||
+                          type == types::funcref || type == types::externref ||
+                          (type == types::v128 && detail::get_enable_simd(_options)),
                           wasm_parse_exception, "invalid local type");
             local_checker.on_local(_options, type, count);
             locals.at(i).count = count;
@@ -835,7 +854,7 @@ namespace psizam {
          const Options& options;
          void push(uint8_t type) {
             assert(type != unreachable_tag && type != scope_tag);
-            assert(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 || type == any_type || (type == types::v128 && detail::get_enable_simd(options)));
+            assert(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 || type == types::funcref || type == types::externref || type == any_type || (type == types::v128 && detail::get_enable_simd(options)));
             PSIZAM_ASSERT(operand_depth < std::numeric_limits<uint32_t>::max(), wasm_parse_exception, "integer overflow in operand depth");
             operand_depth += Writer::get_depth_for_type(type);
             maximum_operand_depth = std::max(operand_depth, maximum_operand_depth);
@@ -1465,12 +1484,15 @@ namespace psizam {
                   uint8_t ref_type = *code++;
                   PSIZAM_ASSERT(ref_type == types::funcref || ref_type == types::externref,
                                 wasm_parse_exception, "ref.null requires funcref or externref type");
-                  op_stack.push(types::i32);  // ref values are carried as i32 (index)
+                  op_stack.push(ref_type);
                   code_writer.emit_ref_null(ref_type);
                } break;
                case opcodes::ref_is_null: {
                   check_in_bounds();
-                  op_stack.pop(types::i32);   // pop ref
+                  auto ref_type = op_stack.pop();  // pop any ref type
+                  PSIZAM_ASSERT(ref_type == types::funcref || ref_type == types::externref ||
+                                ref_type == 0x82 /*any_type*/,
+                                wasm_parse_exception, "ref.is_null requires reference type");
                   op_stack.push(types::i32);  // push i32 result
                   code_writer.emit_ref_is_null();
                } break;
@@ -1479,23 +1501,22 @@ namespace psizam {
                   uint32_t func_idx = parse_varuint32(code);
                   PSIZAM_ASSERT(func_idx < _mod->get_functions_total(),
                                 wasm_parse_exception, "ref.func function index out of range");
-                  op_stack.push(types::i32);  // funcref carried as i32
+                  op_stack.push(types::funcref);
                   code_writer.emit_ref_func(func_idx);
                } break;
                case opcodes::table_get: {
                   check_in_bounds();
                   uint32_t table_idx = parse_varuint32(code);
                   PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.get table index out of range");
-                  op_stack.pop(types::i32);
-                  // table.get produces a funcref or externref — push as i32 for funcref (index)
-                  op_stack.push(types::i32);
+                  op_stack.pop(types::i32);  // index
+                  op_stack.push(_mod->tables[table_idx].element_type);
                   code_writer.emit_table_get(table_idx);
                } break;
                case opcodes::table_set: {
                   check_in_bounds();
                   uint32_t table_idx = parse_varuint32(code);
                   PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.set table index out of range");
-                  op_stack.pop(types::i32);  // value (ref)
+                  op_stack.pop(_mod->tables[table_idx].element_type);  // value (ref)
                   op_stack.pop(types::i32);  // index
                   code_writer.emit_table_set(table_idx);
                } break;
@@ -2326,6 +2347,8 @@ namespace psizam {
                         auto table_idx = parse_varuint32(code);
                         PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.init table index out of range");
                         PSIZAM_ASSERT(elem_idx < _mod->elements.size(), wasm_parse_exception, "elem segment does not exist");
+                        PSIZAM_ASSERT(_mod->elements[elem_idx].type == _mod->tables[table_idx].element_type,
+                                      wasm_parse_exception, "type mismatch");
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
@@ -2555,24 +2578,32 @@ namespace psizam {
       requires (id == section_id::table_section)
       inline void parse_section(wasm_code_ptr&           code,
                                 std::vector<table_type>& elems) {
-         parse_section_impl(code, elems, detail::get_max_section_elements(_options),
-                            [&](wasm_code_ptr& code, table_type& tt, std::size_t /*idx*/) { parse_table_type(code, tt); });
+         auto count = parse_varuint32(code);
+         PSIZAM_ASSERT(count <= detail::get_max_section_elements(_options), wasm_parse_exception, "number of section elements exceeded limit");
+         auto base = elems.size(); // imported tables already present
+         elems.resize(base + count);
+         for (size_t i = 0; i < count; i++) { parse_table_type(code, elems.at(base + i)); }
       }
       template <uint8_t id>
       requires (id == section_id::memory_section)
       inline void parse_section(wasm_code_ptr&            code,
                                 std::vector<memory_type>& elems) {
-         parse_section_impl(code, elems, 1, [&](wasm_code_ptr& code, memory_type& mt, std::size_t idx) {
-            PSIZAM_ASSERT(idx == 0, wasm_parse_exception, "only one memory is permitted");
-            parse_memory_type(code, mt);
-         });
+         auto count = parse_varuint32(code);
+         PSIZAM_ASSERT(count <= 1, wasm_parse_exception, "number of section elements exceeded limit");
+         PSIZAM_ASSERT(elems.size() + count <= 1, wasm_parse_exception, "only one memory is permitted");
+         auto base = elems.size();
+         elems.resize(base + count);
+         for (size_t i = 0; i < count; i++) { parse_memory_type(code, elems.at(base + i)); }
       }
       template <uint8_t id>
       requires (id == section_id::global_section)
       inline void parse_section(wasm_code_ptr&                code,
                                 std::vector<global_variable>& elems) {
-         parse_section_impl(code, elems, detail::get_max_global_section_elements(_options),
-                            [&](wasm_code_ptr& code, global_variable& gv, std::size_t /*idx*/) { parse_global_variable(code, gv); });
+         auto count = parse_varuint32(code);
+         PSIZAM_ASSERT(count <= detail::get_max_global_section_elements(_options), wasm_parse_exception, "number of section elements exceeded limit");
+         auto base = elems.size(); // imported globals already present
+         elems.resize(base + count);
+         for (size_t i = 0; i < count; i++) { parse_global_variable(code, elems.at(base + i)); }
       }
       template <uint8_t id>
       requires (id == section_id::export_section)

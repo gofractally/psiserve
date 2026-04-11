@@ -149,6 +149,7 @@ namespace psizam {
       uint32_t                    index;
       init_expr                   offset;
       elem_mode                   mode;
+      uint8_t                     type = types::funcref;
       std::vector<table_entry>    elems;
    };
 
