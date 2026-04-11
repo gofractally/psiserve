@@ -35,6 +35,12 @@
 
 namespace psizam {
 
+   // Forward declaration — implemented in llvm_runtime_helpers.cpp
+   using llvm_entry_fn_t = int64_t(*)(void*, void*, void*);
+   int64_t call_on_stack(void* stack_top, llvm_entry_fn_t fn,
+                         void* ctx, void* mem, void* args,
+                         std::exception_ptr* exc_out);
+
    struct null_host_functions {
       template<typename... A>
       void operator()(A&&...) const {
@@ -583,8 +589,26 @@ namespace psizam {
                // skip the generated depth_inc cleanup code during unwinding.
                auto saved_call_depth = this->_remaining_call_depth;
                auto depth_guard = scope_guard([&](){ this->_remaining_call_depth = saved_call_depth; });
+
+               // Register the stack guard page so the signal handler catches overflow
+               if (alt_stack.guard_base()) {
+                  stack_guard_range = std::span<std::byte>(
+                     static_cast<std::byte*>(alt_stack.guard_base()), alt_stack.guard_size());
+               }
+
                psizam::invoke_with_signal_handler([&]() {
-                  result.scalar.i64 = entry(this, base_type::linear_memory(), args_raw);
+                  if (alt_stack.top()) {
+                     // Execute on the dedicated stack — isolates WASM from host C stack
+                     std::exception_ptr exc;
+                     using stack_fn_t = int64_t(*)(void*, void*, void*);
+                     result.scalar.i64 = call_on_stack(
+                        alt_stack.top(), reinterpret_cast<stack_fn_t>(entry),
+                        this, base_type::linear_memory(), args_raw, &exc);
+                     if (exc) std::rethrow_exception(exc);
+                  } else {
+                     // No alternate stack allocated (fits in current stack) — call directly
+                     result.scalar.i64 = entry(this, base_type::linear_memory(), args_raw);
+                  }
                   // For v128 returns, the entry wrapper stores the full v128 into args_raw
                   // LLVM stores <2 x i64> as [elem0, elem1] in memory order.
                   // v128_t is {low, high} so elem0 → low, elem1 → high.

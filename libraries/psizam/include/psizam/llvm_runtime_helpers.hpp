@@ -5,6 +5,7 @@
 // Each receives the jit_execution_context* as the first argument.
 
 #include <cstdint>
+#include <exception>
 
 extern "C" {
    // Global variable access
@@ -68,4 +69,20 @@ extern "C" {
    [[noreturn]] void __psizam_trap(void* ctx, uint32_t trap_code);
    // trap codes: 0=unreachable, 1=div_by_zero, 2=int_overflow,
    //             3=invalid_conversion, 4=undefined_element
+}
+
+namespace psizam {
+   // Call an LLVM entry function on a dedicated stack.
+   // The try/catch runs on the alternate stack, so C++ exceptions from
+   // LLVM-generated code (runtime helpers like __psizam_trap) unwind correctly.
+   // Stack overflow hits the guard page → SIGSEGV → signal handler → siglongjmp.
+   //
+   // stack_top: top of the mmap'd stack (stack grows down)
+   // fn: LLVM entry wrapper: int64_t(*)(void* ctx, void* mem, native_value* args)
+   // ctx, mem, args: forwarded to fn
+   // exc_out: if fn throws, the exception is stored here and 0 is returned
+   using llvm_entry_fn_t = int64_t(*)(void*, void*, void*);
+   int64_t call_on_stack(void* stack_top, llvm_entry_fn_t fn,
+                         void* ctx, void* mem, void* args,
+                         std::exception_ptr* exc_out);
 }

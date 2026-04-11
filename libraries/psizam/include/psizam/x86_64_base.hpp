@@ -66,6 +66,8 @@ namespace psizam {
       inline friend register_add_expr operator+(general_register64 reg, int32_t offset) { return { reg, offset }; }
       inline friend register_add_expr operator+(int32_t offset, general_register64 reg) { return { reg, offset }; }
       inline friend register_add_expr operator-(general_register64 reg, int32_t offset) { return { reg, -offset }; }
+      inline friend register_add_expr operator+(register_add_expr expr, int32_t offset) { return { expr.reg, expr.offset + offset }; }
+      inline friend register_add_expr operator-(register_add_expr expr, int32_t offset) { return { expr.reg, expr.offset - offset }; }
 
       struct disp_memory_ref {
          constexpr disp_memory_ref(general_register64 reg, int32_t offset) : reg(reg), offset(offset) {}

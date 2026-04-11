@@ -25,6 +25,9 @@ namespace psizam {
    inline thread_local std::span<std::byte> memory_range;
 
    __attribute__((visibility("default")))
+   inline thread_local std::span<std::byte> stack_guard_range;
+
+   __attribute__((visibility("default")))
    inline thread_local std::atomic<bool> timed_run_has_timed_out{false};
 
    // Fixes a duplicate symbol build issue when building with `-fvisibility=hidden`
@@ -72,6 +75,11 @@ namespace psizam {
 
          //neither range set means legacy catch-all behavior; useful for some of the old tests
          if (code_memory_range.empty() && memory_range.empty())
+            siglongjmp(*dest, sig);
+
+         //a failure on the stack guard page means stack overflow
+         if (!stack_guard_range.empty() &&
+             addr >= stack_guard_range.data() && addr < stack_guard_range.data() + stack_guard_range.size())
             siglongjmp(*dest, sig);
 
          //a failure in the memory range is always jumped out of
@@ -192,6 +200,7 @@ namespace psizam {
       sigjmp_buf* volatile old_signal_handler = nullptr;
       const auto old_code_memory_range = code_memory_range;
       const auto old_memory_range = memory_range;
+      const auto old_stack_guard_range = stack_guard_range;
       code_memory_range = code_allocator.get_code_span();
       memory_range = mem_allocator->get_span();
       int sig;
@@ -217,11 +226,13 @@ namespace psizam {
             std::atomic_store(&signal_dest, old_signal_handler);
             memory_range = old_memory_range;
             code_memory_range = old_code_memory_range;
+            stack_guard_range = old_stack_guard_range;
          } catch(...) {
             pthread_sigmask(SIG_SETMASK, &old_sigmask, nullptr);
             std::atomic_store(&signal_dest, old_signal_handler);
             memory_range = old_memory_range;
             code_memory_range = old_code_memory_range;
+            stack_guard_range = old_stack_guard_range;
             throw;
          }
       } else {

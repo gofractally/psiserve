@@ -4,78 +4,118 @@
 // BACKEND FEATURE PARITY TRACKER
 // Legend: 🟢 done  🟡 partial  🔴 missing  🐛 bug
 //
-//                              INTERP JIT(x86) JIT2(x86) JIT2(a64) LLVM
-//                              ────── ──────── ───────── ───────── ────
+//                              INTERP JIT(x86) JIT2(x86) JIT(a64) JIT2(a64) LLVM
+//                              ────── ──────── ───────── ──────── ───────── ────
 // MULTI-VALUE RETURNS
-//   parse multi-value types      🟢     🟢       🟢        🟢      🟢
-//   function returns (N>1)       🟢     🟢       🟢        🟢      🟢
-//   multi-value block types      🟢     🟢       🟢        🟢      🟢
-//   branch encoding (N vals)     🟢     🟢       🟢        🟢      🟢
+//   parse multi-value types      🟢     🟢       🟢        🟢       🟢      🟢
+//   function returns (N>1)       🟢     🟢       🟢        🟢       🟢      🟢
+//   multi-value block types      🟢     🟢       🟢        🟢       🟢      🟢
+//   branch encoding (N vals)     🟢     🟢       🟢        🟢       🟢      🟢
 //
 // MULTI-TABLE
-//   call_indirect w/ table       🟢     🟢       🟢        🟢      🟢
-//   table.copy multi-table       🟢     🟢       🟢        🟢      🟢
-//   table.init multi-table       🟢     🟢       🟢        🟢      🟢
-//   elem.drop                    🟢     🟢       🟢        🟢      🟢
+//   call_indirect w/ table       🟢     🟢       🟢        🟢       🟢      🟢
+//   table.copy multi-table       🟢     🟢       🟢        🟢       🟢      🟢
+//   table.init multi-table       🟢     🟢       🟢        🟢       🟢      🟢
+//   elem.drop                    🟢     🟢       🟢        🟢       🟢      🟢
 //
 // TABLE ELEMENT OPS
-//   table.get                    🟢     🟢       🟢        🟢      🟢
-//   table.set                    🟢     🟢       🟢        🟢      🟢
-//   table.grow                   🟢     🟢       🟢        🟢      🟢
-//   table.size                   🟢     🟢       🟢        🟢      🟢
-//   table.fill                   🟢     🟢       🟢        🟢      🟢
+//   table.get                    🟢     🟢       🟢        🟢       🟢      🟢
+//   table.set                    🟢     🟢       🟢        🟢       🟢      🟢
+//   table.grow                   🟢     🟢       🟢        🟢       🟢      🟢
+//   table.size                   🟢     🟢       🟢        🟢       🟢      🟢
+//   table.fill                   🟢     🟢       🟢        🟢       🟢      🟢
 //
 // BULK MEMORY
-//   memory.init                  🟢     🟢       🟢        🟢      🟢
-//   memory.copy                  🟢     🟢       🟢        🟢      🟢
-//   memory.fill                  🟢     🟢       🟢        🟢      🟢
-//   data.drop                    🟢     🟢       🟢        🟢      🟢
+//   memory.init                  🟢     🟢       🟢        🟢       🟢      🟢
+//   memory.copy                  🟢     🟢       🟢        🟢       🟢      🟢
+//   memory.fill                  🟢     🟢       🟢        🟢       🟢      🟢
+//   data.drop                    🟢     🟢       🟢        🟢       🟢      🟢
 //
 // SIMD (v128)
-//   full v128 ops                🟢     🟢       🟢        🟢      🟢
+//   full v128 ops                🟢     🟢       🟢        🟢       🟢      🟢
 //
 // REFERENCE TYPES
-//   ref.null / ref.is_null       🟢     🟢       🟢        🟢      🟢
-//   ref.func                     🟢     🟢       🟢        🟢      🟢
-//   externref                    🟢     🟢       🟢        🟢      🟢
+//   ref.null / ref.is_null       🟢     🟢       🟢        🟢       🟢      🟢
+//   ref.func                     🟢     🟢       🟢        🟢       🟢      🟢
+//   externref                    🟢     🟢       🟢        🟢       🟢      🟢
 //
 // SIGN EXTENSION OPS
-//   i32_extend8/16_s             🟢     🟢       🟢        🟢      🟢
-//   i64_extend8/16/32_s          🟢     🟢       🟢        🟢      🟢
+//   i32_extend8/16_s             🟢     🟢       🟢        🟢       🟢      🟢
+//   i64_extend8/16/32_s          🟢     🟢       🟢        🟢       🟢      🟢
 //
 // NONTRAPPING FLOAT-TO-INT
-//   trunc_sat_*                  🟢     🟢       🟢        🟢      🟢
+//   trunc_sat_*                  🟢     🟢       🟢        🟢       🟢      🟢
 //
 // MUTABLE GLOBALS IMPORT/EXPORT
-//   mutable global import        🟢     🟢       🟢        🟢      🟢
+//   mutable global import        🟢     🟢       🟢        🟢       🟢      🟢
 //
 // EXCEPTION HANDLING
-//   try/catch/throw              🟢     🟢       🟢        🟢      🟢
+//   try/catch/throw              🟢     🟢       🟢        🟢       🟢      🟢
 //
 // THREADS / ATOMICS
-//   atomic ops                   🟢     🟢       🟢        🟢      🟢
-//   shared memory                🟢     🟢       🟢        🟢      🟢
+//   atomic ops                   🟢     🟢       🟢        🟢       🟢      🟢
+//   shared memory                🟢     🟢       🟢        🟢       🟢      🟢
 //
 // TAIL CALLS
-//   return_call                  🟢     🟢       🟢        🟢      🟢
-//   return_call_indirect         🟢     🟢       🟢        🟢      🟢
+//   return_call                  🟢     🟢       🟢        🟢       🟢      🟢
+//   return_call_indirect         🟢     🟢       🟢        🟢       🟢      🟢
 //
 // MEMORY64
-//   i64 addressing               🔴     🔴       🔴        🔴      🔴
+//   i64 addressing               🔴     🔴       🔴        🔴       🔴      🔴
 //
 // GC PROPOSAL
-//   struct/array types           🔴     🔴       🔴        🔴      🔴
+//   struct/array types           🔴     🔴       🔴        🔴       🔴      🔴
 //
 // RELAXED SIMD
-//   relaxed simd ops             🟢     🟢       🟢        🟢      🟢
+//   relaxed simd ops             🟢     🟢       🟢        🟢       🟢      🟢
 //
 // MEMORY BOUNDS CHECKING
-//   OOB traps                   🟢     🟢       🟢        🟢      🟢
+//   OOB traps                    🟢     🟢       🟢        🟢       🟢      🟢
+//
+// CLANG COMPATIBILITY
+//   builds with Clang            🟢     🟢       🟢        🟢       🟢      🟢
+//   Rosetta 2 (x86 on arm64)    n/a     🟢       🟢        n/a      n/a     n/a
+//
+// RUNTIME PROPERTIES
+//                              INTERP JIT(x86) JIT2(x86) JIT(a64) JIT2(a64) LLVM
+//                              ────── ──────── ───────── ──────── ───────── ────
+// STACK ISOLATION
+//   dedicated WASM stack         🟢     🟢       🟢        🟢       🟢      🟢
+//   guard page detection         🟢     🟢       🟢        🟢       🟢      🟢
+//   Note: interp/jit/jit2 use a managed operand stack (flat array), so all
+//         WASM calls run in a single C stack frame. LLVM compiles each WASM
+//         function to a native function with real C stack frames; it uses
+//         call_on_stack() to switch to a dedicated mmap'd stack with a guard
+//         page at the bottom. SIGSEGV on the guard page is caught by the
+//         signal handler and converted to a WASM stack overflow trap.
+//
+// CALL DEPTH TRACKING
+//   bounded call depth           🟢     🟢       🟢        🟢       🟢      🟢
+//   Note: interp/jit/jit2 track depth via a counter in execution_context
+//         (register-allocated in jit/jit2). LLVM uses __psizam_call_depth_dec/inc
+//         runtime helpers in function prologues/epilogues.
+//
+// MEMORY SANDBOXING
+//   guard-page OOB traps         🟢     🟢       🟢        🟢       🟢      🟢
+//   Note: All backends use guard-page-based memory sandboxing via wasm_allocator.
+//         OOB accesses hit guard pages → SIGSEGV → signal handler → trap.
+//
+// DETERMINISTIC EXECUTION
+//   softfloat support            🟢     🟢       🟢        🟢       🟢      🔴
+//   Note: LLVM softfloat integration is Phase 4c (pending).
 //
 // KNOWN BUGS 🐛
-//   [B1] Parser rejects table/memory/global imports (~22 failures across all backends)
-//   [B2] LLVM: deep recursion uses C stack, 1M-depth dynamic test segfaults
-//   [B3] JIT2(x86) call_0_wasm SIGABRT (pre-existing, untested on this machine)
+//   [B1] Parser rejects table/memory/global imports (~22 failures per backend)
+//
+// SPEC TEST RESULTS (per backend, excluding B1 parser import failures):
+//   Interpreter:    21 failures (arm64), 21 failures (x86_64 Rosetta)
+//   JIT(x86):       21 failures (x86_64 Rosetta) — zero JIT-specific failures
+//   JIT2(x86):      21 failures (x86_64 Rosetta) — zero JIT2-specific failures
+//   JIT(a64):       23 failures (arm64 native)
+//   JIT2(a64):      23 failures (arm64 native)
+//   LLVM:           23 failures (arm64 native)
+//   Note: x86_64 has ~473 extra "wasm file not found" due to incomplete test
+//         wasm generation in x86 cross-build — not real backend failures.
 //
 // Last updated: 2026-04-10
 //

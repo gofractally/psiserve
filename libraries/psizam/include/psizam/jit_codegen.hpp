@@ -159,6 +159,9 @@ namespace psizam {
       /// Access the recorded relocations (for .pzam serialization).
       const relocation_recorder& relocations() const { return _reloc_recorder; }
 
+      // Offset of _multi_return buffer in frame_info_holder (accessed via RDI)
+      static constexpr int32_t multi_return_offset = 24;
+
       // Offset of _remaining_call_depth in unified frame_info_holder layout
       // (always at offset 16, after _bottom_frame and _top_frame pointers)
       static constexpr int32_t call_depth_offset() { return 16; }
@@ -4166,7 +4169,7 @@ namespace psizam {
       }
 
       // ──────── Global access helper ────────
-      auto emit_global_loc(uint32_t globalidx) {
+      disp_memory_ref emit_global_loc(uint32_t globalidx) {
          auto offset = _mod.get_global_offset(globalidx);
          this->emit_mov(*(rsi + (wasm_allocator::globals_end() - 8)), rcx);
          if (offset > 0x7fffffff) {

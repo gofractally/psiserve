@@ -36,12 +36,18 @@ The design mirrors Unix conventions wherever possible — a developer who has wr
 | exec() | `_start()` | Per-connection entry point |
 | `_init()` / constructors | `_init()` | Template setup, runs once |
 | stdin/stdout/stderr | fd 0 / fd 1 / fd 2 | Socket, log output, error output |
-| read()/write() | `ps_read()`/`ps_write()` | Blocking by default, yields fiber |
-| fcntl(O_NONBLOCK) | `ps_set_nonblock()` | Returns -EAGAIN instead of yielding |
-| poll()/select() | `ps_poll()` | Wait on multiple fds |
-| connect() | `ps_connect()` | Returns new fd |
-| close() | `ps_close()` | |
-| pipe() | `ps_channel_create()` | Shared-memory ring buffer |
+| read()/write() | `psi_read()`/`psi_write()` | Blocking by default, yields process |
+| fcntl(O_NONBLOCK) | `psi_set_nonblock()` | Returns -EAGAIN instead of yielding |
+| poll()/select() | `psi_poll()` | Wait on multiple fds |
+| bind() | `psi_bind()` | Bind to port, returns fd |
+| listen() | `psi_listen()` | Mark fd as listening |
+| accept() | `psi_accept()` | Returns new fd + peer address |
+| connect() | `psi_connect()` | Returns new fd |
+| shutdown() | `psi_shutdown()` | Half-close (read/write/both) |
+| close() | `psi_close()` | |
+| getpeername() | `psi_getpeername()` | Peer IP/port for any socket fd |
+| pipe() | `psi_channel_create()` | Bidirectional ring buffer |
+| clock_gettime() | `psi_clock()` | Monotonic time in nanoseconds |
 | Syscall | Host function call | No kernel trap, just a function call |
 | inetd | The runtime itself | Listens, accepts, forks, binds fd 0 |
 | kill(pid, sig) | `service_call()` | Synchronous RPC |
@@ -56,17 +62,17 @@ A service is a compiled WASM module with two entry points:
 
 ```c
 void _init() {
-    ps_bind_ring(0, PS_READ,  &rx);
-    ps_bind_ring(0, PS_WRITE, &tx);
+    psi_bind_ring(0, PSI_READ,  &rx);
+    psi_bind_ring(0, PSI_WRITE, &tx);
     load_config();
     warm_cache();
 }
 
 void _start() {
     // fd 0 is live, rings are ready, caches are warm (COW shared)
-    http_request req = ps_read_request(0);
+    http_request req = psi_read_request(0);
     db_result r = service_call(DB_SERVICE, QUERY, &req);
-    ps_write_response(0, format(r));
+    psi_write_response(0, format(r));
 }
 ```
 
@@ -76,36 +82,115 @@ Services can also be long-lived daemons (timers, watchers, background workers) t
 
 ## API Surface
 
-### I/O — POSIX-style, blocking by default
+### Architecture: Host Primitives + WASI Standard Interfaces
 
-```c
-int  ps_read(int fd, void* buf, int len);        // blocks (yields fiber) until data ready
-int  ps_write(int fd, void* buf, int len);        // blocks until written
-int  ps_connect(const char* addr, int port);      // blocks until connected, returns fd
-void ps_close(int fd);
-void ps_set_nonblock(int fd);                     // subsequent calls return -EAGAIN
+psiserve is a microkernel. The host provides only raw primitives (`psi:*` interfaces). Higher-level capabilities are standard WASI interfaces (`wasi:*`) implemented by composable system services — not baked into the host.
+
+```
+User service                 System service              Host (psix)
+────────────                 ──────────────              ───────────
+imports wasi:filesystem  →   exports wasi:filesystem
+                             imports psi:host-fs      →  OS file I/O
+imports wasi:sockets     →   exports wasi:sockets
+                             imports psi:host-net     →  OS socket I/O
+imports wasi:clocks      →   exports wasi:clocks
+                             imports psi:host-clock   →  OS clock
+imports wasi:random      →   exports wasi:random
+                             imports psi:host-random  →  OS entropy
 ```
 
-### Multiplexing — for services with multiple fds
+User services import standard WASI interfaces — the same code runs on Wasmtime, Wasmer, or psiserve. The difference is what's behind the interface: on Wasmtime it's direct host calls, on psiserve it's composable services backed by privileged host primitives. The WAC composition controls which implementation backs each interface.
+
+### Privilege Model
+
+Host primitives (`psi:*`) are privileged — only system services can import them. User services only see standard WASI interfaces, mediated by system services. A service's WIT world declaration determines what it can access:
+
+```wit
+// System service — privileged, gets raw host access
+world fs-service {
+    import psi:host-fs/types@0.1.0;           // privileged
+    export wasi:filesystem/types@0.2.0;        // provides sandboxed FS
+}
+
+// User service — only standard WASI, no host access
+world echo-service {
+    import wasi:filesystem/types@0.2.0;        // sandboxed via fs-service
+    import wasi:sockets/tcp@0.2.0;             // sandboxed via net-service
+}
+```
+
+### Host Primitives (`psi:*`)
+
+These are the raw host functions — the "syscall" layer. Available to system services and services that the operator explicitly grants access to.
+
+#### I/O — fd-based, blocking by default
+
+```c
+int  psi_read(int fd, void* buf, int len);        // blocks (yields process) until data ready
+int  psi_write(int fd, void* buf, int len);        // blocks until written
+int  psi_readv(int fd, psi_iov_t* iov, int count); // scatter read
+int  psi_writev(int fd, psi_iov_t* iov, int count);// gather write
+void psi_close(int fd);
+void psi_set_nonblock(int fd);                     // subsequent calls return -EAGAIN
+```
+
+#### Sockets
+
+```c
+int  psi_bind(int port);                           // create + bind, returns listen fd
+int  psi_listen(int fd, int backlog);              // mark as listening
+int  psi_accept(int fd, psi_addr_t* peer);         // blocks, returns fd + peer address
+int  psi_connect(const char* addr, int port);      // blocks until connected, returns fd
+int  psi_shutdown(int fd, int how);                // PSI_SHUT_RD, PSI_SHUT_WR, PSI_SHUT_RDWR
+int  psi_getpeername(int fd, psi_addr_t* addr);    // peer IP/port for any socket fd
+
+typedef struct {
+    uint8_t  ip[16];    // IPv4-mapped-IPv6 or IPv6
+    uint16_t port;
+    uint8_t  family;    // PSI_AF_INET4, PSI_AF_INET6
+} psi_addr_t;
+```
+
+#### Multiplexing
 
 ```c
 typedef struct {
     int fd;
-    int events;    // PS_READABLE | PS_WRITABLE | PS_ERROR
+    int events;    // PSI_READABLE | PSI_WRITABLE | PSI_ERROR
     int revents;   // filled by host on return
-} ps_event_t;
+} psi_event_t;
 
-int ps_poll(ps_event_t* events, int count, int timeout_ms);
+int psi_poll(psi_event_t* events, int count, int timeout_ms);
 ```
 
-### Timers
+#### Timers & Clock
 
 ```c
-int ps_timer_create(int interval_ms, int flags);  // returns fd
-// Timer fires show up as PS_READABLE on the timer fd
+int      psi_timer_create(int interval_ms, int flags);  // returns fd
+int      psi_timer_set(int fd, int interval_ms);        // modify existing timer
+uint64_t psi_clock(void);                                // monotonic nanoseconds
+// Timer fires show up as PSI_READABLE on the timer fd
 ```
 
-### Inter-Service Communication
+#### Host Filesystem (privileged)
+
+```c
+int  psi_host_open(const char* path, int flags, int mode);
+int  psi_host_stat(const char* path, psi_stat_t* st);
+int  psi_host_readdir(int fd, psi_dirent_t* entries, int max);
+int  psi_host_mkdir(const char* path, int mode);
+int  psi_host_unlink(const char* path);
+int  psi_host_rename(const char* old_path, const char* new_path);
+// read/write/close use standard psi_read/psi_write/psi_close on returned fd
+```
+
+#### Environment
+
+```c
+const char* psi_getenv(const char* key);           // sandboxed — only forwarded vars
+```
+
+#### Inter-Service Communication
 
 ```c
 // Synchronous RPC — blocks until target returns
@@ -113,12 +198,12 @@ int service_call(int service_id, int method, void* args, int args_len,
                  void* result, int result_len);
 
 // Channels — bidirectional ring buffers between services
-int ps_channel_create(int buf_size);               // returns fd
-int ps_channel_connect(int service_id, int port);  // returns fd
-// Then use ps_read/ps_write/ps_poll on the channel fd
+int psi_channel_create(int buf_size);               // returns fd
+int psi_channel_connect(int service_id, int port);  // returns fd
+// Then use psi_read/psi_write/psi_poll on the channel fd
 ```
 
-### Ring Buffer Registration — for zero-copy I/O
+#### Ring Buffer Registration — for zero-copy I/O
 
 ```c
 typedef struct {
@@ -126,14 +211,136 @@ typedef struct {
     uint32_t tail;     // reader advances
     uint32_t buf;      // pointer to data buffer in linear memory
     uint32_t size;     // buffer size (power of 2)
-} ps_ring_t;
+} psi_ring_t;
 
-void ps_bind_ring(int fd, int direction, ps_ring_t* ring);
+void psi_bind_ring(int fd, int direction, psi_ring_t* ring);
 ```
 
 Services allocate ring buffers in their own linear memory and tell psix where they are. psix passes those addresses directly to kernel read()/write() syscalls — data moves kernel <-> WASM memory with no intermediate buffer.
 
 For advanced services, the ring can be read/written directly (pure memory access, no host call) with host calls only needed to yield when the ring is empty/full.
+
+### Standard Interfaces (`wasi:*`)
+
+These are implemented by composable system services, not the host. User services import them; the WAC composition determines what backs them.
+
+| WASI Interface | Backed by | System service imports |
+|---|---|---|
+| `wasi:filesystem` | Filesystem service | `psi:host-fs` |
+| `wasi:sockets` | Network service | `psi:host-net` (or direct `psi_bind`/`psi_connect`) |
+| `wasi:clocks` | Clock service | `psi:host-clock` (or direct `psi_clock`) |
+| `wasi:random` | Random service | `psi:host-random` |
+| `wasi:cli/environ` | Host directly | `psi_getenv` |
+
+For simple deployments, the operator can grant `psi:*` interfaces directly to user services (skip the system service layer). For multi-tenant or untrusted code, system services mediate all access. The WAC composition controls which model is used — the service code is identical either way.
+
+### Dynamic WASM Management (`psi:wasm`)
+
+Core host interface for validating, compiling, linking, and instantiating WASM modules at runtime. This is what makes psiserve a platform that can host blockchain runtimes, plugin systems, or any application that receives and executes WASM from external sources.
+
+```wit
+interface psi-wasm {
+    // Validate — check module is well-formed, imports are satisfiable
+    validate: func(module: list<u8>) -> result<module-info, validation-error>;
+
+    // Link — combine module with dependencies (bound/linked)
+    link: func(module: list<u8>, deps: list<link-dep>) -> result<list<u8>, link-error>;
+
+    // Compile — JIT compile a validated module, cache native code
+    compile: func(
+        module: list<u8>,
+        mode: exec-mode,
+    ) -> result<compiled-module, compile-error>;
+
+    // Instantiate — create a running service from compiled module
+    instantiate: func(
+        compiled: compiled-module,
+        config: instance-config,
+    ) -> result<service-ref, instance-error>;
+
+    // Teardown
+    stop: func(service: service-ref) -> result<_, string>;
+    unload: func(service: service-ref) -> result<_, string>;
+}
+
+record link-dep {
+    name: string,
+    module: list<u8>,
+}
+
+record module-info {
+    imports: list<string>,
+    exports: list<string>,
+    memory-min: u32,
+    memory-max: option<u32>,
+}
+
+record instance-config {
+    name: string,
+    env: list<tuple<string, string>>,
+    fds: list<named-fd>,
+    exec-mode: exec-mode,
+    instruction-limit: option<u64>,
+    thread-placement: thread-placement,
+}
+
+enum exec-mode { objective, subjective }
+
+// Thread placement — control where instances run
+variant thread-placement {
+    // Host decides (default — distributes across threads)
+    auto,
+    // Pin to a specific thread
+    pin(thread-id),
+    // Pin to same thread as another service (for fast same-thread IPC)
+    colocate(service-ref),
+    // Spread N instances across N threads (one per thread)
+    spread(u32),
+    // Restrict to a set of threads
+    affinity(list<thread-id>),
+}
+
+resource compiled-module {}
+```
+
+```wit
+// Thread introspection
+interface psi-threads {
+    // How many OS threads are running
+    thread-count: func() -> u32;
+    // Which thread is the caller on
+    current-thread: func() -> thread-id;
+    // Move a service to a different thread
+    migrate: func(service: service-ref, target: thread-id) -> result<_, string>;
+}
+```
+
+Thread placement matters because same-thread communication is a direct process switch (one copy, no atomics), while cross-thread goes through the message ring. A blockchain consensus service uses this to:
+
+- **Pin** the block producer to a dedicated thread (no scheduling contention)
+- **Colocate** services that call each other heavily (same-thread fast path)
+- **Spread** HTTP instances across all threads (max parallelism)
+- **Isolate** untrusted user contracts from system services (separate threads)
+
+```c
+// Consensus service deploying a user contract
+psi_wasm_instantiate(compiled, &(instance_config_t){
+    .name = "tokens",
+    .exec_mode = EXEC_OBJECTIVE,
+    .instruction_limit = 1000000,
+    .thread_placement = PLACEMENT_COLOCATE(consensus_ref),  // same thread as consensus
+});
+
+// Spreading HTTP across all cores
+psi_wasm_instantiate(compiled, &(instance_config_t){
+    .name = "http-router",
+    .thread_placement = PLACEMENT_SPREAD(8),  // one instance per thread
+});
+```
+
+A blockchain consensus service imports `psi-wasm` and `psi-threads` to deploy smart contracts received in transactions and control their placement. A plugin runtime imports them to load extensions. The interface is general-purpose — psiserve doesn't know what the caller is building.
+
+The pipeline is: **validate → link → compile → instantiate (with placement)**. Each step can be called independently and results can be cached. Compilation output is content-addressed and reusable across nodes.
 
 ## Implementation
 
@@ -161,7 +368,7 @@ When the fiber completes, the original stack pages are restored via `mmap`.
 
 Between yields, a fiber has exclusive access to its instance's memory. No locks, no atomics, no surprises. The developer's mental model: "between host calls, I own everything."
 
-Yield points are explicit and visible — they only occur inside `ps_read`, `ps_write`, `ps_poll`, `service_call`, and similar host functions. The developer always knows when a context switch can happen.
+Yield points are explicit and visible — they only occur inside `psi_read`, `psi_write`, `psi_poll`, `service_call`, and similar host functions. The developer always knows when a context switch can happen.
 
 ### The Scheduler (per OS thread)
 
@@ -258,11 +465,173 @@ Both bound and linked modes use WASM's relocatable object format (`.o` files wit
 
 > **See [psix IPC Design](psix-ipc-design.md) §7** for full details on the composition model, relocatable linking mechanics, and per-function JIT caching.
 
+## Configuration & Deployment
+
+### Design: Capability-Based, Not Policy-Based
+
+Services don't request permissions. They declare what interfaces they need (WIT world = entitlements), the operator decides what concrete resources back those interfaces (composition + config = sandbox). No runtime permission checks — if an interface isn't in your imports, you can't call it.
+
+| Layer | Owner | Format | What it determines |
+|-------|-------|--------|--------------------|
+| **WIT world** | Service developer | WIT | What the service CAN use (entitlements) |
+| **WAC composition** | App deployer | WAC | What backs each capability (sandbox) |
+| **TOML config** | Operator | TOML | Operational tuning + resource grants (how many, how fast) |
+
+The service doesn't say "I want port 8080." It says "I need a listening socket." The operator gives it one. The service doesn't say "I want /var/data." It says "I need filesystem access." The operator mounts a directory.
+
+### WIT World — the entitlements
+
+Each service declares its imports and exports using the Component Model's standard world definition:
+
+```wit
+package myapp:echo@1.0.0;
+
+world echo-service {
+    import psi:io/streams@0.1.0;
+    import psi:discovery/api@0.1.0;
+    import community:json-parser/api@1.0.0;
+
+    export myapp:echo/api@1.0.0;
+    export myapp:echo/signals@1.0.0;
+}
+```
+
+The world tells psiserve exactly what interfaces must be satisfied before this service can run. It is also the security boundary — a service cannot access interfaces not declared in its world.
+
+### WAC Composition — the sandbox
+
+WAC (WebAssembly Composition) is the Bytecode Alliance standard for describing how components are wired together:
+
+```wac
+package psiserve:deployment;
+
+let json = new community:json-parser@1.0.0;
+let echo = new myapp:echo@1.0.0 {
+    "community:json-parser/api": json,
+    ...
+};
+let auth = new myapp:auth@1.0.0 { ... };
+
+export echo;
+export auth;
+```
+
+WAC handles both bound (pinned version) and linked (name-resolved) composition. Services exported separately are separate processes with host-mediated IPC (connected mode). `let` bindings are libraries absorbed into the importing service.
+
+### TOML Config — directory-based, per-service
+
+Operational config is split across a directory of TOML files, one per service. Parsed with **toml++** (single header-only file, C++17, MIT license). The exact schema is TBD — what matters is the separation of concerns.
+
+```
+etc/
+  psiserve.toml               # global: threads, logging
+  services/                   # per-service operational config
+    echo.toml
+    auth.toml
+    database.toml
+```
+
+Global config handles server-wide concerns:
+
+```toml
+# etc/psiserve.toml
+[server]
+threads = 4
+compose = "etc/compose.wac"
+pkg_path = "pkg"
+```
+
+Per-service config handles resource grants and operational tuning:
+
+```toml
+# etc/services/echo.toml
+[service]
+module = "myapp:echo@1.0.0"
+
+[instances]
+min = 2
+max = 100
+
+[env]
+DATABASE_URL = "${DATABASE_URL}"   # forward from host env
+LOG_LEVEL = "debug"                # literal value
+
+[listen]
+port = 8080
+
+[filesystem]
+"/config" = { host = "pkg/myapp/echo@1.0.0/config", mode = "ro" }
+"/tmp" = { type = "memory" }
+```
+
+Services receive configuration through `psi_getenv()`. Services see **no host environment by default** — only variables explicitly declared in the service's TOML are visible. `${VAR}` syntax forwards from the host environment (like Docker Compose). Unresolvable references are an error at startup.
+
+### Directory Layout
+
+```
+psiserve/
+  etc/                          configuration
+    psiserve.toml                 global config
+    compose.wac                   service composition
+    services/                     per-service config
+      echo.toml
+      auth.toml
+
+  pkg/                          packages (namespace:name@version)
+    psi/                          host-provided interfaces
+      io@0.1.0/
+        wit/
+      discovery@0.1.0/
+        wit/
+    community/                    libraries
+      json-parser@1.0.0/
+        json-parser.wasm
+        wit/
+    myapp/                        services
+      echo@1.0.0/
+        echo.wasm
+        wit/
+          world.wit
+
+  var/                          runtime state
+    cache/                        JIT-compiled native code
+    log/
+    run/                          PID file, sockets
+```
+
+The `pkg/` tree mirrors the standard WIT package naming convention (`namespace:name@version`). Packages are distributed as OCI artifacts (the industry-standard mechanism for WASM distribution) and fetched with `wkg`.
+
+### Startup Sequence
+
+```
+1. Load etc/psiserve.toml                (global: threads, paths)
+2. Load etc/compose.wac                  (structural: what services, how wired)
+3. Glob etc/services/*.toml              (per-service: resources, limits, env)
+4. For each service:
+     a. Load .wasm from pkg/
+     b. Validate world against composition (all imports satisfied?)
+     c. Link bound/linked dependencies (wasm-ld)
+     d. Pre-bind resources from service TOML:
+        - Listening sockets (pre-bound, passed as fds)
+        - Filesystem mounts (preopened directories)
+        - Environment variables (forwarded/literal)
+        - Signal connections (from WAC)
+     e. Call _init() on template instance
+5. Start OS threads
+6. Distribute service instances across threads
+7. Call _start() on each instance
+     - fd 0 = listening socket (if configured)
+     - Filesystem = mounted directories
+     - Environment = forwarded variables
+     - The service receives what it's given. No runtime permission checks.
+```
+
 ## Detailed Design Documents
 
 - **[psix IPC, Fiber, and Memory Design](psix-ipc-design.md)** — Inter-process communication (signals/slots, ring buffers, cross-thread coordination), fiber allocation (bitmap + CAS pools, static VMA tree), WIT interface conventions (`*-api` for RPC, `*-signals` for events), service discovery, and host-managed message routing. Supersedes the inter-service communication sections below where they conflict.
 - **[psizam Architecture Evolution](llvm-backend-design.md)** — WASM engine refactoring: decoupled compile/execute, LLVM backend, sandboxed compilation, code caching.
 - **[Master Implementation Plan](master-plan.md)** — Layered build plan from scaffold to work-stealing.
+- **[httpd Service](httpd-service.md)** — Hello world application: static file HTTP server. Benchmark target for comparing psiserve overhead against nginx, Go, Node.js.
 
 ## Design Principles
 
@@ -276,7 +645,7 @@ Both bound and linked modes use WASM's relocatable object format (`.o` files wit
 
 5. **Explicit yield points.** Context switches only occur inside host function calls. The developer always knows when interleaving can happen. No hidden preemption.
 
-6. **Everything is an fd.** Sockets, timers, channels, service connections — all managed through the same fd-based API, all waited on through `ps_poll()`.
+6. **Everything is an fd.** Sockets, timers, channels, service connections — all managed through the same fd-based API, all waited on through `psi_poll()`.
 
 ## Performance: HTTP + Database Request Path
 

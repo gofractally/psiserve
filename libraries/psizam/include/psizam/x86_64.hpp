@@ -64,9 +64,14 @@ namespace psizam {
    // - rdi hold the execution context
    // - rbx holds the remaining stack frames
    //
-   class machine_code_writer {
+   // Template to ensure constexpr factory functions (IA32, IA32_WX, etc.) are
+   // considered "defined" at static constexpr member initialization time.
+   // Non-template classes defer inline member function definitions until after
+   // the closing brace, which Clang rejects for constexpr use.
+   template<int = 0>
+   class machine_code_writer_t {
     public:
-      machine_code_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod,
+      machine_code_writer_t(growable_allocator& alloc, std::size_t source_bytes, module& mod,
                           bool enable_backtrace, bool stack_limit_is_bytes) :
          _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()),
          _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
@@ -103,7 +108,7 @@ namespace psizam {
          }
          assert(code == _code_end);
       }
-      ~machine_code_writer() {
+      ~machine_code_writer_t() {
          _allocator.end_code<true>(_code_segment_base);
          auto num_functions = _mod.get_functions_total();
          if (num_functions <= _function_relocations.size()) {
@@ -430,7 +435,7 @@ namespace psizam {
             assert(stack.empty() && "unexpected default.");
             return result;
          }
-         machine_code_writer * _this;
+         machine_code_writer_t * _this;
          int _i = 0;
          struct stack_item {
             uint32_t min;
@@ -933,7 +938,7 @@ namespace psizam {
          COUNT_INSTR();
          auto icount = fixed_size_instr(12);
          emit_pop(rax);
-         emit(CMP, static_cast<int32_t>(-1), eax);
+         emit_cmp(-1, eax);
          emit(XOR_A, ecx, ecx);
          emit(SETZ, cl);
          emit_push(rcx);
@@ -4826,6 +4831,8 @@ namespace psizam {
       inline friend register_add_expr operator+(general_register64 reg, int32_t offset) { return { reg, offset }; }
       inline friend register_add_expr operator+(int32_t offset, general_register64 reg) { return { reg, offset }; }
       inline friend register_add_expr operator-(general_register64 reg, int32_t offset) { return { reg, -offset }; }
+      inline friend register_add_expr operator+(register_add_expr expr, int32_t offset) { return { expr.reg, expr.offset + offset }; }
+      inline friend register_add_expr operator-(register_add_expr expr, int32_t offset) { return { expr.reg, expr.offset - offset }; }
       struct disp_memory_ref {
          constexpr disp_memory_ref(general_register64 reg, int32_t offset) : reg(reg), offset(offset) {}
          constexpr disp_memory_ref(simple_memory_ref other) : reg(other.reg), offset(0) {}
@@ -7011,5 +7018,6 @@ namespace psizam {
       static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
       static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>( "stack overflow" ); }
    };
-   
+   using machine_code_writer = machine_code_writer_t<>;
+
 }

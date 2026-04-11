@@ -86,6 +86,7 @@ endif()
 # ── Runtime helpers (non-LLVM, needed by all JIT backends) ────────────────────
 add_library(psizam-runtime STATIC
    src/runtime_helpers.cpp
+   src/call_on_stack.cpp
 )
 target_link_libraries(psizam-runtime PUBLIC psizam)
 

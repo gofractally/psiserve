@@ -56,13 +56,17 @@ namespace psizam {
       explicit stack_allocator(std::size_t min_size, std::size_t available = 4*1024*1024) {
          if(min_size > available) {
             std::size_t pagesize = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
-            _size = ((min_size + pagesize - 1) & ~(pagesize - 1)) + 4*1024*1024;
+            // Add one guard page at the bottom for stack overflow detection
+            _guard_size = pagesize;
+            _size = ((min_size + pagesize - 1) & ~(pagesize - 1)) + 4*1024*1024 + _guard_size;
             int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #ifdef MAP_STACK
             flags |= MAP_STACK;
 #endif
             _ptr = ::mmap(nullptr, _size, PROT_READ | PROT_WRITE, flags, -1, 0);
             PSIZAM_ASSERT(_ptr != MAP_FAILED, wasm_bad_alloc, "Failed to allocate stack");
+            // Protect the bottom page as a guard
+            ::mprotect(_ptr, _guard_size, PROT_NONE);
          }
       }
       ~stack_allocator() {
@@ -77,9 +81,13 @@ namespace psizam {
             return nullptr;
          }
       }
+      // Returns the guard page region (for signal handler registration)
+      void* guard_base() const { return _ptr; }
+      std::size_t guard_size() const { return _guard_size; }
    private:
       void* _ptr = nullptr;
-      std::size_t _size;
+      std::size_t _size = 0;
+      std::size_t _guard_size = 0;
    };
 
    class contiguous_allocator {
