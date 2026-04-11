@@ -50,28 +50,32 @@ BACKEND_TEST_CASE( "Testing wasm <elem_13_wasm>", "[elem_13_wasm_tests]" ) {
 }
 
 BACKEND_TEST_CASE( "Testing wasm <elem_18_wasm>", "[elem_18_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "elem.18.wasm");
    backend_t bkend( code, &wa );
 
 }
 
 BACKEND_TEST_CASE( "Testing wasm <elem_19_wasm>", "[elem_19_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "elem.19.wasm");
    backend_t bkend( code, &wa );
 
 }
 
 BACKEND_TEST_CASE( "Testing wasm <elem_20_wasm>", "[elem_20_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "elem.20.wasm");
    backend_t bkend( code, &wa );
 
 }
 
 BACKEND_TEST_CASE( "Testing wasm <elem_21_wasm>", "[elem_21_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "elem.21.wasm");
    backend_t bkend( code, &wa );
 

@@ -634,6 +634,16 @@ namespace psizam {
       using execution_interface_t = Execution_Interface;
       using type_converter_t      = Type_Converter;
 
+      struct host_table_import {
+         uint32_t initial_size;
+         uint8_t  element_type = types::funcref;
+      };
+      struct host_global_import {
+         uint8_t  content_type;
+         uint8_t  mutability = 0;
+         uint64_t value = 0;
+      };
+
       struct mappings {
          std::unordered_map<host_func_pair, uint32_t, host_func_pair_hash> named_mapping;
          std::vector<std::function<void(Cls*, Type_Converter&)>>           functions;
@@ -641,6 +651,8 @@ namespace psizam {
          std::vector<fast_host_trampoline_t<Cls>>                          fast_fwd;  // forward order (interpreter)
          std::vector<fast_host_trampoline_t<Cls>>                          fast_rev;  // reverse order (JIT)
          size_t                                                            current_index = 0;
+         std::unordered_map<host_func_pair, host_table_import, host_func_pair_hash>  table_imports;
+         std::unordered_map<host_func_pair, host_global_import, host_func_pair_hash> global_imports;
 
          template <auto F, typename R, typename Args, typename Preconditions>
          void add_mapping(const std::string& mod, const std::string& name) {
@@ -677,6 +689,16 @@ namespace psizam {
          mappings::get().template add_mapping<Func, res, args, preconditions>(mod, name);
       }
 
+      static void add_table(const std::string& mod, const std::string& name,
+                            uint32_t initial_size, uint8_t element_type = types::funcref) {
+         mappings::get().table_imports[{mod, name}] = {initial_size, element_type};
+      }
+
+      static void add_global(const std::string& mod, const std::string& name,
+                             uint8_t content_type, uint64_t value = 0, uint8_t mutability = 0) {
+         mappings::get().global_imports[{mod, name}] = {content_type, mutability, value};
+      }
+
       static void resolve(module& mod) {
          resolve_impl(mod);
       }
@@ -685,15 +707,59 @@ namespace psizam {
       static void resolve_impl(Module& mod) {
          auto& imports          = mod.import_functions;
          auto& current_mappings = mappings::get();
+         uint32_t func_import_idx = 0;
          for (std::size_t i = 0; i < mod.imports.size(); i++) {
             std::string mod_name =
                   std::string((char*)mod.imports[i].module_str.data(), mod.imports[i].module_str.size());
             std::string fn_name = std::string((char*)mod.imports[i].field_str.data(), mod.imports[i].field_str.size());
-            PSIZAM_ASSERT(current_mappings.named_mapping.count({ mod_name, fn_name }), wasm_link_exception,
-                          std::string("no mapping for imported function ") + fn_name);
-            imports[i] = current_mappings.named_mapping[{ mod_name, fn_name }];
-            PSIZAM_ASSERT(mod.imports[i].kind == Function, wasm_link_exception, std::string("importing non-function ") + fn_name);
-            PSIZAM_ASSERT(current_mappings.host_functions[imports[i]] == mod.types[mod.imports[i].type.func_t], wasm_link_exception, std::string("wrong type for imported function ") + fn_name);
+            switch (mod.imports[i].kind) {
+               case external_kind::Function: {
+                  PSIZAM_ASSERT(current_mappings.named_mapping.count({ mod_name, fn_name }), wasm_link_exception,
+                                std::string("no mapping for imported function ") + fn_name);
+                  imports[func_import_idx] = current_mappings.named_mapping[{ mod_name, fn_name }];
+                  PSIZAM_ASSERT(current_mappings.host_functions[imports[func_import_idx]] == mod.types[mod.imports[i].type.func_t], wasm_link_exception, std::string("wrong type for imported function ") + fn_name);
+                  func_import_idx++;
+                  break;
+               }
+               case external_kind::Table: {
+                  auto it = current_mappings.table_imports.find({ mod_name, fn_name });
+                  if (it != current_mappings.table_imports.end()) {
+                     // Find this table in the module's tables (it's among the first num_imported_tables)
+                     uint32_t table_idx = 0;
+                     uint32_t import_count = 0;
+                     for (uint32_t j = 0; j < mod.imports.size() && j <= i; j++) {
+                        if (mod.imports[j].kind == external_kind::Table) {
+                           if (j == i) { table_idx = import_count; break; }
+                           import_count++;
+                        }
+                     }
+                     if (table_idx < mod.tables.size()) {
+                        mod.tables[table_idx].limits.initial = it->second.initial_size;
+                     }
+                  }
+                  break;
+               }
+               case external_kind::Global: {
+                  auto it = current_mappings.global_imports.find({ mod_name, fn_name });
+                  if (it != current_mappings.global_imports.end()) {
+                     uint32_t global_idx = 0;
+                     uint32_t import_count = 0;
+                     for (uint32_t j = 0; j < mod.imports.size() && j <= i; j++) {
+                        if (mod.imports[j].kind == external_kind::Global) {
+                           if (j == i) { global_idx = import_count; break; }
+                           import_count++;
+                        }
+                     }
+                     if (global_idx < mod.globals.size()) {
+                        mod.globals[global_idx].init.value.i64 = it->second.value;
+                     }
+                  }
+                  break;
+               }
+               case external_kind::Memory:
+               case external_kind::Tag:
+                  break; // accepted but no host action needed
+            }
          }
       }
 

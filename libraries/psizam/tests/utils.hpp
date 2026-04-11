@@ -190,6 +190,27 @@ extern template class psizam::backend<psizam::standalone_function_t, psizam::jit
 extern template class psizam::backend<psizam::standalone_function_t, psizam::jit2>;
 #endif
 
+// Spectest host: provides the standard spectest module imports
+// (tables, memories, globals) required by WASM spec test modules.
+struct spectest_host_t;
+using spectest_rhf = psizam::registered_host_functions<spectest_host_t>;
+
+inline void register_spectest_imports() {
+   static bool registered = false;
+   if (registered) return;
+   registered = true;
+   // spectest.table: funcref table with 10 elements (standard spectest module)
+   spectest_rhf::add_table("spectest", "table", 10, psizam::types::funcref);
+   // spectest.global_i32: i32 global, value 666
+   spectest_rhf::add_global("spectest", "global_i32", psizam::types::i32, 666);
+   // spectest.global_i64: i64 global, value 666
+   spectest_rhf::add_global("spectest", "global_i64", psizam::types::i64, 666);
+   // spectest.global_f32: f32 global (666.6f bit pattern)
+   spectest_rhf::add_global("spectest", "global_f32", psizam::types::f32, 0x4426999a);
+   // spectest.global_f64: f64 global (666.6 bit pattern)
+   spectest_rhf::add_global("spectest", "global_f64", psizam::types::f64, 0x4084d33333333333ULL);
+}
+
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
   #if defined(__x86_64__) || defined(__aarch64__)
     #define BACKEND_TEST_CASE(name, tags) \
