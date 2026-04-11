@@ -21,7 +21,7 @@ using error_code_t     = std::error_code;
 #endif
 
 #define GENERATE_ERROR_CATEGORY(CATEGORY, NAME)                                                                        \
-   namespace psizam {                                                                                    \
+   namespace psizam {                                                                                                  \
          struct CATEGORY##_category : error_category_t {                                                               \
             const char* name() const noexcept override { return #NAME; }                                               \
             std::string message(int ev) const override;                                                                \
@@ -32,7 +32,6 @@ using error_code_t     = std::error_code;
                -> std::enable_if_t<std::is_same_v<T, CATEGORY##_category>, bool> {                                     \
             return ec.category() == __##CATEGORY##_category;                                                           \
          }                                                                                                             \
-      }                                                                                                                \
    }
 
 #define GENERATE_ENUM_ELEM(PARENT, ITEM) ITEM,
@@ -42,15 +41,14 @@ using error_code_t     = std::error_code;
       return #ITEM;
 
 #define CREATE_ERROR_CODES(CATEGORY, ERRORS)                                                                           \
-   namespace psizam {                                                                                    \
+   namespace psizam {                                                                                                  \
          enum class CATEGORY { ERRORS(GENERATE_ENUM_ELEM) };                                                           \
-      }                                                                                                                \
    }                                                                                                                   \
    namespace ERROR_CODE_NAMESPACE {                                                                                    \
       template <>                                                                                                      \
-      struct is_error_code_enum<psizam::CATEGORY> : TRUE_TYPE {};                                                   \
+      struct is_error_code_enum<psizam::CATEGORY> : TRUE_TYPE {};                                                      \
    }                                                                                                                   \
-   namespace psizam {                                                                                    \
+   namespace psizam {                                                                                                  \
          inline std::string CATEGORY##_category::message(int ev) const {                                               \
             switch (static_cast<CATEGORY>(ev)) { ERRORS(GENERATE_STR_ELEM) }                                           \
             return "";                                                                                                 \
@@ -58,5 +56,4 @@ using error_code_t     = std::error_code;
          inline error_code_t make_error_code(CATEGORY e) noexcept {                                                    \
             return { static_cast<int>(e), __##CATEGORY##_category };                                                   \
          }                                                                                                             \
-      }                                                                                                                \
    }

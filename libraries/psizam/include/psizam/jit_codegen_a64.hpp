@@ -2134,6 +2134,82 @@ namespace psizam {
             break;
          }
 
+         case ir_op::atomic_op: {
+            uint8_t asub = inst.simd.lane;
+            auto sub = static_cast<atomic_sub>(asub);
+            // Fence: no-op
+            if (sub == atomic_sub::atomic_fence) break;
+            // Notify: push 0
+            if (sub == atomic_sub::memory_atomic_notify) {
+               emit_mov_imm32(X0, 0);
+               emit_push(X0);
+               break;
+            }
+            // Wait: push 1
+            if (sub == atomic_sub::memory_atomic_wait32 || sub == atomic_sub::memory_atomic_wait64) {
+               emit_mov_imm32(X0, 1);
+               emit_push(X0);
+               break;
+            }
+            // Loads: addr from stack, load from memory
+            if (asub >= 0x10 && asub <= 0x16) {
+               emit_pop(X0); // addr
+               emit32(0x8B000000 | (X0 << 16) | (X20 << 5) | X0); // ADD X0, X20, X0 (membase+addr)
+               if (inst.simd.offset) emit_add_imm(X0, X0, inst.simd.offset);
+               switch(sub) {
+               case atomic_sub::i32_atomic_load:    emit32(0xB9400000); break; // LDR W0, [X0]
+               case atomic_sub::i64_atomic_load:    emit32(0xF9400000); break; // LDR X0, [X0]
+               case atomic_sub::i32_atomic_load8_u: emit32(0x39400000); break; // LDRB W0, [X0]
+               case atomic_sub::i32_atomic_load16_u:emit32(0x79400000); break; // LDRH W0, [X0]
+               case atomic_sub::i64_atomic_load8_u: emit32(0x39400000); break; // LDRB W0, [X0]
+               case atomic_sub::i64_atomic_load16_u:emit32(0x79400000); break; // LDRH W0, [X0]
+               case atomic_sub::i64_atomic_load32_u:emit32(0xB9400000); break; // LDR W0, [X0]
+               default: break;
+               }
+               emit_push(X0);
+               break;
+            }
+            // Stores: pop value and addr, store
+            if (asub >= 0x17 && asub <= 0x1D) {
+               emit_pop(X1); // value
+               emit_pop(X0); // addr
+               emit32(0x8B000000 | (X0 << 16) | (X20 << 5) | X0); // ADD X0, X20, X0 (membase+addr)
+               if (inst.simd.offset) emit_add_imm(X0, X0, inst.simd.offset);
+               switch(sub) {
+               case atomic_sub::i32_atomic_store:   emit32(0xB9000001); break; // STR W1, [X0]
+               case atomic_sub::i64_atomic_store:   emit32(0xF9000001); break; // STR X1, [X0]
+               case atomic_sub::i32_atomic_store8:  emit32(0x39000001); break; // STRB W1, [X0]
+               case atomic_sub::i32_atomic_store16: emit32(0x79000001); break; // STRH W1, [X0]
+               case atomic_sub::i64_atomic_store8:  emit32(0x39000001); break; // STRB W1, [X0]
+               case atomic_sub::i64_atomic_store16: emit32(0x79000001); break; // STRH W1, [X0]
+               case atomic_sub::i64_atomic_store32: emit32(0xB9000001); break; // STR W1, [X0]
+               default: break;
+               }
+               break;
+            }
+            // RMW + cmpxchg: call __psizam_atomic_rmw(ctx, sub, addr, offset, val1, val2)
+            {
+               bool is_cmpxchg = (asub >= 0x48);
+               if (is_cmpxchg) {
+                  emit_pop(X5); // replacement
+                  emit_pop(X4); // expected
+               } else {
+                  emit_pop(X4); // value
+                  emit_mov_imm64(X5, 0);
+               }
+               emit_pop(X2); // addr
+               emit_push(X19); emit_push(X20);
+               emit_mov_reg(X0, X19); // ctx
+               emit_mov_imm32(X1, asub); // sub
+               emit_mov_imm32(X3, inst.simd.offset); // offset
+               emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_atomic_rmw));
+               emit32(0xD63F0100); // BLR X8
+               emit_pop(X20); emit_pop(X19);
+               emit_push(X0); // push old value
+            }
+            break;
+         }
+
          default:
             break;
          }

@@ -53,8 +53,8 @@
 //   try/catch/throw              🔴     🔴       🔴        🔴      🔴
 //
 // THREADS / ATOMICS
-//   atomic ops                   🔴     🔴       🔴        🔴      🔴
-//   shared memory                🔴     🔴       🔴        🔴      🔴
+//   atomic ops                   🟢     🟢       🟢        🟢      🟢
+//   shared memory                🟢     🟢       🟢        🟢      🟢
 //
 // TAIL CALLS
 //   return_call                  🟢     🟢       🟢        🟢      🟢

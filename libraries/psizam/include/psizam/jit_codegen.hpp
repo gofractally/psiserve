@@ -1613,6 +1613,89 @@ namespace psizam {
             break;
          }
 
+         case ir_op::atomic_op: {
+            uint8_t asub = inst.simd.lane;
+            auto sub = static_cast<atomic_sub>(asub);
+            // Fence: no-op
+            if (sub == atomic_sub::atomic_fence) break;
+            // Notify: push 0
+            if (sub == atomic_sub::memory_atomic_notify) {
+               this->emit_mov(uint32_t(0), eax);
+               this->emit_push_raw(rax);
+               break;
+            }
+            // Wait: push 1
+            if (sub == atomic_sub::memory_atomic_wait32 || sub == atomic_sub::memory_atomic_wait64) {
+               this->emit_mov(uint32_t(1), eax);
+               this->emit_push_raw(rax);
+               break;
+            }
+            // Loads: load from memory, push result
+            if (asub >= 0x10 && asub <= 0x16) {
+               // addr from stack
+               this->emit_pop_raw(rax);
+               this->emit_add(rsi, rax); // rsi = membase
+               this->emit_add(inst.simd.offset, rax);
+               switch(sub) {
+               case atomic_sub::i32_atomic_load:    this->emit_mov(*rax, eax); break;
+               case atomic_sub::i64_atomic_load:    this->emit_mov(*rax, rax); break;
+               case atomic_sub::i32_atomic_load8_u: this->emit_bytes(0x0f, 0xb6, 0x00); break; // movzx eax, byte [rax]
+               case atomic_sub::i32_atomic_load16_u:this->emit_bytes(0x0f, 0xb7, 0x00); break; // movzx eax, word [rax]
+               case atomic_sub::i64_atomic_load8_u: this->emit_bytes(0x48, 0x0f, 0xb6, 0x00); break; // movzx rax, byte [rax]
+               case atomic_sub::i64_atomic_load16_u:this->emit_bytes(0x48, 0x0f, 0xb7, 0x00); break; // movzx rax, word [rax]
+               case atomic_sub::i64_atomic_load32_u:this->emit_mov(*rax, eax); break; // mov eax, [rax] (zero-extends)
+               default: break;
+               }
+               this->emit_push_raw(rax);
+               break;
+            }
+            // Stores: pop value and addr, store
+            if (asub >= 0x17 && asub <= 0x1D) {
+               this->emit_pop_raw(rcx); // value
+               this->emit_pop_raw(rax); // addr
+               this->emit_add(rsi, rax);
+               this->emit_add(inst.simd.offset, rax);
+               switch(sub) {
+               case atomic_sub::i32_atomic_store:   this->emit_mov(ecx, *rax); break;
+               case atomic_sub::i64_atomic_store:   this->emit_mov(rcx, *rax); break;
+               case atomic_sub::i32_atomic_store8:  this->emit_bytes(0x88, 0x08); break; // mov [rax], cl
+               case atomic_sub::i32_atomic_store16: this->emit_bytes(0x66, 0x89, 0x08); break; // mov [rax], cx
+               case atomic_sub::i64_atomic_store8:  this->emit_bytes(0x88, 0x08); break;
+               case atomic_sub::i64_atomic_store16: this->emit_bytes(0x66, 0x89, 0x08); break;
+               case atomic_sub::i64_atomic_store32: this->emit_mov(ecx, *rax); break;
+               default: break;
+               }
+               break;
+            }
+            // RMW + cmpxchg: call __psizam_atomic_rmw(ctx, sub, addr, offset, val1, val2)
+            {
+               bool is_cmpxchg = (asub >= 0x48);
+               if (is_cmpxchg) {
+                  this->emit_pop_raw(r9);  // replacement -> val2
+                  this->emit_pop_raw(r8);  // expected -> val1
+               } else {
+                  this->emit_pop_raw(r8);  // value -> val1
+                  this->emit_mov(uint64_t(0), r9);
+               }
+               this->emit_pop_raw(rdx); // addr
+               this->emit_push_raw(rdi);
+               this->emit_push_raw(rsi);
+               this->emit_mov(inst.simd.offset, ecx); // offset
+               this->emit_mov(uint32_t(asub), esi); // sub-opcode
+               this->emit_mov(rsp, rax);
+               this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // align stack
+               this->emit_push_raw(rax);
+               this->emit_bytes(0x48, 0xb8);
+               this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_atomic_rmw));
+               this->emit_bytes(0xff, 0xd0); // call rax
+               this->emit_pop_raw(rsp);
+               this->emit_pop_raw(rsi);
+               this->emit_pop_raw(rdi);
+               this->emit_push_raw(rax); // push old value
+            }
+            break;
+         }
+
          default:
             break;
          }
@@ -2697,6 +2780,7 @@ namespace psizam {
          case ir_op::table_grow:
          case ir_op::table_size:
          case ir_op::table_fill:
+         case ir_op::atomic_op:
             return false; // use stack-mode emit_ir_inst
 
          // ── Memory management (register mode) ──

@@ -101,4 +101,77 @@ void __psizam_table_fill(void* ctx, uint32_t table_idx, uint32_t i, uint32_t val
    c.table_fill(table_idx, i, te, n);
 }
 
+uint64_t __psizam_atomic_rmw(void* ctx, uint8_t sub, uint32_t addr, uint32_t offset,
+                              uint64_t val1, uint64_t val2) {
+   auto& c = as_ctx(ctx);
+   char* ptr = c.linear_memory() + addr + offset;
+   auto asub = static_cast<psizam::atomic_sub>(sub);
+
+   auto rmw = [&](auto load_fn, auto store_fn, auto op) -> uint64_t {
+      auto old = load_fn(ptr);
+      store_fn(ptr, op(old, val1));
+      return static_cast<uint64_t>(old);
+   };
+
+   switch(asub) {
+   // Add
+   case psizam::atomic_sub::i32_atomic_rmw_add:     { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o+uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw_add:     { uint64_t o; std::memcpy(&o,ptr,8); uint64_t n=o+val1; std::memcpy(ptr,&n,8); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw8_add_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o+uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw16_add_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o+uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw8_add_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o+uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw16_add_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o+uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw32_add_u: { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o+uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   // Sub
+   case psizam::atomic_sub::i32_atomic_rmw_sub:     { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o-uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw_sub:     { uint64_t o; std::memcpy(&o,ptr,8); uint64_t n=o-val1; std::memcpy(ptr,&n,8); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw8_sub_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o-uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw16_sub_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o-uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw8_sub_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o-uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw16_sub_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o-uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw32_sub_u: { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o-uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   // And
+   case psizam::atomic_sub::i32_atomic_rmw_and:     { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o&uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw_and:     { uint64_t o; std::memcpy(&o,ptr,8); uint64_t n=o&val1; std::memcpy(ptr,&n,8); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw8_and_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o&uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw16_and_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o&uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw8_and_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o&uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw16_and_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o&uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw32_and_u: { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o&uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   // Or
+   case psizam::atomic_sub::i32_atomic_rmw_or:      { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o|uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw_or:      { uint64_t o; std::memcpy(&o,ptr,8); uint64_t n=o|val1; std::memcpy(ptr,&n,8); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw8_or_u:   { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o|uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw16_or_u:  { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o|uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw8_or_u:   { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o|uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw16_or_u:  { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o|uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw32_or_u:  { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o|uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   // Xor
+   case psizam::atomic_sub::i32_atomic_rmw_xor:     { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o^uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw_xor:     { uint64_t o; std::memcpy(&o,ptr,8); uint64_t n=o^val1; std::memcpy(ptr,&n,8); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw8_xor_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o^uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw16_xor_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o^uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw8_xor_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=o^uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw16_xor_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=o^uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw32_xor_u: { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=o^uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   // Xchg
+   case psizam::atomic_sub::i32_atomic_rmw_xchg:     { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw_xchg:     { uint64_t o; std::memcpy(&o,ptr,8); std::memcpy(ptr,&val1,8); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw8_xchg_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw16_xchg_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw8_xchg_u:  { uint8_t o; std::memcpy(&o,ptr,1); uint8_t n=uint8_t(val1); std::memcpy(ptr,&n,1); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw16_xchg_u: { uint16_t o; std::memcpy(&o,ptr,2); uint16_t n=uint16_t(val1); std::memcpy(ptr,&n,2); return o; }
+   case psizam::atomic_sub::i64_atomic_rmw32_xchg_u: { uint32_t o; std::memcpy(&o,ptr,4); uint32_t n=uint32_t(val1); std::memcpy(ptr,&n,4); return o; }
+   // Cmpxchg: val1=expected, val2=replacement
+   case psizam::atomic_sub::i32_atomic_rmw_cmpxchg:     { uint32_t o; std::memcpy(&o,ptr,4); if(o==uint32_t(val1)){uint32_t r=uint32_t(val2);std::memcpy(ptr,&r,4);} return o; }
+   case psizam::atomic_sub::i64_atomic_rmw_cmpxchg:     { uint64_t o; std::memcpy(&o,ptr,8); if(o==val1)std::memcpy(ptr,&val2,8); return o; }
+   case psizam::atomic_sub::i32_atomic_rmw8_cmpxchg_u:  { uint8_t o; std::memcpy(&o,ptr,1); if(o==uint8_t(val1)){uint8_t r=uint8_t(val2);std::memcpy(ptr,&r,1);} return o; }
+   case psizam::atomic_sub::i32_atomic_rmw16_cmpxchg_u: { uint16_t o; std::memcpy(&o,ptr,2); if(o==uint16_t(val1)){uint16_t r=uint16_t(val2);std::memcpy(ptr,&r,2);} return o; }
+   case psizam::atomic_sub::i64_atomic_rmw8_cmpxchg_u:  { uint8_t o; std::memcpy(&o,ptr,1); if(o==uint8_t(val1)){uint8_t r=uint8_t(val2);std::memcpy(ptr,&r,1);} return o; }
+   case psizam::atomic_sub::i64_atomic_rmw16_cmpxchg_u: { uint16_t o; std::memcpy(&o,ptr,2); if(o==uint16_t(val1)){uint16_t r=uint16_t(val2);std::memcpy(ptr,&r,2);} return o; }
+   case psizam::atomic_sub::i64_atomic_rmw32_cmpxchg_u: { uint32_t o; std::memcpy(&o,ptr,4); if(o==uint32_t(val1)){uint32_t r=uint32_t(val2);std::memcpy(ptr,&r,4);} return o; }
+   default: return 0;
+   }
+}
+
 } // extern "C"

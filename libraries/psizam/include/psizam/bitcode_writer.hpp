@@ -383,6 +383,10 @@ namespace psizam {
          fb[op_index++] = table_fill_t{table_idx};
       }
 
+      void emit_atomic_op(atomic_sub sub, uint32_t align, uint32_t offset) {
+         fb[op_index++] = atomic_op_t{sub, align, offset};
+      }
+
       void emit_error() { fb[op_index++] = error_t{}; }
       
       void fix_branch(uint32_t* branch, uint32_t target) { if(branch) *branch = _base_offset + target; }

@@ -158,6 +158,9 @@ namespace psizam {
       // Multi-value call return: load value from _multi_return buffer after a call
       // dest = loaded vreg, ri.imm = byte offset in buffer
       multi_return_load,
+      // Atomic operations (0xFE prefix)
+      // simd.sub field carries atomic_sub, simd.offset carries memarg offset, simd.addr carries addr vreg
+      atomic_op,
    };
 
    static constexpr uint32_t ir_vreg_none = UINT32_MAX;

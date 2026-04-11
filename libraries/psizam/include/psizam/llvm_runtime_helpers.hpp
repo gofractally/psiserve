@@ -52,6 +52,10 @@ extern "C" {
    const void* __psizam_resolve_indirect(void* ctx, uint32_t type_idx,
                                           uint32_t table_idx, uint32_t elem_idx);
 
+   // Atomic RMW helper for single-threaded mode
+   uint64_t __psizam_atomic_rmw(void* ctx, uint8_t sub, uint32_t addr, uint32_t offset,
+                                 uint64_t val1, uint64_t val2);
+
    // Trap — throws a WASM trap exception. Does not return.
    [[noreturn]] void __psizam_trap(void* ctx, uint32_t trap_code);
    // trap codes: 0=unreachable, 1=div_by_zero, 2=int_overflow,

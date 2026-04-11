@@ -2547,6 +2547,350 @@ namespace psizam {
          std::memcpy(&res, r, 16);
          context.push_operand(v128_const_t{ res });
       }
+      // ── Atomic operations (single-threaded: regular load/store/RMW) ──
+      [[gnu::always_inline]] inline void operator()(const atomic_op_t& op) {
+         context.inc_pc();
+         switch(op.sub) {
+         case atomic_sub::atomic_fence:
+            break; // no-op in single-threaded mode
+         case atomic_sub::memory_atomic_notify: {
+            context.pop_operand(); // count
+            context.pop_operand(); // addr
+            context.push_operand(i32_const_t{0u}); // 0 waiters notified
+            break;
+         }
+         case atomic_sub::memory_atomic_wait32:
+         case atomic_sub::memory_atomic_wait64: {
+            context.pop_operand(); // timeout
+            context.pop_operand(); // expected
+            context.pop_operand(); // addr
+            // Return 1 = "not equal" (would never block in single-threaded)
+            context.push_operand(i32_const_t{1u});
+            break;
+         }
+
+         // ── Atomic loads (same as regular loads) ──
+         case atomic_sub::i32_atomic_load: {
+            void* _ptr = pop_memop_addr(op);
+            context.push_operand(i32_const_t{ read_unaligned<uint32_t>(_ptr) });
+            break;
+         }
+         case atomic_sub::i64_atomic_load: {
+            void* _ptr = pop_memop_addr(op);
+            context.push_operand(i64_const_t{ read_unaligned<uint64_t>(_ptr) });
+            break;
+         }
+         case atomic_sub::i32_atomic_load8_u: {
+            void* _ptr = pop_memop_addr(op);
+            context.push_operand(i32_const_t{ static_cast<uint32_t>(read_unaligned<uint8_t>(_ptr)) });
+            break;
+         }
+         case atomic_sub::i32_atomic_load16_u: {
+            void* _ptr = pop_memop_addr(op);
+            context.push_operand(i32_const_t{ static_cast<uint32_t>(read_unaligned<uint16_t>(_ptr)) });
+            break;
+         }
+         case atomic_sub::i64_atomic_load8_u: {
+            void* _ptr = pop_memop_addr(op);
+            context.push_operand(i64_const_t{ static_cast<uint64_t>(read_unaligned<uint8_t>(_ptr)) });
+            break;
+         }
+         case atomic_sub::i64_atomic_load16_u: {
+            void* _ptr = pop_memop_addr(op);
+            context.push_operand(i64_const_t{ static_cast<uint64_t>(read_unaligned<uint16_t>(_ptr)) });
+            break;
+         }
+         case atomic_sub::i64_atomic_load32_u: {
+            void* _ptr = pop_memop_addr(op);
+            context.push_operand(i64_const_t{ static_cast<uint64_t>(read_unaligned<uint32_t>(_ptr)) });
+            break;
+         }
+
+         // ── Atomic stores (same as regular stores) ──
+         case atomic_sub::i32_atomic_store: {
+            auto val = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            write_unaligned<uint32_t>(_ptr, val);
+            break;
+         }
+         case atomic_sub::i64_atomic_store: {
+            auto val = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            write_unaligned<uint64_t>(_ptr, val);
+            break;
+         }
+         case atomic_sub::i32_atomic_store8: {
+            auto val = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(val));
+            break;
+         }
+         case atomic_sub::i32_atomic_store16: {
+            auto val = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(val));
+            break;
+         }
+         case atomic_sub::i64_atomic_store8: {
+            auto val = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(val));
+            break;
+         }
+         case atomic_sub::i64_atomic_store16: {
+            auto val = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(val));
+            break;
+         }
+         case atomic_sub::i64_atomic_store32: {
+            auto val = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(val));
+            break;
+         }
+
+         // ── Atomic RMW (read-modify-write) — i32 ──
+#define ATOMIC_RMW_I32(sub_name, OP) \
+         case atomic_sub::sub_name: { \
+            auto val = context.pop_operand().to_ui32(); \
+            void* _ptr = pop_memop_addr(op); \
+            auto old = read_unaligned<uint32_t>(_ptr); \
+            write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(old OP val)); \
+            context.push_operand(i32_const_t{old}); \
+            break; \
+         }
+#define ATOMIC_RMW_I32_8(sub_name, OP) \
+         case atomic_sub::sub_name: { \
+            auto val = context.pop_operand().to_ui32(); \
+            void* _ptr = pop_memop_addr(op); \
+            auto old = read_unaligned<uint8_t>(_ptr); \
+            write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(old OP static_cast<uint8_t>(val))); \
+            context.push_operand(i32_const_t{static_cast<uint32_t>(old)}); \
+            break; \
+         }
+#define ATOMIC_RMW_I32_16(sub_name, OP) \
+         case atomic_sub::sub_name: { \
+            auto val = context.pop_operand().to_ui32(); \
+            void* _ptr = pop_memop_addr(op); \
+            auto old = read_unaligned<uint16_t>(_ptr); \
+            write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(old OP static_cast<uint16_t>(val))); \
+            context.push_operand(i32_const_t{static_cast<uint32_t>(old)}); \
+            break; \
+         }
+
+         ATOMIC_RMW_I32(i32_atomic_rmw_add, +)
+         ATOMIC_RMW_I32_8(i32_atomic_rmw8_add_u, +)
+         ATOMIC_RMW_I32_16(i32_atomic_rmw16_add_u, +)
+         ATOMIC_RMW_I32(i32_atomic_rmw_sub, -)
+         ATOMIC_RMW_I32_8(i32_atomic_rmw8_sub_u, -)
+         ATOMIC_RMW_I32_16(i32_atomic_rmw16_sub_u, -)
+         ATOMIC_RMW_I32(i32_atomic_rmw_and, &)
+         ATOMIC_RMW_I32_8(i32_atomic_rmw8_and_u, &)
+         ATOMIC_RMW_I32_16(i32_atomic_rmw16_and_u, &)
+         ATOMIC_RMW_I32(i32_atomic_rmw_or, |)
+         ATOMIC_RMW_I32_8(i32_atomic_rmw8_or_u, |)
+         ATOMIC_RMW_I32_16(i32_atomic_rmw16_or_u, |)
+         ATOMIC_RMW_I32(i32_atomic_rmw_xor, ^)
+         ATOMIC_RMW_I32_8(i32_atomic_rmw8_xor_u, ^)
+         ATOMIC_RMW_I32_16(i32_atomic_rmw16_xor_u, ^)
+#undef ATOMIC_RMW_I32
+#undef ATOMIC_RMW_I32_8
+#undef ATOMIC_RMW_I32_16
+
+         // ── Atomic RMW — i64 ──
+#define ATOMIC_RMW_I64(sub_name, OP) \
+         case atomic_sub::sub_name: { \
+            auto val = context.pop_operand().to_ui64(); \
+            void* _ptr = pop_memop_addr(op); \
+            auto old = read_unaligned<uint64_t>(_ptr); \
+            write_unaligned<uint64_t>(_ptr, static_cast<uint64_t>(old OP val)); \
+            context.push_operand(i64_const_t{old}); \
+            break; \
+         }
+#define ATOMIC_RMW_I64_8(sub_name, OP) \
+         case atomic_sub::sub_name: { \
+            auto val = context.pop_operand().to_ui64(); \
+            void* _ptr = pop_memop_addr(op); \
+            auto old = read_unaligned<uint8_t>(_ptr); \
+            write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(old OP static_cast<uint8_t>(val))); \
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)}); \
+            break; \
+         }
+#define ATOMIC_RMW_I64_16(sub_name, OP) \
+         case atomic_sub::sub_name: { \
+            auto val = context.pop_operand().to_ui64(); \
+            void* _ptr = pop_memop_addr(op); \
+            auto old = read_unaligned<uint16_t>(_ptr); \
+            write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(old OP static_cast<uint16_t>(val))); \
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)}); \
+            break; \
+         }
+#define ATOMIC_RMW_I64_32(sub_name, OP) \
+         case atomic_sub::sub_name: { \
+            auto val = context.pop_operand().to_ui64(); \
+            void* _ptr = pop_memop_addr(op); \
+            auto old = read_unaligned<uint32_t>(_ptr); \
+            write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(old OP static_cast<uint32_t>(val))); \
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)}); \
+            break; \
+         }
+
+         ATOMIC_RMW_I64(i64_atomic_rmw_add, +)
+         ATOMIC_RMW_I64_8(i64_atomic_rmw8_add_u, +)
+         ATOMIC_RMW_I64_16(i64_atomic_rmw16_add_u, +)
+         ATOMIC_RMW_I64_32(i64_atomic_rmw32_add_u, +)
+         ATOMIC_RMW_I64(i64_atomic_rmw_sub, -)
+         ATOMIC_RMW_I64_8(i64_atomic_rmw8_sub_u, -)
+         ATOMIC_RMW_I64_16(i64_atomic_rmw16_sub_u, -)
+         ATOMIC_RMW_I64_32(i64_atomic_rmw32_sub_u, -)
+         ATOMIC_RMW_I64(i64_atomic_rmw_and, &)
+         ATOMIC_RMW_I64_8(i64_atomic_rmw8_and_u, &)
+         ATOMIC_RMW_I64_16(i64_atomic_rmw16_and_u, &)
+         ATOMIC_RMW_I64_32(i64_atomic_rmw32_and_u, &)
+         ATOMIC_RMW_I64(i64_atomic_rmw_or, |)
+         ATOMIC_RMW_I64_8(i64_atomic_rmw8_or_u, |)
+         ATOMIC_RMW_I64_16(i64_atomic_rmw16_or_u, |)
+         ATOMIC_RMW_I64_32(i64_atomic_rmw32_or_u, |)
+         ATOMIC_RMW_I64(i64_atomic_rmw_xor, ^)
+         ATOMIC_RMW_I64_8(i64_atomic_rmw8_xor_u, ^)
+         ATOMIC_RMW_I64_16(i64_atomic_rmw16_xor_u, ^)
+         ATOMIC_RMW_I64_32(i64_atomic_rmw32_xor_u, ^)
+#undef ATOMIC_RMW_I64
+#undef ATOMIC_RMW_I64_8
+#undef ATOMIC_RMW_I64_16
+#undef ATOMIC_RMW_I64_32
+
+         // ── Atomic xchg ──
+         case atomic_sub::i32_atomic_rmw_xchg: {
+            auto val = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint32_t>(_ptr);
+            write_unaligned<uint32_t>(_ptr, val);
+            context.push_operand(i32_const_t{old});
+            break;
+         }
+         case atomic_sub::i32_atomic_rmw8_xchg_u: {
+            auto val = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint8_t>(_ptr);
+            write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(val));
+            context.push_operand(i32_const_t{static_cast<uint32_t>(old)});
+            break;
+         }
+         case atomic_sub::i32_atomic_rmw16_xchg_u: {
+            auto val = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint16_t>(_ptr);
+            write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(val));
+            context.push_operand(i32_const_t{static_cast<uint32_t>(old)});
+            break;
+         }
+         case atomic_sub::i64_atomic_rmw_xchg: {
+            auto val = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint64_t>(_ptr);
+            write_unaligned<uint64_t>(_ptr, val);
+            context.push_operand(i64_const_t{old});
+            break;
+         }
+         case atomic_sub::i64_atomic_rmw8_xchg_u: {
+            auto val = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint8_t>(_ptr);
+            write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(val));
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
+            break;
+         }
+         case atomic_sub::i64_atomic_rmw16_xchg_u: {
+            auto val = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint16_t>(_ptr);
+            write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(val));
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
+            break;
+         }
+         case atomic_sub::i64_atomic_rmw32_xchg_u: {
+            auto val = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint32_t>(_ptr);
+            write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(val));
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
+            break;
+         }
+
+         // ── Atomic cmpxchg ──
+         case atomic_sub::i32_atomic_rmw_cmpxchg: {
+            auto replacement = context.pop_operand().to_ui32();
+            auto expected = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint32_t>(_ptr);
+            if (old == expected) write_unaligned<uint32_t>(_ptr, replacement);
+            context.push_operand(i32_const_t{old});
+            break;
+         }
+         case atomic_sub::i64_atomic_rmw_cmpxchg: {
+            auto replacement = context.pop_operand().to_ui64();
+            auto expected = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint64_t>(_ptr);
+            if (old == expected) write_unaligned<uint64_t>(_ptr, replacement);
+            context.push_operand(i64_const_t{old});
+            break;
+         }
+         case atomic_sub::i32_atomic_rmw8_cmpxchg_u: {
+            auto replacement = context.pop_operand().to_ui32();
+            auto expected = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint8_t>(_ptr);
+            if (old == static_cast<uint8_t>(expected))
+               write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(replacement));
+            context.push_operand(i32_const_t{static_cast<uint32_t>(old)});
+            break;
+         }
+         case atomic_sub::i32_atomic_rmw16_cmpxchg_u: {
+            auto replacement = context.pop_operand().to_ui32();
+            auto expected = context.pop_operand().to_ui32();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint16_t>(_ptr);
+            if (old == static_cast<uint16_t>(expected))
+               write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(replacement));
+            context.push_operand(i32_const_t{static_cast<uint32_t>(old)});
+            break;
+         }
+         case atomic_sub::i64_atomic_rmw8_cmpxchg_u: {
+            auto replacement = context.pop_operand().to_ui64();
+            auto expected = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint8_t>(_ptr);
+            if (old == static_cast<uint8_t>(expected))
+               write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(replacement));
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
+            break;
+         }
+         case atomic_sub::i64_atomic_rmw16_cmpxchg_u: {
+            auto replacement = context.pop_operand().to_ui64();
+            auto expected = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint16_t>(_ptr);
+            if (old == static_cast<uint16_t>(expected))
+               write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(replacement));
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
+            break;
+         }
+         case atomic_sub::i64_atomic_rmw32_cmpxchg_u: {
+            auto replacement = context.pop_operand().to_ui64();
+            auto expected = context.pop_operand().to_ui64();
+            void* _ptr = pop_memop_addr(op);
+            auto old = read_unaligned<uint32_t>(_ptr);
+            if (old == static_cast<uint32_t>(expected))
+               write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(replacement));
+            context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
+            break;
+         }
+         } // switch
+      }
+
       [[gnu::always_inline]] inline void operator()(const memory_init_t& op) {
          const auto& size = context.pop_operand();
          const auto& src = context.pop_operand();

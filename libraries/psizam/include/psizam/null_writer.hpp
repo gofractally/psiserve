@@ -473,6 +473,7 @@ class null_writer {
    void emit_table_grow(std::uint32_t) {}
    void emit_table_size(std::uint32_t) {}
    void emit_table_fill(std::uint32_t) {}
+   void emit_atomic_op(atomic_sub, uint32_t, uint32_t) {}
 
    void fix_branch(branch_t, label_t) {}
    void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& /*locals*/, uint32_t /*idx*/) {}

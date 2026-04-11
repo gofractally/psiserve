@@ -1211,6 +1211,7 @@ namespace psizam {
             PSIZAM_VEC_LANE_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_VEC_NUMERIC_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_VEC_RELAXED_OPS(CREATE_TABLE_ENTRY)
+            &&ev_label_atomic_op,
             PSIZAM_ERROR_OPS(CREATE_TABLE_ENTRY)
             &&__ev_last
          };
@@ -1245,6 +1246,9 @@ namespace psizam {
              PSIZAM_VEC_LANE_OPS(CREATE_LABEL);
              PSIZAM_VEC_NUMERIC_OPS(CREATE_LABEL);
              PSIZAM_VEC_RELAXED_OPS(CREATE_LABEL);
+             ev_label_atomic_op : std::forward<Visitor>(visitor)(ev_variant->template get<psizam::atomic_op_t>());
+             ev_variant = _state.pc;
+             goto* dispatch_table[ev_variant->index()];
              PSIZAM_ERROR_OPS(CREATE_LABEL);
              __ev_last:
                 throw wasm_interpreter_exception{"should never reach here"};

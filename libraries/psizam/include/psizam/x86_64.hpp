@@ -1000,6 +1000,88 @@ namespace psizam {
          emit_restore_backtrace();
       }
 
+      // ──── Atomic operations ────
+      void emit_atomic_op(atomic_sub sub, uint32_t align, uint32_t offset) {
+         uint8_t asub = static_cast<uint8_t>(sub);
+         // Fence: no-op in single-threaded
+         if (sub == atomic_sub::atomic_fence) return;
+         // Notify: pop 2, push 0
+         if (sub == atomic_sub::memory_atomic_notify) {
+            COUNT_INSTR();
+            auto icount = fixed_size_instr(8);
+            emit_pop(rax); // count (discard)
+            emit_pop(rax); // addr (discard)
+            emit_mov(uint32_t(0), eax);
+            emit_push(rax);
+            return;
+         }
+         // Wait: pop 3, push 1 (return "not equal" = 1)
+         if (sub == atomic_sub::memory_atomic_wait32 || sub == atomic_sub::memory_atomic_wait64) {
+            COUNT_INSTR();
+            auto icount = fixed_size_instr(12);
+            emit_pop(rax); // timeout
+            emit_pop(rax); // expected
+            emit_pop(rax); // addr
+            emit_mov(uint32_t(1), eax);
+            emit_push(rax);
+            return;
+         }
+         // Atomic loads — delegate to regular loads
+         if (asub >= 0x10 && asub <= 0x16) {
+            switch(sub) {
+            case atomic_sub::i32_atomic_load:    emit_i32_load(align, offset); return;
+            case atomic_sub::i64_atomic_load:    emit_i64_load(align, offset); return;
+            case atomic_sub::i32_atomic_load8_u: emit_i32_load8_u(align, offset); return;
+            case atomic_sub::i32_atomic_load16_u:emit_i32_load16_u(align, offset); return;
+            case atomic_sub::i64_atomic_load8_u: emit_i64_load8_u(align, offset); return;
+            case atomic_sub::i64_atomic_load16_u:emit_i64_load16_u(align, offset); return;
+            case atomic_sub::i64_atomic_load32_u:emit_i64_load32_u(align, offset); return;
+            default: return;
+            }
+         }
+         // Atomic stores — delegate to regular stores
+         if (asub >= 0x17 && asub <= 0x1D) {
+            switch(sub) {
+            case atomic_sub::i32_atomic_store:   emit_i32_store(align, offset); return;
+            case atomic_sub::i64_atomic_store:   emit_i64_store(align, offset); return;
+            case atomic_sub::i32_atomic_store8:  emit_i32_store8(align, offset); return;
+            case atomic_sub::i32_atomic_store16: emit_i32_store16(align, offset); return;
+            case atomic_sub::i64_atomic_store8:  emit_i64_store8(align, offset); return;
+            case atomic_sub::i64_atomic_store16: emit_i64_store16(align, offset); return;
+            case atomic_sub::i64_atomic_store32: emit_i64_store32(align, offset); return;
+            default: return;
+            }
+         }
+         // Atomic RMW + cmpxchg — call runtime helper
+         // Helper signature: atomic_rmw_helper(ctx, sub, addr, offset, val1, val2)
+         // SysV: rdi=ctx, esi=sub, edx=addr, ecx=offset, r8=val1, r9=val2
+         {
+            COUNT_INSTR();
+            auto icount = variable_size_instr(40, 58);
+            bool is_cmpxchg = (asub >= 0x48);
+            if (is_cmpxchg) {
+               emit_pop(r9);  // replacement -> val2
+               emit_pop(r8);  // expected -> val1
+            } else {
+               emit_pop(r8);  // value -> val1
+               emit_mov(uint64_t(0), r9); // val2 unused
+            }
+            emit_pop(rdx); // addr
+            emit_setup_backtrace();
+            emit_push(rdi);
+            emit_push(rsi);
+            emit_mov(offset, ecx); // offset
+            emit_mov(asub, esi);   // sub-opcode
+            // rdi already has ctx
+            emit_mov(&atomic_rmw_helper, rax);
+            emit(CALL, rax);
+            emit_pop(rsi);
+            emit_pop(rdi);
+            emit_restore_backtrace();
+            emit_push(rax); // push result (old value)
+         }
+      }
+
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
          COUNT_INSTR();
          auto icount = variable_size_instr(25, 43);
@@ -6790,6 +6872,104 @@ namespace psizam {
          te.index = val;
          te.code_ptr = nullptr;
          context->table_fill(table_idx, i, te, n);
+      }
+
+      // Runtime helper for atomic RMW operations in single-threaded mode.
+      // Returns the old value. For cmpxchg, expected is in args[0] and replacement in args[1].
+      static uint64_t atomic_rmw_helper(void* ctx, uint8_t sub, uint32_t addr, uint32_t offset, uint64_t val1, uint64_t val2) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         char* mem = context->linear_memory();
+         char* ptr = mem + addr + offset;
+         auto asub = static_cast<atomic_sub>(sub);
+         // Lambda helpers for RMW
+         auto rmw32 = [&](auto op) -> uint64_t {
+            uint32_t old; std::memcpy(&old, ptr, 4);
+            uint32_t nv = op(old, static_cast<uint32_t>(val1)); std::memcpy(ptr, &nv, 4);
+            return old;
+         };
+         auto rmw64 = [&](auto op) -> uint64_t {
+            uint64_t old; std::memcpy(&old, ptr, 8);
+            uint64_t nv = op(old, val1); std::memcpy(ptr, &nv, 8);
+            return old;
+         };
+         auto rmw8 = [&](auto op) -> uint64_t {
+            uint8_t old; std::memcpy(&old, ptr, 1);
+            uint8_t nv = op(old, static_cast<uint8_t>(val1)); std::memcpy(ptr, &nv, 1);
+            return old;
+         };
+         auto rmw16 = [&](auto op) -> uint64_t {
+            uint16_t old; std::memcpy(&old, ptr, 2);
+            uint16_t nv = op(old, static_cast<uint16_t>(val1)); std::memcpy(ptr, &nv, 2);
+            return old;
+         };
+         auto rmw32u = [&](auto op) -> uint64_t {
+            uint32_t old; std::memcpy(&old, ptr, 4);
+            uint32_t nv = op(old, static_cast<uint32_t>(val1)); std::memcpy(ptr, &nv, 4);
+            return old;
+         };
+
+         switch(asub) {
+#define RMW_CASES(OP, op_fn) \
+         case atomic_sub::i32_atomic_rmw_##OP:     return rmw32(op_fn); \
+         case atomic_sub::i64_atomic_rmw_##OP:     return rmw64(op_fn); \
+         case atomic_sub::i32_atomic_rmw8_##OP##_u:  return rmw8(op_fn); \
+         case atomic_sub::i32_atomic_rmw16_##OP##_u: return rmw16(op_fn); \
+         case atomic_sub::i64_atomic_rmw8_##OP##_u:  return rmw8(op_fn); \
+         case atomic_sub::i64_atomic_rmw16_##OP##_u: return rmw16(op_fn); \
+         case atomic_sub::i64_atomic_rmw32_##OP##_u: return rmw32u(op_fn);
+
+         RMW_CASES(add, [](auto a, auto b) { return a + b; })
+         RMW_CASES(sub, [](auto a, auto b) { return a - b; })
+         RMW_CASES(and, [](auto a, auto b) { return a & b; })
+         RMW_CASES(or,  [](auto a, auto b) { return a | b; })
+         RMW_CASES(xor, [](auto a, auto b) { return a ^ b; })
+#undef RMW_CASES
+         // xchg
+         case atomic_sub::i32_atomic_rmw_xchg:     return rmw32([](auto, auto b) { return b; });
+         case atomic_sub::i64_atomic_rmw_xchg:     return rmw64([](auto, auto b) { return b; });
+         case atomic_sub::i32_atomic_rmw8_xchg_u:  return rmw8([](auto, auto b) { return b; });
+         case atomic_sub::i32_atomic_rmw16_xchg_u: return rmw16([](auto, auto b) { return b; });
+         case atomic_sub::i64_atomic_rmw8_xchg_u:  return rmw8([](auto, auto b) { return b; });
+         case atomic_sub::i64_atomic_rmw16_xchg_u: return rmw16([](auto, auto b) { return b; });
+         case atomic_sub::i64_atomic_rmw32_xchg_u: return rmw32u([](auto, auto b) { return b; });
+         // cmpxchg: val1=expected, val2=replacement
+         case atomic_sub::i32_atomic_rmw_cmpxchg: {
+            uint32_t old; std::memcpy(&old, ptr, 4);
+            if (old == static_cast<uint32_t>(val1)) { uint32_t r = static_cast<uint32_t>(val2); std::memcpy(ptr, &r, 4); }
+            return old;
+         }
+         case atomic_sub::i64_atomic_rmw_cmpxchg: {
+            uint64_t old; std::memcpy(&old, ptr, 8);
+            if (old == val1) std::memcpy(ptr, &val2, 8);
+            return old;
+         }
+         case atomic_sub::i32_atomic_rmw8_cmpxchg_u: {
+            uint8_t old; std::memcpy(&old, ptr, 1);
+            if (old == static_cast<uint8_t>(val1)) { uint8_t r = static_cast<uint8_t>(val2); std::memcpy(ptr, &r, 1); }
+            return old;
+         }
+         case atomic_sub::i32_atomic_rmw16_cmpxchg_u: {
+            uint16_t old; std::memcpy(&old, ptr, 2);
+            if (old == static_cast<uint16_t>(val1)) { uint16_t r = static_cast<uint16_t>(val2); std::memcpy(ptr, &r, 2); }
+            return old;
+         }
+         case atomic_sub::i64_atomic_rmw8_cmpxchg_u: {
+            uint8_t old; std::memcpy(&old, ptr, 1);
+            if (old == static_cast<uint8_t>(val1)) { uint8_t r = static_cast<uint8_t>(val2); std::memcpy(ptr, &r, 1); }
+            return old;
+         }
+         case atomic_sub::i64_atomic_rmw16_cmpxchg_u: {
+            uint16_t old; std::memcpy(&old, ptr, 2);
+            if (old == static_cast<uint16_t>(val1)) { uint16_t r = static_cast<uint16_t>(val2); std::memcpy(ptr, &r, 2); }
+            return old;
+         }
+         case atomic_sub::i64_atomic_rmw32_cmpxchg_u: {
+            uint32_t old; std::memcpy(&old, ptr, 4);
+            if (old == static_cast<uint32_t>(val1)) { uint32_t r = static_cast<uint32_t>(val2); std::memcpy(ptr, &r, 4); }
+            return old;
+         }
+         default: return 0;
+         }
       }
 
       static void on_memory_error() { throw_<wasm_memory_exception>("wasm memory out-of-bounds"); }

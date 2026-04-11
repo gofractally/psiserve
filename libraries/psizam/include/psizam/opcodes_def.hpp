@@ -224,7 +224,8 @@
    opcode_macro(ref_func, 0xD2)
 #define PSIZAM_EXTENDED_OPS(opcode_macro)       \
    opcode_macro(ext_prefix, 0xFC)               \
-   opcode_macro(vector_prefix, 0xFD)
+   opcode_macro(vector_prefix, 0xFD)            \
+   opcode_macro(atomic_prefix, 0xFE)
 #define PSIZAM_EMPTY_OPS(opcode_macro)          \
    opcode_macro(empty0xC5, 0xC5)                \
    opcode_macro(empty0xC6, 0xC6)                \
@@ -276,8 +277,7 @@
    opcode_macro(empty0xF8, 0xF8)                \
    opcode_macro(empty0xF9, 0xF9)                \
    opcode_macro(empty0xFA, 0xFA)                \
-   opcode_macro(empty0xFB, 0xFB)                \
-   opcode_macro(empty0xFE, 0xFE)
+   opcode_macro(empty0xFB, 0xFB)
 #define PSIZAM_ERROR_OPS(opcode_macro)          \
    opcode_macro(error, 0xFF)
 

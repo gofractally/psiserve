@@ -1219,6 +1219,76 @@ namespace psizam {
          emit_pop_x(X20); emit_pop_x(X19);
       }
 
+      // ──── Atomic operations ────
+      void emit_atomic_op(atomic_sub sub, uint32_t align, uint32_t offset) {
+         uint8_t asub = static_cast<uint8_t>(sub);
+         // Fence: no-op in single-threaded
+         if (sub == atomic_sub::atomic_fence) return;
+         // Notify: pop 2, push 0
+         if (sub == atomic_sub::memory_atomic_notify) {
+            emit_pop_x(X0); // count (discard)
+            emit_pop_x(X0); // addr (discard)
+            emit_mov_imm32(X0, 0);
+            emit_push_x(X0);
+            return;
+         }
+         // Wait: pop 3, push 1
+         if (sub == atomic_sub::memory_atomic_wait32 || sub == atomic_sub::memory_atomic_wait64) {
+            emit_pop_x(X0); // timeout
+            emit_pop_x(X0); // expected
+            emit_pop_x(X0); // addr
+            emit_mov_imm32(X0, 1);
+            emit_push_x(X0);
+            return;
+         }
+         // Atomic loads — delegate
+         if (asub >= 0x10 && asub <= 0x16) {
+            switch(sub) {
+            case atomic_sub::i32_atomic_load:    emit_i32_load(align, offset); return;
+            case atomic_sub::i64_atomic_load:    emit_i64_load(align, offset); return;
+            case atomic_sub::i32_atomic_load8_u: emit_i32_load8_u(align, offset); return;
+            case atomic_sub::i32_atomic_load16_u:emit_i32_load16_u(align, offset); return;
+            case atomic_sub::i64_atomic_load8_u: emit_i64_load8_u(align, offset); return;
+            case atomic_sub::i64_atomic_load16_u:emit_i64_load16_u(align, offset); return;
+            case atomic_sub::i64_atomic_load32_u:emit_i64_load32_u(align, offset); return;
+            default: return;
+            }
+         }
+         // Atomic stores — delegate
+         if (asub >= 0x17 && asub <= 0x1D) {
+            switch(sub) {
+            case atomic_sub::i32_atomic_store:   emit_i32_store(align, offset); return;
+            case atomic_sub::i64_atomic_store:   emit_i64_store(align, offset); return;
+            case atomic_sub::i32_atomic_store8:  emit_i32_store8(align, offset); return;
+            case atomic_sub::i32_atomic_store16: emit_i32_store16(align, offset); return;
+            case atomic_sub::i64_atomic_store8:  emit_i64_store8(align, offset); return;
+            case atomic_sub::i64_atomic_store16: emit_i64_store16(align, offset); return;
+            case atomic_sub::i64_atomic_store32: emit_i64_store32(align, offset); return;
+            default: return;
+            }
+         }
+         // RMW + cmpxchg: call runtime helper
+         // AAPCS64: X0=ctx, W1=sub, W2=addr, W3=offset, X4=val1, X5=val2
+         {
+            bool is_cmpxchg = (asub >= 0x48);
+            if (is_cmpxchg) {
+               emit_pop_x(X5); // replacement
+               emit_pop_x(X4); // expected
+            } else {
+               emit_pop_x(X4); // value
+               emit_mov_imm64(X5, 0); // unused
+            }
+            emit_pop_x(X2); // addr
+            emit_save_context();
+            emit32(0xAA1303E0); // MOV X0, X19 (ctx)
+            emit_mov_imm32(X1, asub);
+            emit_mov_imm32(X3, offset);
+            emit_call_c_function(&__psizam_atomic_rmw);
+            emit_restore_context();
+            emit_push_x(X0); // push old value
+         }
+      }
+
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
          // Pop n, s, d from WASM stack
          emit_pop_x(X4);  // n

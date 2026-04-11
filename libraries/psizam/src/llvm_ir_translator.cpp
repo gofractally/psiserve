@@ -2108,6 +2108,124 @@ namespace psizam {
                   // TODO: Phase 4e — SIMD support
                   break;
 
+               // ──── Atomic operations ────
+               case ir_op::atomic_op: {
+                  uint8_t asub = inst.simd.lane;
+                  auto sub = static_cast<atomic_sub>(asub);
+                  if (sub == atomic_sub::atomic_fence) break;
+                  if (sub == atomic_sub::memory_atomic_notify) {
+                     store_vreg(inst.dest, builder.getInt64(0));
+                     break;
+                  }
+                  if (sub == atomic_sub::memory_atomic_wait32 || sub == atomic_sub::memory_atomic_wait64) {
+                     store_vreg(inst.dest, builder.getInt64(1));
+                     break;
+                  }
+                  // Loads
+                  if (asub >= 0x10 && asub <= 0x16) {
+                     auto* addr = load_vreg(inst.simd.addr);
+                     auto* addr32 = builder.CreateTrunc(addr, builder.getInt32Ty());
+                     auto* offset = builder.getInt32(inst.simd.offset);
+                     auto* eff = builder.CreateAdd(addr32, offset);
+                     auto* eff64 = builder.CreateZExt(eff, builder.getInt64Ty());
+                     auto* ptr = builder.CreateGEP(builder.getInt8Ty(), mem_ptr, eff64);
+                     llvm::Value* val = nullptr;
+                     switch(sub) {
+                     case atomic_sub::i32_atomic_load: {
+                        auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt32Ty()));
+                        val = builder.CreateZExt(builder.CreateLoad(builder.getInt32Ty(), tp), builder.getInt64Ty());
+                        break;
+                     }
+                     case atomic_sub::i64_atomic_load: {
+                        auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                        val = builder.CreateLoad(builder.getInt64Ty(), tp);
+                        break;
+                     }
+                     case atomic_sub::i32_atomic_load8_u:
+                     case atomic_sub::i64_atomic_load8_u:
+                        val = builder.CreateZExt(builder.CreateLoad(builder.getInt8Ty(), ptr), builder.getInt64Ty());
+                        break;
+                     case atomic_sub::i32_atomic_load16_u:
+                     case atomic_sub::i64_atomic_load16_u: {
+                        auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt16Ty()));
+                        val = builder.CreateZExt(builder.CreateLoad(builder.getInt16Ty(), tp), builder.getInt64Ty());
+                        break;
+                     }
+                     case atomic_sub::i64_atomic_load32_u: {
+                        auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt32Ty()));
+                        val = builder.CreateZExt(builder.CreateLoad(builder.getInt32Ty(), tp), builder.getInt64Ty());
+                        break;
+                     }
+                     default: val = builder.getInt64(0); break;
+                     }
+                     store_vreg(inst.dest, val);
+                     break;
+                  }
+                  // Stores
+                  if (asub >= 0x17 && asub <= 0x1D) {
+                     auto* val = load_vreg(inst.simd.v_src1);
+                     auto* addr = load_vreg(inst.simd.addr);
+                     auto* addr32 = builder.CreateTrunc(addr, builder.getInt32Ty());
+                     auto* offset = builder.getInt32(inst.simd.offset);
+                     auto* eff = builder.CreateAdd(addr32, offset);
+                     auto* eff64 = builder.CreateZExt(eff, builder.getInt64Ty());
+                     auto* ptr = builder.CreateGEP(builder.getInt8Ty(), mem_ptr, eff64);
+                     switch(sub) {
+                     case atomic_sub::i32_atomic_store: {
+                        auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt32Ty()));
+                        builder.CreateStore(builder.CreateTrunc(val, builder.getInt32Ty()), tp);
+                        break;
+                     }
+                     case atomic_sub::i64_atomic_store: {
+                        auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                        builder.CreateStore(val, tp);
+                        break;
+                     }
+                     case atomic_sub::i32_atomic_store8:
+                     case atomic_sub::i64_atomic_store8:
+                        builder.CreateStore(builder.CreateTrunc(val, builder.getInt8Ty()), ptr);
+                        break;
+                     case atomic_sub::i32_atomic_store16:
+                     case atomic_sub::i64_atomic_store16: {
+                        auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt16Ty()));
+                        builder.CreateStore(builder.CreateTrunc(val, builder.getInt16Ty()), tp);
+                        break;
+                     }
+                     case atomic_sub::i64_atomic_store32: {
+                        auto* tp = builder.CreateBitCast(ptr, llvm::PointerType::getUnqual(builder.getInt32Ty()));
+                        builder.CreateStore(builder.CreateTrunc(val, builder.getInt32Ty()), tp);
+                        break;
+                     }
+                     default: break;
+                     }
+                     break;
+                  }
+                  // RMW + cmpxchg: call __psizam_atomic_rmw
+                  {
+                     auto* rmw_fn_ty = llvm::FunctionType::get(builder.getInt64Ty(),
+                        {builder.getPtrTy(), builder.getInt8Ty(), builder.getInt32Ty(),
+                         builder.getInt32Ty(), builder.getInt64Ty(), builder.getInt64Ty()}, false);
+                     auto rmw_fn = llvm_mod->getOrInsertFunction("__psizam_atomic_rmw", rmw_fn_ty);
+                     bool is_cmpxchg = (asub >= 0x48);
+                     llvm::Value* val1 = nullptr;
+                     llvm::Value* val2 = nullptr;
+                     if (is_cmpxchg) {
+                        val1 = load_vreg(inst.simd.v_src1); // expected
+                        val2 = load_vreg(inst.simd.v_src2); // replacement
+                     } else {
+                        val1 = load_vreg(inst.simd.v_src1);
+                        val2 = builder.getInt64(0);
+                     }
+                     auto* addr = load_vreg(inst.simd.addr);
+                     auto* addr32 = builder.CreateTrunc(addr, builder.getInt32Ty());
+                     auto* result = builder.CreateCall(rmw_fn, {
+                        ctx_ptr, builder.getInt8(asub), addr32,
+                        builder.getInt32(inst.simd.offset), val1, val2});
+                     store_vreg(inst.dest, result);
+                  }
+                  break;
+               }
+
                default:
                   // Unknown operation — skip
                   break;

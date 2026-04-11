@@ -1789,6 +1789,137 @@ namespace psizam {
          }
       }
 
+      // ──── Atomic operations ────
+      void emit_atomic_op(atomic_sub sub, uint32_t align, uint32_t offset) {
+         if (_unreachable) return;
+         uint8_t asub = static_cast<uint8_t>(sub);
+
+         if (sub == atomic_sub::atomic_fence) {
+            // No-op in single-threaded mode, but still emit for correctness
+            ir_inst inst{};
+            inst.opcode = ir_op::atomic_op;
+            inst.type = types::pseudo;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = ir_vreg_none;
+            inst.ri.imm = asub;
+            _func->emit(inst);
+            return;
+         }
+
+         if (sub == atomic_sub::memory_atomic_notify) {
+            _func->vpop(); // count
+            _func->vpop(); // addr
+            uint32_t dest = _func->alloc_vreg(types::i32);
+            ir_inst inst{};
+            inst.opcode = ir_op::atomic_op;
+            inst.type = types::i32;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = dest;
+            inst.ri.imm = asub;
+            _func->emit(inst);
+            _func->vpush(dest);
+            return;
+         }
+
+         if (sub == atomic_sub::memory_atomic_wait32 || sub == atomic_sub::memory_atomic_wait64) {
+            _func->vpop(); // timeout
+            _func->vpop(); // expected
+            _func->vpop(); // addr
+            uint32_t dest = _func->alloc_vreg(types::i32);
+            ir_inst inst{};
+            inst.opcode = ir_op::atomic_op;
+            inst.type = types::i32;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = dest;
+            inst.ri.imm = asub;
+            _func->emit(inst);
+            _func->vpush(dest);
+            return;
+         }
+
+         // Atomic loads: pop addr, push result
+         if (asub >= 0x10 && asub <= 0x16) {
+            uint32_t addr = _func->vpop();
+            bool is_i64 = (asub >= 0x14);
+            uint8_t rtype = is_i64 ? types::i64 : types::i32;
+            uint32_t dest = _func->alloc_vreg(rtype);
+            ir_inst inst{};
+            inst.opcode = ir_op::atomic_op;
+            inst.type = rtype;
+            inst.flags = IR_NONE;
+            inst.dest = dest;
+            inst.simd.offset = offset;
+            inst.simd.addr = addr;
+            inst.simd.lane = asub;
+            _func->emit(inst);
+            _func->vpush(dest);
+            return;
+         }
+
+         // Atomic stores: pop value, pop addr
+         if (asub >= 0x17 && asub <= 0x1D) {
+            uint32_t val = _func->vpop();
+            uint32_t addr = _func->vpop();
+            ir_inst inst{};
+            inst.opcode = ir_op::atomic_op;
+            inst.type = types::pseudo;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = ir_vreg_none;
+            inst.simd.offset = offset;
+            inst.simd.addr = addr;
+            inst.simd.lane = asub;
+            inst.simd.v_src1 = static_cast<uint16_t>(val);
+            _func->emit(inst);
+            return;
+         }
+
+         // Atomic RMW: pop value, pop addr, push old
+         if (asub >= 0x1E && asub <= 0x47) {
+            uint32_t val = _func->vpop();
+            uint32_t addr = _func->vpop();
+            // Determine result type
+            uint8_t in_group = (asub - 0x1E) % 7;
+            bool is_i64 = (in_group == 1 || in_group >= 4);
+            uint8_t rtype = is_i64 ? types::i64 : types::i32;
+            uint32_t dest = _func->alloc_vreg(rtype);
+            ir_inst inst{};
+            inst.opcode = ir_op::atomic_op;
+            inst.type = rtype;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = dest;
+            inst.simd.offset = offset;
+            inst.simd.addr = addr;
+            inst.simd.lane = asub;
+            inst.simd.v_src1 = static_cast<uint16_t>(val);
+            _func->emit(inst);
+            _func->vpush(dest);
+            return;
+         }
+
+         // Atomic cmpxchg: pop replacement, pop expected, pop addr, push old
+         if (asub >= 0x48 && asub <= 0x4E) {
+            uint32_t replacement = _func->vpop();
+            uint32_t expected = _func->vpop();
+            uint32_t addr = _func->vpop();
+            bool is_i64 = (asub == 0x49 || asub >= 0x4C);
+            uint8_t rtype = is_i64 ? types::i64 : types::i32;
+            uint32_t dest = _func->alloc_vreg(rtype);
+            ir_inst inst{};
+            inst.opcode = ir_op::atomic_op;
+            inst.type = rtype;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = dest;
+            inst.simd.offset = offset;
+            inst.simd.addr = addr;
+            inst.simd.lane = asub;
+            inst.simd.v_src1 = static_cast<uint16_t>(expected);
+            inst.simd.v_src2 = static_cast<uint16_t>(replacement);
+            _func->emit(inst);
+            _func->vpush(dest);
+            return;
+         }
+      }
+
       // ──── Branch fixup ────
       // Patch a br/br_if IR instruction's target to the resolved block index.
       void fix_branch(branch_t inst_idx, label_t block_idx) {
