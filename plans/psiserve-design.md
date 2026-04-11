@@ -200,54 +200,30 @@ read(real_fd, buf + (ring->head & mask), available);
 
 The platform difference is abstracted behind an `io_engine` interface. The WASM API is identical on both.
 
-### Inter-Service Calls
+### Inter-Service Communication
 
-`service_call()` is synchronous from the caller's perspective. The implementation depends on where the target service lives:
+> **See [psix IPC Design](psix-ipc-design.md) for the full design.**
 
-**Same OS thread:**
-1. Caller writes args into shared heap (or they're already there)
-2. Host maps zero pages over target's stack region
-3. Host spawns a new fiber on the target instance
-4. Target function runs, reads args from shared memory, writes result
-5. Target fiber completes, original stack pages restored
-6. Caller's fiber resumes, reads result
+All inter-service communication is host-mediated message passing using WIT canonical ABI. There is no shared WASM memory between instances. The host lifts args from the sender's memory, routes the call, and lowers args into the receiver's memory.
 
-Zero copies. Two mmap calls. One or two fiber context switches.
+**Key design decisions:**
 
-**Different OS thread:**
-1. Host copies args into target thread's mailbox queue (memcpy)
-2. Host wakes target thread (eventfd/pipe)
-3. Target thread's scheduler spawns fiber, dispatches call
-4. Result copied back to caller's thread
-5. Caller's fiber resumes
-
-One copy per direction. This is the minimum for safe cross-thread communication without locks on the data. This is the only mandatory copy in the system.
-
-**The developer never knows which path is taken.** `service_call()` blocks, returns the result. The runtime picks the optimal path.
-
-### Inter-Service Channels
-
-For streaming communication between services, channels use shared-memory ring buffers with asymmetric page permissions:
-
-- Service A's tx ring: RW in A's linear memory, RO in B's linear memory
-- Service B's tx ring: RW in B's linear memory, RO in A's linear memory
-
-Same physical pages, different permissions per mapping. Hardware-enforced: writing to a read-only mapping triggers SIGSEGV. No runtime checks needed.
-
-Each side writes two values (its tx head, its rx tail) and reads two values from the other side (their tx head, their rx tail). Standard SPSC ring buffer protocol.
-
-Cross-thread channels require the host to mediate (copy between thread-local memories) rather than direct page sharing.
+- **One instance per service per thread** — fibers within an instance share heap (direct in-memory communication between connections), but instances on different threads are fully isolated
+- **Everything is a typed function call** — RPC, signals, and events all reduce to calling WIT-defined interface methods. `*-api` interfaces are RPC (1:1, sync), `*-signals` interfaces are events (1:N, async by default, sync if return value)
+- **Signals/slots model** — signals are WIT resources with `connect`/`disconnect`/`emit`. Static signals scope to a service type, instance signals scope to a specific instance
+- **Per-thread outbound ring buffer** — sender bump-allocates messages into local ring, receivers read directly from sender's ring (zero receiver-side allocation). Cross-thread notification via atomic `has_messages` bitmap + `wake_fd`
+- **Host owns all routing** — same-thread calls are direct fiber switches (one copy), cross-thread calls go through the ring. The WASM code never knows which path is taken
 
 ### COW Instance Forking
 
-New connections are served by COW-forking a template WASM instance:
+COW forking is used for **scaling** — forking a service instance to another OS thread when one thread saturates — not for per-connection isolation. Within a thread, connections are fibers sharing one instance.
 
 1. Template instance is loaded and initialized (run `_init()`, populate caches, etc.)
-2. On new connection, `mmap` the template's linear memory pages as MAP_PRIVATE
-3. The new instance shares all pages until it writes — then COW gives it a private copy
-4. Stack pages are mapped as zero-fill (fresh stack for the new connection)
+2. On scaling event, `memcpy` the template's hot pages into a pre-allocated instance slot
+3. Stack pages reset via `madvise(MADV_DONTNEED)` (no VMA churn)
+4. New instance on target thread begins handling connections independently
 
-Cost: one mmap call. No copying until the instance actually mutates data. Read-only pages (code caches, config, static data) are shared across all forked instances forever.
+> **See [psix IPC Design](psix-ipc-design.md) §2** for memory pool allocation strategy (pre-allocated pools, bitmap + CAS, static VMA tree).
 
 ### Interface Definitions (WIT)
 
@@ -261,6 +237,32 @@ interface balance-api {
 ```
 
 Tooling generates caller stubs and dispatch functions. The canonical ABI defines the memory layout for arguments and results. For same-thread calls, args are laid out in shared memory and read directly by the callee — no lift/lower through the host.
+
+### Module Composition: Bound, Linked, Connected
+
+Three modes of composing modules, with increasing isolation:
+
+| Mode | Resolution | Memory | Overhead | Isolation | Analogy |
+|------|-----------|--------|----------|-----------|---------|
+| **Bound** | Content hash | Shared | Zero | None | Static `.a` library |
+| **Linked** | Name | Shared | Zero (re-link on upgrade) | None | Shared `.so` library |
+| **Connected** | Name | Separate | Copy at boundary | Full sandbox | Unix IPC / COM apartments |
+
+**Bound** — the module links against a specific version (content hash) of a library. The dependency is sealed. Standard WASM static linking via `wasm-ld` on relocatable `.o` files. Shared linear memory, direct `call` instructions, zero runtime overhead.
+
+**Linked** — the module declares a dependency by name. The runtime resolves to the current version and links them. When the library is upgraded, dependents are automatically re-linked. Same static linking mechanics as bound, but with mutable resolution.
+
+**Connected** — separate instances with separate linear memories. Communication through Component Model canonical ABI (host lifts/lowers at boundaries). Full sandbox isolation. This is how services communicate at runtime — described in the [psix IPC design](psix-ipc-design.md).
+
+Both bound and linked modes use WASM's relocatable object format (`.o` files with `linking` and `reloc.*` custom sections). All indices are padded LEB128 for in-place patching. A **link.wasm** module (the linker compiled to WASM) can perform linking inside the sandbox — deterministic, crash-isolated, and cacheable. JIT compilation is per-function and cached by content, so re-linking after a library upgrade does not require re-JITing unchanged functions.
+
+> **See [psix IPC Design](psix-ipc-design.md) §7** for full details on the composition model, relocatable linking mechanics, and per-function JIT caching.
+
+## Detailed Design Documents
+
+- **[psix IPC, Fiber, and Memory Design](psix-ipc-design.md)** — Inter-process communication (signals/slots, ring buffers, cross-thread coordination), fiber allocation (bitmap + CAS pools, static VMA tree), WIT interface conventions (`*-api` for RPC, `*-signals` for events), service discovery, and host-managed message routing. Supersedes the inter-service communication sections below where they conflict.
+- **[psizam Architecture Evolution](llvm-backend-design.md)** — WASM engine refactoring: decoupled compile/execute, LLVM backend, sandboxed compilation, code caching.
+- **[Master Implementation Plan](master-plan.md)** — Layered build plan from scaffold to work-stealing.
 
 ## Design Principles
 
@@ -324,7 +326,7 @@ Compared to standard approaches:
 | Context switch | ~1-5μs (kernel) | N/A (callbacks) | ~200ns (runtime) | ~2ns (swapcontext) |
 
 Key differences:
-- **Per-connection instances:** COW forked from template. Cost: one mmap. Full isolation between connections with near-zero overhead.
-- **Database reads:** Spawn fiber on DB instance, direct pointer access to data structures in linear memory. No serialization, no socket, no query parsing.
+- **Per-instance fibers:** Multiple connections share one instance via cooperative fibers. Direct in-memory communication between connections (no pub/sub needed). Full isolation between service types.
+- **Database access:** Native host function calls to the database — always live, shared across all threads. No serialization, no socket, no query parsing.
 - **Database writes:** Serialized through cooperative scheduling — one writer at a time, no locks, no contention, no CAS loops.
-- **Read scaling:** COW fork DB instance to create read replicas on other OS threads. Consistent snapshots (like MVCC) for free.
+- **Read scaling:** COW fork service instances to additional OS threads when one thread saturates. Each fork is a consistent snapshot.

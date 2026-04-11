@@ -70,14 +70,13 @@
 //   relaxed simd ops             🟢     🟢       🟢        🟢      🟢
 //
 // MEMORY BOUNDS CHECKING
-//   OOB traps                   🟢     🟢       🟢        🟢      🔴
+//   OOB traps                   🟢     🟢       🟢        🟢      🟢
 //
 // KNOWN BUGS 🐛
 //   [B1] SIMD float ops incomplete on aarch64 softfloat (~60 spec failures)
-//   [B2] v128_load32_zero guard page crash in interpreter (simd_const_385/387)
-//   [B3] JIT2(x86) call_0_wasm SIGABRT (pre-existing)
-//   [B4] LLVM OOB load/trap failures (pending fix)
-//   [B5] error_codes_def.hpp extraneous brace warnings on aarch64 tools
+//   [B2] LLVM: imported globals/tables not wired up (~22 spec failures, elem_*/global_14)
+//   [B3] LLVM: call depth + stack byte limits not enforced (4 unit test failures)
+//   [B4] JIT2(x86) call_0_wasm SIGABRT (pre-existing)
 //
 // Last updated: 2026-04-10
 //
