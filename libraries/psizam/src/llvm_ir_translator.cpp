@@ -619,14 +619,15 @@ namespace psizam {
                val = builder.CreateBitCast(val, v128_ty);
             builder.CreateStore(val, v128_slots[vreg]);
          };
-         // Compute effective memory address: mem_ptr + zext(trunc(addr_vreg, i32) + offset)
+         // Compute effective memory address: mem_ptr + zext(addr, i64) + offset
+         // Uses i64 arithmetic to avoid i32 wrap-around (WASM requires i33 effective address)
          auto simd_mem_addr = [&](uint32_t addr_vreg, uint32_t offset) -> llvm::Value* {
             auto* addr = load_vreg(addr_vreg);
             if (!addr) addr = builder.getInt64(0);
-            auto* addr32 = builder.CreateTrunc(addr, i32_ty);
-            auto* eff = builder.CreateAdd(addr32, builder.getInt32(offset));
-            auto* eff64 = builder.CreateZExt(eff, i64_ty);
-            return builder.CreateGEP(i8_ty, mem_ptr, eff64);
+            auto* eff_addr = builder.CreateZExt(builder.CreateTrunc(addr, i32_ty), i64_ty);
+            if (offset != 0)
+               eff_addr = builder.CreateAdd(eff_addr, builder.getInt64(static_cast<uint64_t>(offset)));
+            return builder.CreateGEP(i8_ty, mem_ptr, eff_addr);
          };
 
          // Track which block we're currently emitting into, for fallthrough
@@ -2332,19 +2333,22 @@ namespace psizam {
                   switch (sub) {
                   case simd_sub::v128_load: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
-                     auto* val = builder.CreateAlignedLoad(v128_ty, ptr, llvm::Align(1));
-                     store_v128(inst.simd.v_dest, val);
+                     auto* ld = builder.CreateAlignedLoad(v128_ty, ptr, llvm::Align(1));
+                     ld->setVolatile(true);
+                     store_v128(inst.simd.v_dest, ld);
                      break;
                   }
                   case simd_sub::v128_store: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* val = load_v128(inst.simd.v_src1, v128_ty);
-                     builder.CreateAlignedStore(val, ptr, llvm::Align(1));
+                     auto* st = builder.CreateAlignedStore(val, ptr, llvm::Align(1));
+                     st->setVolatile(true);
                      break;
                   }
                   case simd_sub::v128_load8x8_s: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* v8 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i8_ty, 8), ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(v8)->setVolatile(true);
                      auto* ext = builder.CreateSExt(v8, v8xi16_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
                      break;
@@ -2352,6 +2356,7 @@ namespace psizam {
                   case simd_sub::v128_load8x8_u: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* v8 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i8_ty, 8), ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(v8)->setVolatile(true);
                      auto* ext = builder.CreateZExt(v8, v8xi16_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
                      break;
@@ -2359,6 +2364,7 @@ namespace psizam {
                   case simd_sub::v128_load16x4_s: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* v4 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i16_ty, 4), ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(v4)->setVolatile(true);
                      auto* ext = builder.CreateSExt(v4, v4xi32_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
                      break;
@@ -2366,6 +2372,7 @@ namespace psizam {
                   case simd_sub::v128_load16x4_u: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* v4 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i16_ty, 4), ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(v4)->setVolatile(true);
                      auto* ext = builder.CreateZExt(v4, v4xi32_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
                      break;
@@ -2373,6 +2380,7 @@ namespace psizam {
                   case simd_sub::v128_load32x2_s: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* v2 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i32_ty, 2), ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(v2)->setVolatile(true);
                      auto* ext = builder.CreateSExt(v2, v2xi64_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
                      break;
@@ -2380,6 +2388,7 @@ namespace psizam {
                   case simd_sub::v128_load32x2_u: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* v2 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i32_ty, 2), ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(v2)->setVolatile(true);
                      auto* ext = builder.CreateZExt(v2, v2xi64_ty);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(ext, v128_ty));
                      break;
@@ -2387,6 +2396,7 @@ namespace psizam {
                   case simd_sub::v128_load8_splat: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateLoad(i8_ty, ptr);
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      llvm::Value* vec = builder.CreateVectorSplat(16, scalar);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(vec, v128_ty));
                      break;
@@ -2394,6 +2404,7 @@ namespace psizam {
                   case simd_sub::v128_load16_splat: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateAlignedLoad(i16_ty, ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      llvm::Value* vec = builder.CreateVectorSplat(8, scalar);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(vec, v128_ty));
                      break;
@@ -2401,6 +2412,7 @@ namespace psizam {
                   case simd_sub::v128_load32_splat: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      llvm::Value* vec = builder.CreateVectorSplat(4, scalar);
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(vec, v128_ty));
                      break;
@@ -2408,6 +2420,7 @@ namespace psizam {
                   case simd_sub::v128_load64_splat: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      llvm::Value* vec = builder.CreateVectorSplat(2, scalar);
                      store_v128(inst.simd.v_dest, vec);
                      break;
@@ -2415,6 +2428,7 @@ namespace psizam {
                   case simd_sub::v128_load32_zero: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* zero = llvm::Constant::getNullValue(v4xi32_ty);
                      auto* vec = builder.CreateInsertElement(zero, scalar, builder.getInt32(0));
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(vec, v128_ty));
@@ -2423,6 +2437,7 @@ namespace psizam {
                   case simd_sub::v128_load64_zero: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* zero = llvm::Constant::getNullValue(v2xi64_ty);
                      auto* vec = builder.CreateInsertElement(zero, scalar, builder.getInt32(0));
                      store_v128(inst.simd.v_dest, vec);
@@ -2431,6 +2446,7 @@ namespace psizam {
                   case simd_sub::v128_load8_lane: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateLoad(i8_ty, ptr);
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
                      auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
@@ -2439,6 +2455,7 @@ namespace psizam {
                   case simd_sub::v128_load16_lane: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateAlignedLoad(i16_ty, ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
                      auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
@@ -2447,6 +2464,7 @@ namespace psizam {
                   case simd_sub::v128_load32_lane: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* vec = load_v128(inst.simd.v_src1, v4xi32_ty);
                      auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
@@ -2455,6 +2473,7 @@ namespace psizam {
                   case simd_sub::v128_load64_lane: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
+                     cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
                      auto* result = builder.CreateInsertElement(vec, scalar, builder.getInt32(inst.simd.lane));
                      store_v128(inst.simd.v_dest, result);
@@ -2464,28 +2483,32 @@ namespace psizam {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
                      auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
-                     builder.CreateStore(scalar, ptr);
+                     auto* st = builder.CreateStore(scalar, ptr);
+                     st->setVolatile(true);
                      break;
                   }
                   case simd_sub::v128_store16_lane: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
                      auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
-                     builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     auto* st = builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     st->setVolatile(true);
                      break;
                   }
                   case simd_sub::v128_store32_lane: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* vec = load_v128(inst.simd.v_src1, v4xi32_ty);
                      auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
-                     builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     auto* st = builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     st->setVolatile(true);
                      break;
                   }
                   case simd_sub::v128_store64_lane: {
                      auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
                      auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
                      auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
-                     builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     auto* st = builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
+                     st->setVolatile(true);
                      break;
                   }
 
