@@ -207,6 +207,15 @@ namespace psizam {
       maybe_unique_ptr(T* ptr = nullptr, bool owns = true) : ptr(ptr), owns(owns) {}
       maybe_unique_ptr(const maybe_unique_ptr&) = delete;
       maybe_unique_ptr& operator=(const maybe_unique_ptr&) = delete;
+      maybe_unique_ptr(maybe_unique_ptr&& o) noexcept : ptr(o.ptr), owns(o.owns) { o.ptr = nullptr; o.owns = false; }
+      maybe_unique_ptr& operator=(maybe_unique_ptr&& o) noexcept {
+         if (this != &o) {
+            if (ptr && owns) delete ptr;
+            ptr = o.ptr; owns = o.owns;
+            o.ptr = nullptr; o.owns = false;
+         }
+         return *this;
+      }
       ~maybe_unique_ptr() {
          if (ptr && owns)
             delete ptr;

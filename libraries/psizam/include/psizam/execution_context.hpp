@@ -331,6 +331,11 @@ namespace psizam {
          return _table_sizes[table_idx];
       }
 
+      inline uint32_t table_elem(uint32_t i, uint32_t table_idx = 0) {
+         PSIZAM_ASSERT(i < _table_sizes[table_idx], wasm_interpreter_exception, "table index out of range");
+         return get_table_base(table_idx)[i].index;
+      }
+
       void init_table(uint32_t x, uint32_t d, uint32_t s, uint32_t n, uint32_t table_idx = 0) {
          auto& mod = resolve_module();
          assert(x < mod.elements.size());
@@ -414,6 +419,13 @@ namespace psizam {
          return derived().template execute<TC>(alt_stack, host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
       }
 
+      /// Execute a function by its indirect table index (resolves table entry → function index).
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute_func_table(void* host, Visitor&& visitor, uint32_t table_index,
+                                                                  Args&&... args) {
+         return derived().template execute<TC>(host, std::forward<Visitor>(visitor), table_elem(table_index), std::forward<Args>(args)...);
+      }
+
       template <typename Visitor, typename... Args>
       inline void execute_start(void* host, Visitor&& visitor) {
          if (_mod->start != std::numeric_limits<uint32_t>::max())
@@ -424,6 +436,31 @@ namespace psizam {
       inline void execute_start(stack_manager& alt_stack, void* host, Visitor&& visitor) {
          if (_mod->start != std::numeric_limits<uint32_t>::max())
             derived().execute(alt_stack, host, std::forward<Visitor>(visitor), _mod->start);
+      }
+
+      /// Create a sibling execution context that shares this context's linear memory,
+      /// module, and host function table, but has its own stacks and globals.
+      /// Used for fiber spawning — each fiber gets an independent execution context
+      /// pointing to the same WASM heap.
+      std::unique_ptr<Derived> create_fiber_context() {
+         auto ctx = std::make_unique<Derived>();
+         // Share module, allocator, linear memory, and host function table
+         ctx->_mod           = _mod;
+         ctx->set_wasm_allocator(_wasm_alloc);
+         ctx->_linear_memory = _linear_memory;
+         ctx->_max_pages     = _max_pages;
+         ctx->_table         = _table;
+         // Share function tables (read-only after init)
+         ctx->_table_data    = _table_data;
+         ctx->_table_sizes   = _table_sizes;
+         // Clone globals (each fiber needs its own __stack_pointer)
+         ctx->_globals       = _globals;
+         // Clone dropped state
+         ctx->_dropped_elems = _dropped_elems;
+         ctx->_dropped_data  = _dropped_data;
+         // Set call depth limit via derived accessor
+         ctx->set_max_call_depth(derived().get_remaining_call_depth());
+         return ctx;
       }
 
     protected:
@@ -910,10 +947,6 @@ namespace psizam {
          std::cout << " }\n";
       }
 
-      inline uint32_t       table_elem(uint32_t i, uint32_t table_idx = 0) {
-         PSIZAM_ASSERT(i < _table_sizes[table_idx], wasm_interpreter_exception, "table index out of range");
-         return this->get_table_base(table_idx)[i].index;
-      }
       inline void           push_operand(operand_stack_elem el) { get_operand_stack().push(std::move(el)); }
       inline operand_stack_elem get_operand(uint32_t index) const { return get_operand_stack().get(_last_op_index + index); }
       inline void           eat_operands(uint32_t index) { get_operand_stack().eat(index); }
@@ -1053,12 +1086,6 @@ namespace psizam {
          _state = execution_state{};
          get_operand_stack().eat(_state.os_index);
          _as.eat(_state.as_index);
-      }
-
-      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
-      inline std::optional<operand_stack_elem> execute_func_table(void* host, Visitor&& visitor, uint32_t table_index,
-                                                                  Args&&... args) {
-         return execute<TC>(host, std::forward<Visitor>(visitor), table_elem(table_index), std::forward<Args>(args)...);
       }
 
       template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>

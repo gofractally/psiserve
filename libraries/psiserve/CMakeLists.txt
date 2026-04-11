@@ -1,7 +1,9 @@
 # ── psiserve: WASM TCP application server library ──────────────────────────────
 
 add_library(psiserve
+   src/host_api.cpp
    src/io_engine_kqueue.cpp
+   src/log.cpp
    src/scheduler.cpp
    src/runtime.cpp
 )
@@ -12,9 +14,17 @@ target_include_directories(psiserve PUBLIC
 
 target_link_libraries(psiserve PUBLIC
    psizam
+   psizam-runtime
+   ucc
+   quill::quill
    Threads::Threads
 )
 
-# Boost for program_options (used by CLI, but headers used by lib for utility)
-find_package(Boost REQUIRED)
-target_link_libraries(psiserve PUBLIC Boost::boost)
+# Boost for program_options and Boost.Context (fiber switching)
+find_package(Boost REQUIRED COMPONENTS context)
+target_link_libraries(psiserve PUBLIC Boost::boost Boost::context)
+
+# Link LLVM backend when enabled
+if(TARGET psizam-llvm)
+   target_link_libraries(psiserve PUBLIC psizam-llvm)
+endif()

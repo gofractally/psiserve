@@ -61,9 +61,10 @@ namespace psizam::compliance {
          try {
             wasm_allocator wa;
             host_function_table table;
-            runtime rt(wasm, table, &wa, nullptr, {.eng = eng});
-            r.value = rt.call_with_return("env", func_name,
-                                          std::forward<Args>(args)...);
+            compiled_module mod(wasm_code(wasm.begin(), wasm.end()),
+                                std::move(table), &wa, {.eng = eng});
+            auto inst = mod.create_instance();
+            r.value = inst.call_with_return(func_name, std::forward<Args>(args)...);
          } catch (const std::exception& e) {
             r.had_error = true;
             r.error = e.what();
@@ -82,7 +83,7 @@ namespace psizam::compliance {
    template <typename... Args>
    std::vector<engine_result> run_differential(
          std::span<const uint8_t> wasm,
-         host_function_table& table,
+         host_function_table table,
          void* host,
          std::string_view func_name,
          Args&&... args) {
@@ -96,9 +97,11 @@ namespace psizam::compliance {
 
          try {
             wasm_allocator wa;
-            runtime rt(wasm, table, &wa, host, {.eng = eng});
-            r.value = rt.call_with_return("env", func_name,
-                                          std::forward<Args>(args)...);
+            compiled_module mod(wasm_code(wasm.begin(), wasm.end()),
+                                table, &wa, {.eng = eng});
+            auto inst = mod.create_instance();
+            inst.set_host(host);
+            r.value = inst.call_with_return(func_name, std::forward<Args>(args)...);
          } catch (const std::exception& e) {
             r.had_error = true;
             r.error = e.what();
@@ -115,15 +118,12 @@ namespace psizam::compliance {
 
    /// Compare raw i64 bits of operand_stack_elem (type-punned comparison).
    inline uint64_t result_bits(const operand_stack_elem& elem) {
-      // operand_stack_elem is a variant<i32_const_t, i64_const_t, f32_const_t, f64_const_t, v128_const_t>
-      // Access raw bits through the i64 accessor (union punning)
       uint64_t bits = 0;
       std::memcpy(&bits, &elem, sizeof(uint64_t));
       return bits;
    }
 
    /// Check that all engine results agree.
-   /// Returns empty string on success, or a diagnostic message on disagreement.
    inline std::string check_agreement(const std::vector<engine_result>& results) {
       if (results.size() < 2) return "";
 
@@ -132,7 +132,6 @@ namespace psizam::compliance {
       for (size_t i = 1; i < results.size(); i++) {
          const auto& other = results[i];
 
-         // Both should agree on error/success
          if (ref.had_error != other.had_error) {
             return ref.engine_name + " " +
                    (ref.had_error ? "errored" : "succeeded") +
@@ -140,9 +139,8 @@ namespace psizam::compliance {
                    (other.had_error ? "errored" : "succeeded");
          }
 
-         if (ref.had_error) continue; // both errored — don't compare messages
+         if (ref.had_error) continue;
 
-         // Both should agree on void/non-void
          bool ref_has   = ref.value.has_value();
          bool other_has = other.value.has_value();
          if (ref_has != other_has) {
@@ -152,9 +150,8 @@ namespace psizam::compliance {
                    (other_has ? "a value" : "void");
          }
 
-         if (!ref_has) continue; // both void
+         if (!ref_has) continue;
 
-         // Compare raw bits
          uint64_t ref_bits   = result_bits(*ref.value);
          uint64_t other_bits = result_bits(*other.value);
          if (ref_bits != other_bits) {
@@ -165,10 +162,10 @@ namespace psizam::compliance {
          }
       }
 
-      return ""; // all agree
+      return "";
    }
 
-   /// Assert all engines agree — throws on disagreement (for use in tests).
+   /// Assert all engines agree — throws on disagreement.
    inline void assert_all_agree(const std::vector<engine_result>& results) {
       auto msg = check_agreement(results);
       if (!msg.empty()) {

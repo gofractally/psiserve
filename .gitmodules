@@ -1,3 +1,6 @@
 [submodule "external/psitri"]
 	path = external/psitri
 	url = https://github.com/gofractally/arbtrie.git
+[submodule "external/quill"]
+	path = external/quill
+	url = https://github.com/odygrd/quill.git

@@ -35,10 +35,13 @@ enable_testing()
 
 # ── Libraries ──────────────────────────────────────────────────────────────────
 add_subdirectory(libraries/psio)
+add_subdirectory(external/psitri/libraries/ucc)
+add_subdirectory(external/quill)
 add_subdirectory(libraries/psizam)
 
 option(PSISERVE_ENABLE "Build psiserve library and CLI" OFF)
 if(PSISERVE_ENABLE)
    add_subdirectory(libraries/psiserve)
    add_subdirectory(programs/psiserve-cli)
+   add_subdirectory(programs/chat-bench)
 endif()

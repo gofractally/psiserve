@@ -1,4 +1,4 @@
-// Tests for the new psizam public API (runtime + host_function_table)
+// Tests for the psizam public API (compiled_module + instance)
 
 #include <psizam/psizam.hpp>
 #include "utils.hpp"
@@ -40,45 +40,45 @@ TEST_CASE("Public API: host_function_table add and call", "[public_api]") {
    CHECK(table.size() == 1);
 }
 
-TEST_CASE("Public API: runtime with interpreter", "[public_api]") {
+TEST_CASE("Public API: compiled_module with interpreter", "[public_api]") {
    wasm_allocator wa;
    host_function_table table;
 
-   runtime rt(const42_wasm, table, &wa, nullptr, {.eng = engine::interpreter});
-   auto result = rt.call_with_return("env", "const42");
-   REQUIRE(result.has_value());
-   CHECK(result->to_ui32() == 42u);
+   compiled_module mod(const42_wasm, std::move(table), &wa, {.eng = engine::interpreter});
+   auto inst = mod.create_instance();
+   auto fn = inst.get_function<uint32_t()>("const42");
+   CHECK(fn() == 42u);
 }
 
-TEST_CASE("Public API: runtime with add function", "[public_api]") {
+TEST_CASE("Public API: compiled_module with add function", "[public_api]") {
    wasm_allocator wa;
    host_function_table table;
 
-   runtime rt(add_wasm, table, &wa, nullptr, {.eng = engine::interpreter});
-   auto result = rt.call_with_return("env", "add", (uint32_t)10, (uint32_t)32);
-   REQUIRE(result.has_value());
-   CHECK(result->to_ui32() == 42u);
+   compiled_module mod(add_wasm, std::move(table), &wa, {.eng = engine::interpreter});
+   auto inst = mod.create_instance();
+   auto fn = inst.get_function<uint32_t(uint32_t, uint32_t)>("add");
+   CHECK(fn(10, 32) == 42u);
 }
 
 #if defined(__x86_64__) || defined(__aarch64__)
-TEST_CASE("Public API: runtime with jit", "[public_api]") {
+TEST_CASE("Public API: compiled_module with jit", "[public_api]") {
    wasm_allocator wa;
    host_function_table table;
 
-   runtime rt(const42_wasm, table, &wa, nullptr, {.eng = engine::jit});
-   auto result = rt.call_with_return("env", "const42");
-   REQUIRE(result.has_value());
-   CHECK(result->to_ui32() == 42u);
+   compiled_module mod(const42_wasm, std::move(table), &wa, {.eng = engine::jit});
+   auto inst = mod.create_instance();
+   auto fn = inst.get_function<uint32_t()>("const42");
+   CHECK(fn() == 42u);
 }
 
-TEST_CASE("Public API: runtime with jit2", "[public_api]") {
+TEST_CASE("Public API: compiled_module with jit2", "[public_api]") {
    wasm_allocator wa;
    host_function_table table;
 
-   runtime rt(const42_wasm, table, &wa, nullptr, {.eng = engine::jit2});
-   auto result = rt.call_with_return("env", "const42");
-   REQUIRE(result.has_value());
-   CHECK(result->to_ui32() == 42u);
+   compiled_module mod(const42_wasm, std::move(table), &wa, {.eng = engine::jit2});
+   auto inst = mod.create_instance();
+   auto fn = inst.get_function<uint32_t()>("const42");
+   CHECK(fn() == 42u);
 }
 #endif
 
@@ -93,15 +93,14 @@ TEST_CASE("LLVM: standalone IR translate + compile", "[llvm]") {
    backend<std::nullptr_t, null_backend> nb(code, nullptr);
    auto& mod = nb.get_module();
 
-   // Now parse it with jit_llvm backend using the new ir_writer_llvm
-   // to get function pointers
+   // Now parse it with jit_llvm backend
    wasm_allocator wa;
    host_function_table table;
 
-   runtime rt(const42_wasm, table, &wa, nullptr, {.eng = engine::jit_llvm});
+   compiled_module cm(const42_wasm, std::move(table), &wa, {.eng = engine::jit_llvm});
 
    // Verify the jit_code_offset was set (non-zero = function was compiled)
-   auto& llvm_mod = rt.get_module();
+   auto& llvm_mod = cm.get_module();
    REQUIRE(llvm_mod.code.size() == 1);
    INFO("jit_code_offset = " << llvm_mod.code[0].jit_code_offset);
    CHECK(llvm_mod.code[0].jit_code_offset != 0);
@@ -116,23 +115,23 @@ TEST_CASE("LLVM: standalone IR translate + compile", "[llvm]") {
    CHECK(result == 42);
 }
 
-TEST_CASE("Public API: runtime with jit_llvm const42", "[public_api][llvm]") {
+TEST_CASE("Public API: compiled_module with jit_llvm const42", "[public_api][llvm]") {
    wasm_allocator wa;
    host_function_table table;
 
-   runtime rt(const42_wasm, table, &wa, nullptr, {.eng = engine::jit_llvm});
-   auto result = rt.call_with_return("env", "const42");
-   REQUIRE(result.has_value());
-   CHECK(result->to_ui32() == 42u);
+   compiled_module mod(const42_wasm, std::move(table), &wa, {.eng = engine::jit_llvm});
+   auto inst = mod.create_instance();
+   auto fn = inst.get_function<uint32_t()>("const42");
+   CHECK(fn() == 42u);
 }
 
-TEST_CASE("Public API: runtime with jit_llvm add", "[public_api][llvm]") {
+TEST_CASE("Public API: compiled_module with jit_llvm add", "[public_api][llvm]") {
    wasm_allocator wa;
    host_function_table table;
 
-   runtime rt(add_wasm, table, &wa, nullptr, {.eng = engine::jit_llvm});
-   auto result = rt.call_with_return("env", "add", (uint32_t)10, (uint32_t)32);
-   REQUIRE(result.has_value());
-   CHECK(result->to_ui32() == 42u);
+   compiled_module mod(add_wasm, std::move(table), &wa, {.eng = engine::jit_llvm});
+   auto inst = mod.create_instance();
+   auto fn = inst.get_function<uint32_t(uint32_t, uint32_t)>("add");
+   CHECK(fn(10, 32) == 42u);
 }
 #endif

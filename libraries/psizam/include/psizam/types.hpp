@@ -397,6 +397,19 @@ namespace psizam {
          return index;
       }
 
+      uint32_t get_exported_global(const std::string_view str) {
+         uint32_t index = std::numeric_limits<uint32_t>::max();
+         for (uint32_t i = 0; i < exports.size(); i++) {
+            if (exports[i].kind == external_kind::Global && exports[i].field_str.size() == str.size() &&
+                memcmp((const char*)str.data(), (const char*)exports[i].field_str.data(), exports[i].field_str.size()) ==
+                      0) {
+               index = exports[i].index;
+               break;
+            }
+         }
+         return index;
+      }
+
       static std::size_t get_global_offset(std::uint32_t idx)
       {
          return idx * sizeof(init_expr) + offsetof(init_expr, value);

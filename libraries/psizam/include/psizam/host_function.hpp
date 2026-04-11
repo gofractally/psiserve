@@ -27,6 +27,73 @@ namespace psizam {
    struct no_match_t {};
    struct invoke_on_all_t {};
 
+   // ── wasm_type_traits: extension point for custom WASM-compatible types ────
+   //
+   // Libraries can specialize this trait to make their types work seamlessly
+   // with psizam's host function system (fast trampoline, signature matching,
+   // and the type converter).
+   //
+   // Requirements for a valid specialization:
+   //   - is_wasm_type = true
+   //   - wasm_type    = the underlying WASM-native type (int32_t, uint32_t, int64_t, uint64_t, float, double)
+   //   - unwrap(T) -> wasm_type   (extract the underlying value)
+   //   - wrap(wasm_type) -> T     (construct from the underlying value)
+   //
+   // Example (for a strong typedef library):
+   //
+   //   template<typename T, typename Tag>
+   //   struct psizam::wasm_type_traits<my::strong_int<T, Tag>> {
+   //      static constexpr bool is_wasm_type = true;
+   //      using wasm_type = T;
+   //      static constexpr T                    unwrap(my::strong_int<T, Tag> v) { return v.get(); }
+   //      static constexpr my::strong_int<T, Tag> wrap(T v) { return my::strong_int<T, Tag>{v}; }
+   //   };
+
+   template<typename T, typename = void>
+   struct wasm_type_traits {
+      static constexpr bool is_wasm_type = false;
+   };
+
+   // Built-in: integral types (i32/i64)
+   template<typename T>
+   struct wasm_type_traits<T, std::enable_if_t<std::is_integral_v<T> && (sizeof(T) <= 8)>> {
+      static constexpr bool is_wasm_type = true;
+      using wasm_type = T;
+      static constexpr T unwrap(T v) { return v; }
+      static constexpr T wrap(T v) { return v; }
+   };
+
+   // Built-in: float (f32)
+   template<>
+   struct wasm_type_traits<float> {
+      static constexpr bool is_wasm_type = true;
+      using wasm_type = float;
+      static constexpr float unwrap(float v) { return v; }
+      static constexpr float wrap(float v) { return v; }
+   };
+
+   // Built-in: double (f64)
+   template<>
+   struct wasm_type_traits<double> {
+      static constexpr bool is_wasm_type = true;
+      using wasm_type = double;
+      static constexpr double unwrap(double v) { return v; }
+      static constexpr double wrap(double v) { return v; }
+   };
+
+   // Two-phase trait: safely checks if T is a custom wasm type (i.e. has a
+   // wasm_type_traits specialization with a different wasm_type than T itself).
+   // Avoids accessing ::wasm_type on the primary template (which lacks it).
+   namespace detail {
+      template<typename T, bool = wasm_type_traits<T>::is_wasm_type>
+      struct is_custom_wasm_type_impl : std::false_type {};
+      template<typename T>
+      struct is_custom_wasm_type_impl<T, true>
+         : std::bool_constant<!std::is_same_v<T, typename wasm_type_traits<T>::wasm_type>> {};
+   }
+   template<typename T>
+   inline constexpr bool is_custom_wasm_type_v = detail::is_custom_wasm_type_impl<std::decay_t<T>>::value;
+
    template <typename Host_Type=standalone_function_t, typename Execution_Interface=execution_interface>
    struct running_context {
       using running_context_t = running_context<Execution_Interface>;
@@ -113,25 +180,32 @@ namespace psizam {
             return static_cast<T>(val.template get<f64_const_t>().data.f);
          else if constexpr (std::is_void_v<std::decay_t<std::remove_pointer_t<T>>>)
             return base_type::access(val.template get<i32_const_t>().data.ui);
+         else if constexpr (is_custom_wasm_type_v<T>) {
+            using traits = wasm_type_traits<std::decay_t<T>>;
+            using W = typename traits::wasm_type;
+            return traits::wrap(as_value<W>(val));
+         }
          else
             return no_match_t{};
       }
 
       template <typename T>
       inline constexpr auto as_result(T&& val) const {
-         if constexpr (std::is_integral_v<T> && sizeof(T) == 4)
+         if constexpr (std::is_integral_v<std::decay_t<T>> && sizeof(std::decay_t<T>) == 4)
             return i32_const_t{ static_cast<uint32_t>(val) };
-         else if constexpr (std::is_integral_v<T> && sizeof(T) == 8)
+         else if constexpr (std::is_integral_v<std::decay_t<T>> && sizeof(std::decay_t<T>) == 8)
             return i64_const_t{ static_cast<uint64_t>(val) };
-         else if constexpr (std::is_floating_point_v<T> && sizeof(T) == 4)
+         else if constexpr (std::is_floating_point_v<std::decay_t<T>> && sizeof(std::decay_t<T>) == 4)
             return f32_const_t{ static_cast<float>(val) };
-         else if constexpr (std::is_floating_point_v<T> && sizeof(T) == 8)
+         else if constexpr (std::is_floating_point_v<std::decay_t<T>> && sizeof(std::decay_t<T>) == 8)
             return f64_const_t{ static_cast<double>(val) };
-         else if constexpr (std::is_void_v<std::decay_t<std::remove_pointer_t<T>>>)
+         else if constexpr (std::is_void_v<std::decay_t<std::remove_pointer_t<std::decay_t<T>>>>)
             return i32_const_t{ static_cast<uint32_t>(reinterpret_cast<uintptr_t>(val) -
                                                       reinterpret_cast<uintptr_t>(this->access())) };
          else if constexpr (std::is_same_v<std::decay_t<T>, v128_t>)
             return v128_const_t{ val };
+         else if constexpr (is_custom_wasm_type_v<T>)
+            return as_result(wasm_type_traits<std::decay_t<T>>::unwrap(std::forward<T>(val)));
          else
             return no_match_t{};
       }
@@ -361,7 +435,7 @@ namespace psizam {
    namespace detail {
       // Classify parameter types for fast trampoline eligibility
 
-      // Simple scalar: i32/i64/f32/f64 — consumes 1 native_value
+      // Simple scalar: i32/i64/f32/f64 or any type with a wasm_type_traits specialization — consumes 1 native_value
       template<typename T, typename = void>
       inline constexpr bool is_simple_wasm_type_v = false;
       template<typename T>
@@ -369,9 +443,7 @@ namespace psizam {
          !std::is_void_v<std::decay_t<T>> &&
          !std::is_reference_v<T> &&
          !std::is_pointer_v<T> &&
-         ((std::is_integral_v<std::decay_t<T>> && (sizeof(std::decay_t<T>) <= 8)) ||
-          std::is_same_v<std::decay_t<T>, float> ||
-          std::is_same_v<std::decay_t<T>, double>)
+         wasm_type_traits<std::decay_t<T>>::is_wasm_type
       >> = true;
 
       template<typename T>
@@ -425,14 +497,16 @@ namespace psizam {
       template<typename T>
       inline std::decay_t<T> read_native_arg(const native_value& v) {
          using D = std::decay_t<T>;
-         if constexpr (std::is_same_v<D, float>)
-            return v.f32;
-         else if constexpr (std::is_same_v<D, double>)
-            return v.f64;
-         else if constexpr (std::is_integral_v<D> && sizeof(D) <= 4)
-            return static_cast<D>(v.i32);
+         using traits = wasm_type_traits<D>;
+         using W = typename traits::wasm_type;
+         if constexpr (std::is_same_v<W, float>)
+            return traits::wrap(v.f32);
+         else if constexpr (std::is_same_v<W, double>)
+            return traits::wrap(v.f64);
+         else if constexpr (sizeof(W) <= 4)
+            return traits::wrap(static_cast<W>(v.i32));
          else
-            return static_cast<D>(v.i64);
+            return traits::wrap(static_cast<W>(v.i64));
       }
 
       // Read a parameter from native_value array at given offset, with memory base for span/proxy types.
@@ -491,21 +565,25 @@ namespace psizam {
       // Write a return value into a native_value
       template<typename T>
       inline native_value write_native_result(T val) {
-         if constexpr (std::is_same_v<std::decay_t<T>, float>) {
+         using D = std::decay_t<T>;
+         using traits = wasm_type_traits<D>;
+         using W = typename traits::wasm_type;
+         auto raw = traits::unwrap(val);
+         if constexpr (std::is_same_v<W, float>) {
             native_value r{uint64_t{0}};
-            r.f32 = val;
+            r.f32 = raw;
             return r;
-         } else if constexpr (std::is_same_v<std::decay_t<T>, double>) {
+         } else if constexpr (std::is_same_v<W, double>) {
             native_value r{uint64_t{0}};
-            r.f64 = val;
+            r.f64 = raw;
             return r;
-         } else if constexpr (std::is_integral_v<std::decay_t<T>> && sizeof(std::decay_t<T>) <= 4) {
+         } else if constexpr (sizeof(W) <= 4) {
             native_value r{uint64_t{0}};
-            r.i32 = static_cast<uint32_t>(val);
+            r.i32 = static_cast<uint32_t>(raw);
             return r;
          } else {
             native_value r{uint64_t{0}};
-            r.i64 = static_cast<uint64_t>(val);
+            r.i64 = static_cast<uint64_t>(raw);
             return r;
          }
       }
