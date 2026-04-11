@@ -10,11 +10,8 @@
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
-#ifdef __aarch64__
-#include <psizam/jit_codegen_a64.hpp>
-#else
 #include <psizam/jit_codegen.hpp>
-#endif
+#include <psizam/jit_codegen_a64.hpp>
 #include <psizam/jit_ir.hpp>
 #include <psizam/jit_optimize.hpp>
 #include <psizam/jit_regalloc.hpp>
@@ -26,12 +23,18 @@
 
 namespace psizam {
 
-   class ir_writer {
-#ifdef __aarch64__
-      using codegen_t = jit_codegen_a64;
-#else
-      using codegen_t = jit_codegen;
-#endif
+   /// Result from compilation — captures relocations before codegen is destroyed.
+   /// For LLVM AOT, also captures the code blob and function offsets.
+   struct pzam_compile_result {
+      std::vector<code_relocation> relocs;
+      std::vector<uint8_t>         code_blob;          // filled by LLVM AOT path
+      std::vector<std::pair<uint32_t, uint32_t>> function_offsets; // (offset, size) per function
+      std::string                  target_triple;       // set by caller for LLVM AOT
+   };
+
+   template<typename CodeGen>
+   class ir_writer_impl {
+      using codegen_t = CodeGen;
     public:
       // Subclass access to IR data for alternative codegen pipelines (e.g., LLVM)
       ir_function* get_functions() const { return _functions; }
@@ -45,7 +48,7 @@ namespace psizam {
       using branch_t = uint32_t;
       using label_t  = uint32_t;
 
-      ir_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod,
+      ir_writer_impl(growable_allocator& alloc, std::size_t source_bytes, module& mod,
                 bool enable_backtrace = false, bool stack_limit_is_bytes = false)
          : _allocator(alloc), _source_bytes(source_bytes), _mod(mod),
            _scratch(alloc),
@@ -57,7 +60,7 @@ namespace psizam {
          }
       }
 
-      ~ir_writer() {
+      ~ir_writer_impl() {
          // If destructor runs during stack unwinding (parsing threw an exception),
          // skip compilation — some functions may not have been parsed.
          if (std::uncaught_exceptions() > 0) {
@@ -82,6 +85,11 @@ namespace psizam {
             codegen.compile_function(_functions[i], _mod.code[i]);
          }
          codegen.finalize_code();
+         // Capture relocations before codegen is destroyed
+         if (_compile_result) {
+            const auto& entries = codegen.relocations().entries();
+            _compile_result->relocs.assign(entries.begin(), entries.end());
+         }
          // Reset the parsing allocator — native code has been copied to the
          // JIT segment by end_code<true>(). This allows the module allocator
          // to be reused and satisfies the assert in backend::construct().
@@ -564,8 +572,8 @@ namespace psizam {
       }
 
       struct br_table_parser {
-         ir_writer* _writer;
-         br_table_parser(ir_writer* w) : _writer(w) {}
+         ir_writer_impl* _writer;
+         br_table_parser(ir_writer_impl* w) : _writer(w) {}
          branch_t emit_case(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
             // Emit merge movs if target has merge vregs
             if (label != UINT32_MAX) {
@@ -645,7 +653,7 @@ namespace psizam {
             // Emit arg instructions for each parameter (needed by register mode
             // to push vreg values to the native stack before the call)
             // Pop params in reverse to get them in correct stack order
-            uint32_t param_vregs[64]; // bounded by max params
+            uint32_t* param_vregs = _scratch.alloc<uint32_t>(nparams);
             for (uint32_t i = 0; i < nparams; ++i) {
                uint32_t pi = nparams - 1 - i;
                if (ft.param_types[pi] == types::v128) _func->vpop(); // extra v128 slot
@@ -807,7 +815,7 @@ namespace psizam {
             uint32_t elem_idx_vreg = _func->vpop();
             uint32_t nparams = ft.param_types.size();
             // Emit arg instructions for each parameter
-            uint32_t param_vregs[64];
+            uint32_t* param_vregs = _scratch.alloc<uint32_t>(nparams);
             for (uint32_t i = 0; i < nparams; ++i) {
                uint32_t pi = nparams - 1 - i;
                if (ft.param_types[pi] == types::v128) _func->vpop(); // extra v128 slot
@@ -2243,7 +2251,21 @@ namespace psizam {
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;
     protected:
+      pzam_compile_result* _compile_result = nullptr;
       bool _skip_codegen = false;           // Set by subclasses to bypass native codegen
+    public:
+      void set_compile_result(pzam_compile_result* r) { _compile_result = r; }
    };
+
+   // Architecture-specific aliases
+   using ir_writer_x64 = ir_writer_impl<jit_codegen>;
+   using ir_writer_a64 = ir_writer_impl<jit_codegen_a64>;
+
+   // Default alias for the native platform
+#ifdef __aarch64__
+   using ir_writer = ir_writer_a64;
+#elif defined(__x86_64__)
+   using ir_writer = ir_writer_x64;
+#endif
 
 } // namespace psizam

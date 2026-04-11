@@ -72,7 +72,7 @@ target_compile_options(psizam INTERFACE
    $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fbracket-depth=1024>
 )
 
-target_link_libraries(psizam INTERFACE Threads::Threads)
+target_link_libraries(psizam INTERFACE Threads::Threads psio)
 
 if(PSIZAM_ENABLE_SOFTFLOAT)
    target_compile_definitions(psizam INTERFACE PSIZAM_SOFTFLOAT)
@@ -90,11 +90,6 @@ add_library(psizam-runtime STATIC
 )
 target_link_libraries(psizam-runtime PUBLIC psizam)
 
-# ── Tools ──────────────────────────────────────────────────────────────────────
-if(PSIZAM_ENABLE_TOOLS)
-   add_subdirectory(tools)
-endif()
-
 # ── LLVM Backend (opt-in) ──────────────────────────────────────────────────────
 option(PSIZAM_ENABLE_LLVM "Build LLVM JIT backend" OFF)
 
@@ -105,6 +100,9 @@ if(PSIZAM_ENABLE_LLVM)
    llvm_map_components_to_libnames(LLVM_LIBS
       core support orcjit native
       passes instcombine scalaropts
+      x86codegen x86asmparser x86desc x86info
+      aarch64codegen aarch64asmparser aarch64desc aarch64info
+      object
    )
 
    add_library(psizam-llvm STATIC
@@ -112,6 +110,7 @@ if(PSIZAM_ENABLE_LLVM)
       src/llvm_jit_compiler.cpp
       src/llvm_compile.cpp
       src/llvm_runtime_helpers.cpp
+      src/llvm_aot_compiler.cpp
    )
    target_link_libraries(psizam-llvm PUBLIC psizam psizam-runtime ${LLVM_LIBS})
    target_include_directories(psizam-llvm PUBLIC ${LLVM_INCLUDE_DIRS})
@@ -121,6 +120,11 @@ if(PSIZAM_ENABLE_LLVM)
    if(NOT LLVM_ENABLE_RTTI)
       target_compile_options(psizam-llvm PRIVATE -fno-rtti)
    endif()
+endif()
+
+# ── Tools (after LLVM so pzam-compile can link psizam-llvm) ───────────────────
+if(PSIZAM_ENABLE_TOOLS)
+   add_subdirectory(tools)
 endif()
 
 # ── Benchmarks ─────────────────────────────────────────────────────────────────

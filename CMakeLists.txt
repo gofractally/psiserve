@@ -34,6 +34,7 @@ find_package(Threads REQUIRED)
 enable_testing()
 
 # ── Libraries ──────────────────────────────────────────────────────────────────
+add_subdirectory(libraries/psio)
 add_subdirectory(libraries/psizam)
 
 option(PSISERVE_ENABLE "Build psiserve library and CLI" OFF)

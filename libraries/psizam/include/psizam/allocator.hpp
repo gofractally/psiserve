@@ -16,8 +16,10 @@
 #include <utility>
 #include <vector>
 
+#ifndef PSIZAM_COMPILE_ONLY
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 
 namespace psizam {
    class bounded_allocator {
@@ -47,6 +49,16 @@ namespace psizam {
       size_t                     index = 0;
    };
 
+#ifdef PSIZAM_COMPILE_ONLY
+   // Compile-only stubs — types exist but don't allocate
+   class stack_allocator {
+    public:
+      explicit stack_allocator(std::size_t, std::size_t = 4*1024*1024) {}
+      void* top() const { return nullptr; }
+      void* guard_base() const { return nullptr; }
+      std::size_t guard_size() const { return 0; }
+   };
+#else
    // Conditionally allocates a new stack leaving enough room
    // for host function and signal handler execution.  If
    // the required stack size is small enough to fit in the
@@ -89,7 +101,38 @@ namespace psizam {
       std::size_t _size = 0;
       std::size_t _guard_size = 0;
    };
+#endif
 
+#ifdef PSIZAM_COMPILE_ONLY
+   class contiguous_allocator {
+      public:
+         template<std::size_t align_amt>
+         static constexpr size_t align_offset(size_t offset) { return (offset + align_amt - 1) & ~(align_amt - 1); }
+         contiguous_allocator(size_t size) : _size(size) {
+            _base = (char*)std::malloc(size);
+         }
+         ~contiguous_allocator() { std::free(_base); }
+         template <typename T>
+         T* alloc(size_t size = 0) {
+            _offset = align_offset<alignof(T)>(_offset);
+            size_t aligned = (sizeof(T) * size) + _offset;
+            if (aligned > _size) {
+               _base = (char*)std::realloc(_base, aligned);
+               _size = aligned;
+            }
+            T* ptr = (T*)(_base + _offset);
+            _offset = aligned;
+            return ptr;
+         }
+         template <typename T>
+         void reclaim(const T*, size_t = 0) {}
+         void free() {}
+      private:
+         size_t _offset = 0;
+         size_t _size   = 0;
+         char*  _base;
+   };
+#else
    class contiguous_allocator {
       public:
          template<std::size_t align_amt>
@@ -133,7 +176,9 @@ namespace psizam {
          size_t _size   = 0;
          char*  _base;
    };
+#endif
 
+#ifndef PSIZAM_COMPILE_ONLY
    class jit_allocator {
        static constexpr std::size_t segment_size = std::size_t{1024u} * 1024u * 1024u;
    public:
@@ -290,6 +335,7 @@ namespace psizam {
          return (offset + pagesize - 1) & ~(pagesize - 1);
       }
    };
+#endif // !PSIZAM_COMPILE_ONLY
 
    class growable_allocator {
     public:
@@ -298,8 +344,12 @@ namespace psizam {
       static constexpr size_t align_offset(size_t offset) { return (offset + align_amt - 1) & ~(align_amt - 1); }
 
       static std::size_t align_to_page(std::size_t offset) {
+#ifdef PSIZAM_COMPILE_ONLY
+         constexpr std::size_t pagesize = 4096;
+#else
          std::size_t pagesize = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
-         assert(max_memory_size % page_size == 0);
+#endif
+         assert(max_memory_size % pagesize == 0);
          return (offset + pagesize - 1) & ~(pagesize - 1);
       }
 
@@ -313,10 +363,13 @@ namespace psizam {
 
       void use_default_memory() {
          PSIZAM_ASSERT(_base == nullptr, wasm_bad_alloc, "default memory already allocated");
-
-         // uses mmap for big memory allocation
+#ifdef PSIZAM_COMPILE_ONLY
+         _base = (char*)std::malloc(max_memory_size);
+         PSIZAM_ASSERT(_base != nullptr, wasm_bad_alloc, "failed to allocate default memory.");
+#else
          _base = (char*)mmap(NULL, max_memory_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
          PSIZAM_ASSERT(_base != MAP_FAILED, wasm_bad_alloc, "failed to mmap for default memory.");
+#endif
          _capacity = max_memory_size;
       }
 
@@ -324,19 +377,29 @@ namespace psizam {
       void use_fixed_memory(size_t size) {
          PSIZAM_ASSERT(0 < size && size <= max_memory_size, wasm_bad_alloc, "Too large or 0 fixed memory size");
          PSIZAM_ASSERT(_base == nullptr, wasm_bad_alloc, "Fixed memory already allocated");
-
+#ifdef PSIZAM_COMPILE_ONLY
+         _base = (char*)std::malloc(size);
+         PSIZAM_ASSERT(_base != nullptr, wasm_bad_alloc, "malloc in use_fixed_memory failed.");
+#else
          _base = (char*)mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
          PSIZAM_ASSERT(_base != MAP_FAILED, wasm_bad_alloc, "mmap in use_fixed_memory failed.");
+#endif
          _capacity = size;
       }
 
       ~growable_allocator() {
          if (_base != nullptr) {
+#ifdef PSIZAM_COMPILE_ONLY
+            std::free(_base);
+#else
             munmap(_base, _capacity);
+#endif
          }
+#ifndef PSIZAM_COMPILE_ONLY
          if (_is_jit && _code_base) {
             jit_allocator::instance().free(_code_base);
          }
+#endif
       }
 
       // TODO use Outcome library
@@ -370,6 +433,7 @@ namespace psizam {
          _offset = align_to_page(_offset);
          _code_base = (char*)code_base;
          _code_size = _offset - ((char*)code_base - _base);
+#ifndef PSIZAM_COMPILE_ONLY
          if constexpr (IsJit) {
             auto & jit_alloc = jit_allocator::instance();
             void * executable_code = jit_alloc.alloc(_code_size);
@@ -381,16 +445,21 @@ namespace psizam {
             _is_jit = true;
             _offset = (char*)code_base - _base;
          }
+#endif
       }
 
       // Sets protection on code pages to allow them to be executed.
-      void enable_code(bool is_jit) {
+      void enable_code([[maybe_unused]] bool is_jit) {
+#ifndef PSIZAM_COMPILE_ONLY
          mprotect(_code_base, _code_size, is_jit?PROT_EXEC:(PROT_READ|PROT_WRITE));
+#endif
       }
       // Make code pages unexecutable so deadline timer can kill an
       // execution (in both JIT and Interpreter)
       void disable_code() {
+#ifndef PSIZAM_COMPILE_ONLY
          mprotect(_code_base, _code_size, PROT_NONE);
+#endif
       }
 
       const void* get_code_start() const { return _code_base; }
@@ -416,6 +485,10 @@ namespace psizam {
        * Finalize the memory by unmapping any excess pages, this means that the allocator will no longer grow
        */
       void finalize() {
+#ifdef PSIZAM_COMPILE_ONLY
+         // In compile-only mode, just update the offset — no munmap
+         _offset = align_to_page(_offset);
+#else
          if(_capacity != _offset) {
             std::size_t final_size = align_to_page(_offset);
             if (final_size < _capacity) { // final_size can grow to _capacity after align_to_page.
@@ -429,6 +502,7 @@ namespace psizam {
                }
             }
          }
+#endif
       }
 
       void free() { PSIZAM_ASSERT(false, wasm_bad_alloc, "unimplemented"); }
@@ -436,7 +510,11 @@ namespace psizam {
       void release_base_memory()
       {
          if (_base != nullptr) {
+#ifdef PSIZAM_COMPILE_ONLY
+            std::free(_base);
+#else
             PSIZAM_ASSERT(munmap(_base, _capacity) == 0, wasm_bad_alloc, "failed to release base memory");
+#endif
             _base = nullptr;
          }
       }
@@ -452,6 +530,40 @@ namespace psizam {
       bool     _is_jit                = false;
    };
 
+#ifdef PSIZAM_COMPILE_ONLY
+   // Compile-only stubs for runtime-only types
+   template <typename T>
+   class fixed_stack_allocator {
+    public:
+      fixed_stack_allocator(size_t) {}
+      template <typename U>
+      void free() {}
+      inline T* get_base_ptr() const { return nullptr; }
+   };
+
+   class wasm_allocator {
+    public:
+      static constexpr std::size_t page_size_val = 4096;
+      static std::int32_t table_offset() { return -static_cast<std::int32_t>(2 * page_size_val); }
+      static std::size_t table_size() { return page_size_val; }
+      static std::int32_t globals_end() { return -static_cast<std::int32_t>(page_size_val); }
+      template <typename T>
+      void alloc(size_t = 1) {}
+      template <typename T>
+      void free(std::size_t = 0) {}
+      void free() {}
+      wasm_allocator() {}
+      void reset(uint32_t) {}
+      void reset() {}
+      template <typename T>
+      inline T* get_base_ptr() const { return nullptr; }
+      template <typename T>
+      inline T* create_pointer(uint32_t) { return nullptr; }
+      inline int32_t get_current_page() const { return 0; }
+      bool is_in_region(char*) { return false; }
+      inline void set_wasm_allocator(wasm_allocator*) {}
+   };
+#else
    template <typename T>
    class fixed_stack_allocator {
     private:
@@ -472,6 +584,7 @@ namespace psizam {
    };
 
    class wasm_allocator {
+
     private:
       char*   raw       = nullptr;
       int32_t page      = 0;
@@ -574,4 +687,5 @@ namespace psizam {
          return {(std::byte*)raw - syspagesize, max_memory + 2*syspagesize};
       }
    };
+#endif // !PSIZAM_COMPILE_ONLY
 } // namespace psizam

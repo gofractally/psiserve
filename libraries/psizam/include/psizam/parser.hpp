@@ -18,6 +18,8 @@
 #include <variant>
 #include <vector>
 
+namespace psizam { struct pzam_compile_result; }
+
 namespace psizam {
 
    namespace detail {
@@ -244,6 +246,8 @@ namespace psizam {
                             bool enable_backtrace = false, bool stack_limit_is_bytes = false)
          : _allocator(alloc), _options(options),
            _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {}
+
+      void set_compile_result(pzam_compile_result* r) { _compile_result = r; }
 
       template <typename T>
       using vec = guarded_vector<T>;
@@ -2686,6 +2690,9 @@ namespace psizam {
       void write_code_out(growable_allocator& allocator, wasm_code_ptr& code, const void* code_start) {
          Writer code_writer(allocator, code.bounds() - code.offset(), *_mod,
                             _enable_backtrace, _stack_limit_is_bytes);
+         if constexpr (requires { code_writer.set_compile_result(_compile_result); }) {
+            code_writer.set_compile_result(_compile_result);
+         }
          imap.on_code_start(code_writer.get_base_addr(), code_start);
          for (size_t i = 0; i < _function_bodies.size(); i++) {
             function_body& fb = _mod->code[i];
@@ -2768,6 +2775,7 @@ namespace psizam {
       Options             _options;
       bool                _enable_backtrace;
       bool                _stack_limit_is_bytes;
+      pzam_compile_result* _compile_result = nullptr;
       module*             _mod; // non-owning weak pointer
       int64_t             _current_function_index = -1;
       uint64_t            _maximum_function_stack_usage = 0; // non-parameter locals + stack

@@ -81,26 +81,67 @@ namespace psizam {
       libc_memset,
       libc_memmove,
 
+      // LLVM runtime helpers (extern "C" __psizam_* functions)
+      llvm_global_get,
+      llvm_global_set,
+      llvm_global_get_v128,
+      llvm_global_set_v128,
+      llvm_memory_size,
+      llvm_memory_grow,
+      llvm_call_host,
+      llvm_memory_init,
+      llvm_data_drop,
+      llvm_memory_copy,
+      llvm_memory_fill,
+      llvm_table_init,
+      llvm_elem_drop,
+      llvm_table_copy,
+      llvm_call_indirect,
+      llvm_table_get,
+      llvm_table_set,
+      llvm_table_grow,
+      llvm_table_size,
+      llvm_table_fill,
+      llvm_resolve_indirect,
+      llvm_atomic_rmw,
+      llvm_call_depth_dec,
+      llvm_call_depth_inc,
+      llvm_trap,
+
       // Generic/unknown (for addresses not yet categorized)
       unknown,
 
       NUM_SYMBOLS
    };
 
+   /// Relocation types — how the address should be patched into code.
+   enum class reloc_type : uint8_t {
+      abs64 = 0,                    // 8-byte absolute address (native JIT, x86_64 LLVM large model)
+      x86_64_pc32 = 1,             // 4-byte PC-relative (x86_64 call rel32)
+      aarch64_call26 = 2,          // 26-bit PC-relative branch (aarch64 BL)
+      aarch64_movw_uabs_g0_nc = 3, // MOVZ/MOVK lower 16 bits (bits 0-15)
+      aarch64_movw_uabs_g1_nc = 4, // MOVK bits 16-31
+      aarch64_movw_uabs_g2_nc = 5, // MOVK bits 32-47
+      aarch64_movw_uabs_g3 = 6,    // MOVK bits 48-63
+   };
+
    /// A single relocation entry: records where an absolute address was embedded.
    struct code_relocation {
       uint32_t     code_offset;  // byte offset within the code blob
       reloc_symbol symbol;       // which function/data this points to
-      uint16_t     reserved = 0; // padding for alignment
+      reloc_type   type = reloc_type::abs64;
+      uint8_t      reserved = 0;
+      int32_t      addend = 0;   // relocation addend (for PC-relative)
    };
-   static_assert(sizeof(code_relocation) == 8);
+   static_assert(sizeof(code_relocation) == 12);
 
    /// Relocation recorder — attached to code generators during compilation.
    /// Records each absolute address embedding for later .pzam serialization.
    class relocation_recorder {
    public:
-      void record(uint32_t code_offset, reloc_symbol sym) {
-         _relocs.push_back({code_offset, sym, 0});
+      void record(uint32_t code_offset, reloc_symbol sym,
+                  reloc_type type = reloc_type::abs64, int32_t addend = 0) {
+         _relocs.push_back({code_offset, sym, type, 0, addend});
       }
 
       const std::vector<code_relocation>& entries() const { return _relocs; }
@@ -119,8 +160,49 @@ namespace psizam {
                                   uint32_t num_relocs,
                                   void* const* symbol_table) {
       for (uint32_t i = 0; i < num_relocs; i++) {
-         void* addr = symbol_table[static_cast<uint32_t>(relocs[i].symbol)];
-         std::memcpy(code_base + relocs[i].code_offset, &addr, sizeof(void*));
+         const auto& r = relocs[i];
+         void* addr = symbol_table[static_cast<uint32_t>(r.symbol)];
+         uint64_t target = reinterpret_cast<uint64_t>(addr);
+         char* patch_site = code_base + r.code_offset;
+
+         switch (r.type) {
+            case reloc_type::abs64:
+               std::memcpy(patch_site, &target, 8);
+               break;
+
+            case reloc_type::x86_64_pc32: {
+               // PC-relative 32-bit: value = target - (patch_site + 4) + addend
+               int64_t pc = reinterpret_cast<int64_t>(patch_site);
+               int32_t val = static_cast<int32_t>(static_cast<int64_t>(target) - pc - 4 + r.addend);
+               std::memcpy(patch_site, &val, 4);
+               break;
+            }
+
+            case reloc_type::aarch64_call26: {
+               // 26-bit PC-relative branch offset (BL/B instruction)
+               int64_t pc = reinterpret_cast<int64_t>(patch_site);
+               int64_t offset = (static_cast<int64_t>(target) - pc + r.addend) >> 2;
+               uint32_t insn;
+               std::memcpy(&insn, patch_site, 4);
+               insn = (insn & 0xFC000000u) | (static_cast<uint32_t>(offset) & 0x03FFFFFFu);
+               std::memcpy(patch_site, &insn, 4);
+               break;
+            }
+
+            case reloc_type::aarch64_movw_uabs_g0_nc:
+            case reloc_type::aarch64_movw_uabs_g1_nc:
+            case reloc_type::aarch64_movw_uabs_g2_nc:
+            case reloc_type::aarch64_movw_uabs_g3: {
+               // Patch 16-bit immediate in MOVZ/MOVK instruction (bits 5-20)
+               int shift = (static_cast<int>(r.type) - static_cast<int>(reloc_type::aarch64_movw_uabs_g0_nc)) * 16;
+               uint16_t imm16 = static_cast<uint16_t>((target >> shift) & 0xFFFF);
+               uint32_t insn;
+               std::memcpy(&insn, patch_site, 4);
+               insn = (insn & ~(0xFFFFu << 5)) | (static_cast<uint32_t>(imm16) << 5);
+               std::memcpy(patch_site, &insn, 4);
+               break;
+            }
+         }
       }
    }
 

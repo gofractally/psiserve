@@ -9,6 +9,37 @@
 #include <cstdlib>
 #include <exception>
 #include <utility>
+
+#ifdef PSIZAM_COMPILE_ONLY
+
+// Compile-only mode: these functions provide addresses for relocations but abort if called.
+// No signal handling, no thread-locals, no setjmp/longjmp.
+namespace psizam {
+   template<typename E>
+   [[noreturn]] inline void signal_throw(const char* msg) {
+      std::abort();
+   }
+
+   inline std::span<std::byte> stack_guard_range;
+
+   template<typename F>
+   inline void longjmp_on_exception(F&& f) {
+      f();
+   }
+
+   template<typename F, typename E>
+   auto invoke_with_signal_handler(F&& f, E&&, growable_allocator&, wasm_allocator*) {
+      return f();
+   }
+
+   template<typename F>
+   auto invoke_with_signal_handler(F&& f) {
+      return f();
+   }
+} // namespace psizam
+
+#else // !PSIZAM_COMPILE_ONLY
+
 #include <signal.h>
 #include <setjmp.h>
 
@@ -250,3 +281,5 @@ namespace psizam {
    }
 
 } // namespace psizam
+
+#endif // PSIZAM_COMPILE_ONLY

@@ -25,6 +25,7 @@
 #include <system_error>
 #include <utility>
 
+#ifndef PSIZAM_COMPILE_ONLY
 // OSX requires _XOPEN_SOURCE to #include <ucontext.h>
 #ifdef __APPLE__
 #ifndef _XOPEN_SOURCE
@@ -32,6 +33,7 @@
 #endif
 #endif
 #include <ucontext.h>
+#endif
 
 namespace psizam {
 

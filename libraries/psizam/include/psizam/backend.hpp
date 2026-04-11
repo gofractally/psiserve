@@ -130,14 +130,9 @@
 #include <psizam/parser.hpp>
 #include <psizam/types.hpp>
 
-#ifdef __x86_64__
 #include <psizam/x86_64.hpp>
-#elif defined(__aarch64__)
 #include <psizam/aarch64.hpp>
-#endif
-#if defined(__x86_64__) || defined(__aarch64__)
 #include <psizam/ir_writer.hpp>
-#endif
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
 #include <psizam/ir_writer_llvm.hpp>
 #endif

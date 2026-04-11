@@ -1,7 +1,5 @@
 #pragma once
 
-#ifdef __aarch64__
-
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
 #include <psizam/execution_context.hpp>
@@ -50,7 +48,7 @@ namespace psizam {
    //
    // All ARM64 instructions are 32-bit wide.
 
-   class machine_code_writer {
+   class machine_code_writer_a64 {
     public:
       using branch_t = void*;
       using label_t = void*;
@@ -110,7 +108,7 @@ namespace psizam {
 
       static constexpr uint32_t invert_condition(uint32_t cond) { return cond ^ 1; }
 
-      machine_code_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod,
+      machine_code_writer_a64(growable_allocator& alloc, std::size_t source_bytes, module& mod,
                           bool enable_backtrace = false, bool stack_limit_is_bytes = false) :
          _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()),
          _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
@@ -159,7 +157,7 @@ namespace psizam {
          }
       }
 
-      ~machine_code_writer() {
+      ~machine_code_writer_a64() {
          _allocator.end_code<true>(_code_segment_base);
          auto num_functions = _mod.get_functions_total();
          if (num_functions <= _function_relocations.size()) {
@@ -604,7 +602,7 @@ namespace psizam {
             assert(stack.empty());
             return result;
          }
-         machine_code_writer * _this;
+         machine_code_writer_a64 * _this;
          int _i = 0;
          struct stack_item {
             uint32_t min;
@@ -5210,6 +5208,9 @@ namespace psizam {
       }
    };
 
-}
+   // Backward-compatible alias: on aarch64, machine_code_writer = machine_code_writer_a64
+#ifdef __aarch64__
+   using machine_code_writer = machine_code_writer_a64;
+#endif
 
-#endif // __aarch64__
+}

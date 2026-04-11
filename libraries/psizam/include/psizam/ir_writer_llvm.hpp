@@ -26,12 +26,10 @@ namespace psizam {
 
    class ir_writer_llvm : public ir_writer {
     public:
-      using ir_writer::ir_writer;  // Inherit constructors
-
       ir_writer_llvm(growable_allocator& alloc, std::size_t source_bytes, module& mod,
                      bool enable_backtrace = false, bool stack_limit_is_bytes = false,
                      bool deterministic = true)
-         : ir_writer(alloc, source_bytes, mod, enable_backtrace, stack_limit_is_bytes),
+         : ir_writer_impl(alloc, source_bytes, mod, enable_backtrace, stack_limit_is_bytes),
            _deterministic(deterministic)
       {
          _skip_codegen = true;

@@ -408,7 +408,12 @@ namespace psizam {
       }
 
       static bool indirect_table_impl(auto& mod, std::size_t i) {
+#ifdef PSIZAM_COMPILE_ONLY
+         // In compile-only mode, table allocation layout doesn't matter
+         return false;
+#else
          return i < mod.tables.size() && (mod.tables[i].limits.initial * sizeof(table_entry) > (wasm_allocator::table_size()) - sizeof(void*));
+#endif
       }
    };
 } // namespace psizam

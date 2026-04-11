@@ -1,7 +1,5 @@
 #pragma once
 
-#ifdef __aarch64__
-
 // Pass 2 of the two-pass optimizing JIT (jit2) — AArch64 backend.
 // Converts IR instructions to ARM64 machine code.
 //
@@ -3529,8 +3527,12 @@ namespace psizam {
       block_fixup* _fixup_pool = nullptr;
       uint32_t _fixup_pool_next = 0;
       uint32_t _fixup_pool_size = 0;
+
+      // Stub — a64 codegen does not yet track absolute address relocations for .pzam.
+      // TODO: Add emit_reloc() calls throughout the a64 codegen to enable cross-compilation output.
+      relocation_recorder _reloc_recorder_stub;
+    public:
+      const relocation_recorder& relocations() const { return _reloc_recorder_stub; }
    };
 
 } // namespace psizam
-
-#endif // __aarch64__

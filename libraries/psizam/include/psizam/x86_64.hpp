@@ -15,7 +15,9 @@
 #include <cstring>
 #include <variant>
 #include <vector>
+#ifdef __x86_64__
 #include <cpuid.h>
+#endif
 
 
 namespace psizam {
@@ -1516,9 +1518,13 @@ namespace psizam {
       // --------------- i32 unops ----------------------
 
       bool has_tzcnt_impl() {
+#ifdef __x86_64__
          unsigned a, b, c, d;
          return __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b & bit_BMI) &&
                 __get_cpuid(0x80000001, &a, &b, &c, &d) && (c & bit_LZCNT);
+#else
+         return false; // conservative fallback: use BSF/BSR path
+#endif
       }
 
       bool has_tzcnt() {
@@ -7018,6 +7024,9 @@ namespace psizam {
       static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
       static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>( "stack overflow" ); }
    };
-   using machine_code_writer = machine_code_writer_t<>;
+   using machine_code_writer_x64 = machine_code_writer_t<>;
+#ifdef __x86_64__
+   using machine_code_writer = machine_code_writer_x64;
+#endif
 
 }
