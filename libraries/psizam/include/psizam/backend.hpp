@@ -32,7 +32,7 @@
 //   data.drop                    🟢     🟢       🟢        🟢      🟢
 //
 // SIMD (v128)
-//   full v128 ops                🟢     🟢       🟢        🟡      🟢
+//   full v128 ops                🟢     🟢       🟢        🟢      🟢
 //
 // REFERENCE TYPES
 //   ref.null / ref.is_null       🟢     🟢       🟢        🟢      🟢
@@ -73,10 +73,9 @@
 //   OOB traps                   🟢     🟢       🟢        🟢      🟢
 //
 // KNOWN BUGS 🐛
-//   [B1] SIMD float ops incomplete on aarch64 softfloat (~60 spec failures)
-//   [B2] LLVM: imported globals/tables not wired up (~22 spec failures, elem_*/global_14)
-//   [B3] LLVM: call depth + stack byte limits not enforced (4 unit test failures)
-//   [B4] JIT2(x86) call_0_wasm SIGABRT (pre-existing)
+//   [B1] Parser rejects table/memory/global imports (~22 failures across all backends)
+//   [B2] LLVM: deep recursion uses C stack, 1M-depth dynamic test segfaults
+//   [B3] JIT2(x86) call_0_wasm SIGABRT (pre-existing, untested on this machine)
 //
 // Last updated: 2026-04-10
 //
