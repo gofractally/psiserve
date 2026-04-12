@@ -73,22 +73,14 @@ namespace psiber
 
       while (true)
       {
-         // Drain cross-thread sources
+         // ── Always drain cross-thread wakes/tasks/work (cheap: atomic exchange) ──
          drainWakeList();
          drainTaskList();
+         drainWorkList();
 
-         // Poll I/O and move blocked/sleeping fibers to ready queue
-         pollAndUnblock(/*blocking=*/false);
-
-         // Drain again: wakes/tasks that arrived between the first drain
-         // and the poll may have triggered EVFILT_USER which was consumed
-         // by the non-blocking poll above.  Without this second drain, the
-         // subsequent blocking poll would never see the event.
-         drainWakeList();
-         drainTaskList();
-
-         // Pick next fiber: LIFO slot first, then priority queues
+         // ── Pick next fiber: LIFO slot first, then priority queues ──
          Fiber* fiber = nullptr;
+
          if (_lifo_slot && _lifo_consecutive < lifo_cap)
          {
             fiber       = _lifo_slot;
@@ -100,11 +92,33 @@ namespace psiber
             _lifo_consecutive = 0;
             if (_lifo_slot)
             {
-               // Spill LIFO slot back to the ready queue
                addToReadyQueue(_lifo_slot);
                _lifo_slot = nullptr;
             }
             fiber = popFromReadyQueues();
+         }
+
+         if (!fiber)
+         {
+            // ── Slow path: nothing ready — poll for I/O + timers ──
+            pollAndUnblock(/*blocking=*/false);
+
+            // Drain again: wakes/tasks that arrived during the poll
+            drainWakeList();
+            drainTaskList();
+            drainWorkList();
+
+            // Re-check queues after poll+drain
+            if (_lifo_slot)
+            {
+               fiber       = _lifo_slot;
+               _lifo_slot  = nullptr;
+               _lifo_consecutive = 1;
+            }
+            else
+            {
+               fiber = popFromReadyQueues();
+            }
          }
 
          if (fiber)
@@ -112,7 +126,6 @@ namespace psiber
             _current     = fiber;
             fiber->state = FiberState::Running;
 
-            // Switch to the fiber (suspends the scheduler)
             fiber->cont = fiber->cont.resume();
 
             _current = nullptr;
@@ -148,7 +161,43 @@ namespace psiber
                continue;
             }
 
-            // All living fibers are blocked -- wait for I/O or cross-thread wake
+            // ── Adaptive spin-before-block ──
+            // Spin budget grows when work arrives during the spin window
+            // (cross-thread traffic is active), shrinks when spin expires
+            // with nothing found (thread is idle → go straight to kevent).
+            if (_spin_budget > 0)
+            {
+               bool found = false;
+               for (int spin = 0; spin < _spin_budget; ++spin)
+               {
+                  if (_wake_head.load(std::memory_order_acquire) ||
+                      _task_head.load(std::memory_order_acquire) ||
+                      _work_head.load(std::memory_order_acquire))
+                  {
+                     found = true;
+                     break;
+                  }
+#if defined(__x86_64__)
+                  __builtin_ia32_pause();
+#elif defined(__aarch64__)
+                  asm volatile("yield" ::: "memory");
+#endif
+               }
+
+               if (found)
+               {
+                  // Work arrived during spin — increase budget (up to max)
+                  _spin_budget = std::min(_spin_budget * 2, max_spin);
+                  continue;  // loop back to drain + pick
+               }
+
+               // Spin expired with no work — halve budget
+               _spin_budget /= 2;
+            }
+
+            // All living fibers are blocked -- wait for I/O or cross-thread wake.
+            // _run_state is already 0 (scheduling), so senders will trigger
+            // EVFILT_USER to wake us from the blocking kevent.
             pollAndUnblock(/*blocking=*/true);
          }
 
@@ -211,14 +260,12 @@ namespace psiber
       _current->state          = FiberState::Blocked;
       _current->blocked_fd     = RealFd{signo};
       _current->blocked_events = Signal;
-      // Signal is already registered via registerSignal() — no addFd needed
 
       auto& sched = *_current->sched_cont;
       sched       = sched.resume();
 
       if (_interrupted)
          throw shutdown_exception{};
-      // Don't remove signal registration — stays registered for reuse
    }
 
    void Scheduler::yieldCurrentFiber()
@@ -235,6 +282,13 @@ namespace psiber
          throw shutdown_exception{};
    }
 
+   // ── Cross-thread notify (only triggers kevent when receiver is blocked) ──
+
+   void Scheduler::notifyIfPolling()
+   {
+      _io->triggerUserEvent(_index);
+   }
+
    void Scheduler::wake(Fiber* fiber)
    {
       assert(fiber && fiber->home_sched);
@@ -248,8 +302,27 @@ namespace psiber
       } while (!target->_wake_head.compare_exchange_weak(
          old_head, fiber, std::memory_order_release, std::memory_order_relaxed));
 
-      // Poke the target scheduler's event loop
-      target->_io->triggerUserEvent(target->_index);
+      // Same-thread wake: the drain at the top of the run loop will
+      // pick this up — no kevent trigger needed.
+      // Cross-thread wake: must trigger EVFILT_USER to wake the target
+      // from a potential blocking kevent.
+      if (target != t_current)
+         target->notifyIfPolling();
+   }
+
+   void Scheduler::post(std::function<void()> fn)
+   {
+      auto* item = new WorkItem{nullptr, std::move(fn)};
+
+      // CAS-push onto the work list
+      WorkItem* old_head = _work_head.load(std::memory_order_relaxed);
+      do
+      {
+         item->next = old_head;
+      } while (!_work_head.compare_exchange_weak(
+         old_head, item, std::memory_order_release, std::memory_order_relaxed));
+
+      notifyIfPolling();
    }
 
    void Scheduler::postTask(TaskSlotHeader* slot)
@@ -262,16 +335,19 @@ namespace psiber
       } while (!_task_head.compare_exchange_weak(
          old_head, slot, std::memory_order_release, std::memory_order_relaxed));
 
-      // Poke the event loop
-      _io->triggerUserEvent(_index);
+      notifyIfPolling();
    }
+
+   // ── Drain helpers ────────────────────────────────────────────────────────
 
    void Scheduler::drainWakeList()
    {
-      // Atomic exchange to drain the entire batch in one op
       Fiber* batch = _wake_head.exchange(nullptr, std::memory_order_acquire);
       if (!batch)
          return;
+
+      // Cross-thread work arrived — boost spin budget for next idle
+      _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
 
       // Reverse the list to restore FIFO order (MPSC stack is LIFO)
       Fiber* reversed = nullptr;
@@ -284,8 +360,7 @@ namespace psiber
       }
 
       // Single-fiber wake: promote to LIFO slot for request-response
-      // cache locality (Tokio pattern).  Multi-fiber batch: FIFO into
-      // the priority-aware ready queue so we don't break ordering.
+      // cache locality (Tokio pattern).
       if (!reversed->next_wake && !_lifo_slot)
       {
          reversed->next_wake  = nullptr;
@@ -313,6 +388,8 @@ namespace psiber
       if (!batch)
          return;
 
+      _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
+
       // Reverse for FIFO order
       TaskSlotHeader* reversed = nullptr;
       while (batch)
@@ -332,8 +409,35 @@ namespace psiber
             void* payload = reversed + 1;
             reversed->run(payload);
          }
-         // Mark consumed so the sender can reclaim the ring buffer slot
          reversed->consumed.store(true, std::memory_order_release);
+         reversed = next;
+      }
+   }
+
+   void Scheduler::drainWorkList()
+   {
+      WorkItem* batch = _work_head.exchange(nullptr, std::memory_order_acquire);
+      if (!batch)
+         return;
+
+      _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
+
+      // Reverse for FIFO order
+      WorkItem* reversed = nullptr;
+      while (batch)
+      {
+         WorkItem* next = batch->next;
+         batch->next    = reversed;
+         reversed       = batch;
+         batch          = next;
+      }
+
+      // Execute and delete each work item
+      while (reversed)
+      {
+         WorkItem* next = reversed->next;
+         reversed->fn();
+         delete reversed;
          reversed = next;
       }
    }
@@ -395,7 +499,7 @@ namespace psiber
       for (int i = 0; i < n; ++i)
       {
          if (events[i].events & UserWake)
-            continue;  // user event -- already processed via drainWakeList/drainTaskList
+            continue;  // user event -- processed via drain
 
          for (auto& fiber : _fibers)
          {
@@ -416,7 +520,6 @@ namespace psiber
 
    Fiber* Scheduler::popFromReadyQueues()
    {
-      // High (0) → Normal (1) → Low (2)
       for (auto& q : _ready_queues)
       {
          if (!q.empty())
@@ -462,7 +565,6 @@ namespace psiber
          }
          else
          {
-            // No scheduler -- fall back to pure spin
 #if defined(__x86_64__)
             __builtin_ia32_pause();
 #elif defined(__aarch64__)

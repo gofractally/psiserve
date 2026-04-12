@@ -6,6 +6,7 @@ add_library(psiber
    src/send_queue.cpp
    src/fiber_mutex.cpp
    src/tcp_socket.cpp
+   src/thread.cpp
 )
 
 target_include_directories(psiber PUBLIC

@@ -20,10 +20,12 @@ namespace psiber
    /// and resumes the next ready fiber.
    ///
    /// Cross-thread communication is lock-free:
-   /// - wake(): CAS-push fiber onto atomic wake list + EVFILT_USER poke
-   /// - postTask(): CAS-push task slot onto atomic task list + poke
+   /// - wake(): CAS-push fiber onto atomic wake list
+   /// - post():  CAS-push callable onto atomic work list
+   /// - postTask(): CAS-push task slot onto atomic task list
    ///
-   /// Any thread can call wake() and postTask() safely.
+   /// kevent trigger is only sent when the receiver is blocked in poll,
+   /// not when it's spinning or running fibers.
    class Scheduler
    {
      public:
@@ -74,8 +76,11 @@ namespace psiber
       // ── Cross-thread operations (thread-safe) ───────────────────────
 
       /// Wake a parked fiber.  Thread-safe — any thread can call this.
-      /// Uses MPSC intrusive linked list + EVFILT_USER/eventfd poke.
       static void wake(Fiber* fiber);
+
+      /// Post a heap-allocated callable to this scheduler.
+      /// Thread-safe.  The scheduler runs it and deletes it.
+      void post(std::function<void()> fn);
 
       /// Post a task slot to this scheduler's intake queue.
       /// Thread-safe.  The slot must have been allocated from a SendQueue.
@@ -88,8 +93,10 @@ namespace psiber
       uint32_t  index() const { return _index; }
 
      private:
+      void notifyIfPolling();
       void drainWakeList();
       void drainTaskList();
+      void drainWorkList();
       void pollAndUnblock(bool blocking);
       Fiber* popFromReadyQueues();
       void addToReadyQueue(Fiber* fiber);
@@ -97,13 +104,30 @@ namespace psiber
       // ── LIFO slot (Tokio pattern) ───────────────────────────────────
       Fiber*   _lifo_slot        = nullptr;
       uint32_t _lifo_consecutive = 0;
-      static constexpr uint32_t lifo_cap = 3;
+      static constexpr uint32_t lifo_cap          = 3;
+      static constexpr int      max_spin          = 4096;  // upper bound on spin iterations
+
+      // ── Adaptive spin budget ───────────────────────────────────────
+      // Grows on successful spin (work arrived during spin window),
+      // shrinks on timeout (spin expired with no work).  Idle threads
+      // converge to 0 (straight to kevent), busy threads stay at max_spin.
+      int _spin_budget = 0;
+
+      // (padding kept for cache-line alignment of wake_head below)
 
       // ── Cross-thread wake list (MPSC, cache-line padded) ────────────
       alignas(cache_line_size) std::atomic<Fiber*> _wake_head{nullptr};
 
       // ── Cross-thread task intake (MPSC, cache-line padded) ──────────
       alignas(cache_line_size) std::atomic<TaskSlotHeader*> _task_head{nullptr};
+
+      // ── Cross-thread callable work list (MPSC) ──────────────────────
+      struct WorkItem
+      {
+         WorkItem*              next = nullptr;
+         std::function<void()>  fn;
+      };
+      alignas(cache_line_size) std::atomic<WorkItem*> _work_head{nullptr};
 
       // ── Priority ready queues (3 levels, FIFO within each) ──────────
       std::deque<Fiber*> _ready_queues[3];

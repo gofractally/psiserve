@@ -1,9 +1,13 @@
 #include <psiber/scheduler.hpp>
 #include <psiber/io_engine_kqueue.hpp>
+#include <psiber/thread.hpp>
 #include <psiber/tcp_socket.hpp>
 #include <psiber/fiber_mutex.hpp>
 #include <psiber/fiber_promise.hpp>
 #include <psiber/spin_lock.hpp>
+
+#include <boost/context/continuation.hpp>
+#include <boost/context/protected_fixedsize_stack.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -11,6 +15,8 @@
 #include <cstring>
 #include <thread>
 #include <vector>
+
+namespace ctx = boost::context;
 
 using namespace psiber;
 using Clock = std::chrono::steady_clock;
@@ -32,6 +38,37 @@ static void report(const char* name, int ops, double us)
 }
 
 // ── Benchmarks ───────────────────────────────────────────────────────────────
+
+static void bench_raw_context_switch()
+{
+   constexpr int N = 1'000'000;
+
+   // Two continuations ping-ponging — no scheduler, no kqueue, no queues.
+   // This measures pure Boost.Context assembly cost.
+   int count = 0;
+
+   ctx::continuation fiber = ctx::callcc(
+       std::allocator_arg,
+       ctx::protected_fixedsize_stack(64 * 1024),
+       [&](ctx::continuation&& main) {
+          for (int i = 0; i < N; ++i)
+          {
+             ++count;
+             main = main.resume();
+          }
+          return std::move(main);
+       });
+
+   auto start = Clock::now();
+   for (int i = 0; i < N; ++i)
+   {
+      ++count;
+      fiber = fiber.resume();
+   }
+   auto end = Clock::now();
+
+   report("raw boost.context switch", count, elapsed_us(start, end));
+}
 
 static void bench_fiber_create_destroy()
 {
@@ -120,6 +157,95 @@ static void bench_cross_thread_wake()
    sender.join();
 
    report("cross-thread wake (park+wake)", wakes, elapsed_us(start, end));
+}
+
+static void bench_cross_thread_pingpong()
+{
+   constexpr int N = 10'000;
+
+   // Two schedulers on separate threads, ping-ponging wake signals.
+   // Measures true round-trip cross-thread call latency.
+   auto io_a = std::make_unique<KqueueEngine>();
+   auto io_b = std::make_unique<KqueueEngine>();
+   Scheduler sched_a(std::move(io_a), 2000);
+   Scheduler sched_b(std::move(io_b), 2001);
+
+   Fiber*           fiber_a = nullptr;
+   Fiber*           fiber_b = nullptr;
+   std::atomic<int> ready{0};
+   int              round_trips = 0;
+
+   // Fiber on scheduler A: parks, gets woken by B, wakes B back
+   sched_a.spawnFiber([&]() {
+      fiber_a = sched_a.currentFiber();
+      ready.fetch_add(1, std::memory_order_release);
+
+      // Wait for fiber_b to be set
+      while (!fiber_b)
+         sched_a.yieldCurrentFiber();
+
+      for (int i = 0; i < N; ++i)
+      {
+         sched_a.parkCurrentFiber();
+         // Woken by B — wake B back
+         Scheduler::wake(fiber_b);
+         ++round_trips;
+      }
+   });
+
+   // Fiber on scheduler B: initiates the ping, parks, gets woken by A
+   sched_b.spawnFiber([&]() {
+      fiber_b = sched_b.currentFiber();
+      ready.fetch_add(1, std::memory_order_release);
+
+      // Wait for fiber_a to be set
+      while (!fiber_a)
+         sched_b.yieldCurrentFiber();
+
+      for (int i = 0; i < N; ++i)
+      {
+         // Initiate: wake A
+         Scheduler::wake(fiber_a);
+         // Wait for A to wake us back
+         sched_b.parkCurrentFiber();
+      }
+   });
+
+   // Run both schedulers on separate threads
+   auto start = Clock::now();
+   std::thread thread_b([&]() { sched_b.run(); });
+   sched_a.run();
+   auto end = Clock::now();
+   thread_b.join();
+
+   report("cross-thread ping-pong (round trip)", round_trips, elapsed_us(start, end));
+}
+
+static void bench_thread_call()
+{
+   constexpr int N = 10'000;
+
+   // Clean API: psiber::thread a, b — b.call() dispatches to a and gets result
+   psiber::thread worker("worker");
+   int            round_trips = 0;
+
+   psiber::thread caller([&]() {
+      auto start = Clock::now();
+
+      for (int i = 0; i < N; ++i)
+      {
+         int r = worker.call([&]() { return i + 1; });
+         (void)r;
+         ++round_trips;
+      }
+
+      auto end = Clock::now();
+      report("thread::call() round trip", round_trips, elapsed_us(start, end));
+   });
+
+   // Must quit explicitly — keepalive fiber blocks until quit()
+   caller.quit();
+   worker.quit();
 }
 
 static void bench_fiber_mutex()
@@ -355,12 +481,12 @@ static void run_bench(const char* name, void (*fn)())
    std::fflush(stdout);
 
    // Watchdog: kill the whole process if a benchmark hangs
-   std::atomic<bool> done{false};
-   std::thread       watchdog([&done, name]() {
+   auto done = std::make_shared<std::atomic<bool>>(false);
+   std::thread watchdog([done, name]() {
       for (int i = 0; i < 100; ++i)  // 10 seconds max
       {
          std::this_thread::sleep_for(std::chrono::milliseconds{100});
-         if (done.load(std::memory_order_relaxed))
+         if (done->load(std::memory_order_relaxed))
             return;
       }
       std::printf("  *** TIMEOUT: %s hung after 10s ***\n", name);
@@ -370,17 +496,20 @@ static void run_bench(const char* name, void (*fn)())
    watchdog.detach();
 
    fn();
-   done.store(true, std::memory_order_relaxed);
+   done->store(true, std::memory_order_relaxed);
 }
 
 int main()
 {
    std::printf("\n=== psiber benchmarks ===\n\n");
 
+   run_bench("raw_context_switch",     bench_raw_context_switch);
    run_bench("fiber_spawn_rate",      bench_fiber_spawn_rate);
    run_bench("fiber_create_destroy",  bench_fiber_create_destroy);
    run_bench("context_switch",        bench_context_switch);
    run_bench("cross_thread_wake",     bench_cross_thread_wake);
+   run_bench("cross_thread_pingpong", bench_cross_thread_pingpong);
+   run_bench("thread_call",           bench_thread_call);
    run_bench("spin_lock",             bench_spin_lock);
    run_bench("fiber_mutex",           bench_fiber_mutex);
    run_bench("tcp_connection_rate",   bench_tcp_connection_rate);
