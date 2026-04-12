@@ -16,18 +16,19 @@
 //
 //   // Define WASM exports you want to call:
 //   struct my_exports {
-//      uint32_t init();
-//      uint32_t handle(uint32_t path_ptr, uint32_t path_len);
+//      uint32_t add(uint32_t a, uint32_t b);
+//      void     on_request(uint32_t path_ptr, uint32_t path_len);
 //   };
-//   PSIO_REFLECT(my_exports, method(init), method(handle, path_ptr, path_len))
+//   PSIO_REFLECT(my_exports, method(add, a, b), method(on_request, path_ptr, path_len))
 //
 //   // Load and use:
 //   my_host host_impl;
-//   auto instance = pzam_load<my_host, my_exports>(pzam_data, host_impl);
-//   instance.exports().init();
-//   instance.exports().handle(ptr, len);
+//   auto instance = pzam_load_file<my_host, my_exports>("module.pzam", host_impl);
+//   auto result = instance.exports().add(1, 2);
+//   instance.exports().on_request(ptr, len);
 
 #include <psizam/backend.hpp>
+#include <fstream>
 #include <psizam/host_function_table.hpp>
 #include <psizam/pzam_cache.hpp>
 #include <psizam/pzam_format.hpp>
@@ -81,6 +82,17 @@ namespace psizam {
       detail::register_methods(table, module_name,
          static_cast<typename R::member_functions*>(nullptr),
          R::member_function_names);
+   }
+
+   /// Create a host_function_table from a reflected host type.
+   ///
+   ///   auto table = psizam::make_host_table<my_host>("env");
+   ///
+   template<typename Host>
+   host_function_table make_host_table(const std::string& module_name) {
+      host_function_table table;
+      register_reflected<Host>(table, module_name);
+      return table;
    }
 
    // =========================================================================
@@ -380,12 +392,12 @@ namespace psizam {
    ///   struct my_host { void log(uint32_t, uint32_t); };
    ///   PSIO_REFLECT(my_host, method(log, ptr, len))
    ///
-   ///   struct my_exports { uint32_t init(); };
-   ///   PSIO_REFLECT(my_exports, method(init))
+   ///   struct my_exports { uint32_t add(uint32_t a, uint32_t b); };
+   ///   PSIO_REFLECT(my_exports, method(add, a, b))
    ///
    ///   my_host host;
    ///   auto instance = pzam_load<my_host, my_exports>(pzam_data, host);
-   ///   instance.exports().init();
+   ///   auto result = instance.exports().add(1, 2);
    ///
    template<typename Imports, typename Exports>
    pzam_instance<Imports, Exports> pzam_load(std::span<const char> data, Imports& host,
@@ -398,6 +410,26 @@ namespace psizam {
          throw std::runtime_error("pzam_load: bad magic");
 
       return pzam_instance<Imports, Exports>(std::move(pzam), host, import_module);
+   }
+
+   /// Load a .pzam file from disk and create a typed instance.
+   ///
+   ///   my_host host;
+   ///   auto instance = pzam_load_file<my_host, my_exports>("module.pzam", host);
+   ///   auto result = instance.exports().add(1, 2);
+   ///
+   template<typename Imports, typename Exports>
+   pzam_instance<Imports, Exports> pzam_load_file(const std::string& path, Imports& host,
+                                                  const std::string& import_module = "env") {
+      std::ifstream f(path, std::ios::binary | std::ios::ate);
+      if (!f.is_open())
+         throw std::runtime_error("pzam_load_file: cannot open " + path);
+      auto size = f.tellg();
+      f.seekg(0);
+      std::vector<char> data(static_cast<size_t>(size));
+      f.read(data.data(), size);
+      return pzam_load<Imports, Exports>(
+         std::span<const char>(data.data(), data.size()), host, import_module);
    }
 
 } // namespace psizam

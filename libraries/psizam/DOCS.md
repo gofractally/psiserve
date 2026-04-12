@@ -42,73 +42,68 @@ cd build && ctest -j$(nproc)
 
 ### Embedding in C++
 
-There are two ways to use psizam: the direct backend API and the typed `.pzam` API.
+#### Step 1: Compile .wasm to .pzam
 
-#### Option 1: Direct Backend API
+```bash
+pzam compile module.wasm -o module.pzam
+```
+
+Or from C++:
 
 ```cpp
-#include <psizam/backend.hpp>
+#include <psizam/pzam_compile.hpp>
 
-// Define host functions
+int main() {
+   psizam::pzam_compile_file("module.wasm", "module.pzam");
+}
+```
+
+#### Step 2: Load and call from C++
+
+```cpp
+#include <psizam/pzam_typed.hpp>
+
+// Declare host functions the WASM module can call
 struct my_host {
    uint32_t get_value() { return 42; }
    void log(uint32_t ptr, uint32_t len) { /* ... */ }
 };
+PSIO_REFLECT(my_host, method(get_value), method(log, ptr, len))
+
+// Declare WASM exports you want to call (must match the module's exports)
+struct my_exports {
+   uint32_t add(uint32_t a, uint32_t b);
+   void     on_request(uint32_t path_ptr, uint32_t path_len);
+};
+PSIO_REFLECT(my_exports, method(add, a, b), method(on_request, path_ptr, path_len))
 
 int main() {
-   // Read WASM bytes
-   auto code = psizam::read_wasm("module.wasm");
-
-   // Register host functions
-   psizam::host_function_table table;
-   table.add<&my_host::get_value>("env", "get_value");
-   table.add<&my_host::log>("env", "log");
-
-   // Compile and instantiate
-   psizam::wasm_allocator alloc;
    my_host host;
-   psizam::backend<std::nullptr_t, psizam::jit> be(code, table, &host, &alloc);
-   be.initialize();
+   auto instance = psizam::pzam_load_file<my_host, my_exports>("module.pzam", host);
 
-   // Call an exported function
-   be.call(&host, "_start");
+   // Call WASM exports like native C++ methods
+   uint32_t result = instance.exports().add(1, 2);
+   instance.exports().on_request(ptr, len);
 }
 ```
 
-#### Option 2: Typed .pzam API (Recommended)
+#### Advanced: JIT from .wasm source
+
+For development workflows where you want to skip the compile step, or when you need control over the allocator and engine:
 
 ```cpp
+#include <psizam/backend.hpp>
 #include <psizam/pzam_typed.hpp>
-#include <fstream>
-
-// Declare imports (host functions the WASM module calls)
-struct my_imports {
-   uint32_t get_value() { return 42; }
-   void log(uint32_t ptr, uint32_t len) { /* ... */ }
-};
-PSIO_REFLECT(my_imports, method(get_value), method(log, ptr, len))
-
-// Declare exports (WASM functions you want to call)
-struct my_exports {
-   uint32_t init();
-   uint32_t handle(uint32_t request_ptr, uint32_t request_len);
-};
-PSIO_REFLECT(my_exports, method(init), method(handle, request_ptr, request_len))
 
 int main() {
-   // Load a pre-compiled .pzam file
-   std::ifstream in("module.pzam", std::ios::binary | std::ios::ate);
-   std::vector<char> data(in.tellg());
-   in.seekg(0);
-   in.read(data.data(), data.size());
+   my_host host;
+   auto code  = psizam::read_wasm("module.wasm");
+   auto table = psizam::make_host_table<my_host>("env");
 
-   // Create typed instance
-   my_imports host;
-   auto instance = psizam::pzam_load<my_imports, my_exports>(data, host);
-
-   // Call WASM exports with natural C++ syntax
-   uint32_t result = instance.exports().init();
-   result = instance.exports().handle(ptr, len);
+   psizam::wasm_allocator alloc;
+   psizam::backend<std::nullptr_t, psizam::jit> be(code, table, &host, &alloc);
+   be.initialize();
+   be.call(&host, "_start");
 }
 ```
 
@@ -195,24 +190,9 @@ At load time, the loader picks the code section matching the host architecture.
 
 ## Host Function Registration
 
-### Manual Registration
+### Reflection-Based (Recommended)
 
-```cpp
-psizam::host_function_table table;
-
-// Member functions — void* host is cast to the class type
-table.add<&my_host::get_value>("env", "get_value");
-table.add<&my_host::log>("env", "log");
-
-// Resolve against a parsed module
-table.resolve(mod);
-```
-
-The registration system uses template metaprogramming to generate optimized trampolines. For functions with only WASM-primitive parameters (i32, i64, f32, f64), it generates a "fast trampoline" that avoids the type conversion pipeline entirely.
-
-### Reflection-Based Auto-Registration
-
-When using `PSIO_REFLECT`, all methods are registered automatically:
+With `PSIO_REFLECT`, a single call registers all methods:
 
 ```cpp
 struct my_host {
@@ -221,10 +201,20 @@ struct my_host {
 };
 PSIO_REFLECT(my_host, method(get_value), method(log, ptr, len))
 
-psizam::host_function_table table;
-psizam::register_reflected<my_host>(table, "env");
-// Equivalent to manually calling table.add for each method
+auto table = psizam::make_host_table<my_host>("env");
 ```
+
+### Manual Registration
+
+For cases where you need per-function control (custom module names, selective registration):
+
+```cpp
+psizam::host_function_table table;
+table.add<&my_host::get_value>("env", "get_value");
+table.add<&my_host::log>("env", "log");
+```
+
+The registration system uses template metaprogramming to generate optimized trampolines. For functions with only WASM-primitive parameters (i32, i64, f32, f64), it generates a "fast trampoline" that avoids the type conversion pipeline entirely.
 
 ### Custom Type Converters
 
