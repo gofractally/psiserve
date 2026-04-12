@@ -12,7 +12,9 @@
 #include <psizam/backend.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 using namespace psizam;
+using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <forward_0_wasm>", "[forward_0_wasm_tests]" ) {

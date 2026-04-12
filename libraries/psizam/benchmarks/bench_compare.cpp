@@ -42,6 +42,7 @@ extern "C" {
 #endif
 
 using namespace psizam;
+using namespace psizam::detail;
 
 // ============================================================================
 // Host functions — simulate psibase-style workloads

@@ -130,7 +130,7 @@ namespace psizam {
          }
          case opcodes::vector_prefix:
             // v128.const: vector_prefix + varuint(12) + 16 bytes
-            detail::write_leb128_u32(result, vec_opcodes::v128_const);
+            detail::write_leb128_u32(result, detail::vec_opcodes::v128_const);
             {
                auto* bytes = reinterpret_cast<const uint8_t*>(&ie.value.v128);
                result.insert(result.end(), bytes, bytes + 16);

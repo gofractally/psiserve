@@ -4,7 +4,7 @@
 #include <psizam/detail/span.hpp>
 
 #include <memory>
-namespace psizam {
+namespace psizam::detail {
 
    // Used for pointer arguments to intrinsics.
    // T should be a type that points to external memory, such as a pointer or span.
@@ -95,16 +95,14 @@ namespace psizam {
       std::unique_ptr<std::remove_cv_t<T>[]> copy = nullptr;
    };
 
-   namespace detail {
-      template <typename T>
-      constexpr inline std::true_type is_argument_proxy_type(argument_proxy<T>);
-      template <typename T, std::size_t LA>
-      constexpr inline std::true_type is_argument_proxy_type(argument_proxy<T, LA>);
-      template <typename T>
-      constexpr inline std::false_type is_argument_proxy_type(T);
-   }
+   template <typename T>
+   constexpr inline std::true_type is_argument_proxy_type(argument_proxy<T>);
+   template <typename T, std::size_t LA>
+   constexpr inline std::true_type is_argument_proxy_type(argument_proxy<T, LA>);
+   template <typename T>
+   constexpr inline std::false_type is_argument_proxy_type(T);
 
    template <typename T>
-   constexpr inline static bool is_argument_proxy_type_v = std::is_same_v<decltype(detail::is_argument_proxy_type(std::declval<T>())), std::true_type>;
+   constexpr inline static bool is_argument_proxy_type_v = std::is_same_v<decltype(is_argument_proxy_type(std::declval<T>())), std::true_type>;
 
-} // namespace psizam
+} // namespace psizam::detail

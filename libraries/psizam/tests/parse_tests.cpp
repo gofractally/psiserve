@@ -10,6 +10,7 @@
 #include <psizam/backend.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 TEST_CASE("small parse test", "[small_parse_test]") {
    module mod;

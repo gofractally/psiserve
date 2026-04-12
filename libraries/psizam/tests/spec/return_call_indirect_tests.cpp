@@ -12,7 +12,9 @@
 #include <psizam/backend.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 using namespace psizam;
+using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <return_call_indirect_12_wasm>", "[return_call_indirect_12_wasm_tests]" ) {

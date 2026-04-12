@@ -14,7 +14,7 @@
 #include <cstring>
 #include <limits>
 
-namespace psizam {
+namespace psizam::detail {
 
    template <typename ExecutionContext>
    struct interpret_visitor : base_visitor {
@@ -3105,4 +3105,4 @@ namespace psizam {
       }
    };
 
-} // namespace psizam
+} // namespace psizam::detail

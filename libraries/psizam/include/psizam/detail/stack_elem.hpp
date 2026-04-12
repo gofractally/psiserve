@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-namespace psizam {
+namespace psizam::detail {
 
    class operand_stack_elem : public variant<i32_const_t, i64_const_t, f32_const_t, f64_const_t, v128_const_t> {
       public:
@@ -33,4 +33,4 @@ namespace psizam {
          inline v128_t& to_v128() & { return get<v128_const_t>().data; };
          inline v128_t to_v128() const& { return get<v128_const_t>().data; };
    };
-} // namespace psizam
+} // namespace psizam::detail

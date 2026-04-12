@@ -13,7 +13,7 @@
 #include <fcntl.h>
 #include <sys/types.h>
 
-namespace psizam {
+namespace psizam::detail {
 
 inline uint32_t profile_interval_us = 10000;
 

@@ -19,7 +19,7 @@ namespace llvm {
    class Module;
 }
 
-namespace psizam {
+namespace psizam::detail {
 
    /// Result of LLVM AOT compilation — code blob + relocations.
    struct llvm_aot_result {
@@ -38,4 +38,4 @@ namespace psizam {
          const module& mod,
          const std::string& target_triple);
 
-} // namespace psizam
+} // namespace psizam::detail

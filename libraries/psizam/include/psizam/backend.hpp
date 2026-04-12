@@ -149,17 +149,17 @@ namespace psizam {
 
 #if defined(__x86_64__) || defined(__aarch64__)
    struct jit {
-      using context = jit_execution_context<false>;
+      using context = detail::jit_execution_context<false>;
       template<typename Options, typename DebugInfo>
-      using parser = binary_parser<machine_code_writer, Options, DebugInfo>;
+      using parser = detail::binary_parser<detail::machine_code_writer, Options, DebugInfo>;
       static constexpr bool is_jit = true;
       static constexpr bool enable_backtrace = false;
    };
 
    struct jit_profile {
-      using context = jit_execution_context<true>;
+      using context = detail::jit_execution_context<true>;
       template<typename Options, typename DebugInfo>
-      using parser = binary_parser<machine_code_writer, Options, DebugInfo>;
+      using parser = detail::binary_parser<detail::machine_code_writer, Options, DebugInfo>;
       static constexpr bool is_jit = true;
       static constexpr bool enable_backtrace = true;
    };
@@ -168,9 +168,9 @@ namespace psizam {
 
 #if defined(__x86_64__) || defined(__aarch64__)
    struct jit2 {
-      using context = jit_execution_context<false>;
+      using context = detail::jit_execution_context<false>;
       template<typename Options, typename DebugInfo>
-      using parser = binary_parser<ir_writer, Options, DebugInfo>;
+      using parser = detail::binary_parser<detail::ir_writer, Options, DebugInfo>;
       static constexpr bool is_jit = true;
       static constexpr bool enable_backtrace = false;
    };
@@ -178,26 +178,26 @@ namespace psizam {
 
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
    struct jit_llvm {
-      using context = jit_execution_context<false>;
+      using context = detail::jit_execution_context<false>;
       template<typename Options, typename DebugInfo>
-      using parser = binary_parser<ir_writer_llvm, Options, DebugInfo>;
+      using parser = detail::binary_parser<detail::ir_writer_llvm, Options, DebugInfo>;
       static constexpr bool is_jit = true;
       static constexpr bool enable_backtrace = false;
    };
 #endif
 
    struct interpreter {
-      using context = execution_context;
+      using context = detail::execution_context;
       template<typename Options, typename DebugInfo>
-      using parser = binary_parser<bitcode_writer, Options, DebugInfo>;
+      using parser = detail::binary_parser<detail::bitcode_writer, Options, DebugInfo>;
       static constexpr bool is_jit = false;
       static constexpr bool enable_backtrace = false;
    };
 
    struct null_backend {
-      using context = null_execution_context;
+      using context = detail::null_execution_context;
       template<typename Options, typename DebugInfo>
-      using parser = binary_parser<null_writer, Options, DebugInfo>;
+      using parser = detail::binary_parser<detail::null_writer, Options, DebugInfo>;
       static constexpr bool is_jit = false;
       static constexpr bool enable_backtrace = false;
    };
@@ -235,7 +235,7 @@ namespace psizam {
       bool owns;
    };
 
-   template <typename HostFunctions = std::nullptr_t, typename Impl = interpreter, typename Options = default_options, typename DebugInfo = null_debug_info>
+   template <typename HostFunctions = std::nullptr_t, typename Impl = interpreter, typename Options = default_options, typename DebugInfo = detail::null_debug_info>
    class backend {
       using host_t     = detail::host_type_t<HostFunctions>;
       using context_t  = typename Impl::context;
@@ -278,7 +278,7 @@ namespace psizam {
                      auto& sig = m.host_functions[idx];
 
                      // Build operand stack from forward-order native_value args
-                     operand_stack temp_stack;
+                     detail::operand_stack temp_stack;
                      for (uint32_t i = 0; i < sig.params.size(); i++) {
                         temp_stack.push(i64_const_t{args[i].i64});
                      }
@@ -376,7 +376,7 @@ namespace psizam {
             if constexpr (!std::is_same_v<Impl, null_backend>) {
                if (memory_alloc) {
                   ctx->reset();
-                  ctx->execute_start(host, interpret_visitor(*ctx));
+                  ctx->execute_start(host, detail::interpret_visitor(*ctx));
                }
             }
          }
@@ -476,7 +476,7 @@ namespace psizam {
       }
 
       template <typename... Args>
-      inline auto operator()(stack_manager& alt_stack, host_t& host, const std::string_view& mod, const std::string_view& func, Args... args) {
+      inline auto operator()(detail::stack_manager& alt_stack, host_t& host, const std::string_view& mod, const std::string_view& func, Args... args) {
          return call(alt_stack, host, mod, func, args...);
       }
 
@@ -501,15 +501,15 @@ namespace psizam {
       inline backend& initialize(host_t* host=nullptr) {
          if (memory_alloc) {
             ctx->reset();
-            ctx->execute_start(host, interpret_visitor(*ctx));
+            ctx->execute_start(host, detail::interpret_visitor(*ctx));
          }
          return *this;
       }
 
-      inline backend& initialize(stack_manager& alt_stack, host_t* host=nullptr) {
+      inline backend& initialize(detail::stack_manager& alt_stack, host_t* host=nullptr) {
          if (memory_alloc) {
             ctx->reset();
-            ctx->execute_start(alt_stack, host, interpret_visitor(*ctx));
+            ctx->execute_start(alt_stack, host, detail::interpret_visitor(*ctx));
          }
          return *this;
       }
@@ -523,9 +523,9 @@ namespace psizam {
       template <typename... Args>
       inline bool call_indirect(host_t* host, uint32_t func_index, Args&&... args) {
          if constexpr (psizam_debug) {
-            ctx->template execute_func_table<tc_t>(host, debug_visitor(*ctx), func_index, std::forward<Args>(args)...);
+            ctx->template execute_func_table<tc_t>(host, detail::debug_visitor(*ctx), func_index, std::forward<Args>(args)...);
          } else {
-            ctx->template execute_func_table<tc_t>(host, interpret_visitor(*ctx), func_index, std::forward<Args>(args)...);
+            ctx->template execute_func_table<tc_t>(host, detail::interpret_visitor(*ctx), func_index, std::forward<Args>(args)...);
          }
          return true;
       }
@@ -533,19 +533,19 @@ namespace psizam {
       template <typename... Args>
       inline bool call(host_t* host, uint32_t func_index, Args&&... args) {
          if constexpr (psizam_debug) {
-            ctx->template execute<tc_t>(host, debug_visitor(*ctx), func_index, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(host, detail::debug_visitor(*ctx), func_index, std::forward<Args>(args)...);
          } else {
-            ctx->template execute<tc_t>(host, interpret_visitor(*ctx), func_index, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(host, detail::interpret_visitor(*ctx), func_index, std::forward<Args>(args)...);
          }
          return true;
       }
 
       template <typename... Args>
-      inline bool call(stack_manager& alt_stack, host_t& host, const std::string_view& mod, const std::string_view& func, Args&&... args) {
+      inline bool call(detail::stack_manager& alt_stack, host_t& host, const std::string_view& mod, const std::string_view& func, Args&&... args) {
          if constexpr (psizam_debug) {
-            ctx->template execute<tc_t>(alt_stack, &host, debug_visitor(*ctx), func, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(alt_stack, &host, detail::debug_visitor(*ctx), func, std::forward<Args>(args)...);
          } else {
-            ctx->template execute<tc_t>(alt_stack, &host, interpret_visitor(*ctx), func, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(alt_stack, &host, detail::interpret_visitor(*ctx), func, std::forward<Args>(args)...);
          }
          return true;
       }
@@ -553,9 +553,9 @@ namespace psizam {
       template <typename... Args>
       inline bool call(host_t& host, const std::string_view& mod, const std::string_view& func, Args&&... args) {
          if constexpr (psizam_debug) {
-            ctx->template execute<tc_t>(&host, debug_visitor(*ctx), func, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(&host, detail::debug_visitor(*ctx), func, std::forward<Args>(args)...);
          } else {
-            ctx->template execute<tc_t>(&host, interpret_visitor(*ctx), func, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(&host, detail::interpret_visitor(*ctx), func, std::forward<Args>(args)...);
          }
          return true;
       }
@@ -563,9 +563,9 @@ namespace psizam {
       template <typename... Args>
       inline bool call(const std::string_view& mod, const std::string_view& func, Args&&... args) {
          if constexpr (psizam_debug) {
-            ctx->template execute<tc_t>(nullptr, debug_visitor(*ctx), func, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(nullptr, detail::debug_visitor(*ctx), func, std::forward<Args>(args)...);
          } else {
-            ctx->template execute<tc_t>(nullptr, interpret_visitor(*ctx), func, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(nullptr, detail::interpret_visitor(*ctx), func, std::forward<Args>(args)...);
          }
          return true;
       }
@@ -575,9 +575,9 @@ namespace psizam {
       template <typename... Args>
       inline bool call(void* host, const std::string_view& func, Args&&... args) {
          if constexpr (psizam_debug) {
-            ctx->template execute<tc_t>(host, debug_visitor(*ctx), func, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(host, detail::debug_visitor(*ctx), func, std::forward<Args>(args)...);
          } else {
-            ctx->template execute<tc_t>(host, interpret_visitor(*ctx), func, std::forward<Args>(args)...);
+            ctx->template execute<tc_t>(host, detail::interpret_visitor(*ctx), func, std::forward<Args>(args)...);
          }
          return true;
       }
@@ -585,18 +585,18 @@ namespace psizam {
       template <typename... Args>
       inline auto call_with_return(host_t& host, const std::string_view& mod, const std::string_view& func, Args&&... args ) {
          if constexpr (psizam_debug) {
-            return ctx->template execute<tc_t>(&host, debug_visitor(*ctx), func, std::forward<Args>(args)...);
+            return ctx->template execute<tc_t>(&host, detail::debug_visitor(*ctx), func, std::forward<Args>(args)...);
          } else {
-            return ctx->template execute<tc_t>(&host, interpret_visitor(*ctx), func, std::forward<Args>(args)...);
+            return ctx->template execute<tc_t>(&host, detail::interpret_visitor(*ctx), func, std::forward<Args>(args)...);
          }
       }
 
       template <typename... Args>
       inline auto call_with_return(const std::string_view& mod, const std::string_view& func, Args&&... args) {
          if constexpr (psizam_debug) {
-            return ctx->template execute<tc_t>(nullptr, debug_visitor(*ctx), func, std::forward<Args>(args)...);
+            return ctx->template execute<tc_t>(nullptr, detail::debug_visitor(*ctx), func, std::forward<Args>(args)...);
          } else {
-            return ctx->template execute<tc_t>(nullptr, interpret_visitor(*ctx), func, std::forward<Args>(args)...);
+            return ctx->template execute<tc_t>(nullptr, detail::interpret_visitor(*ctx), func, std::forward<Args>(args)...);
          }
       }
 
@@ -606,7 +606,7 @@ namespace psizam {
          // so that upon a SEGV the signal handling code can discern if the thread that caused the SEGV has a timed_run that has timed out. This
          // thread local also need to be an atomic because the thread that a Watchdog callback will be called from may not be the same as the
          // executing thread.
-         std::atomic<bool>&      _timed_out = timed_run_has_timed_out;
+         std::atomic<bool>&      _timed_out = detail::timed_run_has_timed_out;
          auto reenable_code = scope_guard{[&](){
             if (_timed_out.load(std::memory_order_acquire)) {
                mod->allocator.enable_code(Impl::is_jit);
@@ -634,7 +634,7 @@ namespace psizam {
             for (int i = 0; i < mod->exports.size(); i++) {
                if (mod->exports[i].kind == external_kind::Function) {
                   std::string s{ (const char*)mod->exports[i].field_str.data(), mod->exports[i].field_str.size() };
-                  ctx->execute(&host, interpret_visitor(*ctx), s);
+                  ctx->execute(&host, detail::interpret_visitor(*ctx), s);
                }
             }
          });
@@ -646,7 +646,7 @@ namespace psizam {
             for (int i = 0; i < mod->exports.size(); i++) {
                if (mod->exports[i].kind == external_kind::Function) {
                   std::string s{ (const char*)mod->exports[i].field_str.data(), mod->exports[i].field_str.size() };
-                  ctx->execute(nullptr, interpret_visitor(*ctx), s);
+                  ctx->execute(nullptr, detail::interpret_visitor(*ctx), s);
                }
             }
          });

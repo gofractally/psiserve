@@ -3,6 +3,7 @@
 #include "utils.hpp"
 
 using namespace psizam;
+using namespace psizam::detail;
 
 extern wasm_allocator wa;
 

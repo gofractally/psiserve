@@ -9,6 +9,7 @@
 #include <psizam/types.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 TEST_CASE("Testing varuint", "[varuint_tests]") { 
    {

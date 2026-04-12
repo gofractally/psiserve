@@ -7,6 +7,7 @@
 #include <vector>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 // --- Host functions that simulate real blockchain operations ---
 

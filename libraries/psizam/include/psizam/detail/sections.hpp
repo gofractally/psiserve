@@ -1,6 +1,6 @@
 #pragma once
 
-namespace psizam {
+namespace psizam::detail {
    enum section_id {
       custom_section     = 0,
       type_section       = 1,
@@ -18,4 +18,4 @@ namespace psizam {
       tag_section        = 13,
       num_of_elems
    };
-} // namespace psizam
+} // namespace psizam::detail

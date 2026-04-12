@@ -18,11 +18,9 @@
 #include <variant>
 #include <vector>
 
-namespace psizam { struct pzam_compile_result; }
+namespace psizam::detail { struct pzam_compile_result; }
 
-namespace psizam {
-
-   namespace detail {
+namespace psizam::detail {
 
    static constexpr unsigned get_size_for_type(uint8_t type) {
       switch(type) {
@@ -67,7 +65,7 @@ namespace psizam {
      return options.name;                                                     \
    }                                                                          \
    template<typename Options>                                                 \
-   type get_ ## name(const Options& options) { return detail::get_ ## name(options, 0); }
+   type get_ ## name(const Options& options) { return get_ ## name(options, 0); }
 
 #define MAX_ELEMENTS(name, default_)\
    PARSER_OPTION(name, default_, std::uint32_t)
@@ -75,13 +73,13 @@ namespace psizam {
    MAX_ELEMENTS(max_table_elements, 0xFFFFFFFFu)
    MAX_ELEMENTS(max_section_elements, 0xFFFFFFFFu)
 
-   MAX_ELEMENTS(max_type_section_elements, detail::get_max_section_elements(options))
-   MAX_ELEMENTS(max_import_section_elements, detail::get_max_section_elements(options))
-   MAX_ELEMENTS(max_function_section_elements, detail::get_max_section_elements(options))
-   MAX_ELEMENTS(max_global_section_elements, detail::get_max_section_elements(options))
-   MAX_ELEMENTS(max_export_section_elements, detail::get_max_section_elements(options))
-   MAX_ELEMENTS(max_element_section_elements, detail::get_max_section_elements(options))
-   MAX_ELEMENTS(max_data_section_elements, detail::get_max_section_elements(options))
+   MAX_ELEMENTS(max_type_section_elements, get_max_section_elements(options))
+   MAX_ELEMENTS(max_import_section_elements, get_max_section_elements(options))
+   MAX_ELEMENTS(max_function_section_elements, get_max_section_elements(options))
+   MAX_ELEMENTS(max_global_section_elements, get_max_section_elements(options))
+   MAX_ELEMENTS(max_export_section_elements, get_max_section_elements(options))
+   MAX_ELEMENTS(max_element_section_elements, get_max_section_elements(options))
+   MAX_ELEMENTS(max_data_section_elements, get_max_section_elements(options))
 
    MAX_ELEMENTS(max_element_segment_elements, 0xFFFFFFFFu)
    MAX_ELEMENTS(max_data_segment_bytes, 0xFFFFFFFFu)
@@ -102,7 +100,7 @@ namespace psizam {
    template<typename Options>
    struct max_func_local_bytes_checker<Options, std::void_t<decltype(std::declval<Options>().max_func_local_bytes)>> {
       explicit max_func_local_bytes_checker(const Options& options, const func_type& ft) {
-         if ((detail::get_max_func_local_bytes_flags(options) & max_func_local_bytes_flags_t::params) != (max_func_local_bytes_flags_t)0) {
+         if ((get_max_func_local_bytes_flags(options) & max_func_local_bytes_flags_t::params) != (max_func_local_bytes_flags_t)0) {
             for(std::uint32_t i = 0; i < ft.param_types.size(); ++i) {
                on_type(options, ft.param_types.at(i));
             }
@@ -114,7 +112,7 @@ namespace psizam {
          PSIZAM_ASSERT(_count <= options.max_func_local_bytes && _count >= size, wasm_parse_exception, "local variable limit exceeded");
       }
       void on_local(const Options& options, std::uint8_t type, std::uint32_t count) {
-         if ((detail::get_max_func_local_bytes_flags(options) & max_func_local_bytes_flags_t::locals) != (max_func_local_bytes_flags_t)0) {
+         if ((get_max_func_local_bytes_flags(options) & max_func_local_bytes_flags_t::locals) != (max_func_local_bytes_flags_t)0) {
             uint64_t size = get_size_for_type(type);
             size *= count;
             _count += size;
@@ -134,12 +132,12 @@ namespace psizam {
    struct max_func_local_bytes_stack_checker : max_func_local_bytes_checker<Options> {
       explicit constexpr max_func_local_bytes_stack_checker(const max_func_local_bytes_checker<Options>& base) : max_func_local_bytes_checker<Options>(base) {}
       void push_stack(const Options& options, std::uint8_t type) {
-         if(unreachable_depth == 0 && (detail::get_max_func_local_bytes_flags(options) & max_func_local_bytes_flags_t::stack) != (max_func_local_bytes_flags_t)0) {
+         if(unreachable_depth == 0 && (get_max_func_local_bytes_flags(options) & max_func_local_bytes_flags_t::stack) != (max_func_local_bytes_flags_t)0) {
             this->on_type(options, type);
          }
       }
       void pop_stack(const Options& options, std::uint8_t type) {
-         if(unreachable_depth == 0 && (detail::get_max_func_local_bytes_flags(options) & max_func_local_bytes_flags_t::stack) != (max_func_local_bytes_flags_t)0) {
+         if(unreachable_depth == 0 && (get_max_func_local_bytes_flags(options) & max_func_local_bytes_flags_t::stack) != (max_func_local_bytes_flags_t)0) {
             this->_count -= get_size_for_type(type);
          }
       }
@@ -237,8 +235,6 @@ namespace psizam {
       }
       std::decay_t<decltype(std::declval<Options>().max_stack_bytes)> _max = 0;
    };
-
-   }
 
    template <typename Writer, typename Options = default_options, typename DebugInfo = null_debug_info>
    class binary_parser {
@@ -413,7 +409,7 @@ namespace psizam {
          }
          PSIZAM_ASSERT(_mod->code.size() == _mod->functions.size(), wasm_parse_exception, "code section must have the same size as the function section" );
 
-         _mod->stack_limit_is_bytes = detail::has_max_stack_bytes<Options>;
+         _mod->stack_limit_is_bytes = has_max_stack_bytes<Options>;
          debug.set(std::move(imap));
          debug.relocate(_allocator.get_code_start());
       }
@@ -431,7 +427,7 @@ namespace psizam {
 
       inline void parse_custom(wasm_code_ptr& code) {
          auto section_name = parse_utf8_string(code, 0xFFFFFFFFu); // ignored, but needs to be validated
-         if(detail::get_parse_custom_section_name(_options) &&
+         if(get_parse_custom_section_name(_options) &&
             section_name.size() == 4 && std::memcmp(section_name.data(), "name", 4) == 0) {
             parse_name_section(code);
          } else {
@@ -482,8 +478,8 @@ namespace psizam {
       }
 
       void parse_import_entry(wasm_code_ptr& code, import_entry& entry) {
-         entry.module_str = parse_utf8_string(code, detail::get_max_symbol_bytes(_options));
-         entry.field_str = parse_utf8_string(code, detail::get_max_symbol_bytes(_options));
+         entry.module_str = parse_utf8_string(code, get_max_symbol_bytes(_options));
+         entry.field_str = parse_utf8_string(code, get_max_symbol_bytes(_options));
          entry.kind = (external_kind)(*code++);
          switch ((uint8_t)entry.kind) {
             case external_kind::Function: {
@@ -510,7 +506,7 @@ namespace psizam {
                entry.type.global_t.content_type = ct;
                PSIZAM_ASSERT(ct == types::i32 || ct == types::i64 || ct == types::f32 || ct == types::f64 ||
                              ct == types::externref || ct == types::funcref ||
-                             (ct == types::v128 && detail::get_enable_simd(_options)),
+                             (ct == types::v128 && get_enable_simd(_options)),
                              wasm_parse_exception, "invalid global content type");
                entry.type.global_t.mutability = parse_varuint1(code);
                // Add imported global with zero-initialized value
@@ -549,7 +545,7 @@ namespace psizam {
             tt.limits.maximum = parse_varuint32(code);
             PSIZAM_ASSERT(tt.limits.initial <= tt.limits.maximum, wasm_parse_exception, "table max size less than min size");
          }
-         PSIZAM_ASSERT(tt.limits.initial <= detail::get_max_table_elements(_options), wasm_parse_exception, "table size exceeds limit");
+         PSIZAM_ASSERT(tt.limits.initial <= get_max_table_elements(_options), wasm_parse_exception, "table size exceeds limit");
       }
 
       void parse_global_variable(wasm_code_ptr& code, global_variable& gv) {
@@ -557,7 +553,7 @@ namespace psizam {
          gv.type.content_type = ct;
          PSIZAM_ASSERT(ct == types::i32 || ct == types::i64 || ct == types::f32 || ct == types::f64 ||
                        ct == types::funcref || ct == types::externref ||
-                       (ct == types::v128 && detail::get_enable_simd(_options)),
+                       (ct == types::v128 && get_enable_simd(_options)),
                        wasm_parse_exception, "invalid global content type");
 
          gv.type.mutability = parse_varuint1(code);
@@ -570,7 +566,7 @@ namespace psizam {
          mt.limits.flags   = parse_flags(code);
          mt.limits.initial = parse_varuint32(code);
          // Implementation limits
-         PSIZAM_ASSERT(mt.limits.initial <= detail::get_max_pages(_options), wasm_parse_exception, "initial memory out of range");
+         PSIZAM_ASSERT(mt.limits.initial <= get_max_pages(_options), wasm_parse_exception, "initial memory out of range");
          // WASM specification
          PSIZAM_ASSERT(mt.limits.initial <= 65536u, wasm_parse_exception, "initial memory out of range");
          // Shared memory (bit 1) requires has_max (bit 0)
@@ -584,7 +580,7 @@ namespace psizam {
       }
 
       void parse_export_entry(wasm_code_ptr& code, export_entry& entry) {
-         entry.field_str = parse_utf8_string(code, detail::get_max_symbol_bytes(_options));
+         entry.field_str = parse_utf8_string(code, get_max_symbol_bytes(_options));
          entry.kind  = (external_kind)(*code++);
          entry.index = parse_varuint32(code);
          switch(entry.kind) {
@@ -610,7 +606,7 @@ namespace psizam {
             param_types.at(i) = pt;
             PSIZAM_ASSERT(pt == types::i32 || pt == types::i64 || pt == types::f32 || pt == types::f64 ||
                           pt == types::funcref || pt == types::externref ||
-                          (pt == types::v128 && detail::get_enable_simd(_options)),
+                          (pt == types::v128 && get_enable_simd(_options)),
                           wasm_parse_exception, "invalid function param type");
          }
          ft.param_types  = std::move(param_types);
@@ -621,7 +617,7 @@ namespace psizam {
             ft.return_types[i] = rt;
             PSIZAM_ASSERT(rt == types::i32 || rt == types::i64 || rt == types::f32 || rt == types::f64 ||
                           rt == types::funcref || rt == types::externref ||
-                          (rt == types::v128 && detail::get_enable_simd(_options)),
+                          (rt == types::v128 && get_enable_simd(_options)),
                           wasm_parse_exception, "invalid function return type");
          }
          ft.finalize_returns();
@@ -653,7 +649,7 @@ namespace psizam {
       void parse_elem_segment(wasm_code_ptr& code, elem_segment& es) {
          table_type* tt = nullptr;
          std::uint32_t flags = parse_varuint32(code);
-         PSIZAM_ASSERT(es.index == 0 || detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+         PSIZAM_ASSERT(es.index == 0 || get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
          PSIZAM_ASSERT(es.index <= 7, wasm_parse_exception, "Illegal flags for elem");
          if (flags == 2 || flags == 6) {
             es.index = parse_varuint32(code);
@@ -686,7 +682,7 @@ namespace psizam {
             PSIZAM_ASSERT(elem_reftype == tt->element_type, wasm_parse_exception, "type mismatch");
          }
          uint32_t           size  = parse_varuint32(code);
-         PSIZAM_ASSERT(size <= detail::get_max_element_segment_elements(_options), wasm_parse_exception, "elem segment too large");
+         PSIZAM_ASSERT(size <= get_max_element_segment_elements(_options), wasm_parse_exception, "elem segment too large");
          decltype(es.elems) elems(size);
          if (flags & 4) {
             for (uint32_t i = 0; i < size; i++) {
@@ -758,7 +754,7 @@ namespace psizam {
                PSIZAM_ASSERT(type == types::f64, wasm_parse_exception, "expected f64 initializer");
                break;
             case opcodes::vector_prefix:
-               PSIZAM_ASSERT(detail::get_enable_simd(_options), wasm_parse_exception, "SIMD not enabled");
+               PSIZAM_ASSERT(get_enable_simd(_options), wasm_parse_exception, "SIMD not enabled");
                PSIZAM_ASSERT(parse_varuint32(code) == vec_opcodes::v128_const, wasm_parse_exception, "Expected v128.const");
                ie.value.v128 = parse_v128(code);
                PSIZAM_ASSERT(type == types::v128, wasm_parse_exception, "expected v128 initializer");
@@ -840,22 +836,22 @@ namespace psizam {
 
       void parse_function_body(wasm_code_ptr& code, function_body& fb, std::size_t idx) {
          fb.size   = parse_varuint32(code);
-         PSIZAM_ASSERT(fb.size <= detail::get_max_code_bytes(_options), wasm_parse_exception, "Function body too large");
+         PSIZAM_ASSERT(fb.size <= get_max_code_bytes(_options), wasm_parse_exception, "Function body too large");
          const auto&         before    = code.offset();
          const auto&         local_cnt = parse_varuint32(code);
          _current_function_index++;
-         PSIZAM_ASSERT(local_cnt <= detail::get_max_local_sets(_options), wasm_parse_exception, "Number of local sets exceeds limit");
+         PSIZAM_ASSERT(local_cnt <= get_max_local_sets(_options), wasm_parse_exception, "Number of local sets exceeds limit");
          decltype(fb.locals) locals(local_cnt);
          PSIZAM_ASSERT(idx < _mod->functions.size(), wasm_parse_exception, "function index out of range");
          func_type& ft = _mod->types.at(_mod->functions[idx]);
-         detail::max_func_local_bytes_checker<Options> local_checker(_options, ft);
+         max_func_local_bytes_checker<Options> local_checker(_options, ft);
          // parse the local entries
          for (size_t i = 0; i < local_cnt; i++) {
             auto count = parse_varuint32(code);
             auto type = *code++;
             PSIZAM_ASSERT(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 ||
                           type == types::funcref || type == types::externref ||
-                          (type == types::v128 && detail::get_enable_simd(_options)),
+                          (type == types::v128 && get_enable_simd(_options)),
                           wasm_parse_exception, "invalid local type");
             local_checker.on_local(_options, type, count);
             locals.at(i).count = count;
@@ -895,7 +891,7 @@ namespace psizam {
 
       static constexpr uint8_t any_type = 0x82;
       struct operand_stack_type_tracker {
-         explicit operand_stack_type_tracker(const detail::max_func_local_bytes_stack_checker<Options> local_bytes_checker, const Options& options)
+         explicit operand_stack_type_tracker(const max_func_local_bytes_stack_checker<Options> local_bytes_checker, const Options& options)
           : local_bytes_checker(local_bytes_checker), options(options) {
             stack_usage.update(local_bytes_checker);
          }
@@ -904,12 +900,12 @@ namespace psizam {
          static constexpr uint8_t scope_tag = 0x81;
          uint32_t operand_depth = 0;
          uint32_t maximum_operand_depth = 0;
-         detail::max_func_local_bytes_stack_checker<Options> local_bytes_checker;
-         detail::max_stack_usage_calculator<Options> stack_usage;
+         max_func_local_bytes_stack_checker<Options> local_bytes_checker;
+         max_stack_usage_calculator<Options> stack_usage;
          const Options& options;
          void push(uint8_t type) {
             assert(type != unreachable_tag && type != scope_tag);
-            assert(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 || type == types::funcref || type == types::externref || type == any_type || (type == types::v128 && detail::get_enable_simd(options)));
+            assert(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 || type == types::funcref || type == types::externref || type == any_type || (type == types::v128 && get_enable_simd(options)));
             PSIZAM_ASSERT(operand_depth < std::numeric_limits<uint32_t>::max(), wasm_parse_exception, "integer overflow in operand depth");
             operand_depth += Writer::get_depth_for_type(type);
             maximum_operand_depth = std::max(operand_depth, maximum_operand_depth);
@@ -1014,7 +1010,7 @@ namespace psizam {
          std::vector<uint32_t> _boundaries;
       };
 
-      void parse_function_body_code(wasm_code_ptr& code, size_t bounds, const detail::max_func_local_bytes_stack_checker<Options>& local_bytes_checker,
+      void parse_function_body_code(wasm_code_ptr& code, size_t bounds, const max_func_local_bytes_stack_checker<Options>& local_bytes_checker,
                                     Writer& code_writer, const func_type& ft, const local_types_t& local_types) {
          parse_function_body_code_impl(code, bounds, local_bytes_checker, code_writer, ft, local_types,
                                        _nested_checker, imap, _mod->maximum_stack);
@@ -1024,7 +1020,7 @@ namespace psizam {
       // can provide its own checker/imap/max_stack accumulator.
       template<typename WriterT, typename Checker, typename DebugInfoBuilder>
       void parse_function_body_code_impl(wasm_code_ptr& code, size_t bounds,
-                                    const detail::max_func_local_bytes_stack_checker<Options>& local_bytes_checker,
+                                    const max_func_local_bytes_stack_checker<Options>& local_bytes_checker,
                                     WriterT& code_writer, const func_type& ft, const local_types_t& local_types,
                                     Checker& nested_checker, DebugInfoBuilder& imap_ref, uint64_t& max_stack_out) {
 
@@ -1113,7 +1109,7 @@ namespace psizam {
          };
 
          while (code.offset() < bounds) {
-            PSIZAM_ASSERT(pc_stack.size() <= detail::get_max_nested_structures(_options), wasm_parse_exception,
+            PSIZAM_ASSERT(pc_stack.size() <= get_max_nested_structures(_options), wasm_parse_exception,
                           "nested structures validation failure");
 
             imap_ref.on_instr_start(code_writer.get_addr(), code.raw());
@@ -1147,7 +1143,7 @@ namespace psizam {
                      code++;
                      PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
                                    first_byte == types::f32 || first_byte == types::f64 ||
-                                   (first_byte == types::v128 && detail::get_enable_simd(_options)) ||
+                                   (first_byte == types::v128 && get_enable_simd(_options)) ||
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in block");
                      single_type = first_byte;
@@ -1192,7 +1188,7 @@ namespace psizam {
                      code++;
                      PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
                                    first_byte == types::f32 || first_byte == types::f64 ||
-                                   (first_byte == types::v128 && detail::get_enable_simd(_options)) ||
+                                   (first_byte == types::v128 && get_enable_simd(_options)) ||
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in loop");
                      single_type = first_byte;
@@ -1238,7 +1234,7 @@ namespace psizam {
                      code++;
                      PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
                                    first_byte == types::f32 || first_byte == types::f64 ||
-                                   (first_byte == types::v128 && detail::get_enable_simd(_options)) ||
+                                   (first_byte == types::v128 && get_enable_simd(_options)) ||
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in if");
                      single_type = first_byte;
@@ -1420,7 +1416,7 @@ namespace psizam {
                case opcodes::br_table: {
                   check_in_bounds();
                   size_t table_size = parse_varuint32(code);
-                  PSIZAM_ASSERT(table_size <= detail::get_max_br_table_elements(_options), wasm_parse_exception, "Too many labels in br_table");
+                  PSIZAM_ASSERT(table_size <= get_max_br_table_elements(_options), wasm_parse_exception, "Too many labels in br_table");
                   uint8_t result_type = 0;
                   op_stack.pop(types::i32);
                   auto handler = code_writer.emit_br_table(table_size);
@@ -1595,7 +1591,7 @@ namespace psizam {
                   uint32_t alignment = parse_varuint32(code);        \
                   uint32_t offset = parse_varuint32(code);           \
                   PSIZAM_ASSERT(alignment <= uint32_t(max_align), wasm_parse_exception, "alignment cannot be greater than size."); \
-                  PSIZAM_ASSERT(offset <= detail::get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
+                  PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
                   op_stack.pop(types::i32);                          \
                   op_stack.push(types::type);                        \
                   code_writer.emit_ ## op_name( alignment, offset ); \
@@ -1623,7 +1619,7 @@ namespace psizam {
                   uint32_t alignment = parse_varuint32(code);        \
                   uint32_t offset = parse_varuint32(code);           \
                   PSIZAM_ASSERT(alignment <= uint32_t(max_align), wasm_parse_exception, "alignment cannot be greater than size."); \
-                  PSIZAM_ASSERT(offset <= detail::get_max_memory_offset(_options), wasm_parse_exception, "store offset too large."); \
+                  PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "store offset too large."); \
                   op_stack.pop(types::type);                         \
                   op_stack.pop(types::i32);                          \
                   code_writer.emit_ ## op_name( alignment, offset ); \
@@ -1825,7 +1821,7 @@ namespace psizam {
 #define EXTENDOP(dst, opname)                                           \
                case opcodes::dst ## _ ## opname:                        \
                   check_in_bounds();                                    \
-                  PSIZAM_ASSERT(detail::get_enable_sign_ext(_options), wasm_parse_exception, "Sign-extension operators not enabled"); \
+                  PSIZAM_ASSERT(get_enable_sign_ext(_options), wasm_parse_exception, "Sign-extension operators not enabled"); \
                   code_writer.emit_ ## dst ## _ ## opname();            \
                   op_stack.pop(types::dst);                             \
                   op_stack.push(types::dst);                            \
@@ -1838,7 +1834,7 @@ namespace psizam {
                EXTENDOP(i64, extend32_s)
 
                case opcodes::vector_prefix: {
-                  PSIZAM_ASSERT(detail::get_enable_simd(_options), wasm_parse_exception, "SIMD not enabled");
+                  PSIZAM_ASSERT(get_enable_simd(_options), wasm_parse_exception, "SIMD not enabled");
                   switch(parse_varuint32(code))
                   {
 #define opcodes vec_opcodes
@@ -1869,7 +1865,7 @@ namespace psizam {
                         uint32_t offset = parse_varuint32(code);        \
                         uint8_t lane = *code++;                         \
                         PSIZAM_ASSERT(alignment <= uint32_t(max_align), wasm_parse_exception, "alignment cannot be greater than size."); \
-                        PSIZAM_ASSERT(offset <= detail::get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
+                        PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
                         PSIZAM_ASSERT(lane < (1 << (4-max_align)), wasm_parse_exception, "laneidx out of bounds"); \
                         op_stack.pop(types::type);                      \
                         op_stack.pop(types::i32);                       \
@@ -1892,7 +1888,7 @@ namespace psizam {
                         uint32_t offset = parse_varuint32(code);        \
                         uint8_t lane = *code++;                         \
                         PSIZAM_ASSERT(alignment <= uint32_t(max_align), wasm_parse_exception, "alignment cannot be greater than size."); \
-                        PSIZAM_ASSERT(offset <= detail::get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
+                        PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
                         PSIZAM_ASSERT(lane < (1 << (4-max_align)), wasm_parse_exception, "laneidx out of bounds"); \
                         op_stack.pop(types::type);                      \
                         op_stack.pop(types::i32);                       \
@@ -2347,7 +2343,7 @@ namespace psizam {
 #define TRUNC_SAT_OP(dest, src, sign)                                                   \
                      case ext_opcodes::dest ## _trunc_sat_ ## src ## _ ## sign: {       \
                         check_in_bounds();                                              \
-                        PSIZAM_ASSERT(detail::get_enable_nontrapping_fptoint(_options), wasm_parse_exception, "Non-trapping float-to-int conversions not enabled");\
+                        PSIZAM_ASSERT(get_enable_nontrapping_fptoint(_options), wasm_parse_exception, "Non-trapping float-to-int conversions not enabled");\
                         op_stack.pop(src);                                              \
                         op_stack.push(dest);                                            \
                         code_writer.emit_ ## dest ## _trunc_sat_ ## src ## _ ## sign(); \
@@ -2363,7 +2359,7 @@ namespace psizam {
 #undef TRUNC_SAT_OP
                      case ext_opcodes::memory_init: {
                         check_in_bounds();
-                        PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+                        PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "memory.init requires memory");
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
@@ -2377,7 +2373,7 @@ namespace psizam {
                      } break;
                      case ext_opcodes::data_drop: {
                         check_in_bounds();
-                        PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+                        PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         auto x = parse_varuint32(code);
                         PSIZAM_ASSERT(!!_datacount, wasm_parse_exception, "data.drop requires datacount section");
                         PSIZAM_ASSERT(x < *_datacount, wasm_parse_exception, "data segment does not exist");
@@ -2385,7 +2381,7 @@ namespace psizam {
                      } break;
                      case ext_opcodes::memory_copy:
                         check_in_bounds();
-                        PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+                        PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "memory.copy requires memory");
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
@@ -2398,7 +2394,7 @@ namespace psizam {
                         break;
                      case ext_opcodes::memory_fill:
                         check_in_bounds();
-                        PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+                        PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "memory.fill requires memory");
                         op_stack.pop(types::i32);
                         op_stack.pop(types::i32);
@@ -2409,7 +2405,7 @@ namespace psizam {
                         break;
                      case ext_opcodes::table_init: {
                         check_in_bounds();
-                        PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+                        PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->tables.size() != 0, wasm_parse_exception, "table.init requires table");
                         auto elem_idx = parse_varuint32(code);
                         auto table_idx = parse_varuint32(code);
@@ -2424,14 +2420,14 @@ namespace psizam {
                      } break;
                      case ext_opcodes::elem_drop: {
                         check_in_bounds();
-                        PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+                        PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         auto x = parse_varuint32(code);
                         PSIZAM_ASSERT(x < _mod->elements.size(), wasm_parse_exception, "elem segment does not exist");
                         code_writer.emit_elem_drop(x);
                      } break;
                      case ext_opcodes::table_copy: {
                         check_in_bounds();
-                        PSIZAM_ASSERT(detail::get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+                        PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->tables.size() != 0, wasm_parse_exception, "table.copy requires table");
                         auto dst_table = parse_varuint32(code);
                         auto src_table = parse_varuint32(code);
@@ -2564,7 +2560,7 @@ namespace psizam {
                default: PSIZAM_ASSERT(false, wasm_parse_exception, "Illegal instruction");
             }
          }
-         if constexpr (detail::has_max_stack_bytes<Options>)
+         if constexpr (has_max_stack_bytes<Options>)
          {
             code_writer.set_stack_usage(op_stack.stack_usage._max);
          }
@@ -2574,7 +2570,7 @@ namespace psizam {
 
       void parse_data_segment(wasm_code_ptr& code, data_segment& ds) {
          ds.index = parse_varuint32(code);
-         if (ds.index == 0 || !detail::get_enable_bulk_memory(_options))
+         if (ds.index == 0 || !get_enable_bulk_memory(_options))
          {
             ds.passive = false;
             parse_init_expr(code, ds.offset, types::i32);
@@ -2597,9 +2593,9 @@ namespace psizam {
             PSIZAM_ASSERT(false, wasm_parse_exception, "Unexpected flag for data");
          }
          auto len =  parse_varuint32(code);
-         PSIZAM_ASSERT(len <= detail::get_max_data_segment_bytes(_options), wasm_parse_exception, "data segment too large.");
+         PSIZAM_ASSERT(len <= get_max_data_segment_bytes(_options), wasm_parse_exception, "data segment too large.");
          if (ds.offset.raw_expr.empty()) {
-            PSIZAM_ASSERT(static_cast<uint64_t>(static_cast<uint32_t>(ds.offset.value.i32)) + len <= detail::get_max_linear_memory_init(_options),
+            PSIZAM_ASSERT(static_cast<uint64_t>(static_cast<uint32_t>(ds.offset.value.i32)) + len <= get_max_linear_memory_init(_options),
                           wasm_parse_exception, "out-of-bounds data section");
          }
          auto guard = code.scoped_shrink_bounds(len);
@@ -2627,21 +2623,21 @@ namespace psizam {
       requires (id == section_id::type_section)
       inline void parse_section(wasm_code_ptr&          code,
                                 std::vector<func_type>& elems) {
-         parse_section_impl(code, elems, detail::get_max_type_section_elements(_options),
+         parse_section_impl(code, elems, get_max_type_section_elements(_options),
                             [&](wasm_code_ptr& code, func_type& ft, std::size_t /*idx*/) { parse_func_type(code, ft); ft.compute_sig_hash(); });
       }
       template <uint8_t id>
       requires (id == section_id::import_section)
       inline void parse_section(wasm_code_ptr&             code,
                                 std::vector<import_entry>& elems) {
-         parse_section_impl(code, elems, detail::get_max_import_section_elements(_options),
+         parse_section_impl(code, elems, get_max_import_section_elements(_options),
                             [&](wasm_code_ptr& code, import_entry& ie, std::size_t /*idx*/) { parse_import_entry(code, ie); });
       }
       template <uint8_t id>
       requires (id == section_id::function_section)
       inline void parse_section(wasm_code_ptr&         code,
                                 std::vector<uint32_t>& elems) {
-         parse_section_impl(code, elems, detail::get_max_function_section_elements(_options),
+         parse_section_impl(code, elems, get_max_function_section_elements(_options),
                             [&](wasm_code_ptr& code, uint32_t& elem, std::size_t /*idx*/) { elem = parse_varuint32(code); });
       }
       template <uint8_t id>
@@ -2649,7 +2645,7 @@ namespace psizam {
       inline void parse_section(wasm_code_ptr&           code,
                                 std::vector<table_type>& elems) {
          auto count = parse_varuint32(code);
-         PSIZAM_ASSERT(count <= detail::get_max_section_elements(_options), wasm_parse_exception, "number of section elements exceeded limit");
+         PSIZAM_ASSERT(count <= get_max_section_elements(_options), wasm_parse_exception, "number of section elements exceeded limit");
          auto base = elems.size(); // imported tables already present
          elems.resize(base + count);
          for (size_t i = 0; i < count; i++) { parse_table_type(code, elems.at(base + i)); }
@@ -2670,7 +2666,7 @@ namespace psizam {
       inline void parse_section(wasm_code_ptr&                code,
                                 std::vector<global_variable>& elems) {
          auto count = parse_varuint32(code);
-         PSIZAM_ASSERT(count <= detail::get_max_global_section_elements(_options), wasm_parse_exception, "number of section elements exceeded limit");
+         PSIZAM_ASSERT(count <= get_max_global_section_elements(_options), wasm_parse_exception, "number of section elements exceeded limit");
          auto base = elems.size(); // imported globals already present
          elems.resize(base + count);
          for (size_t i = 0; i < count; i++) { parse_global_variable(code, elems.at(base + i)); }
@@ -2679,7 +2675,7 @@ namespace psizam {
       requires (id == section_id::export_section)
       inline void parse_section(wasm_code_ptr&             code,
                                 std::vector<export_entry>& elems) {
-         parse_section_impl(code, elems, detail::get_max_export_section_elements(_options),
+         parse_section_impl(code, elems, get_max_export_section_elements(_options),
                             [&](wasm_code_ptr& code, export_entry& ee, std::size_t /*idx*/) { parse_export_entry(code, ee); });
       }
       template <uint8_t id>
@@ -2693,7 +2689,7 @@ namespace psizam {
       requires (id == section_id::element_section)
       inline void parse_section(wasm_code_ptr&             code,
                                 std::vector<elem_segment>& elems) {
-         parse_section_impl(code, elems, detail::get_max_element_section_elements(_options),
+         parse_section_impl(code, elems, get_max_element_section_elements(_options),
                             [&](wasm_code_ptr& code, elem_segment& es, std::size_t /*idx*/) { parse_elem_segment(code, es); });
       }
       template <uint8_t id>
@@ -2701,7 +2697,7 @@ namespace psizam {
       inline void parse_section(wasm_code_ptr&              code,
                                 std::vector<function_body>& elems) {
          const void* code_start = code.raw() - code.offset();
-         parse_section_impl(code, elems, detail::get_max_function_section_elements(_options),
+         parse_section_impl(code, elems, get_max_function_section_elements(_options),
                             [&](wasm_code_ptr& code, function_body& fb, std::size_t idx) { parse_function_body(code, fb, idx); });
          PSIZAM_ASSERT( elems.size() == _mod->functions.size(), wasm_parse_exception, "code section must have the same size as the function section" );
 
@@ -2709,7 +2705,7 @@ namespace psizam {
       }
 
       void write_code_out(growable_allocator& allocator, wasm_code_ptr& code, const void* code_start) {
-         auto _compile_threads = detail::get_compile_threads(_options);
+         auto _compile_threads = get_compile_threads(_options);
          Writer code_writer(allocator, code.bounds() - code.offset(), *_mod,
                             _enable_backtrace, _stack_limit_is_bytes, _compile_threads);
          if constexpr (requires { code_writer.set_compile_result(_compile_result); }) {
@@ -2727,7 +2723,7 @@ namespace psizam {
                      func_type& ft = _mod->types.at(_mod->functions.at(func_idx));
                      local_types_t local_types(ft, fb.locals);
                      w.emit_prologue(ft, fb.locals, func_idx);
-                     detail::psizam_max_nested_structures_checker<Options> checker;
+                     psizam_max_nested_structures_checker<Options> checker;
                      null_debug_info::builder dummy_imap;
                      parse_function_body_code_impl(
                         _function_bodies[func_idx].first, fb.size,
@@ -2759,7 +2755,7 @@ namespace psizam {
       requires (id == section_id::data_section)
       inline void parse_section(wasm_code_ptr&             code,
                                 std::vector<data_segment>& elems) {
-         parse_section_impl(code, elems, detail::get_max_data_section_elements(_options),
+         parse_section_impl(code, elems, get_max_data_section_elements(_options),
                             [&](wasm_code_ptr& code, data_segment& ds, std::size_t /*idx*/) { parse_data_segment(code, ds); });
          if (_datacount) {
             PSIZAM_ASSERT(*_datacount == elems.size(), wasm_parse_exception, "data count does not match data");
@@ -2775,7 +2771,7 @@ namespace psizam {
       template <uint8_t id>
       requires (id == section_id::tag_section)
       inline void parse_section(wasm_code_ptr& code, std::vector<tag_type>& elems) {
-         parse_section_impl(code, elems, detail::get_max_section_elements(_options),
+         parse_section_impl(code, elems, get_max_section_elements(_options),
                             [&](wasm_code_ptr& code, tag_type& tt, std::size_t /*idx*/) {
             tt.attribute = *code++;
             PSIZAM_ASSERT(tt.attribute == 0, wasm_parse_exception, "invalid tag attribute");
@@ -2826,12 +2822,12 @@ namespace psizam {
       module*             _mod; // non-owning weak pointer
       int64_t             _current_function_index = -1;
       uint64_t            _maximum_function_stack_usage = 0; // non-parameter locals + stack
-      std::vector<std::pair<wasm_code_ptr, detail::max_func_local_bytes_stack_checker<Options>>>  _function_bodies;
-      detail::max_mutable_globals_checker<Options> _globals_checker;
-      detail::psizam_max_nested_structures_checker<Options> _nested_checker;
+      std::vector<std::pair<wasm_code_ptr, max_func_local_bytes_stack_checker<Options>>>  _function_bodies;
+      max_mutable_globals_checker<Options> _globals_checker;
+      psizam_max_nested_structures_checker<Options> _nested_checker;
       std::optional<std::uint32_t> _datacount;
       typename DebugInfo::builder imap;
       std::vector<uint32_t> type_aliases;
       std::vector<uint32_t> fast_functions;
    };
-} // namespace psizam
+} // namespace psizam::detail

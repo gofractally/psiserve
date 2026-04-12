@@ -11,7 +11,7 @@
 #include <psizam/types.hpp>
 #include <psizam/detail/vector.hpp>
 
-namespace psizam {
+namespace psizam::detail {
    using std::nullptr_t;
 
    template <typename ElemT, size_t ElemSz, typename Allocator = nullptr_t >
@@ -90,4 +90,4 @@ namespace psizam {
    using operand_stack = stack<operand_stack_elem, constants::initial_stack_size>;
    using call_stack    = stack<activation_frame,   constants::max_call_depth + 1>;
 
-} // namespace psizam
+} // namespace psizam::detail

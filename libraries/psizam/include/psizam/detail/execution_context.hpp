@@ -35,7 +35,7 @@
 #include <ucontext.h>
 #endif
 
-namespace psizam {
+namespace psizam::detail {
 
    // Forward declaration — implemented in llvm_runtime_helpers.cpp
    using llvm_entry_fn_t = int64_t(*)(void*, void*, void*);
@@ -52,42 +52,40 @@ namespace psizam {
       }
    };
 
-   namespace detail {
-      template <typename HostFunctions>
-      struct host_type {
-         using type = typename HostFunctions::host_type_t;
-      };
-      template <>
-      struct host_type<std::nullptr_t> {
-         using type = std::nullptr_t;
-      };
+   template <typename HostFunctions>
+   struct host_type {
+      using type = typename HostFunctions::host_type_t;
+   };
+   template <>
+   struct host_type<std::nullptr_t> {
+      using type = std::nullptr_t;
+   };
 
-      template <typename HF>
-      using host_type_t = typename host_type<HF>::type;
+   template <typename HF>
+   using host_type_t = typename host_type<HF>::type;
 
-      template <typename HostFunctions>
-      struct type_converter {
-         using type = typename HostFunctions::type_converter_t;
-      };
-      template <>
-      struct type_converter<std::nullptr_t> {
-         using type = psizam::type_converter<std::nullptr_t, psizam::execution_interface>;
-      };
+   template <typename HostFunctions>
+   struct tc_selector {
+      using type = typename HostFunctions::type_converter_t;
+   };
+   template <>
+   struct tc_selector<std::nullptr_t> {
+      using type = psizam::type_converter<std::nullptr_t, psizam::execution_interface>;
+   };
 
-      template <typename HF>
-      using type_converter_t = typename type_converter<HF>::type;
+   template <typename HF>
+   using type_converter_t = typename tc_selector<HF>::type;
 
-      template <typename HostFunctions>
-      struct host_invoker {
-         using type = HostFunctions;
-      };
-      template <>
-      struct host_invoker<std::nullptr_t> {
-         using type = null_host_functions;
-      };
-      template <typename HF>
-      using host_invoker_t = typename host_invoker<HF>::type;
-   }
+   template <typename HostFunctions>
+   struct host_invoker {
+      using type = HostFunctions;
+   };
+   template <>
+   struct host_invoker<std::nullptr_t> {
+      using type = null_host_functions;
+   };
+   template <typename HF>
+   using host_invoker_t = typename host_invoker<HF>::type;
 
    template<typename T>
    struct local {
@@ -405,14 +403,14 @@ namespace psizam {
             base[i + j] = val;
       }
 
-      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename Visitor, typename... Args>
       inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, const std::string_view func,
                                                Args&&... args) {
          uint32_t func_index = _mod->get_exported_function(func);
          return derived().template execute<TC>(host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
       }
 
-      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename Visitor, typename... Args>
       inline std::optional<operand_stack_elem> execute(stack_manager& alt_stack, void* host, Visitor&& visitor, const std::string_view func,
                                                Args... args) {
          uint32_t func_index = _mod->get_exported_function(func);
@@ -420,7 +418,7 @@ namespace psizam {
       }
 
       /// Execute a function by its indirect table index (resolves table entry → function index).
-      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename Visitor, typename... Args>
       inline std::optional<operand_stack_elem> execute_func_table(void* host, Visitor&& visitor, uint32_t table_index,
                                                                   Args&&... args) {
          return derived().template execute<TC>(host, std::forward<Visitor>(visitor), table_elem(table_index), std::forward<Args>(args)...);
@@ -586,13 +584,13 @@ namespace psizam {
          }
       }
 
-      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename... Args>
       inline std::optional<operand_stack_elem> execute(void* host, jit_visitor vis, uint32_t func_index, Args&&... args)
       {
          stack_allocator alt_stack(get_maximum_stack_size());
          return execute<TC>(alt_stack, host, vis, func_index, std::forward<Args>(args)...);
       }
-      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename... Args>
       inline std::optional<operand_stack_elem> execute(stack_manager& alloc, void* host, jit_visitor vis, uint32_t func_index, Args&&... args)
       {
          return alloc.execute(get_maximum_stack_size(), [&](stack_allocator& alt_stack){
@@ -600,7 +598,7 @@ namespace psizam {
          });
       }
 
-      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename... Args>
       inline std::optional<operand_stack_elem> execute(stack_allocator& alt_stack, void* host, jit_visitor, uint32_t func_index, Args... args) {
          auto saved_host = _host;
          auto saved_os_size = get_operand_stack().size();
@@ -647,7 +645,7 @@ namespace psizam {
                      static_cast<std::byte*>(alt_stack.guard_base()), alt_stack.guard_size());
                }
 
-               psizam::invoke_with_signal_handler([&]() {
+               invoke_with_signal_handler([&]() {
                   if (alt_stack.top()) {
                      // Execute on the dedicated stack — isolates WASM from host C stack
                      std::exception_ptr exc;
@@ -697,12 +695,12 @@ namespace psizam {
                      pthread_sigmask(SIG_UNBLOCK, &block_mask, nullptr);
                   }};
 
-                  psizam::invoke_with_signal_handler([&]() {
+                  invoke_with_signal_handler([&]() {
                      result = execute<args_count>(args_raw, fn, this, base_type::linear_memory(), stack, ft.return_type);
                   }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
 #endif
                } else {
-                  psizam::invoke_with_signal_handler([&]() {
+                  invoke_with_signal_handler([&]() {
                      result = execute<args_count>(args_raw, fn, this, base_type::linear_memory(), stack, ft.return_type);
                   }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
                }
@@ -1187,14 +1185,14 @@ namespace psizam {
          _as.eat(_state.as_index);
       }
 
-      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename Visitor, typename... Args>
       inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, const std::string_view func,
                                                        Args&&... args) {
          uint32_t func_index = _mod->get_exported_function(func);
          return execute<TC>(host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
       }
 
-      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename Visitor, typename... Args>
       inline std::optional<operand_stack_elem> execute(stack_manager&, void* host, Visitor&& visitor, const std::string_view func,
                                                        Args... args) {
          return execute<TC>(host, std::forward<Visitor>(visitor), func, std::forward<Args>(args)...);
@@ -1211,7 +1209,7 @@ namespace psizam {
          execute_start(host, std::forward<Visitor>(visitor));
       }
 
-      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename Visitor, typename... Args>
       inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, uint32_t func_index, Args&&... args) {
          PSIZAM_ASSERT(func_index < std::numeric_limits<uint32_t>::max(), wasm_interpreter_exception,
                        "cannot execute function, function not found");
@@ -1271,7 +1269,7 @@ namespace psizam {
          } else {
             _state.pc = _mod->get_function_pc(func_index);
             setup_locals(func_index);
-            psizam::invoke_with_signal_handler([&]() {
+            invoke_with_signal_handler([&]() {
                execute(std::forward<Visitor>(visitor));
             }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
          }
@@ -1326,7 +1324,7 @@ namespace psizam {
 
     private:
 
-      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      template <typename TC = psizam::type_converter<standalone_function_t>, typename... Args>
       void push_args(Args... args) {
          auto tc = TC{ nullptr, get_interface() };
          (void)tc;
@@ -1350,7 +1348,7 @@ namespace psizam {
 
 #define CREATE_TABLE_ENTRY(NAME, CODE) &&ev_label_##NAME,
 #define CREATE_LABEL(NAME, CODE)                                                                                  \
-      ev_label_##NAME : std::forward<Visitor>(visitor)(ev_variant->template get<psizam::PSIZAM_OPCODE_T(NAME)>()); \
+      ev_label_##NAME : std::forward<Visitor>(visitor)(ev_variant->template get<PSIZAM_OPCODE_T(NAME)>()); \
       ev_variant = _state.pc; \
       goto* dispatch_table[ev_variant->index()];
 #define CREATE_EXIT_LABEL(NAME, CODE) ev_label_##NAME : \
@@ -1425,7 +1423,7 @@ namespace psizam {
              PSIZAM_VEC_LANE_OPS(CREATE_LABEL);
              PSIZAM_VEC_NUMERIC_OPS(CREATE_LABEL);
              PSIZAM_VEC_RELAXED_OPS(CREATE_LABEL);
-             ev_label_atomic_op : std::forward<Visitor>(visitor)(ev_variant->template get<psizam::atomic_op_t>());
+             ev_label_atomic_op : std::forward<Visitor>(visitor)(ev_variant->template get<atomic_op_t>());
              ev_variant = _state.pc;
              goto* dispatch_table[ev_variant->index()];
              PSIZAM_ERROR_OPS(CREATE_LABEL);
@@ -1469,4 +1467,4 @@ namespace psizam {
       std::vector<eh_handler>         _eh_stack;       // exception handler stack
       std::vector<wasm_exception_t>   _eh_exn_stack;   // caught exception stack (for rethrow)
    };
-} // namespace psizam
+} // namespace psizam::detail

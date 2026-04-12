@@ -33,7 +33,7 @@
 #include <functional>
 #endif
 
-namespace psizam {
+namespace psizam::detail {
 
    /// Result from compilation — captures relocations before codegen is destroyed.
    /// For LLVM AOT, also captures the code blob and function offsets.
@@ -2877,4 +2877,4 @@ namespace psizam {
    using ir_writer = ir_writer_x64;
 #endif
 
-} // namespace psizam
+} // namespace psizam::detail

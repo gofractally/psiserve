@@ -22,6 +22,16 @@
 #include <vector>
 
 namespace psizam {
+   // Import detail types used in public template signatures and struct members
+   using detail::execution_interface;
+   using detail::operand_stack_elem;
+   using detail::is_span_type_v;
+   using detail::is_argument_proxy_type_v;
+   using detail::argument_proxy;
+   using detail::v128_const_t;
+   using detail::flatten_parameters_t;
+   using detail::return_type_t;
+
    // types for host functions to use
    typedef std::nullptr_t standalone_function_t;
    struct no_match_t {};

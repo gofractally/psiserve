@@ -15,7 +15,7 @@
 #define DBG2_VISIT(name, code)                                                                                         \
    void operator()(const PSIZAM_OPCODE_T(name)& op) { std::cout << "Found " << #name << "\n"; }
 
-namespace psizam {
+namespace psizam::detail {
 
 template <typename ExecutionCTX>
 struct debug_visitor : public interpret_visitor<ExecutionCTX> {
@@ -66,4 +66,4 @@ struct debug_visitor2 {
 #undef DBG_VISIT
 #undef DBG2_VISIT
 
-} // namespace psizam
+} // namespace psizam::detail

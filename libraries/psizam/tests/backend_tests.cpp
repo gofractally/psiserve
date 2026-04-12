@@ -3,6 +3,7 @@
 #include "utils.hpp"
 
 using namespace psizam;
+using namespace psizam::detail;
 
 
 BACKEND_TEST_CASE("Tests that the arguments of top level calls are validated",

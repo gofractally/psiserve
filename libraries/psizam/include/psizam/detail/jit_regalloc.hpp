@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <algorithm>
 
-namespace psizam {
+namespace psizam::detail {
 
    // Physical register assignment
 #ifdef __aarch64__
@@ -695,4 +695,4 @@ namespace psizam {
       }
    };
 
-} // namespace psizam
+} // namespace psizam::detail

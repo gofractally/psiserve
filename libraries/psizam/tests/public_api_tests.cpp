@@ -5,6 +5,7 @@
 #include <catch2/catch.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 namespace {
 

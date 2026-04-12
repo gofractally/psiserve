@@ -6,6 +6,7 @@
 #include <catch2/catch.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 // ── Helper: build a minimal module with known data ──────────────────────────
 

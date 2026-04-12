@@ -13,6 +13,7 @@
 #endif
 
 using namespace psizam;
+using namespace psizam::detail;
 
 int main(int argc, char** argv) {
    if (argc < 2) {

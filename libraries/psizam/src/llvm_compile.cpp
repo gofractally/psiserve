@@ -11,7 +11,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
-namespace psizam {
+namespace psizam::detail {
 
    static int g_llvm_opt_level = 2;
 
@@ -45,4 +45,4 @@ namespace psizam {
 
    }
 
-} // namespace psizam
+} // namespace psizam::detail

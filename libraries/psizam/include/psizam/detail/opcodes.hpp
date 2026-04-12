@@ -4,7 +4,7 @@
 
 #include <map>
 
-namespace psizam {
+namespace psizam::detail {
    enum opcodes {
       PSIZAM_CONTROL_FLOW_OPS(PSIZAM_CREATE_ENUM)
       PSIZAM_BR_TABLE_OP(PSIZAM_CREATE_ENUM)
@@ -228,7 +228,7 @@ namespace psizam {
       PSIZAM_VEC_LANE_OPS(PSIZAM_IDENTITY)
       PSIZAM_VEC_NUMERIC_OPS(PSIZAM_IDENTITY)
       PSIZAM_VEC_RELAXED_OPS(PSIZAM_IDENTITY)
-      psizam::atomic_op_t,
+      atomic_op_t,
       PSIZAM_ERROR_OPS(PSIZAM_IDENTITY_END)
       >;
-} // namespace psizam
+} // namespace psizam::detail

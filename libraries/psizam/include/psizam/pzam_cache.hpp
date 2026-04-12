@@ -37,6 +37,10 @@
 #endif
 
 namespace psizam {
+   using detail::reloc_symbol;
+   using detail::reloc_type;
+   using detail::relocation_recorder;
+   using detail::code_relocation;
 
    /// Build the reloc_symbol -> function address mapping table.
    /// This is the "linker" that resolves symbols at load time.
@@ -46,6 +50,7 @@ namespace psizam {
    /// generators have different static functions. This version is for jit2 (jit_codegen).
    template <typename CodeGen>
    void build_symbol_table(void** table) {
+      using namespace detail;
       // Zero-initialize
       std::memset(table, 0, static_cast<size_t>(reloc_symbol::NUM_SYMBOLS) * sizeof(void*));
 
@@ -101,6 +106,7 @@ namespace psizam {
    /// can be loaded and run without LLVM installed locally.
 #ifndef PSIZAM_COMPILE_ONLY
    inline void build_llvm_symbol_table(void** table) {
+      using namespace detail;
       // LLVM runtime helpers (does not zero-init — caller or build_symbol_table handles that)
       table[static_cast<uint32_t>(reloc_symbol::llvm_global_get)]       = reinterpret_cast<void*>(&__psizam_global_get);
       table[static_cast<uint32_t>(reloc_symbol::llvm_global_set)]       = reinterpret_cast<void*>(&__psizam_global_set);

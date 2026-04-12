@@ -14,7 +14,9 @@
 #include <cstring>
 
 namespace {
-   using ctx_t = psizam::jit_execution_context<false>;
+   using namespace psizam;
+   using namespace psizam::detail;
+   using ctx_t = jit_execution_context<false>;
 
    ctx_t& as_ctx(void* ctx) {
       return *static_cast<ctx_t*>(ctx);
@@ -23,9 +25,9 @@ namespace {
    // Escape via longjmp with an existing exception_ptr.
    // Used when propagating exceptions from host calls or recursive WASM calls.
    [[noreturn]] void escape_exception(std::exception_ptr eptr) {
-      sigjmp_buf* dest = std::atomic_load(&psizam::signal_dest);
+      sigjmp_buf* dest = std::atomic_load(&signal_dest);
       if (dest) {
-         psizam::saved_exception = std::move(eptr);
+         saved_exception = std::move(eptr);
          siglongjmp(*dest, -1);
       }
       std::rethrow_exception(eptr);
@@ -34,9 +36,9 @@ namespace {
    // Escape via longjmp with a new exception, or throw if no escape target.
    template<typename E>
    [[noreturn]] void escape_or_throw(const char* msg) {
-      sigjmp_buf* dest = std::atomic_load(&psizam::signal_dest);
+      sigjmp_buf* dest = std::atomic_load(&signal_dest);
       if (dest) {
-         psizam::saved_exception = std::make_exception_ptr(E{msg});
+         saved_exception = std::make_exception_ptr(E{msg});
          siglongjmp(*dest, -1);
       }
       throw E{msg};
@@ -85,7 +87,7 @@ int64_t __psizam_call_host(void* ctx, uint32_t func_idx,
    auto& c = as_ctx(ctx);
    auto* table = c.get_host_table();
    uint32_t mapped_index = c.get_module().import_functions[func_idx];
-   auto* args = static_cast<psizam::native_value*>(args_buf);
+   auto* args = static_cast<native_value*>(args_buf);
    try {
       auto result = table->call(c.get_host_ptr(), mapped_index, args, c.linear_memory());
       return result.i64;
@@ -109,7 +111,7 @@ void __psizam_memory_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n) {
    uint32_t mem_size = static_cast<uint32_t>(c.current_linear_memory()) * 65536u;
    // Spec: trap if dest + n > |mem| or src + n > |mem| (even when n=0)
    if (uint64_t(dest) + n > mem_size || uint64_t(src) + n > mem_size)
-      escape_or_throw<psizam::wasm_memory_exception>("out of bounds memory access");
+      escape_or_throw<wasm_memory_exception>("out of bounds memory access");
    if (n > 0) {
       std::memmove(mem + dest, mem + src, n);
    }
@@ -121,7 +123,7 @@ void __psizam_memory_fill(void* ctx, uint32_t dest, uint32_t val, uint32_t n) {
    uint32_t mem_size = static_cast<uint32_t>(c.current_linear_memory()) * 65536u;
    // Spec: trap if dest + n > |mem| (even when n=0)
    if (uint64_t(dest) + n > mem_size)
-      escape_or_throw<psizam::wasm_memory_exception>("out of bounds memory access");
+      escape_or_throw<wasm_memory_exception>("out of bounds memory access");
    if (n > 0) {
       std::memset(mem + dest, static_cast<uint8_t>(val), n);
    }
@@ -140,11 +142,11 @@ int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
    auto& mod = c.get_module();
 
    if (table_idx >= mod.tables.size())
-      escape_or_throw<psizam::wasm_interpreter_exception>("no table");
+      escape_or_throw<wasm_interpreter_exception>("no table");
    uint32_t table_size = c.get_table_size(table_idx);
 
    if (table_elem >= table_size)
-      escape_or_throw<psizam::wasm_interpreter_exception>("undefined element");
+      escape_or_throw<wasm_interpreter_exception>("undefined element");
 
    // Get table entry
    auto* table_base = c.get_table_base(table_idx);
@@ -152,13 +154,13 @@ int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
 
    // Null/uninitialized check (0xFFFFFFFF is the sentinel)
    if (entry.type == 0xFFFFFFFF)
-      escape_or_throw<psizam::wasm_interpreter_exception>("undefined element");
+      escape_or_throw<wasm_interpreter_exception>("undefined element");
 
    // Type check
    const auto& expected_type = mod.types[type_idx];
    const auto& actual_type = mod.get_function_type(entry.index);
    if (!(actual_type == expected_type))
-      escape_or_throw<psizam::wasm_interpreter_exception>("indirect call type mismatch");
+      escape_or_throw<wasm_interpreter_exception>("indirect call type mismatch");
 
    // Call the function
    uint32_t num_imports = mod.get_imported_functions_size();
@@ -170,10 +172,10 @@ int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
       // Wrap in try/catch to escape if the callee throws via a runtime helper
       uint32_t code_idx = entry.index - num_imports;
       auto offset = mod.code[code_idx].jit_code_offset;
-      using llvm_entry_fn_t = int64_t(*)(void*, void*, psizam::native_value*);
+      using llvm_entry_fn_t = int64_t(*)(void*, void*, native_value*);
       auto fn = reinterpret_cast<llvm_entry_fn_t>(offset);
       try {
-         return fn(ctx, mem, static_cast<psizam::native_value*>(args_buf));
+         return fn(ctx, mem, static_cast<native_value*>(args_buf));
       } catch (...) {
          escape_exception(std::current_exception());
       }
@@ -184,12 +186,12 @@ void __psizam_call_depth_dec(void* ctx) {
    auto& c = as_ctx(ctx);
    uint32_t depth = c.get_remaining_call_depth();
    if (depth == 0) {
-      escape_or_throw<psizam::wasm_interpreter_exception>("stack overflow");
+      escape_or_throw<wasm_interpreter_exception>("stack overflow");
    }
    uint32_t new_depth = depth - 1;
    c.set_max_call_depth(new_depth);
    if (new_depth == 0) {
-      escape_or_throw<psizam::wasm_interpreter_exception>("stack overflow");
+      escape_or_throw<wasm_interpreter_exception>("stack overflow");
    }
 }
 
@@ -208,7 +210,7 @@ void __psizam_trap(void* ctx, uint32_t trap_code) {
       case 4:  msg = "undefined element"; break;
       default: msg = "unknown trap"; break;
    }
-   escape_or_throw<psizam::wasm_interpreter_exception>(msg);
+   escape_or_throw<wasm_interpreter_exception>(msg);
 }
 
 } // extern "C"

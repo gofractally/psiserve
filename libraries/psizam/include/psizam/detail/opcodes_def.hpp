@@ -771,5 +771,5 @@
    };
 
 
-#define PSIZAM_IDENTITY(name, code) psizam::PSIZAM_OPCODE_T(name),
-#define PSIZAM_IDENTITY_END(name, code) psizam::PSIZAM_OPCODE_T(name)
+#define PSIZAM_IDENTITY(name, code) psizam::detail::PSIZAM_OPCODE_T(name),
+#define PSIZAM_IDENTITY_END(name, code) psizam::detail::PSIZAM_OPCODE_T(name)

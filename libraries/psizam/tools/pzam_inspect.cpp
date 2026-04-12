@@ -10,6 +10,7 @@
 #include <vector>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 static const char* arch_name(uint8_t arch) {
    switch (static_cast<pzam_arch>(arch)) {

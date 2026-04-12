@@ -7,6 +7,7 @@
 #include <exception>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 static int check = 0;
 static int check2 = 0;

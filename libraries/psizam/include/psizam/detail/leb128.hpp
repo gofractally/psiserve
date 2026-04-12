@@ -9,7 +9,7 @@
 #include <iostream>
 #include <type_traits>
 
-namespace psizam {
+namespace psizam::detail {
    template <size_t N>
    inline size_t constexpr bytes_needed() {
       if constexpr (N == 1 || N == 7)
@@ -220,4 +220,4 @@ namespace psizam {
          uint8_t bytes_used = bytes_needed<N>();
    };
 
-} // namespace psizam
+} // namespace psizam::detail

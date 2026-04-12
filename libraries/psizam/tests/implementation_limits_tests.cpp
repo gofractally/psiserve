@@ -12,6 +12,7 @@
 #include "utils.hpp"
 
 using namespace psizam;
+using namespace psizam::detail;
 
 void host_call() {}
 

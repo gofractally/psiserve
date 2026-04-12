@@ -14,7 +14,7 @@
 
 // Compile-only mode: these functions provide addresses for relocations but abort if called.
 // No signal handling, no thread-locals, no setjmp/longjmp.
-namespace psizam {
+namespace psizam::detail {
    template<typename E>
    [[noreturn]] inline void signal_throw(const char* msg) {
       std::abort();
@@ -36,14 +36,14 @@ namespace psizam {
    auto invoke_with_signal_handler(F&& f) {
       return f();
    }
-} // namespace psizam
+} // namespace psizam::detail
 
 #else // !PSIZAM_COMPILE_ONLY
 
 #include <signal.h>
 #include <setjmp.h>
 
-namespace psizam {
+namespace psizam::detail {
 
    // Fixes a duplicate symbol build issue when building with `-fvisibility=hidden`
    __attribute__((visibility("default")))
@@ -325,6 +325,6 @@ namespace psizam {
       }
    }
 
-} // namespace psizam
+} // namespace psizam::detail
 
 #endif // PSIZAM_COMPILE_ONLY

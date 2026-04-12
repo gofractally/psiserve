@@ -4,7 +4,7 @@
 #include <ostream>
 #include <iomanip>
 
-namespace psizam {
+namespace psizam::detail {
 
    struct v128_t {
       std::uint64_t low,high;

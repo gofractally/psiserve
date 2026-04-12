@@ -8,6 +8,7 @@
 #include <catch2/catch.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 
 BACKEND_TEST_CASE("Test that we can load and run a wasm that uses 8191 stack elements",

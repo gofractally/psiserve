@@ -4,6 +4,7 @@
 #include <chrono>
 
 using namespace psizam;
+using namespace psizam::detail;
 using namespace std::chrono;
 
 

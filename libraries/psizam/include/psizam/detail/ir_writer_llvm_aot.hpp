@@ -19,7 +19,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
-namespace psizam {
+namespace psizam::detail {
 
    class ir_writer_llvm_aot : public ir_writer {
     public:
@@ -408,4 +408,4 @@ namespace psizam {
       bool _had_error = false;
    };
 
-} // namespace psizam
+} // namespace psizam::detail

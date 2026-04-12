@@ -13,7 +13,7 @@
 
 #include <stdexcept>
 
-namespace psizam {
+namespace psizam::detail {
 
    // Initialize LLVM targets (once)
    static bool init_llvm_targets() {
@@ -127,4 +127,4 @@ namespace psizam {
       return sym->toPtr<void*>();
    }
 
-} // namespace psizam
+} // namespace psizam::detail

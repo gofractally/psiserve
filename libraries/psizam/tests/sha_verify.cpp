@@ -5,6 +5,7 @@
 #include <cstdio>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 int main(int argc, char** argv) {
    const char* path = argc > 1 ? argv[1] : "benchmarks/bench_sha256.wasm";

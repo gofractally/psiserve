@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <exception>
 
-namespace psizam {
+namespace psizam::detail {
    using llvm_entry_fn_t = int64_t(*)(void*, void*, void*);
 }
 
@@ -13,7 +13,7 @@ namespace psizam {
 // Must be noinline and extern "C" for a stable, platform-portable symbol name.
 extern "C" __attribute__((noinline))
 int64_t __psizam_call_on_stack_impl(
-   psizam::llvm_entry_fn_t fn, void* ctx, void* mem,
+   psizam::detail::llvm_entry_fn_t fn, void* ctx, void* mem,
    void* args, std::exception_ptr* exc_out)
 {
    try {
@@ -24,7 +24,7 @@ int64_t __psizam_call_on_stack_impl(
    }
 }
 
-namespace psizam {
+namespace psizam::detail {
 
 // Platform-specific symbol prefix for assembly references
 #ifdef __APPLE__
@@ -113,4 +113,4 @@ namespace psizam {
 
 #undef PSIZAM_ASM_SYM
 
-} // namespace psizam
+} // namespace psizam::detail

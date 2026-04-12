@@ -13,6 +13,7 @@
 
 
 using namespace psizam;
+using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <e_memory_0_wasm>", "[e_memory_0_wasm_tests]" ) {

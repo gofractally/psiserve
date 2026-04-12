@@ -5,7 +5,7 @@
 
 #include <cstddef>
 
-namespace psizam {
+namespace psizam::detail {
    template <typename T>
    struct guarded_ptr {
       T* raw_ptr;
@@ -102,4 +102,4 @@ namespace psizam {
          return at(index);
       }
    };
-} // namespace psizam
+} // namespace psizam::detail

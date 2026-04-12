@@ -3,6 +3,7 @@
 #include "utils.hpp"
 
 using namespace psizam;
+using namespace psizam::detail;
 
 
 TEST_CASE("Tests a null backend", "[null_backend]") {

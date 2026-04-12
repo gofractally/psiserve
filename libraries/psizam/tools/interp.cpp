@@ -5,6 +5,7 @@
 #include <iostream>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 /**
  * Simple implementation of an interpreter using psizam.

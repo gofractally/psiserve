@@ -22,6 +22,7 @@
 #endif
 
 namespace psizam {
+
    class bounded_allocator {
     public:
       bounded_allocator(size_t size) {
@@ -476,7 +477,7 @@ namespace psizam {
 
       const void* get_code_start() const { return _code_base; }
 
-      span<std::byte> get_code_span() const {return {(std::byte*)_code_base, _code_size};}
+      detail::span<std::byte> get_code_span() const {return {(std::byte*)_code_base, _code_size};}
       /// Returns the actual code size before page alignment padding.
       size_t get_actual_code_size() const { return _actual_code_size; }
 

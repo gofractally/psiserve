@@ -72,7 +72,7 @@ extern "C" {
    //             3=invalid_conversion, 4=undefined_element
 }
 
-namespace psizam {
+namespace psizam::detail {
    // Call an LLVM entry function on a dedicated stack.
    // The try/catch runs on the alternate stack, so C++ exceptions from
    // LLVM-generated code (runtime helpers like __psizam_trap) unwind correctly.

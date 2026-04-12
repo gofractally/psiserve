@@ -37,7 +37,7 @@ namespace llvm {
    }
 }
 
-namespace psizam {
+namespace psizam::detail {
 
    /// Options for the LLVM IR translator.
    struct llvm_translate_options {
@@ -87,4 +87,4 @@ namespace psizam {
       std::unique_ptr<impl> _impl;
    };
 
-} // namespace psizam
+} // namespace psizam::detail

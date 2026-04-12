@@ -6,7 +6,7 @@
 #include <cstring>
 #include <limits>
 
-namespace psizam {
+namespace psizam::detail {
 
    // interface used for the host function system to use
    // clients can create their own interface to overlay their own implementations
@@ -47,4 +47,4 @@ namespace psizam {
       char* memory;
       operand_stack* os;
    };
-} // namespace psizam
+} // namespace psizam::detail

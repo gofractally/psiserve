@@ -55,11 +55,12 @@ namespace psizam {
       return wasm;
    }
 
-   // forward declarations
-   struct i32_const_t;
-   struct i64_const_t;
-   struct f32_const_t;
-   struct f64_const_t;
+   // Re-export opcode constant types from detail
+   namespace detail { struct i32_const_t; struct i64_const_t; struct f32_const_t; struct f64_const_t; }
+   using detail::i32_const_t;
+   using detail::i64_const_t;
+   using detail::f32_const_t;
+   using detail::f64_const_t;
 
    template <typename StackElem>
    inline void print_result(const std::optional<StackElem>& result) {

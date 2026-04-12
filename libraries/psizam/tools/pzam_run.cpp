@@ -28,6 +28,7 @@
 #endif
 
 using namespace psizam;
+using namespace psizam::detail;
 
 int pzam_run_main(int argc, char** argv);
 

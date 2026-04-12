@@ -1,6 +1,6 @@
 #pragma once
 
-namespace psizam {
+namespace psizam::detail {
 
 class null_writer {
  public:

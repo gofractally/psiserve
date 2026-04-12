@@ -19,7 +19,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace psizam {
+namespace psizam::detail {
 
    // WASI errno codes
    enum wasi_errno : uint32_t {
@@ -844,7 +844,7 @@ namespace psizam {
    void add_wasi_func(host_function_table& table, const std::string& name) {
       using args_t = flatten_parameters_t<AUTO_PARAM_WORKAROUND(Func)>;
       using ret_t  = return_type_t<AUTO_PARAM_WORKAROUND(Func)>;
-      using TC     = type_converter<wasi_host>;
+      using TC     = psizam::type_converter<wasi_host>;
 
       host_function_table::entry e;
       e.module_name = "wasi_snapshot_preview1";
@@ -906,4 +906,4 @@ namespace psizam {
       #undef WASI_REG
    }
 
-} // namespace psizam
+} // namespace psizam::detail

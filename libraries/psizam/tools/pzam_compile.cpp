@@ -25,6 +25,7 @@
 #include <vector>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 static void usage(const char* prog) {
    std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [--softfloat] [--backtrace] [-o output.pzam] input.wasm\n";

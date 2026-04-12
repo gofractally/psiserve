@@ -12,6 +12,7 @@
 #include "utils.hpp"
 
 using namespace psizam;
+using namespace psizam::detail;
 
 // host functions that are C-style functions
 // wasm hex

@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstdio>
 using namespace psizam;
+using namespace psizam::detail;
 int main(int argc, char** argv) {
    if (argc < 2) { fprintf(stderr, "Usage: %s file.wasm\n", argv[0]); return 1; }
    for (int a = 1; a < argc; a++) {

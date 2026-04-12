@@ -45,7 +45,7 @@ extern "C" {
 #include <optional>
 #include <unordered_map>
 
-namespace psizam {
+namespace psizam::detail {
 
    // Initialize X86 and AArch64 targets for cross-compilation.
    // Only these two are linked, so we can't use InitializeAllTargets().
@@ -483,4 +483,4 @@ namespace psizam {
       return result;
    }
 
-} // namespace psizam
+} // namespace psizam::detail

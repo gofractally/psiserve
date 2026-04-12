@@ -122,8 +122,8 @@ namespace psizam {
       friend class compiled_module;
 
       using context_var = std::variant<
-         std::unique_ptr<execution_context>,
-         std::unique_ptr<jit_execution_context<false>>
+         std::unique_ptr<detail::execution_context>,
+         std::unique_ptr<detail::jit_execution_context<false>>
       >;
 
       std::shared_ptr<compiled_module::impl> _impl;
@@ -272,7 +272,7 @@ namespace psizam {
    std::optional<operand_stack_elem> instance::call_with_return(
          std::string_view func_name, Args&&... args) {
       return std::visit([&](auto& ctx_ptr) -> std::optional<operand_stack_elem> {
-         return ctx_ptr->execute(_host, interpret_visitor(*ctx_ptr), func_name,
+         return ctx_ptr->execute(_host, detail::interpret_visitor(*ctx_ptr), func_name,
                                  std::forward<Args>(args)...);
       }, _ctx);
    }
@@ -285,7 +285,7 @@ namespace psizam {
 
          return [ctx, host_slot, func_index](Args... args) -> R {
             auto result = ctx->execute(
-               *host_slot, interpret_visitor(*ctx), func_index, args...);
+               *host_slot, detail::interpret_visitor(*ctx), func_index, args...);
 
             if constexpr (!std::is_void_v<R>) {
                return detail::extract_result<R>(*result);

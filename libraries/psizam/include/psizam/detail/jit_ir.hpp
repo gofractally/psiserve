@@ -14,7 +14,7 @@
 
 #include <cstdint>
 
-namespace psizam {
+namespace psizam::detail {
 
    // Bump allocator for JIT scratch data (IR, regalloc, codegen aux).
    // Wraps a growable_allocator, using a saved/restored watermark so that
@@ -562,4 +562,4 @@ namespace psizam {
       }
    };
 
-} // namespace psizam
+} // namespace psizam::detail

@@ -13,6 +13,7 @@
 #include <vector>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 static bool validate_pzam(const std::string& path) {
    std::ifstream in(path, std::ios::binary | std::ios::ate);

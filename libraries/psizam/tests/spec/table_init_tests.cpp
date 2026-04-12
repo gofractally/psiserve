@@ -13,7 +13,9 @@
 #include <psizam/backend.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 using namespace psizam;
+using namespace psizam::detail;
 extern wasm_allocator wa;
 
 // Host functions imported by table_init spec tests (module "a", ef0-ef4).

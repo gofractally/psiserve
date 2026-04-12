@@ -13,7 +13,7 @@ TEST_CASE("Testing signals", "[invoke_with_signal_handler]") {
    psizam::growable_allocator code_alloc;
    psizam::wasm_allocator wasm_alloc;
    try {
-      psizam::invoke_with_signal_handler([&]() {
+      psizam::detail::invoke_with_signal_handler([&]() {
          volatile auto i = *wasm_alloc.get_base_ptr<unsigned char>();
       }, [](int sig) {
          throw test_exception{};
@@ -27,8 +27,8 @@ TEST_CASE("Testing signals", "[invoke_with_signal_handler]") {
 TEST_CASE("Testing throw", "[signal_handler_throw]") {
    psizam::growable_allocator code_alloc;
    psizam::wasm_allocator wasm_alloc;
-   CHECK_THROWS_AS(psizam::invoke_with_signal_handler([](){
-      psizam::signal_throw<psizam::wasm_exit_exception>( "Exiting" );
+   CHECK_THROWS_AS(psizam::detail::invoke_with_signal_handler([](){
+      psizam::detail::signal_throw<psizam::wasm_exit_exception>( "Exiting" );
    }, [](int){}, code_alloc, &wasm_alloc), psizam::wasm_exit_exception);
 }
 
@@ -48,13 +48,13 @@ TEST_CASE("Test signal handler forwarding", "[signal_handler_forward]") {
       std::signal(SIGSEGV, SIG_DFL);
       std::signal(SIGBUS, SIG_DFL);
       std::signal(SIGFPE, SIG_DFL);
-      psizam::setup_signal_handler_impl(); // This is normally only called once
+      psizam::detail::setup_signal_handler_impl(); // This is normally only called once
    }};
    {
       std::signal(SIGSEGV, &handle_signal);
       std::signal(SIGBUS, &handle_signal);
       std::signal(SIGFPE, &handle_signal);
-      psizam::setup_signal_handler_impl();
+      psizam::detail::setup_signal_handler_impl();
       sig_handled = 0;
       std::raise(SIGSEGV);
       CHECK(sig_handled == 42 + SIGSEGV);
@@ -75,7 +75,7 @@ TEST_CASE("Test signal handler forwarding", "[signal_handler_forward]") {
       sigaction(SIGSEGV, &sa, nullptr);
       sigaction(SIGBUS, &sa, nullptr);
       sigaction(SIGFPE, &sa, nullptr);
-      psizam::setup_signal_handler_impl();
+      psizam::detail::setup_signal_handler_impl();
       sig_handled = 0;
       std::raise(SIGSEGV);
       CHECK(sig_handled == 142 + SIGSEGV);

@@ -94,6 +94,7 @@ int main(int argc, const char** argv) {
    std::vector<std::string> function_names;
 
    using namespace psizam;
+using namespace psizam::detail;
    auto code = read_wasm(filename);
    nm_debug_info info;
    module mod;

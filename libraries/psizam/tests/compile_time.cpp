@@ -5,6 +5,7 @@
 #include <cstdio>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 int main(int argc, char** argv) {
    if (argc < 2) { fprintf(stderr, "Usage: %s file.wasm [file2.wasm ...]\n", argv[0]); return 1; }

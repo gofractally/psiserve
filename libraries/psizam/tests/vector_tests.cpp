@@ -10,6 +10,7 @@
 #include <psizam/detail/vector.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 TEST_CASE( "unmanaged_vector tests", "[unmanaged_vector_tests]") {
    {

@@ -6,6 +6,7 @@
 #include <iostream>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 int main(int argc, char** argv) {
    wasm_allocator wa;

@@ -4,6 +4,7 @@
 #include <catch2/catch.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 // Test host with reflected methods
 struct test_host {

@@ -6,7 +6,7 @@
 
 #include <softfloat.hpp>
 
-namespace psizam {
+namespace psizam::detail {
 inline constexpr uint32_t inv_float_eps = 0x4B000000;
 inline constexpr uint64_t inv_double_eps = 0x4330000000000000;
 
@@ -1049,5 +1049,5 @@ inline v128_t _psizam_i32x4_relaxed_dot_i8x16_i7x16_add_s(v128_t a, v128_t b, v1
    return res;
 }
 
-} // namespace psizam
+} // namespace psizam::detail
 #endif

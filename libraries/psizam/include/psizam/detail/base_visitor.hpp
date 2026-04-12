@@ -3,7 +3,7 @@
 #include <psizam/exceptions.hpp>
 #include <psizam/detail/opcodes.hpp>
 
-namespace psizam {
+namespace psizam::detail {
 
    struct base_visitor {
       [[gnu::always_inline]] inline void operator()(const unreachable_t& ) {}
@@ -191,4 +191,4 @@ namespace psizam {
       }
    };
 
-} // namespace psizam
+} // namespace psizam::detail

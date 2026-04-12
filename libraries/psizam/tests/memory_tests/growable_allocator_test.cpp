@@ -6,6 +6,7 @@
 #include <psizam/backend.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 TEST_CASE( "Allocate until failure", "[alloc_fail]" ) {
    growable_allocator ga(1); // allocate 1 page

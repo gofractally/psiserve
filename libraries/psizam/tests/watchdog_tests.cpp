@@ -4,7 +4,7 @@
 
 #include <catch2/catch.hpp>
 
-using psizam::watchdog;
+using psizam::detail::watchdog;
 
 TEST_CASE("watchdog interrupt", "[watchdog_interrupt]") {
   std::atomic<bool> okay = false;

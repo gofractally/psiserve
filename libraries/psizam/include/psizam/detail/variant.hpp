@@ -13,16 +13,13 @@
 #include <variant>
 #include <utility>
 
-namespace psizam {
+namespace psizam::detail {
 
    // forward declaration
    template <typename... Alternatives>
    class variant;
 
-   // implementation details
-   namespace detail {
-
-      constexpr std::size_t find_impl(std::initializer_list<bool> il) {
+   constexpr std::size_t find_impl(std::initializer_list<bool> il) {
          std::size_t result = 0;
          for(auto iter = il.begin(), end = il.end(); iter != end && !*iter; ++iter, ++result) {}
          return result;
@@ -156,12 +153,10 @@ namespace psizam {
       constexpr decltype(auto) variant_storage_get(Storage&& val) {
          return std::move(variant_storage_get<I>(val));
       }
-   } // namespace detail
-
    template <class Visitor, typename Variant>
    constexpr auto visit(Visitor&& vis, Variant&& var) {
       using Ret = decltype(std::invoke(std::forward<Visitor>(vis), var.template get<0>()));
-      return detail::dispatcher<true, Ret>::template _switch<0>(std::forward<Visitor>(vis), std::forward<Variant>(var));
+      return dispatcher<true, Ret>::template _switch<0>(std::forward<Visitor>(vis), std::forward<Variant>(var));
    }
 
    template <typename... Alternatives>
@@ -180,14 +175,14 @@ namespace psizam {
       variant& operator=(const variant& other) = default;
       variant& operator=(variant&& other) = default;
 
-      template <typename T, typename = std::enable_if_t<detail::is_valid_alternative_v<std::decay_t<T>, Alternatives...>>>
+      template <typename T, typename = std::enable_if_t<is_valid_alternative_v<std::decay_t<T>, Alternatives...>>>
       constexpr variant(T&& alt) :
-         _which(detail::get_alternatives_index_v<std::decay_t<T>, Alternatives...>),
+         _which(get_alternatives_index_v<std::decay_t<T>, Alternatives...>),
          _storage(std::forward<T>(alt)) {
       }
 
       template <typename T,
-                typename = std::enable_if_t<detail::is_valid_alternative_v<std::decay_t<T>, Alternatives...>>>
+                typename = std::enable_if_t<is_valid_alternative_v<std::decay_t<T>, Alternatives...>>>
       constexpr variant& operator=(T&& alt) {
 #if (defined(__GNUC__) && !defined(__clang__))
 #pragma GCC diagnostic push
@@ -197,7 +192,7 @@ namespace psizam {
 #else
         _storage = std::forward<T>(alt);
 #endif
-         _which = detail::get_alternatives_index_v<std::decay_t<T>, Alternatives...>;
+         _which = get_alternatives_index_v<std::decay_t<T>, Alternatives...>;
          return *this;
       }
 
@@ -206,54 +201,54 @@ namespace psizam {
 
       template <size_t Index>
       inline constexpr const auto& get() const & {
-         return detail::variant_storage_get<Index>(_storage);
+         return variant_storage_get<Index>(_storage);
       }
 
       template <typename Alt>
       inline constexpr const Alt& get() const & {
-         return detail::variant_storage_get<detail::get_alternatives_index_v<Alt, Alternatives...>>(_storage);
+         return variant_storage_get<get_alternatives_index_v<Alt, Alternatives...>>(_storage);
       }
 
       template <size_t Index>
       inline constexpr const auto&& get() const && {
-         return detail::variant_storage_get<Index>(std::move(_storage));
+         return variant_storage_get<Index>(std::move(_storage));
       }
 
       template <typename Alt>
       inline constexpr const Alt&& get() const && {
-         return detail::variant_storage_get<detail::get_alternatives_index_v<Alt, Alternatives...>>(std::move(_storage));
+         return variant_storage_get<get_alternatives_index_v<Alt, Alternatives...>>(std::move(_storage));
       }
 
       template <size_t Index>
       inline constexpr auto&& get() && {
-         return detail::variant_storage_get<Index>(std::move(_storage));
+         return variant_storage_get<Index>(std::move(_storage));
       }
 
       template <typename Alt>
       inline constexpr Alt&& get() && {
-         return detail::variant_storage_get<detail::get_alternatives_index_v<Alt, Alternatives...>>(std::move(_storage));
+         return variant_storage_get<get_alternatives_index_v<Alt, Alternatives...>>(std::move(_storage));
       }
 
       template <size_t Index>
       inline constexpr auto& get() & {
-         return detail::variant_storage_get<Index>(_storage);
+         return variant_storage_get<Index>(_storage);
       }
 
       template <typename Alt>
       inline constexpr Alt& get() & {
-         return detail::variant_storage_get<detail::get_alternatives_index_v<Alt, Alternatives...>>(_storage);
+         return variant_storage_get<get_alternatives_index_v<Alt, Alternatives...>>(_storage);
       }
 
       template <typename Alt>
       inline constexpr bool is_a() const {
-         return _which == detail::get_alternatives_index_v<Alt, Alternatives...>;
+         return _which == get_alternatives_index_v<Alt, Alternatives...>;
       }
 
     private:
-      static constexpr size_t _sizeof  = detail::max_layout_size_v<Alternatives...>;
-      static constexpr size_t _alignof = detail::max_alignof_v<Alternatives...>;
+      static constexpr size_t _sizeof  = max_layout_size_v<Alternatives...>;
+      static constexpr size_t _alignof = max_alignof_v<Alternatives...>;
       uint16_t _which                  = 0;
-      detail::variant_storage<Alternatives...> _storage;
+      variant_storage<Alternatives...> _storage;
    };
 
-} // namespace psizam
+} // namespace psizam::detail

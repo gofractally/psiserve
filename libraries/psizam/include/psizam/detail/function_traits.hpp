@@ -45,39 +45,36 @@
 // Tested at Apple LLVM version 10.0.1 (clang-1001.0.46.4)
 #define AUTO_PARAM_WORKAROUND(X) psizam::detail::make_dependent<decltype(X)>(X)
 
-namespace psizam {
+namespace psizam::detail {
 
    struct freestanding {};
 
-   namespace detail {
-      template <typename T>
-      constexpr bool pass_type() { return true; }
+   template <typename T>
+   constexpr bool pass_type() { return true; }
 
-      template <typename>
-      constexpr bool is_callable_impl(...) {
-        return false;
-      }
-
-      template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-      template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
-
-      template <typename T>
-      struct wrapper_t {
-        using type = T;
-        constexpr wrapper_t() {}
-        constexpr wrapper_t(T&&) {}
-      };
-
-      template <typename T, typename U>
-      inline constexpr U&& make_dependent(U&& u) { return std::forward<U>(u); }
+   template <typename>
+   constexpr bool is_callable_impl(...) {
+     return false;
    }
+
+   template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+   template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+   template <typename T>
+   struct wrapper_t {
+     using type = T;
+     constexpr wrapper_t() {}
+     constexpr wrapper_t(T&&) {}
+   };
+
+   template <typename T, typename U>
+   inline constexpr U&& make_dependent(U&& u) { return std::forward<U>(u); }
 
    template <typename F>
    constexpr bool is_callable(F&& fn) { return PSIZAM_HAS_MEMBER(fn, operator()); }
 
-   namespace detail {
-      template <bool Decay, typename R, typename... Args>
-      constexpr auto get_types(R(Args...)) -> std::tuple<R, freestanding,
+   template <bool Decay, typename R, typename... Args>
+   constexpr auto get_types(R(Args...)) -> std::tuple<R, freestanding,
                                               std::tuple<std::conditional_t<Decay, std::decay_t<Args>, Args>...>>;
       template <bool Decay, typename R, typename Cls, typename... Args>
       constexpr auto get_types(R (Cls::*)(Args...)) -> std::tuple<R, Cls,
@@ -147,9 +144,8 @@ namespace psizam {
             return parameters_from_impl<N>(fn);
       }
 
-      template <std::size_t N, typename F>
-      using parameters_from_impl_t = decltype(parameters_from_impl<N>(std::declval<F>()));
-   } // ns psizam::detail
+   template <std::size_t N, typename F>
+   using parameters_from_impl_t = decltype(parameters_from_impl<N>(std::declval<F>()));
 
    template <typename R, typename... Args>
    constexpr bool is_function(R(*)(Args...)) { return true; }
@@ -188,25 +184,25 @@ namespace psizam {
    constexpr bool is_class(F&&) { return std::is_class_v<F>; }
 
    template <typename F>
-   constexpr auto return_type(F&& fn) -> std::tuple_element_t<0, detail::get_types_t<false, F>>;
+   constexpr auto return_type(F&& fn) -> std::tuple_element_t<0, get_types_t<false, F>>;
 
    template <auto FN>
    using return_type_t = decltype(return_type(AUTO_PARAM_WORKAROUND(FN)));
 
    template <typename F>
-   constexpr auto class_from_member(F&& fn) -> std::tuple_element_t<1, detail::get_types_t<false, F>>;
+   constexpr auto class_from_member(F&& fn) -> std::tuple_element_t<1, get_types_t<false, F>>;
 
    template <auto FN>
    using class_from_member_t = decltype(class_from_member(AUTO_PARAM_WORKAROUND(FN)));
 
    template <typename F>
-   constexpr auto flatten_parameters(F&& fn) -> std::tuple_element_t<2, detail::get_types_t<false, F>>;
+   constexpr auto flatten_parameters(F&& fn) -> std::tuple_element_t<2, get_types_t<false, F>>;
 
    template <auto FN>
    using flatten_parameters_t = decltype(flatten_parameters(AUTO_PARAM_WORKAROUND(FN)));
 
    template <typename F>
-   constexpr auto decayed_flatten_parameters(F&& fn) -> std::tuple_element_t<2, detail::get_types_t<true, F>>;
+   constexpr auto decayed_flatten_parameters(F&& fn) -> std::tuple_element_t<2, get_types_t<true, F>>;
 
    template <auto FN>
    using decayed_flatten_parameters_t = decltype(decayed_flatten_parameters(AUTO_PARAM_WORKAROUND(FN)));
@@ -219,7 +215,7 @@ namespace psizam {
    using parameter_at_t = decltype(parameter_at<N>(AUTO_PARAM_WORKAROUND(FN)));
 
    template <std::size_t N, typename F>
-   constexpr auto parameters_from(F&& fn) -> detail::parameters_from_impl_t<N, F>;
+   constexpr auto parameters_from(F&& fn) -> parameters_from_impl_t<N, F>;
 
    template <std::size_t N, auto FN>
    using parameters_from_t = decltype(parameters_from<N>(AUTO_PARAM_WORKAROUND(FN)));

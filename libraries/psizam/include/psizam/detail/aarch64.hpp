@@ -17,7 +17,7 @@
 #include <variant>
 #include <vector>
 
-namespace psizam {
+namespace psizam::detail {
 
    // ARM64 (AArch64) JIT backend for psizam WebAssembly engine.
    //
@@ -5122,7 +5122,7 @@ namespace psizam {
       static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          native_value result;
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             auto saved = context->_remaining_call_depth;
             context->_remaining_call_depth = remaining_stack;
             scope_guard g{[&](){ context->_remaining_call_depth = saved; }};
@@ -5203,11 +5203,11 @@ namespace psizam {
       static void on_memory_error() {
          signal_throw<wasm_memory_exception>("wasm memory out-of-bounds");
       }
-      static void on_unreachable() { psizam::signal_throw<wasm_interpreter_exception>( "unreachable" ); }
-      static void on_fp_error() { psizam::signal_throw<wasm_interpreter_exception>( "floating point error" ); }
-      static void on_call_indirect_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect out of range" ); }
-      static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
-      static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>( "stack overflow" ); }
+      static void on_unreachable() { signal_throw<wasm_interpreter_exception>( "unreachable" ); }
+      static void on_fp_error() { signal_throw<wasm_interpreter_exception>( "floating point error" ); }
+      static void on_call_indirect_error() { signal_throw<wasm_interpreter_exception>( "call_indirect out of range" ); }
+      static void on_type_error() { signal_throw<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
+      static void on_stack_overflow() { signal_throw<wasm_interpreter_exception>( "stack overflow" ); }
 
       static void unimplemented() { PSIZAM_ASSERT(false, wasm_parse_exception, "Sorry, not implemented."); }
 

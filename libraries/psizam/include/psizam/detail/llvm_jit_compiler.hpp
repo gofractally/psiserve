@@ -26,9 +26,9 @@ namespace llvm {
    }
 }
 
-namespace psizam {
+namespace psizam { class host_function_table; }
 
-   class host_function_table;
+namespace psizam::detail {
 
    /// LLVM JIT compiler options.
    struct llvm_jit_options {
@@ -64,4 +64,4 @@ namespace psizam {
       std::unique_ptr<impl> _impl;
    };
 
-} // namespace psizam
+} // namespace psizam::detail

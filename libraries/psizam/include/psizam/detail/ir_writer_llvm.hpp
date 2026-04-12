@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <exception>
 
-namespace psizam {
+namespace psizam::detail {
 
    // Forward-declared LLVM compile pipeline (defined in src/llvm_compile.cpp).
    // Takes IR functions from ir_writer and compiles them to native code via LLVM.
@@ -50,4 +50,4 @@ namespace psizam {
       bool _deterministic = false;
    };
 
-} // namespace psizam
+} // namespace psizam::detail

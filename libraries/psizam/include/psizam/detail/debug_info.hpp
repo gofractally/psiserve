@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <algorithm>
 
-namespace psizam {
+namespace psizam::detail {
 
 struct null_debug_info {
    using builder = null_debug_info;

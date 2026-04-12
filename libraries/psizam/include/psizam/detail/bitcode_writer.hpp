@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace psizam {
+namespace psizam::detail {
 
    class bitcode_writer {
 

@@ -8,6 +8,7 @@
 #include <vector>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 // Stub host functions matching psibase's NativeFunctions signatures.
 // Each does minimal work to isolate the call overhead.

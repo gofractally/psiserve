@@ -20,7 +20,7 @@
 #endif
 
 
-namespace psizam {
+namespace psizam::detail {
 
    struct instruction_counter {
       template<int line>
@@ -6852,7 +6852,7 @@ namespace psizam {
          // the exception tables for them.
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          native_value result;
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             auto saved = context->_remaining_call_depth;
             context->_remaining_call_depth = remaining_stack;
             scope_guard g{[&](){ context->_remaining_call_depth = saved; }};
@@ -6896,14 +6896,14 @@ namespace psizam {
       static uint32_t table_get_helper(void* ctx, uint32_t table_idx, uint32_t elem_idx) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          if (elem_idx >= context->get_table_size(table_idx))
-            psizam::signal_throw<wasm_interpreter_exception>("table index out of range");
+            signal_throw<wasm_interpreter_exception>("table index out of range");
          return context->get_table_base(table_idx)[elem_idx].index;
       }
 
       static void table_set_helper(void* ctx, uint32_t table_idx, uint32_t elem_idx, uint32_t val) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          if (elem_idx >= context->get_table_size(table_idx))
-            psizam::signal_throw<wasm_interpreter_exception>("table index out of range");
+            signal_throw<wasm_interpreter_exception>("table index out of range");
          auto& entry = context->get_table_base(table_idx)[elem_idx];
          entry.index = val;
          entry.type = UINT32_MAX;
@@ -7032,11 +7032,11 @@ namespace psizam {
 
       static void on_memory_error() { signal_throw<wasm_memory_exception>("wasm memory out-of-bounds"); }
 
-      static void on_unreachable() { psizam::signal_throw<wasm_interpreter_exception>( "unreachable" ); }
-      static void on_fp_error() { psizam::signal_throw<wasm_interpreter_exception>( "floating point error" ); }
-      static void on_call_indirect_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect out of range" ); }
-      static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
-      static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>( "stack overflow" ); }
+      static void on_unreachable() { signal_throw<wasm_interpreter_exception>( "unreachable" ); }
+      static void on_fp_error() { signal_throw<wasm_interpreter_exception>( "floating point error" ); }
+      static void on_call_indirect_error() { signal_throw<wasm_interpreter_exception>( "call_indirect out of range" ); }
+      static void on_type_error() { signal_throw<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
+      static void on_stack_overflow() { signal_throw<wasm_interpreter_exception>( "stack overflow" ); }
    };
    using machine_code_writer_x64 = machine_code_writer_t<>;
 #ifdef __x86_64__

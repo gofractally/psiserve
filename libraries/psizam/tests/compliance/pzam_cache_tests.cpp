@@ -6,6 +6,7 @@
 #include <catch2/catch.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 TEST_CASE("pzam: fracpack serialization roundtrip", "[pzam]") {
    pzam_file file;

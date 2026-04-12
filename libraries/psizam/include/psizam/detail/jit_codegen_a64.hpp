@@ -33,7 +33,7 @@
 #include <variant>
 #include <vector>
 
-namespace psizam {
+namespace psizam::detail {
 
    class jit_codegen_a64 {
     public:
@@ -3715,7 +3715,7 @@ namespace psizam {
       static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          native_value result;
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             auto saved = context->_remaining_call_depth;
             context->_remaining_call_depth = remaining_stack;
             scope_guard g{[&](){ context->_remaining_call_depth = saved; }};
@@ -3733,22 +3733,22 @@ namespace psizam {
          return context->grow_linear_memory(pages);
       }
       static void on_memory_error() { signal_throw<wasm_memory_exception>("wasm memory out-of-bounds"); }
-      static void on_unreachable() { psizam::signal_throw<wasm_interpreter_exception>("unreachable"); }
-      static void on_fp_error() { psizam::signal_throw<wasm_interpreter_exception>("floating point error"); }
-      static void on_call_indirect_error() { psizam::signal_throw<wasm_interpreter_exception>("call_indirect out of range"); }
-      static void on_type_error() { psizam::signal_throw<wasm_interpreter_exception>("call_indirect incorrect function type"); }
-      static void on_stack_overflow() { psizam::signal_throw<wasm_interpreter_exception>("stack overflow"); }
+      static void on_unreachable() { signal_throw<wasm_interpreter_exception>("unreachable"); }
+      static void on_fp_error() { signal_throw<wasm_interpreter_exception>("floating point error"); }
+      static void on_call_indirect_error() { signal_throw<wasm_interpreter_exception>("call_indirect out of range"); }
+      static void on_type_error() { signal_throw<wasm_interpreter_exception>("call_indirect incorrect function type"); }
+      static void on_stack_overflow() { signal_throw<wasm_interpreter_exception>("stack overflow"); }
 
       // Bulk memory/table runtime helpers
       static void memory_init_impl(void* ctx, uint32_t seg_idx, uint32_t dest, uint32_t src, uint32_t count) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             context->init_linear_memory(seg_idx, dest, src, count);
          });
       }
       static void data_drop_impl(void* ctx, uint32_t seg_idx) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             context->drop_data(seg_idx);
          });
       }
@@ -3756,13 +3756,13 @@ namespace psizam {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          uint32_t seg_idx = packed_idx & 0xFFFF;
          uint32_t table_idx = packed_idx >> 16;
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             context->init_table(seg_idx, dest, src, count, table_idx);
          });
       }
       static void elem_drop_impl(void* ctx, uint32_t seg_idx) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             context->drop_elem(seg_idx);
          });
       }
@@ -3770,7 +3770,7 @@ namespace psizam {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          uint32_t dst_table = packed_tables & 0xFFFF;
          uint32_t src_table = packed_tables >> 16;
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             auto* s = context->get_table_ptr(src, count, src_table);
             auto* d = context->get_table_ptr(dest, count, dst_table);
             if (count > 0)
@@ -3779,22 +3779,22 @@ namespace psizam {
       }
       static void memory_copy_impl(void* ctx, uint32_t dest, uint32_t src, uint32_t count) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             char* mem = context->linear_memory();
             uint32_t mem_size = static_cast<uint32_t>(context->current_linear_memory()) * 65536u;
             if (uint64_t(dest) + count > mem_size || uint64_t(src) + count > mem_size)
-               psizam::signal_throw<wasm_memory_exception>("out of bounds memory access");
+               signal_throw<wasm_memory_exception>("out of bounds memory access");
             if (count > 0)
                std::memmove(mem + dest, mem + src, count);
          });
       }
       static void memory_fill_impl(void* ctx, uint32_t dest, uint32_t val, uint32_t count) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
-         psizam::longjmp_on_exception([&]() {
+         longjmp_on_exception([&]() {
             char* mem = context->linear_memory();
             uint32_t mem_size = static_cast<uint32_t>(context->current_linear_memory()) * 65536u;
             if (uint64_t(dest) + count > mem_size)
-               psizam::signal_throw<wasm_memory_exception>("out of bounds memory access");
+               signal_throw<wasm_memory_exception>("out of bounds memory access");
             if (count > 0)
                std::memset(mem + dest, static_cast<uint8_t>(val), count);
          });
@@ -3874,4 +3874,4 @@ namespace psizam {
       }
    };
 
-} // namespace psizam
+} // namespace psizam::detail

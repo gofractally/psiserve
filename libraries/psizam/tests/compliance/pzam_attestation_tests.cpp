@@ -4,6 +4,7 @@
 #include <catch2/catch.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 // Mock signer: uses the pubkey hash as the "signature" XORed with the digest.
 // Not real crypto — just enough to test the infrastructure.

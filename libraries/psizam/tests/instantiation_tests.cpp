@@ -8,6 +8,7 @@
 #include <catch2/catch.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 #pragma GCC push_options
 #pragma GCC optimize ("O0")

@@ -8,9 +8,8 @@
 #include <string>
 #include <vector>
 
-namespace psizam {
-   namespace detail {
-      template <typename T, typename Allocator> 
+namespace psizam::detail {
+      template <typename T, typename Allocator>
       class vector {
          public:
             constexpr vector(Allocator& allocator, size_t size=0) :
@@ -101,13 +100,11 @@ namespace psizam {
          unmanaged_base_member(size_t sz) : alloc(sz) {}
          allocator alloc;
       };
-   } // ns detail
-
    template <typename T, typename Allocator>
-   class managed_vector : public detail::vector<T, Allocator> {
+   class managed_vector : public vector<T, Allocator> {
       public:
-         using detail::vector<T, Allocator>::vector;
-         constexpr inline void set_owner( Allocator& alloc ) { detail::vector<T, Allocator>::_allocator = &alloc; }
+         using vector<T, Allocator>::vector;
+         constexpr inline void set_owner( Allocator& alloc ) { vector<T, Allocator>::_allocator = &alloc; }
    };
 
    template <typename T>
@@ -121,4 +118,4 @@ namespace psizam {
        str[i] = vec[i];
      return str;
    }
-} // namespace psizam
+} // namespace psizam::detail

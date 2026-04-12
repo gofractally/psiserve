@@ -6,7 +6,7 @@
 #include <mutex>
 #include <condition_variable>
 
-namespace psizam {
+namespace psizam::detail {
 
    /// \brief Triggers a callback after a given time elapses.
    ///
@@ -86,4 +86,4 @@ namespace psizam {
       ~null_watchdog() {} // avoid unused variable warnings
    };
 
-} // namespace psizam
+} // namespace psizam::detail

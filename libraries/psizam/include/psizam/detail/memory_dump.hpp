@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <utility>
 
-namespace psizam {
+namespace psizam::detail {
 
 #define MEMORY_DUMP_OP_VISIT(name, code) \
    void operator()(const PSIZAM_OPCODE_T(name)& op) { \
@@ -88,11 +88,11 @@ namespace psizam {
             size_t index=0;
             memory_dump_visitor<Stream> md(std::forward<Stream>(stream), index);
             for (; index < _size; index++) {
-               psizam::visit(std::move(md), std::move(_opcodes[index]));
+               visit(std::move(md), std::move(_opcodes[index]));
             }
          }
       private:
          Opcode* _opcodes = nullptr;
          size_t  _size    = 0;
    };
-} // namespace psizam
+} // namespace psizam::detail

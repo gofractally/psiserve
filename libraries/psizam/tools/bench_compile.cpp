@@ -27,6 +27,7 @@
 #include <algorithm>
 
 using namespace psizam;
+using namespace psizam::detail;
 namespace fs = std::filesystem;
 
 struct bench_options : default_options {

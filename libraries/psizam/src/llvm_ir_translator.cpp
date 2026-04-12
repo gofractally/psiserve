@@ -61,7 +61,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace psizam {
+namespace psizam::detail {
 
    struct llvm_ir_translator::impl {
       const module&             wasm_mod;
@@ -4387,4 +4387,4 @@ namespace psizam {
       return result;
    }
 
-} // namespace psizam
+} // namespace psizam::detail

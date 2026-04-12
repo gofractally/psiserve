@@ -10,7 +10,7 @@
 #include <psizam/detail/jit_ir.hpp>
 #include <cstring>
 
-namespace psizam {
+namespace psizam::detail {
 
    struct jit_optimizer {
 
@@ -639,4 +639,4 @@ namespace psizam {
       }
    };
 
-} // namespace psizam
+} // namespace psizam::detail

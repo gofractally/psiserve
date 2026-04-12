@@ -7,6 +7,7 @@
 #include <string>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 #include "hello.wasm.hpp"
 
@@ -30,7 +31,7 @@ struct example_host_methods {
    }
 };
 
-struct cnv : type_converter<example_host_methods> {
+struct cnv : psizam::type_converter<example_host_methods> {
    using type_converter::type_converter;
    using type_converter::from_wasm;
    PSIZAM_FROM_WASM(bool, (uint32_t value)) { return value ? 1 : 0; }

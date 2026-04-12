@@ -11,7 +11,7 @@
 #include <cstring>
 #include <vector>
 
-namespace psizam {
+namespace psizam::detail {
 
    /// Symbols that may be embedded as absolute addresses in JIT-generated code.
    /// Each symbol maps to a specific C++ function or data address that must be
@@ -269,4 +269,4 @@ namespace psizam {
       }
    }
 
-} // namespace psizam
+} // namespace psizam::detail

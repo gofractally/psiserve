@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace psizam {
+namespace psizam::detail {
 
    // x86_64 assembler base class (CRTP).
    // Provides register types, instruction constant definitions,
@@ -901,4 +901,4 @@ namespace psizam {
       void emit_const_ones(xmm_register reg) { emit(VPCMPEQB, reg, reg, reg); }
    };
 
-} // namespace psizam
+} // namespace psizam::detail

@@ -115,7 +115,7 @@ namespace psizam {
    /// Dispatches method calls to WASM exported functions via the execution context.
    template<typename Exports>
    class pzam_export_dispatch {
-      jit_execution_context<>* _ctx;
+      detail::jit_execution_context<>* _ctx;
       module*                  _mod;
       void*                    _host;
 
@@ -136,13 +136,13 @@ namespace psizam {
       }
 
    public:
-      pzam_export_dispatch(jit_execution_context<>* ctx, module* mod, void* host)
+      pzam_export_dispatch(detail::jit_execution_context<>* ctx, module* mod, void* host)
          : _ctx(ctx), _mod(mod), _host(host) {}
 
       template<std::size_t I, auto MemberPtr, typename... Args>
       decltype(auto) call(Args&&... args) {
          uint32_t func_idx = resolve_index(I);
-         auto result = _ctx->execute(_host, jit_visitor{nullptr}, func_idx,
+         auto result = _ctx->execute(_host, detail::jit_visitor{nullptr}, func_idx,
                                      std::forward<Args>(args)...);
          using R = std::invoke_result_t<decltype(MemberPtr), Exports, Args...>;
          if constexpr (std::is_void_v<R>) {
@@ -173,7 +173,7 @@ namespace psizam {
    class pzam_instance {
       module                    _mod;
       wasm_allocator            _wa;
-      jit_execution_context<>   _ctx;
+      detail::jit_execution_context<>   _ctx;
       host_function_table       _table;
       Imports*                  _host;
       void*                     _exec_code = nullptr;
@@ -217,7 +217,7 @@ namespace psizam {
          void* symbol_table[static_cast<size_t>(reloc_symbol::NUM_SYMBOLS)];
 #if defined(__aarch64__)
          std::memset(symbol_table, 0, sizeof(symbol_table));
-         using jit_cg = jit_codegen_a64;
+         using jit_cg = detail::jit_codegen_a64;
          symbol_table[static_cast<uint32_t>(reloc_symbol::call_host_function)]     = reinterpret_cast<void*>(&jit_cg::call_host_function);
          symbol_table[static_cast<uint32_t>(reloc_symbol::current_memory)]         = reinterpret_cast<void*>(&jit_cg::current_memory);
          symbol_table[static_cast<uint32_t>(reloc_symbol::grow_memory)]            = reinterpret_cast<void*>(&jit_cg::grow_memory);
@@ -235,7 +235,7 @@ namespace psizam {
          symbol_table[static_cast<uint32_t>(reloc_symbol::on_type_error)]          = reinterpret_cast<void*>(&jit_cg::on_type_error);
          symbol_table[static_cast<uint32_t>(reloc_symbol::on_stack_overflow)]      = reinterpret_cast<void*>(&jit_cg::on_stack_overflow);
 #else
-         build_symbol_table<jit_codegen>(symbol_table);
+         build_symbol_table<detail::jit_codegen>(symbol_table);
 #endif
          build_llvm_symbol_table(symbol_table);
 
@@ -345,14 +345,14 @@ namespace psizam {
          }
 
          // Initialize execution context
-         _ctx = jit_execution_context<>(_mod, 8192);
+         _ctx = detail::jit_execution_context<>(_mod, 8192);
          _ctx.set_wasm_allocator(&_wa);
          _ctx.set_host_table(&_table);
          _ctx.reset();
 
          // Run start function if present
          if (_mod.start != std::numeric_limits<uint32_t>::max()) {
-            _ctx.execute(_host, jit_visitor{nullptr}, _mod.start);
+            _ctx.execute(_host, detail::jit_visitor{nullptr}, _mod.start);
          }
       }
 
@@ -362,7 +362,7 @@ namespace psizam {
       }
 
       /// Direct access to the execution context.
-      jit_execution_context<>& context() { return _ctx; }
+      detail::jit_execution_context<>& context() { return _ctx; }
 
       /// Direct access to the module.
       module& mod() { return _mod; }

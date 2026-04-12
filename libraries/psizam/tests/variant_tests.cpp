@@ -3,6 +3,7 @@
 #include <catch2/catch.hpp>
 
 using namespace psizam;
+using namespace psizam::detail;
 
 TEST_CASE("Testing variant with stateless class", "[variant_stateless_tests]") {
    struct vis {
