@@ -45,6 +45,7 @@ namespace psizam {
       bool deterministic     = false; // Constrained FP: prevents identity-op folding, preserves NaN semantics
       bool enable_backtrace  = false; // Enable async backtrace support
       int  opt_level         = 2;     // LLVM optimization level (0-3)
+      bool per_function      = false; // Per-function compilation: external linkage for all decls
    };
 
    /// Translates psizam IR functions to LLVM IR.

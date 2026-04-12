@@ -317,11 +317,39 @@ namespace psizam {
                   continue;
                }
 
-               // Internal code reference (wasm functions, local labels within .text)
+               // WASM function references (per-function compilation).
+               // Must check before is_internal_code: with ExternalLinkage, LLVM
+               // emits relocations for calls between symbols in the same .text
+               // section (e.g., wasm_entry_N → wasm_func_N within one compilation
+               // unit). These are NOT pre-resolved by the assembler.
+               if (sym_name.starts_with("wasm_entry_") || sym_name.starts_with("wasm_func_")) {
+                  bool is_entry = sym_name.starts_with("wasm_entry_");
+                  std::string idx_str = is_entry ? sym_name.substr(11) : sym_name.substr(10);
+                  uint32_t func_idx = std::stoul(idx_str);
+                  uint32_t num_imports_val = mod.get_imported_functions_size();
+                  if (func_idx >= num_imports_val) {
+                     code_relocation cr;
+                     cr.code_offset = static_cast<uint32_t>(reloc.getOffset());
+                     cr.symbol = reloc_symbol::code_blob_self;
+                     cr.type = map_elf_reloc_type(reloc.getType(), is_x86_64);
+                     uint32_t code_idx = func_idx - num_imports_val;
+                     // Negative addend = pending function ref
+                     // Body refs:  -(code_idx + 1)             [range -1..-N]
+                     // Entry refs: -(code_idx + 1 + code_count) [range -(N+1)..-(2N)]
+                     int32_t encoded = -static_cast<int32_t>(code_idx + 1);
+                     if (is_entry) {
+                        encoded -= static_cast<int32_t>(mod.code.size());
+                     }
+                     cr.addend = encoded;
+                     result.relocations.push_back(cr);
+                  }
+                  continue;
+               }
+
+               // Internal code reference (local labels within .text)
                // The assembler already resolves intra-section relocations in .text,
                // so the instructions have correct relative offsets. Skip them.
                if (is_internal_code ||
-                   sym_name.starts_with("wasm_entry_") || sym_name.starts_with("wasm_func_") ||
                    sym_name.starts_with(".L") || sym_name.starts_with(".")) {
                   continue;
                }
@@ -360,9 +388,10 @@ namespace psizam {
          }
       }
 
-      // Find function offsets by looking up wasm_entry_* symbols
+      // Find function offsets by looking up wasm_entry_* and wasm_func_* symbols
       uint32_t num_imports = mod.get_imported_functions_size();
       result.function_offsets.resize(mod.code.size(), {0, 0});
+      result.body_offsets.resize(mod.code.size(), {0, 0});
 
       for (const auto& sym : obj.symbols()) {
          auto name_or_err = sym.getName();
@@ -378,8 +407,17 @@ namespace psizam {
                   if (addr_or_err) {
                      result.function_offsets[code_idx].first = static_cast<uint32_t>(*addr_or_err);
                   }
-                  auto val_or_err = sym.getValue();
-                  // Size is tricky from symbols; leave as 0 for now
+               }
+            }
+         } else if (name.starts_with("wasm_func_")) {
+            uint32_t func_idx = std::stoul(name.substr(10));
+            if (func_idx >= num_imports) {
+               uint32_t code_idx = func_idx - num_imports;
+               if (code_idx < result.body_offsets.size()) {
+                  auto addr_or_err = sym.getAddress();
+                  if (addr_or_err) {
+                     result.body_offsets[code_idx].first = static_cast<uint32_t>(*addr_or_err);
+                  }
                }
             }
          }

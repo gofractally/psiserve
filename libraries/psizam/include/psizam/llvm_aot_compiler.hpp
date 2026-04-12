@@ -26,6 +26,7 @@ namespace psizam {
       std::vector<uint8_t> code;                   // native code blob
       std::vector<code_relocation> relocations;     // relocations against runtime symbols
       std::vector<std::pair<uint32_t, uint32_t>> function_offsets; // (offset, size) per entry wrapper
+      std::vector<std::pair<uint32_t, uint32_t>> body_offsets;     // (offset, size) per function body
       std::string error;                            // non-empty on failure
    };
 

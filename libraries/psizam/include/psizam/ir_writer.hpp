@@ -2245,17 +2245,17 @@ namespace psizam {
       }
 
       // ──── State ────
-      growable_allocator& _allocator;       // Code only (executable, permanent)
       std::size_t _source_bytes;
+      bool _unreachable = false;
+      bool _enable_backtrace;
+      bool _stack_limit_is_bytes;
+    protected:
+      growable_allocator& _allocator;       // Code only (executable, permanent)
       module& _mod;
       jit_scratch_allocator _scratch;       // Watermark wrapper for _allocator (transient IR/regalloc data)
       ir_function* _functions = nullptr;
       uint32_t _num_functions = 0;
       ir_function* _func = nullptr;
-      bool _unreachable = false;
-      bool _enable_backtrace;
-      bool _stack_limit_is_bytes;
-    protected:
       pzam_compile_result* _compile_result = nullptr;
       bool _skip_codegen = false;           // Set by subclasses to bypass native codegen
     public:

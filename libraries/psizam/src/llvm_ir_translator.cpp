@@ -263,8 +263,13 @@ namespace psizam {
             auto* fn_ty = llvm::FunctionType::get(ret_ty, params, false);
 
             std::string name = "wasm_func_" + std::to_string(i);
-            auto* fn = llvm::Function::Create(fn_ty, llvm::Function::InternalLinkage,
-                                               name, llvm_mod.get());
+            // Per-function mode: all functions are external declarations except the
+            // one being compiled. Use ExternalLinkage so LLVM doesn't reject
+            // body-less internal functions.
+            auto linkage = opts.per_function
+               ? llvm::Function::ExternalLinkage
+               : llvm::Function::InternalLinkage;
+            auto* fn = llvm::Function::Create(fn_ty, linkage, name, llvm_mod.get());
             // In deterministic/softfloat mode, WASM requires precise FP semantics —
             // identity operations (x-0, x*1) must not be folded away because they
             // quiet sNaN to qNaN.
