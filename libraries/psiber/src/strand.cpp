@@ -46,7 +46,53 @@ namespace psiber
          _free_list = ret;
       }
 
-      // 2. First-fit scan of free list
+      // 2. Coalesce adjacent free blocks and first-fit scan.
+      //    Sort free list by address so we can detect adjacency,
+      //    then merge neighbors and search in a single pass.
+      if (_free_list)
+      {
+         // Insertion sort by address (free lists are typically short)
+         Block* sorted = nullptr;
+         Block* cur    = _free_list;
+         while (cur)
+         {
+            Block* next = cur->next;
+            if (!sorted || cur < sorted)
+            {
+               cur->next = sorted;
+               sorted    = cur;
+            }
+            else
+            {
+               Block* s = sorted;
+               while (s->next && s->next < cur)
+                  s = s->next;
+               cur->next = s->next;
+               s->next   = cur;
+            }
+            cur = next;
+         }
+
+         // Merge adjacent blocks
+         cur = sorted;
+         while (cur && cur->next)
+         {
+            auto* end_of_cur = reinterpret_cast<char*>(cur) + cur->size;
+            if (end_of_cur == reinterpret_cast<char*>(cur->next))
+            {
+               cur->size += cur->next->size;
+               cur->next  = cur->next->next;
+               // Don't advance — check if we can merge with the next one too
+            }
+            else
+            {
+               cur = cur->next;
+            }
+         }
+         _free_list = sorted;
+      }
+
+      // 3. First-fit scan of (now coalesced) free list
       Block** prev = &_free_list;
       for (Block* b = _free_list; b; prev = &b->next, b = b->next)
       {
@@ -59,7 +105,7 @@ namespace psiber
          }
       }
 
-      // 3. Bump pointer
+      // 4. Bump pointer
       if (_bump + total > _capacity)
       {
          _alloc_lock.unlock();
@@ -138,7 +184,6 @@ namespace psiber
    Fiber* strand::release()
    {
       Fiber* next = nullptr;
-      bool   should_post = false;
 
       _queue_lock.lock();
 
@@ -153,15 +198,45 @@ namespace psiber
          next->next_wake = nullptr;
 
          _active.store(next, std::memory_order_release);
-         should_post = true;
       }
 
       _queue_lock.unlock();
 
-      if (should_post)
-         maybe_post();
+      // No maybe_post() here — the caller (run loop) handles the
+      // returned fiber directly by adding it to the local ready queue.
+      // Posting to the reactor would cause a double-enqueue race.
 
       return next;
+   }
+
+   bool strand::enter(Fiber* fiber)
+   {
+      assert(fiber);
+
+      _queue_lock.lock();
+
+      if (_active.load(std::memory_order_relaxed) == nullptr)
+      {
+         _active.store(fiber, std::memory_order_release);
+         _queue_lock.unlock();
+         return true;  // became active — keep running
+      }
+
+      // Queue behind the active fiber (FIFO)
+      fiber->next_wake = nullptr;
+      if (_wait_tail)
+      {
+         _wait_tail->next_wake = fiber;
+         _wait_tail            = fiber;
+      }
+      else
+      {
+         _wait_head = fiber;
+         _wait_tail = fiber;
+      }
+
+      _queue_lock.unlock();
+      return false;  // queued — caller should park
    }
 
    void strand::maybe_post()

@@ -258,3 +258,62 @@ TEST_CASE("strand scheduling: release then re-enqueue", "[strand]")
    s.enqueue(&f1);
    REQUIRE(s.active() == &f1);
 }
+
+// ── Arena coalescing tests ─────────────────────────────────────────────
+
+TEST_CASE("strand arena: coalescing adjacent blocks", "[strand]")
+{
+   // Use a small arena so we can observe coalescing effects.
+   // Each alloc of 16 bytes uses 32 bytes (16 header + 16 payload).
+   strand s(256);
+
+   // Allocate 4 adjacent blocks
+   void* p1 = s.alloc(16);
+   void* p2 = s.alloc(16);
+   void* p3 = s.alloc(16);
+   void* p4 = s.alloc(16);
+   REQUIRE(p1 != nullptr);
+   REQUIRE(p2 != nullptr);
+   REQUIRE(p3 != nullptr);
+   REQUIRE(p4 != nullptr);
+
+   // Free all 4 blocks (they're adjacent in the bump region)
+   s.free(p1);
+   s.free(p2);
+   s.free(p3);
+   s.free(p4);
+
+   // Now try to allocate a single large block that only fits if
+   // the 4 freed blocks were coalesced.
+   // 4 blocks × 32 bytes each = 128 bytes total region freed.
+   // A 96-byte payload needs 112 bytes (16 header + 96 payload).
+   // This exceeds any single 32-byte block but fits the coalesced region.
+   void* big = s.alloc(96);
+   REQUIRE(big != nullptr);
+}
+
+TEST_CASE("strand arena: non-adjacent blocks are not coalesced", "[strand]")
+{
+   strand s(512);
+
+   // Allocate 3 blocks, free only blocks 1 and 3 (keep 2)
+   void* p1 = s.alloc(16);
+   void* p2 = s.alloc(16);
+   void* p3 = s.alloc(16);
+   REQUIRE(p1 != nullptr);
+   REQUIRE(p2 != nullptr);
+   REQUIRE(p3 != nullptr);
+
+   s.free(p1);
+   s.free(p3);
+   // p2 is still allocated — p1 and p3 are NOT adjacent
+
+   // A 48-byte payload needs 64 bytes.
+   // p1 = 32 bytes, p3 = 32 bytes, neither is large enough alone.
+   // They can't coalesce because p2 sits between them.
+   void* big = s.alloc(48);
+   // Should come from bump pointer (still has space), not from coalescing
+   REQUIRE(big != nullptr);
+   // Verify it's NOT from the free list (should be past p3)
+   REQUIRE(big > p3);
+}

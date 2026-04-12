@@ -176,8 +176,9 @@ namespace psiber
 
          if (fiber)
          {
-            _current     = fiber;
-            fiber->state = FiberState::Running;
+            _current         = fiber;
+            fiber->state     = FiberState::Running;
+            fiber->home_sched = this;  // track current scheduler (fiber may have migrated)
 
             fiber->cont = fiber->cont.resume();
 

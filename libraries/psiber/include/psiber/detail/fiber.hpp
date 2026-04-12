@@ -80,6 +80,13 @@ namespace psiber
             entry_dtor = nullptr;
          }
 
+         // ── Native stack ────────────────────────────────────────────────
+
+         /// Size of this fiber's native stack (bytes).
+         /// Stored for pool reuse — a pooled fiber can only be reused
+         /// for work that fits within its allocated stack.
+         std::size_t native_stack_size = 0;
+
          // ── Boost.Context ──────────────────────────────────────────────
 
          /// The fiber's suspended continuation (held by the scheduler).

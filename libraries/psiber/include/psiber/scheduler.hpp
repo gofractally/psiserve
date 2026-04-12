@@ -91,8 +91,9 @@ namespace psiber
       /// Templated to avoid std::function heap allocation — the callable is
       /// moved directly into the Boost.Context closure on the fiber's stack.
       /// Optional name for debugging (must point to stable storage).
+      /// Optional stack_size in bytes (0 = use default_fiber_stack_size).
       template <typename F>
-      void spawnFiber(F&& entry, const char* name = nullptr);
+      void spawnFiber(F&& entry, const char* name = nullptr, std::size_t stack_size = 0);
 
       /// Main scheduler loop.  Runs until all fibers complete or interrupt().
       void run();
@@ -288,8 +289,12 @@ namespace psiber
       std::vector<Fiber*>                  _free_fibers;  // pooled recyclable fibers
       uint32_t                             _next_id = 0;
 
-      /// Native stack size for each fiber (512 KB).
-      static constexpr std::size_t fiber_native_stack_size = 512 * 1024;
+      /// Default native stack size for fibers (64 KB).
+      /// WASM handlers should compute their required stack from the
+      /// module's call graph and pass it to spawnFiber explicitly.
+      /// Internal coordination fibers (I/O, timers) rarely need
+      /// more than a few KB.
+      static constexpr std::size_t default_fiber_stack_size = 64 * 1024;
 
       /// Thrown inside a fiber when the scheduler is shutting down.
       struct shutdown_exception {};
@@ -318,34 +323,41 @@ namespace psiber
 
    template <typename Engine>
    template <typename F>
-   void basic_scheduler<Engine>::spawnFiber(F&& entry, const char* name)
+   void basic_scheduler<Engine>::spawnFiber(F&& entry, const char* name, std::size_t stack_size)
    {
-      // Check freelist first — reuse a pooled fiber (no mmap)
-      if (!_free_fibers.empty())
-      {
-         Fiber* fp = _free_fibers.back();
-         _free_fibers.pop_back();
+      if (stack_size == 0)
+         stack_size = default_fiber_stack_size;
 
-         fp->setEntry(std::forward<F>(entry));
-         fp->name       = name;
-         fp->state      = FiberState::Ready;
-         fp->priority   = 1;
-         fp->posted_num = _posted_counter++;
-         addToReadyQueue(fp);
-         return;
+      // Check freelist — reuse a pooled fiber whose stack is large enough
+      for (auto it = _free_fibers.begin(); it != _free_fibers.end(); ++it)
+      {
+         if ((*it)->native_stack_size >= stack_size)
+         {
+            Fiber* fp = *it;
+            _free_fibers.erase(it);
+
+            fp->setEntry(std::forward<F>(entry));
+            fp->name       = name;
+            fp->state      = FiberState::Ready;
+            fp->priority   = 1;
+            fp->posted_num = _posted_counter++;
+            addToReadyQueue(fp);
+            return;
+         }
       }
 
       // Cold path: allocate new fiber + native stack
       auto   fiber = std::make_unique<Fiber>();
       Fiber* fp    = fiber.get();
-      fp->id         = _next_id++;
-      fp->name       = name;
-      fp->home_sched = this;
+      fp->id               = _next_id++;
+      fp->name             = name;
+      fp->home_sched       = this;
+      fp->native_stack_size = stack_size;
       fp->setEntry(std::forward<F>(entry));
 
       fp->cont = ctx::callcc(
          std::allocator_arg,
-         ctx::protected_fixedsize_stack(fiber_native_stack_size),
+         ctx::protected_fixedsize_stack(stack_size),
          [this, fp](ctx::continuation&& sched) mutable
          {
             fp->sched_cont = &sched;
