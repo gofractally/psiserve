@@ -26,7 +26,7 @@
 using namespace psizam;
 
 static void usage(const char* prog) {
-   std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [-o output.pzam] input.wasm\n";
+   std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [--softfloat] [--backtrace] [-o output.pzam] input.wasm\n";
 }
 
 static std::vector<char> write_pzam(
@@ -34,24 +34,17 @@ static std::vector<char> write_pzam(
       const growable_allocator& alloc,
       const pzam_compile_result& result,
       std::span<const uint8_t> wasm_bytes,
-      pzam_arch target_arch) {
+      pzam_arch target_arch,
+      bool use_softfloat,
+      bool use_backtrace) {
 
    pzam_file file;
    file.arch = static_cast<uint8_t>(target_arch);
-   file.opts.softfloat =
-#ifdef PSIZAM_SOFTFLOAT
-      1;
-#else
-      0;
-#endif
-   file.opts.async_backtrace = 0;
+   file.opts.softfloat = use_softfloat ? 1 : 0;
+   file.opts.async_backtrace = use_backtrace ? 1 : 0;
    file.opts.stack_limit_is_bytes = mod.stack_limit_is_bytes ? 1 : 0;
-   // Record compile-time page_size for memory layout offset matching
-#ifdef PSIZAM_COMPILE_ONLY
-   file.opts.page_size = wasm_allocator::page_size_val;
-#else
-   file.opts.page_size = static_cast<uint32_t>(wasm_allocator::table_size());
-#endif
+   // Cross-compiler always uses standard 4096-byte WASM pages, not host page size
+   file.opts.page_size = 4096;
    file.max_stack = static_cast<uint32_t>(mod.maximum_stack);
    file.input_hash = pzam_cache::hash_wasm(wasm_bytes);
    file.compiler_hash = pzam_cache::compiler_identity(target_arch);
@@ -98,6 +91,8 @@ static bool compile_wasm(
       std::vector<uint8_t>& wasm_bytes,
       pzam_arch target_arch,
       const std::string& output_file,
+      bool use_softfloat = false,
+      bool use_backtrace = false,
       const std::string& target_triple = {}) {
 
    module mod;
@@ -105,10 +100,12 @@ static bool compile_wasm(
 
    pzam_compile_result compile_result;
    compile_result.target_triple = target_triple;
+   compile_result.softfloat = use_softfloat;
+   compile_result.backtrace = use_backtrace;
    null_debug_info debug;
 
    using parser_t = binary_parser<IrWriter, default_options, null_debug_info>;
-   parser_t parser(mod.allocator, default_options{}, false, false);
+   parser_t parser(mod.allocator, default_options{}, use_backtrace, false);
    parser.set_compile_result(&compile_result);
 
 #ifdef __EXCEPTIONS
@@ -130,7 +127,8 @@ static bool compile_wasm(
    }
 
    auto pzam_bytes = write_pzam(mod, mod.allocator, compile_result,
-                                 wasm_bytes, target_arch);
+                                 wasm_bytes, target_arch, use_softfloat,
+                                 use_backtrace);
 
    std::ofstream out(output_file, std::ios::binary);
    if (!out.is_open()) {
@@ -146,6 +144,8 @@ int main(int argc, char** argv) {
    std::string backend_str = "jit2";
    std::string output_file;
    std::string input_file;
+   bool use_softfloat = false;
+   bool use_backtrace = false;
 
    for (int i = 1; i < argc; i++) {
       std::string arg = argv[i];
@@ -153,6 +153,10 @@ int main(int argc, char** argv) {
          target_str = arg.substr(9);
       } else if (arg.starts_with("--backend=")) {
          backend_str = arg.substr(10);
+      } else if (arg == "--softfloat") {
+         use_softfloat = true;
+      } else if (arg == "--backtrace") {
+         use_backtrace = true;
       } else if (arg == "-o" && i + 1 < argc) {
          output_file = argv[++i];
       } else if (arg[0] != '-') {
@@ -192,18 +196,27 @@ int main(int argc, char** argv) {
       output_file += ".pzam";
    }
 
+   if (use_softfloat && backend_str != "llvm") {
+      std::cerr << "Error: --softfloat requires --backend=llvm\n";
+      return 1;
+   }
+
    auto wasm_bytes = read_wasm(input_file);
 
    bool ok;
    if (backend_str == "jit2") {
       if (target_arch == pzam_arch::x86_64) {
-         ok = compile_wasm<ir_writer_x64>(wasm_bytes, target_arch, output_file);
+         ok = compile_wasm<ir_writer_x64>(wasm_bytes, target_arch, output_file,
+                                           false, use_backtrace);
       } else {
-         ok = compile_wasm<ir_writer_a64>(wasm_bytes, target_arch, output_file);
+         ok = compile_wasm<ir_writer_a64>(wasm_bytes, target_arch, output_file,
+                                           false, use_backtrace);
       }
    } else if (backend_str == "llvm") {
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
-      ok = compile_wasm<ir_writer_llvm_aot>(wasm_bytes, target_arch, output_file, target_triple);
+      ok = compile_wasm<ir_writer_llvm_aot>(wasm_bytes, target_arch, output_file,
+                                             use_softfloat, use_backtrace,
+                                             target_triple);
 #else
       std::cerr << "Error: LLVM backend not available (build with -DPSIZAM_ENABLE_LLVM=ON)\n";
       return 1;
@@ -217,6 +230,8 @@ int main(int argc, char** argv) {
    if (!ok) return 1;
 
    std::cerr << "Compiled " << input_file << " -> " << output_file
-             << " (target: " << target_str << ", backend: " << backend_str << ")\n";
+             << " (target: " << target_str << ", backend: " << backend_str
+             << (use_softfloat ? ", softfloat" : "")
+             << (use_backtrace ? ", backtrace" : "") << ")\n";
    return 0;
 }

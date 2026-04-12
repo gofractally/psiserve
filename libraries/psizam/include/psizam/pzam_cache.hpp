@@ -20,6 +20,9 @@
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND) && !defined(PSIZAM_COMPILE_ONLY)
 #include <psizam/llvm_runtime_helpers.hpp>
 #endif
+#ifdef PSIZAM_SOFTFLOAT
+#include <psizam/softfloat.hpp>
+#endif
 
 #include <cstring>
 #include <span>
@@ -123,6 +126,49 @@ namespace psizam {
       table[static_cast<uint32_t>(reloc_symbol::llvm_call_depth_inc)]   = reinterpret_cast<void*>(&__psizam_call_depth_inc);
       table[static_cast<uint32_t>(reloc_symbol::llvm_trap)]             = reinterpret_cast<void*>(&__psizam_trap);
       table[static_cast<uint32_t>(reloc_symbol::llvm_get_memory)]       = reinterpret_cast<void*>(&__psizam_get_memory);
+
+#ifdef PSIZAM_SOFTFLOAT
+      // Softfloat functions (used when .pzam was compiled with softfloat mode)
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_add)]     = reinterpret_cast<void*>(&_psizam_f32_add);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_sub)]     = reinterpret_cast<void*>(&_psizam_f32_sub);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_mul)]     = reinterpret_cast<void*>(&_psizam_f32_mul);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_div)]     = reinterpret_cast<void*>(&_psizam_f32_div);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_min)]     = reinterpret_cast<void*>(&_psizam_f32_min<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_max)]     = reinterpret_cast<void*>(&_psizam_f32_max<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_copysign)] = reinterpret_cast<void*>(&_psizam_f32_copysign);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_abs)]     = reinterpret_cast<void*>(&_psizam_f32_abs);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_neg)]     = reinterpret_cast<void*>(&_psizam_f32_neg);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_sqrt)]    = reinterpret_cast<void*>(&_psizam_f32_sqrt);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_ceil)]    = reinterpret_cast<void*>(&_psizam_f32_ceil<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_floor)]   = reinterpret_cast<void*>(&_psizam_f32_floor<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_trunc)]   = reinterpret_cast<void*>(&_psizam_f32_trunc<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_nearest)] = reinterpret_cast<void*>(&_psizam_f32_nearest<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_add)]     = reinterpret_cast<void*>(&_psizam_f64_add);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_sub)]     = reinterpret_cast<void*>(&_psizam_f64_sub);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_mul)]     = reinterpret_cast<void*>(&_psizam_f64_mul);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_div)]     = reinterpret_cast<void*>(&_psizam_f64_div);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_min)]     = reinterpret_cast<void*>(&_psizam_f64_min<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_max)]     = reinterpret_cast<void*>(&_psizam_f64_max<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_copysign)] = reinterpret_cast<void*>(&_psizam_f64_copysign);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_abs)]     = reinterpret_cast<void*>(&_psizam_f64_abs);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_neg)]     = reinterpret_cast<void*>(&_psizam_f64_neg);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_sqrt)]    = reinterpret_cast<void*>(&_psizam_f64_sqrt);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_ceil)]    = reinterpret_cast<void*>(&_psizam_f64_ceil<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_floor)]   = reinterpret_cast<void*>(&_psizam_f64_floor<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_trunc)]   = reinterpret_cast<void*>(&_psizam_f64_trunc<true>);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_nearest)] = reinterpret_cast<void*>(&_psizam_f64_nearest<true>);
+      // Conversions
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_convert_i32s)] = reinterpret_cast<void*>(&_psizam_i32_to_f32);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_convert_i32u)] = reinterpret_cast<void*>(&_psizam_ui32_to_f32);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_convert_i64s)] = reinterpret_cast<void*>(&_psizam_i64_to_f32);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_convert_i64u)] = reinterpret_cast<void*>(&_psizam_ui64_to_f32);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_convert_i32s)] = reinterpret_cast<void*>(&_psizam_i32_to_f64);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_convert_i32u)] = reinterpret_cast<void*>(&_psizam_ui32_to_f64);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_convert_i64s)] = reinterpret_cast<void*>(&_psizam_i64_to_f64);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_convert_i64u)] = reinterpret_cast<void*>(&_psizam_ui64_to_f64);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f32_demote_f64)]   = reinterpret_cast<void*>(&_psizam_f64_demote);
+      table[static_cast<uint32_t>(reloc_symbol::sf_f64_promote_f32)]  = reinterpret_cast<void*>(&_psizam_f32_promote);
+#endif // PSIZAM_SOFTFLOAT
    }
 #endif
 
@@ -147,14 +193,14 @@ namespace psizam {
       }
 
       /// Compiler identity hash — changes when the compiler itself changes.
-      /// Incorporates format version, arch, and a compile-time salt.
+      /// Incorporates format version and arch. Deterministic across builds
+      /// (no __DATE__/__TIME__) so native and WASI compilers produce identical
+      /// .pzam files. Bump PZAM_VERSION when the compiler changes.
       inline std::array<uint8_t, 32> compiler_identity(pzam_arch arch) {
          std::array<uint8_t, 32> result = {};
          uint64_t h = PZAM_VERSION;
          h ^= static_cast<uint64_t>(arch);
-         // Include __DATE__ and __TIME__ to invalidate when recompiled
-         const char* date = __DATE__ " " __TIME__;
-         while (*date) { h ^= *date++; h *= 0x100000001b3ULL; }
+         h *= 0x100000001b3ULL;
          std::memcpy(result.data(), &h, 8);
          return result;
       }

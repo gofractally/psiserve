@@ -61,6 +61,15 @@ namespace psizam {
    __attribute__((visibility("default")))
    inline thread_local std::atomic<bool> timed_run_has_timed_out{false};
 
+#if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS)
+   // Function table for crash diagnostics — set by ir_writer after finalize
+   struct jit_func_range { uint32_t offset; uint32_t size; uint32_t func_index; };
+   __attribute__((visibility("default")))
+   inline thread_local const jit_func_range* jit_func_ranges{nullptr};
+   __attribute__((visibility("default")))
+   inline thread_local uint32_t jit_func_range_count{0};
+#endif
+
    // Fixes a duplicate symbol build issue when building with `-fvisibility=hidden`
    __attribute__((visibility("default")))
    inline thread_local std::exception_ptr saved_exception{nullptr};
@@ -100,6 +109,22 @@ namespace psizam {
                int64_t offset_from_base = (int64_t)((uint64_t)addr - mem_base);
                fprintf(stderr, "  Fault offset from X20(mem_base): %lld (0x%llx)\n",
                        offset_from_base, (uint64_t)offset_from_base);
+            }
+            if (in_code && jit_func_ranges && jit_func_range_count > 0) {
+               uint64_t code_base = (uint64_t)code_memory_range.data();
+               uint64_t pc_off = pc_val - code_base;
+               uint64_t lr_off = ss->__lr - code_base;
+               for (uint32_t fi = 0; fi < jit_func_range_count; ++fi) {
+                  auto& r = jit_func_ranges[fi];
+                  if (pc_off >= r.offset && pc_off < r.offset + r.size) {
+                     fprintf(stderr, "  Crash in func[%u] at +%llu (code offset %u, size %u)\n",
+                             r.func_index, (unsigned long long)(pc_off - r.offset), r.offset, r.size);
+                  }
+                  if (lr_off >= r.offset && lr_off < r.offset + r.size) {
+                     fprintf(stderr, "  Caller func[%u] at +%llu\n",
+                             r.func_index, (unsigned long long)(lr_off - r.offset));
+                  }
+               }
             }
          }
 #endif

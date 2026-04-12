@@ -1,12 +1,13 @@
 #pragma once
 
-// Pass 1 of the two-pass optimizing JIT (jit2).
+// Two-pass optimizing JIT (jit2) IR builder.
 // Converts WASM stack machine operations to virtual-register IR.
 //
-// Phase 4: Standalone IR builder — no machine_code_writer dependency.
-//   During parsing, builds IR for each function into an array.
-//   After parsing completes, the destructor compiles all functions
-//   via jit_codegen (Pass 2) which emits native x86_64 code.
+// Per-function compilation: as the parser completes each function body,
+// finalize() immediately runs optimize → regalloc → native codegen,
+// then resets the IR allocator.  This bounds peak memory to module
+// metadata + one function's IR + accumulated native code, which is
+// critical for wasm32-hosted compilation (4GB address space).
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <optional>
 
 namespace psizam {
 
@@ -32,6 +34,8 @@ namespace psizam {
       std::vector<std::pair<uint32_t, uint32_t>> function_offsets; // (offset, size) per function
       std::string                  target_triple;       // set by caller for LLVM AOT
       std::string                  error;               // non-empty on failure (e.g. LLVM AOT)
+      bool                         softfloat = false;   // use softfloat wrappers (runtime option)
+      bool                         backtrace = false;   // enable async backtrace frame tracking
    };
 
    template<typename CodeGen>
@@ -42,7 +46,7 @@ namespace psizam {
       ir_function* get_functions() const { return _functions; }
       uint32_t     get_num_functions() const { return _num_functions; }
       module&      get_ir_module() const { return _mod; }
-      growable_allocator& get_ir_allocator() { return _allocator; }
+      growable_allocator& get_ir_allocator() { return _ir_alloc; }
       jit_scratch_allocator& get_ir_scratch() { return _scratch; }
       // Branch/label types — dummy values since IR tracks control flow directly.
       // The parser stores and passes these between emit_if/emit_else/emit_end/emit_br
@@ -53,46 +57,72 @@ namespace psizam {
       ir_writer_impl(growable_allocator& alloc, std::size_t source_bytes, module& mod,
                 bool enable_backtrace = false, bool stack_limit_is_bytes = false)
          : _allocator(alloc), _source_bytes(source_bytes), _mod(mod),
-           _scratch(alloc),
+           _scratch(_ir_alloc),
            _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
+         // IR allocator — holds per-function IR data, reset after each function.
+         // Separate from _allocator so the code segment isn't affected by IR resets.
+         // Size based on largest function: ~250 bytes of IR per WASM byte
+         // (insts×3×24 + blocks×2×20 + vstack×2×4 + ctrl_stack×1×100 ≈ 220 B/B + margin).
+         // Minimum 16MB to avoid tiny-function underallocation.
+#ifdef PSIZAM_COMPILE_ONLY
+         {
+            size_t max_func_size = 0;
+            for (uint32_t i = 0; i < mod.code.size(); ++i) {
+               if (mod.code[i].size > max_func_size)
+                  max_func_size = mod.code[i].size;
+            }
+            size_t ir_size = max_func_size * 250 + 1024 * 1024;  // 250× + 1MB headroom
+            if (ir_size < 16 * 1024 * 1024) ir_size = 16 * 1024 * 1024;
+            _ir_alloc.use_fixed_memory(ir_size);
+         }
+#else
+         _ir_alloc.use_default_memory();
+#endif
          _num_functions = mod.code.size();
          _functions = _scratch.alloc<ir_function>(_num_functions);
          for (uint32_t i = 0; i < _num_functions; ++i) {
             _functions[i] = ir_function{};
          }
+         _post_array_offset = _ir_alloc._offset;
       }
 
       ~ir_writer_impl() {
          // If destructor runs during stack unwinding (parsing threw an exception),
-         // skip compilation — some functions may not have been parsed.
+         // skip compilation — the codegen may be in an inconsistent state.
 #ifdef __EXCEPTIONS
          if (std::uncaught_exceptions() > 0) {
             return;
          }
 #endif
 
-         // If a subclass handles codegen (e.g., LLVM), skip native codegen.
-         // The scratch allocator destructor will clean up IR data.
+         // If a subclass handles codegen (e.g., LLVM), skip native codegen finalization.
          if (_skip_codegen) {
             return;
          }
 
-         // Pass 2: Register allocation + code generation (fused per-function).
-         // _scratch_alloc holds IR/regalloc/optimizer data (transient, non-executable).
-         // _allocator holds only native code (executable, tightly packed).
-         codegen_t codegen(_allocator, _mod, _allocator, _enable_backtrace, _stack_limit_is_bytes);
-         codegen.emit_entry_and_error_handlers();
-         for (uint32_t i = 0; i < _num_functions; ++i) {
-            jit_optimizer::optimize(_functions[i], _scratch);
-            jit_regalloc::compute_live_intervals(_functions[i], _scratch);
-            jit_regalloc::allocate_registers(_functions[i]);
-            codegen.compile_function(_functions[i], _mod.code[i]);
-         }
-         codegen.finalize_code();
-         // Capture relocations before codegen is destroyed
-         if (_compile_result) {
-            const auto& entries = codegen.relocations().entries();
-            _compile_result->relocs.assign(entries.begin(), entries.end());
+         // Finalize the code segment (all functions already compiled in finalize()).
+         if (_codegen) {
+            _codegen->finalize_code();
+#if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS)
+            // Build function range table for crash diagnostics
+            {
+               uint32_t num_imported = _mod.get_imported_functions_size();
+               auto* ranges = new jit_func_range[_num_functions];
+               for (uint32_t i = 0; i < _num_functions; ++i) {
+                  auto& body = _mod.code[i];
+                  ranges[i] = { static_cast<uint32_t>(body.jit_code_offset),
+                                body.jit_code_size, i + num_imported };
+               }
+               jit_func_ranges = ranges;
+               jit_func_range_count = _num_functions;
+            }
+#endif
+            // Capture relocations before codegen is destroyed
+            if (_compile_result) {
+               const auto& entries = _codegen->relocations().entries();
+               _compile_result->relocs.assign(entries.begin(), entries.end());
+            }
+            _codegen.reset();
          }
          // Reset the parsing allocator — native code has been copied to the
          // JIT segment by end_code<true>(). This allows the module allocator
@@ -145,7 +175,33 @@ namespace psizam {
          // Nothing to do — IR is complete after parsing
       }
 
-      void finalize(function_body& /*body*/) {
+      void finalize(function_body& body) {
+         if (!_skip_codegen && _func) {
+            // Lazy-init codegen on first function
+            if (!_codegen) {
+#ifdef PSIZAM_COMPILE_ONLY
+               _codegen_scratch.use_fixed_memory(32 * 1024 * 1024);
+               _opt_scratch_alloc.use_fixed_memory(32 * 1024 * 1024);
+#else
+               _codegen_scratch.use_default_memory();
+               _opt_scratch_alloc.use_default_memory();
+#endif
+               _codegen.emplace(_allocator, _mod, _codegen_scratch, _enable_backtrace, _stack_limit_is_bytes);
+               _codegen->emit_entry_and_error_handlers();
+            }
+            // Compile this function immediately: optimize → regalloc → emit native code
+            {
+               jit_scratch_allocator opt_scratch(_opt_scratch_alloc);
+               jit_optimizer::optimize(*_func, opt_scratch);
+               jit_regalloc::compute_live_intervals(*_func, opt_scratch);
+               jit_regalloc::allocate_registers(*_func);
+               _codegen->compile_function(*_func, body);
+               // opt_scratch destructor resets _opt_scratch_alloc
+            }
+            // Reset IR allocator — reclaim this function's IR data.
+            // Preserves the _functions array (allocated before _post_array_offset).
+            _ir_alloc._offset = _post_array_offset;
+         }
          _func = nullptr;
       }
 
@@ -2250,14 +2306,20 @@ namespace psizam {
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;
     protected:
-      growable_allocator& _allocator;       // Code only (executable, permanent)
+      growable_allocator& _allocator;       // Code segment (native code, permanent)
+      growable_allocator _ir_alloc;         // IR data (per-function, reset after compilation)
       module& _mod;
-      jit_scratch_allocator _scratch;       // Watermark wrapper for _allocator (transient IR/regalloc data)
+      jit_scratch_allocator _scratch;       // Watermark wrapper for _ir_alloc
       ir_function* _functions = nullptr;
       uint32_t _num_functions = 0;
       ir_function* _func = nullptr;
       pzam_compile_result* _compile_result = nullptr;
       bool _skip_codegen = false;           // Set by subclasses to bypass native codegen
+      std::size_t _post_array_offset = 0;   // IR alloc offset after _functions array
+      // Lazy-initialized codegen and scratch allocators (created on first finalize)
+      growable_allocator _codegen_scratch;
+      growable_allocator _opt_scratch_alloc;
+      std::optional<codegen_t> _codegen;
     public:
       void set_compile_result(pzam_compile_result* r) { _compile_result = r; }
    };

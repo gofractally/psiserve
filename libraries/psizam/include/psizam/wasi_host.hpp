@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <iostream>
 #include <random>
@@ -34,11 +35,15 @@ namespace psizam {
       WASI_ELOOP        = 32,
       WASI_ENAMETOOLONG = 37,
       WASI_ENOENT       = 44,
+      WASI_EMLINK       = 36,
+      WASI_ENOSPC       = 51,
       WASI_ENOSYS       = 52,
       WASI_ENOTDIR      = 54,
       WASI_ENOTEMPTY    = 55,
       WASI_EPERM        = 63,
       WASI_EROFS        = 69,
+      WASI_ESPIPE       = 70,
+      WASI_EXDEV        = 75,
    };
 
    // WASI file types
@@ -98,6 +103,12 @@ namespace psizam {
          case ENOTEMPTY: return WASI_ENOTEMPTY;
          case EPERM:   return WASI_EPERM;
          case EROFS:   return WASI_EROFS;
+#ifdef EMLINK
+         case EMLINK:  return WASI_EMLINK;
+#endif
+         case ENOSPC:  return WASI_ENOSPC;
+         case ESPIPE:  return WASI_ESPIPE;
+         case EXDEV:   return WASI_EXDEV;
          default:      return WASI_EIO;
       }
    }
@@ -395,11 +406,55 @@ namespace psizam {
          return fd_seek(fd, 0, WASI_WHENCE_CUR, offset_ptr);
       }
 
-      // fd_readdir
-      uint32_t fd_readdir(uint32_t /*fd*/, uint32_t /*buf*/, uint32_t /*buf_len*/,
-                          uint64_t /*cookie*/, uint32_t bufused_ptr) {
-         // Minimal stub — LLVM doesn't enumerate directories
-         write_u32(bufused_ptr, 0);
+      // fd_readdir: read directory entries
+      uint32_t fd_readdir(uint32_t fd, uint32_t buf, uint32_t buf_len,
+                          uint64_t cookie, uint32_t bufused_ptr) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         int hfd = fds[fd].host_fd;
+         // Open a DIR* from the host fd (dup to avoid closing the original)
+         int dfd = ::dup(hfd);
+         if (dfd < 0) return errno_to_wasi(errno);
+         DIR* dir = ::fdopendir(dfd);
+         if (!dir) { ::close(dfd); return errno_to_wasi(errno); }
+
+         // Skip to the cookie position
+         if (cookie > 0) ::seekdir(dir, static_cast<long>(cookie));
+
+         uint32_t used = 0;
+         struct dirent* ent;
+         while ((ent = ::readdir(dir)) != nullptr) {
+            uint32_t name_len = static_cast<uint32_t>(strlen(ent->d_name));
+            // dirent layout: u64 d_next, u64 d_ino, u32 d_namlen, u8 d_type
+            uint32_t header_size = 24;
+            uint32_t entry_size = header_size + name_len;
+
+            if (used + header_size > buf_len) break; // no room for header
+
+            // Write header
+            uint64_t next_cookie = static_cast<uint64_t>(::telldir(dir));
+            memcpy(mem(buf + used), &next_cookie, 8);
+            write_u64(buf + used + 8, ent->d_ino);
+            write_u32(buf + used + 16, name_len);
+            uint8_t ftype = WASI_FILETYPE_UNKNOWN;
+            switch (ent->d_type) {
+               case DT_REG: ftype = WASI_FILETYPE_REGULAR_FILE; break;
+               case DT_DIR: ftype = WASI_FILETYPE_DIRECTORY; break;
+               case DT_LNK: ftype = WASI_FILETYPE_SYMBOLIC_LINK; break;
+               case DT_BLK: ftype = WASI_FILETYPE_BLOCK_DEVICE; break;
+               case DT_CHR: ftype = WASI_FILETYPE_CHARACTER_DEVICE; break;
+               default: break;
+            }
+            *mem<uint8_t>(buf + used + 20) = ftype;
+            used += header_size;
+
+            // Write name (may be truncated if buf runs out)
+            uint32_t name_copy = std::min(name_len, buf_len - used);
+            memcpy(mem(buf + used), ent->d_name, name_copy);
+            used += name_copy;
+            if (name_copy < name_len) break; // truncated
+         }
+         ::closedir(dir); // also closes dfd
+         write_u32(bufused_ptr, used);
          return WASI_ESUCCESS;
       }
 
@@ -513,6 +568,263 @@ namespace psizam {
          throw wasi_exit_exception{static_cast<int>(code)};
       }
 
+      // clock_res_get: return clock resolution
+      uint32_t clock_res_get(uint32_t clock_id, uint32_t resolution_ptr) {
+         uint64_t res;
+         switch (clock_id) {
+            case WASI_CLOCK_REALTIME:
+            case WASI_CLOCK_MONOTONIC:
+            case WASI_CLOCK_PROCESS_CPUTIME_ID:
+            case WASI_CLOCK_THREAD_CPUTIME_ID: {
+               struct timespec ts;
+               clockid_t cid = (clock_id == WASI_CLOCK_MONOTONIC) ? CLOCK_MONOTONIC : CLOCK_REALTIME;
+               if (clock_getres(cid, &ts) != 0) return errno_to_wasi(errno);
+               res = static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + ts.tv_nsec;
+               break;
+            }
+            default: return WASI_EINVAL;
+         }
+         write_u64(resolution_ptr, res);
+         return WASI_ESUCCESS;
+      }
+
+      // fd_advise: hint about file access pattern (no-op)
+      uint32_t fd_advise(uint32_t fd, uint64_t /*offset*/, uint64_t /*len*/, uint32_t /*advice*/) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         return WASI_ESUCCESS;
+      }
+
+      // fd_allocate: preallocate file space
+      uint32_t fd_allocate(uint32_t fd, uint64_t offset, uint64_t len) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+#ifdef __APPLE__
+         // macOS: use ftruncate if extending
+         struct stat st;
+         if (fstat(fds[fd].host_fd, &st) != 0) return errno_to_wasi(errno);
+         off_t needed = static_cast<off_t>(offset + len);
+         if (needed > st.st_size) {
+            if (ftruncate(fds[fd].host_fd, needed) != 0) return errno_to_wasi(errno);
+         }
+#else
+         if (posix_fallocate(fds[fd].host_fd, offset, len) != 0)
+            return errno_to_wasi(errno);
+#endif
+         return WASI_ESUCCESS;
+      }
+
+      // fd_datasync: synchronize file data to disk
+      uint32_t fd_datasync(uint32_t fd) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+#ifdef __APPLE__
+         if (::fsync(fds[fd].host_fd) != 0) return errno_to_wasi(errno);
+#else
+         if (::fdatasync(fds[fd].host_fd) != 0) return errno_to_wasi(errno);
+#endif
+         return WASI_ESUCCESS;
+      }
+
+      // fd_sync: synchronize file data and metadata
+      uint32_t fd_sync(uint32_t fd) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         if (::fsync(fds[fd].host_fd) != 0) return errno_to_wasi(errno);
+         return WASI_ESUCCESS;
+      }
+
+      // fd_fdstat_set_rights: set fd rights (no-op — we grant all rights)
+      uint32_t fd_fdstat_set_rights(uint32_t fd, uint64_t /*rights_base*/, uint64_t /*rights_inheriting*/) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         return WASI_ESUCCESS;
+      }
+
+      // fd_filestat_set_size: truncate file
+      uint32_t fd_filestat_set_size(uint32_t fd, uint64_t size) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         if (::ftruncate(fds[fd].host_fd, static_cast<off_t>(size)) != 0)
+            return errno_to_wasi(errno);
+         return WASI_ESUCCESS;
+      }
+
+      // fd_filestat_set_times: set file timestamps
+      uint32_t fd_filestat_set_times(uint32_t fd, uint64_t atim, uint64_t mtim, uint32_t fst_flags) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         struct timespec times[2];
+         // fst_flags: bit 0 = set atim, bit 1 = set atim to now, bit 2 = set mtim, bit 3 = set mtim to now
+         if (fst_flags & 2) {
+            times[0].tv_nsec = UTIME_NOW;
+            times[0].tv_sec = 0;
+         } else if (fst_flags & 1) {
+            times[0].tv_sec = static_cast<time_t>(atim / 1000000000ULL);
+            times[0].tv_nsec = static_cast<long>(atim % 1000000000ULL);
+         } else {
+            times[0].tv_nsec = UTIME_OMIT;
+            times[0].tv_sec = 0;
+         }
+         if (fst_flags & 8) {
+            times[1].tv_nsec = UTIME_NOW;
+            times[1].tv_sec = 0;
+         } else if (fst_flags & 4) {
+            times[1].tv_sec = static_cast<time_t>(mtim / 1000000000ULL);
+            times[1].tv_nsec = static_cast<long>(mtim % 1000000000ULL);
+         } else {
+            times[1].tv_nsec = UTIME_OMIT;
+            times[1].tv_sec = 0;
+         }
+         if (futimens(fds[fd].host_fd, times) != 0) return errno_to_wasi(errno);
+         return WASI_ESUCCESS;
+      }
+
+      // fd_pwrite: scatter write at offset
+      uint32_t fd_pwrite(uint32_t fd, uint32_t iovs_ptr, uint32_t iovs_len,
+                         uint64_t offset, uint32_t nwritten_ptr) {
+         if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         uint32_t total = 0;
+         for (uint32_t i = 0; i < iovs_len; i++) {
+            uint32_t buf = read_u32(iovs_ptr + i * 8);
+            uint32_t len = read_u32(iovs_ptr + i * 8 + 4);
+            ssize_t n = ::pwrite(fds[fd].host_fd, mem(buf), len, offset + total);
+            if (n < 0) {
+               if (total > 0) break;
+               return errno_to_wasi(errno);
+            }
+            total += n;
+            if (static_cast<uint32_t>(n) < len) break;
+         }
+         write_u32(nwritten_ptr, total);
+         return WASI_ESUCCESS;
+      }
+
+      // fd_renumber: renumber file descriptor
+      uint32_t fd_renumber(uint32_t from, uint32_t to) {
+         if (from >= fds.size() || fds[from].host_fd < 0) return WASI_EBADF;
+         if (to >= fds.size()) {
+            fds.resize(to + 1);
+         }
+         if (fds[to].host_fd >= 0 && to >= 3) {
+            ::close(fds[to].host_fd);
+         }
+         fds[to] = fds[from];
+         fds[from].host_fd = -1;
+         return WASI_ESUCCESS;
+      }
+
+      // path_create_directory
+      uint32_t path_create_directory(uint32_t dir_fd, uint32_t path_ptr, uint32_t path_len) {
+         std::string host_path = resolve_path(dir_fd, mem(path_ptr), path_len);
+         if (host_path.empty()) return WASI_ENOENT;
+         if (::mkdir(host_path.c_str(), 0777) != 0) return errno_to_wasi(errno);
+         return WASI_ESUCCESS;
+      }
+
+      // path_filestat_set_times
+      uint32_t path_filestat_set_times(uint32_t dir_fd, uint32_t /*flags*/,
+                                       uint32_t path_ptr, uint32_t path_len,
+                                       uint64_t atim, uint64_t mtim, uint32_t fst_flags) {
+         std::string host_path = resolve_path(dir_fd, mem(path_ptr), path_len);
+         if (host_path.empty()) return WASI_ENOENT;
+         struct timespec times[2];
+         if (fst_flags & 2) {
+            times[0].tv_nsec = UTIME_NOW; times[0].tv_sec = 0;
+         } else if (fst_flags & 1) {
+            times[0].tv_sec = static_cast<time_t>(atim / 1000000000ULL);
+            times[0].tv_nsec = static_cast<long>(atim % 1000000000ULL);
+         } else {
+            times[0].tv_nsec = UTIME_OMIT; times[0].tv_sec = 0;
+         }
+         if (fst_flags & 8) {
+            times[1].tv_nsec = UTIME_NOW; times[1].tv_sec = 0;
+         } else if (fst_flags & 4) {
+            times[1].tv_sec = static_cast<time_t>(mtim / 1000000000ULL);
+            times[1].tv_nsec = static_cast<long>(mtim % 1000000000ULL);
+         } else {
+            times[1].tv_nsec = UTIME_OMIT; times[1].tv_sec = 0;
+         }
+         if (utimensat(AT_FDCWD, host_path.c_str(), times, 0) != 0)
+            return errno_to_wasi(errno);
+         return WASI_ESUCCESS;
+      }
+
+      // path_link: create hard link
+      uint32_t path_link(uint32_t old_fd, uint32_t /*old_flags*/,
+                         uint32_t old_path_ptr, uint32_t old_path_len,
+                         uint32_t new_fd,
+                         uint32_t new_path_ptr, uint32_t new_path_len) {
+         std::string old_host = resolve_path(old_fd, mem(old_path_ptr), old_path_len);
+         std::string new_host = resolve_path(new_fd, mem(new_path_ptr), new_path_len);
+         if (old_host.empty() || new_host.empty()) return WASI_ENOENT;
+         if (::link(old_host.c_str(), new_host.c_str()) != 0) return errno_to_wasi(errno);
+         return WASI_ESUCCESS;
+      }
+
+      // path_rename
+      uint32_t path_rename(uint32_t old_fd, uint32_t old_path_ptr, uint32_t old_path_len,
+                           uint32_t new_fd, uint32_t new_path_ptr, uint32_t new_path_len) {
+         std::string old_host = resolve_path(old_fd, mem(old_path_ptr), old_path_len);
+         std::string new_host = resolve_path(new_fd, mem(new_path_ptr), new_path_len);
+         if (old_host.empty() || new_host.empty()) return WASI_ENOENT;
+         if (::rename(old_host.c_str(), new_host.c_str()) != 0) return errno_to_wasi(errno);
+         return WASI_ESUCCESS;
+      }
+
+      // path_symlink: create symbolic link
+      uint32_t path_symlink(uint32_t old_path_ptr, uint32_t old_path_len,
+                            uint32_t dir_fd,
+                            uint32_t new_path_ptr, uint32_t new_path_len) {
+         std::string old_path(mem(old_path_ptr), old_path_len);
+         std::string new_host = resolve_path(dir_fd, mem(new_path_ptr), new_path_len);
+         if (new_host.empty()) return WASI_ENOENT;
+         if (::symlink(old_path.c_str(), new_host.c_str()) != 0) return errno_to_wasi(errno);
+         return WASI_ESUCCESS;
+      }
+
+      // poll_oneoff: event polling
+      uint32_t poll_oneoff(uint32_t in_ptr, uint32_t out_ptr, uint32_t nsubscriptions,
+                           uint32_t nevents_ptr) {
+         // Each subscription is 48 bytes, each event is 32 bytes
+         uint32_t events_written = 0;
+         for (uint32_t i = 0; i < nsubscriptions; i++) {
+            uint32_t sub_offset = in_ptr + i * 48;
+            uint64_t userdata;
+            memcpy(&userdata, mem(sub_offset), 8);
+            uint8_t type = *mem<uint8_t>(sub_offset + 8);
+
+            uint32_t evt_offset = out_ptr + events_written * 32;
+            memset(mem(evt_offset), 0, 32);
+            memcpy(mem(evt_offset), &userdata, 8);  // userdata
+            // error = 0 (success)
+            *mem<uint8_t>(evt_offset + 10) = type;  // event type
+
+            if (type == 0) {
+               // clock: extract timeout and sleep
+               uint64_t timeout;
+               memcpy(&timeout, mem(sub_offset + 24), 8);
+               uint16_t flags;
+               memcpy(&flags, mem(sub_offset + 40), 2);
+               if (!(flags & 1)) { // not absolute
+                  struct timespec ts;
+                  ts.tv_sec = timeout / 1000000000ULL;
+                  ts.tv_nsec = timeout % 1000000000ULL;
+                  nanosleep(&ts, nullptr);
+               }
+            } else {
+               // fd_read (1) or fd_write (2): report ready immediately
+               write_u64(evt_offset + 16, 1); // nbytes available
+            }
+            events_written++;
+         }
+         write_u32(nevents_ptr, events_written);
+         return WASI_ESUCCESS;
+      }
+
+      // proc_raise: raise signal (no-op in sandbox)
+      uint32_t proc_raise(uint32_t /*sig*/) {
+         return WASI_ENOSYS;
+      }
+
+      // sched_yield: yield CPU
+      uint32_t sched_yield() {
+         return WASI_ESUCCESS;
+      }
+
    };
 
    /// WASI trampoline: sets host->memory before dispatching to the member function.
@@ -552,26 +864,44 @@ namespace psizam {
       WASI_REG(args_sizes_get);
       WASI_REG(environ_get);
       WASI_REG(environ_sizes_get);
+      WASI_REG(clock_res_get);
       WASI_REG(clock_time_get);
+      WASI_REG(fd_advise);
+      WASI_REG(fd_allocate);
       WASI_REG(fd_close);
+      WASI_REG(fd_datasync);
       WASI_REG(fd_fdstat_get);
       WASI_REG(fd_fdstat_set_flags);
+      WASI_REG(fd_fdstat_set_rights);
       WASI_REG(fd_filestat_get);
+      WASI_REG(fd_filestat_set_size);
+      WASI_REG(fd_filestat_set_times);
       WASI_REG(fd_pread);
       WASI_REG(fd_prestat_get);
       WASI_REG(fd_prestat_dir_name);
+      WASI_REG(fd_pwrite);
       WASI_REG(fd_read);
       WASI_REG(fd_readdir);
+      WASI_REG(fd_renumber);
       WASI_REG(fd_seek);
+      WASI_REG(fd_sync);
       WASI_REG(fd_tell);
       WASI_REG(fd_write);
+      WASI_REG(path_create_directory);
       WASI_REG(path_filestat_get);
+      WASI_REG(path_filestat_set_times);
+      WASI_REG(path_link);
       WASI_REG(path_open);
       WASI_REG(path_readlink);
       WASI_REG(path_remove_directory);
+      WASI_REG(path_rename);
+      WASI_REG(path_symlink);
       WASI_REG(path_unlink_file);
-      WASI_REG(random_get);
+      WASI_REG(poll_oneoff);
       WASI_REG(proc_exit);
+      WASI_REG(proc_raise);
+      WASI_REG(random_get);
+      WASI_REG(sched_yield);
 
       #undef WASI_REG
    }

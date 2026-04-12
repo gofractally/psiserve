@@ -366,11 +366,12 @@ namespace psizam {
       void use_default_memory() {
          PSIZAM_ASSERT(_base == nullptr, wasm_bad_alloc, "default memory already allocated");
 #ifdef PSIZAM_COMPILE_ONLY
-         // On wasm32, allocate conservatively to leave address space for LLVM.
-         // Per-function IR reset keeps actual usage well below this.
+         // On wasm32, IR data uses a separate per-function allocator so the main
+         // allocator only holds parsed module data + native code.  256MB is enough
+         // for modules up to ~23k functions producing ~104MB of native code.
          constexpr size_t alloc_size = sizeof(size_t) >= 8
             ? max_memory_size           // 64-bit: full allocation
-            : 128 * 1024 * 1024;        // 32-bit: 128MB (leaves ~3.8GB for LLVM)
+            : 256 * 1024 * 1024;        // 32-bit: 256MB (leaves ~3.7GB for heap/LLVM)
          _base = (char*)std::malloc(alloc_size);
          PSIZAM_ASSERT(_base != nullptr, wasm_bad_alloc, "failed to allocate default memory.");
          _capacity = alloc_size;

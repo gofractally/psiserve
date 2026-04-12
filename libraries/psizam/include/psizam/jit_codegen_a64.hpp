@@ -30,6 +30,8 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <variant>
+#include <vector>
 
 namespace psizam {
 
@@ -111,6 +113,9 @@ namespace psizam {
       // ──────── Compile one function from IR to ARM64 ────────
 
       void compile_function(ir_function& func, function_body& body) {
+         // Insert veneer island if enough code has been emitted
+         maybe_insert_veneer_island();
+
          jit_scratch_allocator scratch(_scratch_alloc);
 
          _block_addrs = scratch.alloc<void*>(func.block_count);
@@ -127,17 +132,6 @@ namespace psizam {
          _num_vregs = 0;
          _num_spill_slots = 0;
          if (func.interval_count > 0 && func.intervals) {
-            // ARM64 has no XMM registers. The regalloc GPR pass skips f32/f64
-            // intervals and the XMM pass assigns them XMM slots, leaving
-            // phys_reg = -1 and spill_slot = -1. Force-assign spill slots so
-            // the codegen can materialize them via the spill map.
-            for (uint32_t iv = 0; iv < func.interval_count; ++iv) {
-               auto& interval = func.intervals[iv];
-               if (interval.phys_reg < 0 && interval.spill_slot < 0
-                   && (interval.type == types::f32 || interval.type == types::f64)) {
-                  interval.spill_slot = static_cast<int16_t>(func.num_spill_slots++);
-               }
-            }
             _num_vregs = func.next_vreg;
             _vreg_map = scratch.alloc<int8_t>(_num_vregs);
             _spill_map = scratch.alloc<int16_t>(_num_vregs);
@@ -163,17 +157,12 @@ namespace psizam {
          _func_insts = func.insts;
          _func_inst_count = func.inst_count;
 
-         // Pre-allocate fixup pool before disarming scratch.
+         // Pre-allocate fixup pool from scratch (freed after this function).
          _fixup_pool = scratch.alloc<block_fixup>(func.inst_count + 1);
          _fixup_pool_next = 0;
          _fixup_pool_size = func.inst_count + 1;
 
-         // Disarm scratch so its destructor won't reclaim the code buffer.
-         // When _scratch_alloc == _allocator, scratch data stays interleaved
-         // with code — the waste is acceptable given deterministic limits.
-         scratch.disarm();
-
-         // Code buffer
+         // Code buffer — allocated from the code allocator (_allocator)
          const std::size_t bytes_per_inst = func.has_simd ? 128 : 64;
          const std::size_t est_size = static_cast<std::size_t>(func.inst_count) * bytes_per_inst + 512;
          auto* buf = _allocator.alloc<unsigned char>(est_size);
@@ -193,6 +182,14 @@ namespace psizam {
          body.jit_code_offset = code_start - static_cast<unsigned char*>(_code_segment_base);
          body.jit_code_size = static_cast<uint32_t>(code - code_start);
 
+         // Reclaim unused code buffer tail to keep code compact.
+         // Critical for aarch64 where B/BL displacement is limited to ±128MB.
+         std::size_t used = static_cast<std::size_t>(code - code_start);
+
+         if (used < est_size) {
+            _allocator.reclaim(code, est_size - used);
+         }
+
          _block_addrs = nullptr;
          _block_fixups = nullptr;
          _num_blocks = 0;
@@ -203,14 +200,13 @@ namespace psizam {
       void finalize_code() {
          _allocator.end_code<true>(_code_segment_base);
 
-
          auto num_functions = _mod.get_functions_total();
          for (auto& elem : _mod.elements) {
             for (auto& entry : elem.elems) {
                void* addr = call_indirect_handler;
-               if (entry.index < num_functions && entry.index < _num_relocs) {
-                  if (_relocs[entry.index].address) {
-                     addr = _relocs[entry.index].address;
+               if (entry.index < num_functions && entry.index < _func_relocations.size()) {
+                  if (auto* resolved = std::get_if<void*>(&_func_relocations[entry.index])) {
+                     addr = *resolved;
                   }
                }
                std::size_t offset = static_cast<char*>(addr) - static_cast<char*>(_code_segment_base);
@@ -230,7 +226,9 @@ namespace psizam {
 
       // ──────── Branch fixup ────────
 
-      static void fix_branch(void* branch, void* target) {
+      // Try to fix a branch to target. Returns false if displacement exceeds
+      // the instruction's encoding range (caller must use a veneer instead).
+      static bool try_fix_branch(void* branch, void* target) {
          auto* branch_bytes = static_cast<uint8_t*>(branch);
          auto* target_bytes = static_cast<uint8_t*>(target);
          int64_t offset = (target_bytes - branch_bytes) / 4;
@@ -239,23 +237,76 @@ namespace psizam {
          std::memcpy(&instr, branch, 4);
 
          if ((instr & 0xFC000000) == 0x14000000 || (instr & 0xFC000000) == 0x94000000) {
-            // B / BL: imm26
-            PSIZAM_ASSERT(offset <= 0x1FFFFFF && offset >= -0x2000000, wasm_parse_exception, "branch out of range");
+            // B / BL: imm26 (±128MB)
+            if (offset > 0x1FFFFFF || offset < -0x2000000) return false;
             instr = (instr & 0xFC000000) | (static_cast<uint32_t>(offset) & 0x3FFFFFF);
          } else if ((instr & 0xFF000010) == 0x54000000) {
-            // B.cond: imm19
-            PSIZAM_ASSERT(offset <= 0x3FFFF && offset >= -0x40000, wasm_parse_exception, "branch out of range");
+            // B.cond: imm19 (±1MB)
+            if (offset > 0x3FFFF || offset < -0x40000) return false;
             instr = (instr & 0xFF00001F) | ((static_cast<uint32_t>(offset) & 0x7FFFF) << 5);
          } else if ((instr & 0x7F000000) == 0x34000000 || (instr & 0x7F000000) == 0x35000000 ||
                     (instr & 0xFF000000) == 0xB4000000 || (instr & 0xFF000000) == 0xB5000000) {
-            // CBZ/CBNZ (32/64-bit): imm19
-            PSIZAM_ASSERT(offset <= 0x3FFFF && offset >= -0x40000, wasm_parse_exception, "branch out of range");
+            // CBZ/CBNZ (32/64-bit): imm19 (±1MB)
+            if (offset > 0x3FFFF || offset < -0x40000) return false;
             instr = (instr & 0xFF00001F) | ((static_cast<uint32_t>(offset) & 0x7FFFF) << 5);
          } else {
             PSIZAM_ASSERT(false, wasm_parse_exception, "unknown branch instruction to fix");
          }
 
          std::memcpy(branch, &instr, 4);
+         return true;
+      }
+
+      static void fix_branch(void* branch, void* target) {
+         if (!try_fix_branch(branch, target)) {
+            // For intra-function branches (B.cond, CBZ/CBNZ), try to convert to
+            // long form: replace the short conditional with an inverted B.cond +8
+            // followed by an unconditional B to the target.
+            // This requires the instruction AFTER the conditional branch to be a NOP
+            // that we can overwrite with the B instruction.
+            uint32_t instr;
+            std::memcpy(&instr, branch, 4);
+            uint32_t next_instr;
+            std::memcpy(&next_instr, static_cast<char*>(branch) + 4, 4);
+
+            // Check if the next instruction is our long-branch NOP sentinel (0xD503201F)
+            if (next_instr == 0xD503201F) {
+               if ((instr & 0xFF000010) == 0x54000000) {
+                  // B.cond → invert condition, branch +8, then B target
+                  uint32_t cond = instr & 0xF;
+                  uint32_t inverted = cond ^ 1;
+                  uint32_t short_branch = 0x54000040 | inverted; // B.cond_inv PC+8
+                  std::memcpy(branch, &short_branch, 4);
+                  // Write unconditional B at branch+4
+                  void* b_slot = static_cast<char*>(branch) + 4;
+                  bool ok = try_fix_branch_b(b_slot, target);
+                  PSIZAM_ASSERT(ok, wasm_parse_exception, "long conditional branch out of range");
+                  return;
+               }
+               if ((instr & 0x7F000000) == 0x34000000 || (instr & 0x7F000000) == 0x35000000 ||
+                   (instr & 0xFF000000) == 0xB4000000 || (instr & 0xFF000000) == 0xB5000000) {
+                  // CBZ/CBNZ → invert (CBZ↔CBNZ), branch +8, then B target
+                  uint32_t flipped = instr ^ 0x01000000; // flip bit 24 (CBZ↔CBNZ)
+                  // Set offset to +8 bytes (2 instructions): imm19 = 2
+                  flipped = (flipped & 0xFF00001F) | (2 << 5);
+                  std::memcpy(branch, &flipped, 4);
+                  void* b_slot = static_cast<char*>(branch) + 4;
+                  bool ok = try_fix_branch_b(b_slot, target);
+                  PSIZAM_ASSERT(ok, wasm_parse_exception, "long conditional branch out of range");
+                  return;
+               }
+            }
+            PSIZAM_ASSERT(false, wasm_parse_exception, "branch out of range (no long-branch NOP available)");
+         }
+      }
+
+      // Write an unconditional B instruction at the given address to target.
+      static bool try_fix_branch_b(void* branch, void* target) {
+         int64_t offset = (static_cast<uint8_t*>(target) - static_cast<uint8_t*>(branch)) / 4;
+         if (offset > 0x1FFFFFF || offset < -0x2000000) return false;
+         uint32_t b = 0x14000000 | (static_cast<uint32_t>(offset) & 0x3FFFFFF);
+         std::memcpy(branch, &b, 4);
+         return true;
       }
 
       // ──────── Immediate encoding helpers ────────
@@ -966,6 +1017,12 @@ namespace psizam {
          block_fixup* next;
       };
 
+      block_fixup* alloc_block_fixup() {
+         PSIZAM_ASSERT(_fixup_pool_next < _fixup_pool_size, wasm_parse_exception,
+            "block fixup pool exhausted");
+         return &_fixup_pool[_fixup_pool_next++];
+      }
+
       void mark_block_start(uint32_t block_idx) {
          if (block_idx < _num_blocks) _block_addrs[block_idx] = code;
       }
@@ -992,6 +1049,7 @@ namespace psizam {
       void* emit_cond_branch_placeholder(uint32_t cond) {
          void* branch = code;
          emit32(0x54000000 | cond); // B.cond (patched later)
+         emit32(0xD503201F);        // NOP sentinel — overwritten with B if out of range
          return branch;
       }
 
@@ -1005,7 +1063,7 @@ namespace psizam {
             fix_branch(branch, _block_addrs[block_idx]);
          } else {
             void* branch = emit_branch_placeholder();
-            auto* fixup = _allocator.alloc<block_fixup>(1);
+            auto* fixup = alloc_block_fixup();
             fixup->branch = branch;
             fixup->next = _block_fixups[block_idx];
             _block_fixups[block_idx] = fixup;
@@ -1020,7 +1078,7 @@ namespace psizam {
             fix_branch(branch, _block_addrs[block_idx]);
          } else {
             void* branch = emit_cond_branch_placeholder(cond);
-            auto* fixup = _allocator.alloc<block_fixup>(1);
+            auto* fixup = alloc_block_fixup();
             fixup->branch = branch;
             fixup->next = _block_fixups[block_idx];
             _block_fixups[block_idx] = fixup;
@@ -1614,7 +1672,7 @@ namespace psizam {
             uint32_t target_block = inst.br.target;
             if (target_block < _num_blocks) {
                void* jmp = emit_branch_placeholder();
-               auto* fixup = _allocator.alloc<block_fixup>(1);
+               auto* fixup = alloc_block_fixup();
                fixup->branch = jmp;
                fixup->next = _block_fixups[target_block];
                _block_fixups[target_block] = fixup;
@@ -3450,46 +3508,126 @@ namespace psizam {
          store_x0_vreg(inst.dest);
       }
 
+      // ──────── Veneer islands for long-range branches ────────
+      //
+      // AArch64 B/BL instructions have ±128MB displacement. When code exceeds
+      // this limit, we insert veneer islands — small trampolines that use
+      // PC-relative ADRP+ADD+BR (±4GB range) to reach distant targets.
+      // Islands are inserted between function compilations every ~60MB.
+
+      static constexpr uint32_t VENEER_ISLAND_INTERVAL = 60 * 1024 * 1024; // 60MB between islands
+      static constexpr uint32_t VENEER_SLOT_SIZE = 12;  // ADRP + ADD + BR = 12 bytes
+
+      struct veneer_island {
+         void* start;
+         uint32_t capacity;
+         uint32_t used;
+      };
+
+      // Write a veneer trampoline at veneer_addr that branches to target_addr.
+      // Uses ADRP+ADD+BR X16 (PC-relative, ±4GB range, survives code relocation).
+      static void write_veneer(void* veneer_addr, void* target_addr) {
+         auto veneer_pc = reinterpret_cast<uintptr_t>(veneer_addr);
+         auto target = reinterpret_cast<uintptr_t>(target_addr);
+         int64_t page_offset = (static_cast<int64_t>(target & ~0xFFFULL) -
+                                static_cast<int64_t>(veneer_pc & ~0xFFFULL)) >> 12;
+         uint32_t lo12 = target & 0xFFF;
+
+         // ADRP X16, #page_offset
+         uint32_t immlo = static_cast<uint32_t>(page_offset) & 3;
+         uint32_t immhi = (static_cast<uint32_t>(page_offset) >> 2) & 0x7FFFF;
+         uint32_t adrp = 0x90000010 | (immlo << 29) | (immhi << 5);
+
+         // ADD X16, X16, #lo12
+         uint32_t add = 0x91000210 | (lo12 << 10);
+
+         // BR X16
+         uint32_t br = 0xD61F0200;
+
+         std::memcpy(veneer_addr, &adrp, 4);
+         std::memcpy(static_cast<char*>(veneer_addr) + 4, &add, 4);
+         std::memcpy(static_cast<char*>(veneer_addr) + 8, &br, 4);
+      }
+
+      // Insert a veneer island if enough code has been emitted since the last one.
+      // Called between function compilations.
+      void maybe_insert_veneer_island() {
+         // Peek at current allocator position
+         auto* current = reinterpret_cast<char*>(_allocator._base) + _allocator._offset;
+         void* ref = _num_veneer_islands > 0
+            ? static_cast<char*>(_veneer_islands[_num_veneer_islands - 1].start)
+              + _veneer_island_size
+            : _code_segment_base;
+         ptrdiff_t distance = current - static_cast<char*>(ref);
+         if (distance < static_cast<ptrdiff_t>(VENEER_ISLAND_INTERVAL)) return;
+
+         // Allocate island in the code segment
+         auto* island_buf = _allocator.alloc<unsigned char>(_veneer_island_size);
+         std::memset(island_buf, 0, _veneer_island_size);
+
+         PSIZAM_ASSERT(_num_veneer_islands < MAX_VENEER_ISLANDS, wasm_parse_exception,
+            "too many veneer islands");
+         _veneer_islands[_num_veneer_islands++] = { island_buf, _veneer_island_slots, 0 };
+      }
+
+      // Allocate a veneer slot reachable from branch_addr and write trampoline to target.
+      void* allocate_veneer(void* branch_addr, void* target_addr) {
+         for (uint32_t i = 0; i < _num_veneer_islands; ++i) {
+            auto& island = _veneer_islands[i];
+            if (island.used >= island.capacity) continue;
+            void* slot = static_cast<char*>(island.start) + island.used * VENEER_SLOT_SIZE;
+            int64_t dist_bytes = static_cast<char*>(slot) - static_cast<char*>(branch_addr);
+            // Must be reachable by BL (±128MB = ±0x8000000 bytes)
+            if (dist_bytes >= -0x8000000LL && dist_bytes <= 0x7FFFFFFLL) {
+               write_veneer(slot, target_addr);
+               island.used++;
+               return slot;
+            }
+         }
+         PSIZAM_ASSERT(false, wasm_parse_exception,
+            "no veneer island reachable for out-of-range branch");
+         return nullptr;
+      }
+
+      // Fix a branch, using a veneer if the displacement exceeds ±128MB.
+      void fix_branch_or_veneer(void* branch, void* target) {
+         if (!try_fix_branch(branch, target)) {
+            auto dist = static_cast<char*>(target) - static_cast<char*>(branch);
+            void* veneer = allocate_veneer(branch, target);
+            bool ok = try_fix_branch(branch, veneer);
+            PSIZAM_ASSERT(ok, wasm_parse_exception,
+               "veneer island unreachable from branch");
+         }
+      }
+
       // ──────── Function relocation ────────
-
-      struct call_fixup {
-         void* branch;
-         call_fixup* next;
-      };
-
-      struct func_reloc {
-         void* address = nullptr;
-         call_fixup* pending = nullptr;
-      };
 
       void init_relocations() {
          uint32_t total = _mod.get_functions_total();
-         _relocs = _allocator.alloc<func_reloc>(total);
-         _num_relocs = total;
-         for (uint32_t i = 0; i < total; ++i) _relocs[i] = func_reloc{};
+         _func_relocations.resize(total);
+         // Scale veneer island capacity with function count.
+         // Each out-of-range call site needs one veneer slot.
+         _veneer_island_slots = std::max(uint32_t(2048), total * 2);
+         _veneer_island_size = VENEER_SLOT_SIZE * _veneer_island_slots;
       }
 
       void register_call(void* branch_addr, uint32_t funcnum) {
-         if (funcnum >= _num_relocs) return;
-         auto& r = _relocs[funcnum];
-         if (r.address) {
-            fix_branch(branch_addr, r.address);
+         if (funcnum >= _func_relocations.size()) return;
+         auto& entry = _func_relocations[funcnum];
+         if (auto* addr = std::get_if<void*>(&entry)) {
+            fix_branch_or_veneer(branch_addr, *addr);
          } else {
-            auto* fixup = _allocator.alloc<call_fixup>(1);
-            fixup->branch = branch_addr;
-            fixup->next = r.pending;
-            r.pending = fixup;
+            std::get<std::vector<void*>>(entry).push_back(branch_addr);
          }
       }
 
       void start_function(void* func_start, uint32_t funcnum) {
-         if (funcnum >= _num_relocs) return;
-         auto& r = _relocs[funcnum];
-         for (auto* f = r.pending; f; f = f->next) {
-            fix_branch(f->branch, func_start);
+         if (funcnum >= _func_relocations.size()) return;
+         auto& entry = _func_relocations[funcnum];
+         for (void* branch : std::get<std::vector<void*>>(entry)) {
+            fix_branch_or_veneer(branch, func_start);
          }
-         r.address = func_start;
-         r.pending = nullptr;
+         entry = func_start;
       }
 
    public:
@@ -3597,8 +3735,14 @@ namespace psizam {
       void* type_error_handler = nullptr;
       void* stack_overflow_handler = nullptr;
       void* memory_handler = nullptr;
-      func_reloc* _relocs = nullptr;
-      uint32_t _num_relocs = 0;
+      // Function relocation: variant holds either pending branches (vector)
+      // or resolved address (void*). Matches JIT1's approach in aarch64.hpp.
+      std::vector<std::variant<std::vector<void*>, void*>> _func_relocations;
+      static constexpr uint32_t MAX_VENEER_ISLANDS = 64; // supports up to ~3.8GB of code
+      veneer_island _veneer_islands[MAX_VENEER_ISLANDS];
+      uint32_t _num_veneer_islands = 0;
+      uint32_t _veneer_island_slots = 2048;
+      uint32_t _veneer_island_size = VENEER_SLOT_SIZE * 2048;
       void** _block_addrs = nullptr;
       block_fixup** _block_fixups = nullptr;
       uint32_t _num_blocks = 0;

@@ -121,6 +121,13 @@ namespace psizam {
          declare_functions();
          // Declare runtime helper functions
          declare_runtime_helpers();
+         if (opts.softfloat) {
+            declare_softfloat_helpers();
+         }
+         if (opts.enable_backtrace) {
+            frameaddress_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+               llvm_mod.get(), llvm::Intrinsic::frameaddress, {ptr_ty});
+         }
       }
 
       // Runtime helper function declarations
@@ -148,6 +155,54 @@ namespace psizam {
       llvm::Function* rt_call_depth_dec = nullptr;
       llvm::Function* rt_call_depth_inc = nullptr;
       llvm::Function* rt_get_memory     = nullptr;
+
+      // Backtrace intrinsic
+      llvm::Function* frameaddress_intrinsic = nullptr;
+
+      // Softfloat function declarations (only populated when opts.softfloat)
+      // f32 arithmetic: i32(i32, i32)
+      llvm::Function* sf_f32_add = nullptr;
+      llvm::Function* sf_f32_sub = nullptr;
+      llvm::Function* sf_f32_mul = nullptr;
+      llvm::Function* sf_f32_div = nullptr;
+      llvm::Function* sf_f32_min = nullptr;
+      llvm::Function* sf_f32_max = nullptr;
+      llvm::Function* sf_f32_copysign = nullptr;
+      // f32 unary: i32(i32)
+      llvm::Function* sf_f32_abs = nullptr;
+      llvm::Function* sf_f32_neg = nullptr;
+      llvm::Function* sf_f32_sqrt = nullptr;
+      llvm::Function* sf_f32_ceil = nullptr;
+      llvm::Function* sf_f32_floor = nullptr;
+      llvm::Function* sf_f32_trunc = nullptr;
+      llvm::Function* sf_f32_nearest = nullptr;
+      // f64 arithmetic: i64(i64, i64)
+      llvm::Function* sf_f64_add = nullptr;
+      llvm::Function* sf_f64_sub = nullptr;
+      llvm::Function* sf_f64_mul = nullptr;
+      llvm::Function* sf_f64_div = nullptr;
+      llvm::Function* sf_f64_min = nullptr;
+      llvm::Function* sf_f64_max = nullptr;
+      llvm::Function* sf_f64_copysign = nullptr;
+      // f64 unary: i64(i64)
+      llvm::Function* sf_f64_abs = nullptr;
+      llvm::Function* sf_f64_neg = nullptr;
+      llvm::Function* sf_f64_sqrt = nullptr;
+      llvm::Function* sf_f64_ceil = nullptr;
+      llvm::Function* sf_f64_floor = nullptr;
+      llvm::Function* sf_f64_trunc = nullptr;
+      llvm::Function* sf_f64_nearest = nullptr;
+      // Conversions
+      llvm::Function* sf_f32_convert_i32s = nullptr;
+      llvm::Function* sf_f32_convert_i32u = nullptr;
+      llvm::Function* sf_f32_convert_i64s = nullptr;
+      llvm::Function* sf_f32_convert_i64u = nullptr;
+      llvm::Function* sf_f64_convert_i32s = nullptr;
+      llvm::Function* sf_f64_convert_i32u = nullptr;
+      llvm::Function* sf_f64_convert_i64s = nullptr;
+      llvm::Function* sf_f64_convert_i64u = nullptr;
+      llvm::Function* sf_f32_demote_f64 = nullptr;
+      llvm::Function* sf_f64_promote_f32 = nullptr;
 
       void declare_runtime_helpers() {
          auto decl = [&](const char* name, llvm::FunctionType* ty) -> llvm::Function* {
@@ -256,6 +311,93 @@ namespace psizam {
             llvm::FunctionType::get(ptr_ty, {ptr_ty}, false));
       }
 
+      void declare_softfloat_helpers() {
+         auto decl = [&](const char* name, llvm::FunctionType* ty) -> llvm::Function* {
+            return llvm::Function::Create(ty, llvm::Function::ExternalLinkage,
+                                           name, llvm_mod.get());
+         };
+
+         auto f32_binop_ty = llvm::FunctionType::get(i32_ty, {i32_ty, i32_ty}, false);
+         auto f32_unop_ty  = llvm::FunctionType::get(i32_ty, {i32_ty}, false);
+         auto f64_binop_ty = llvm::FunctionType::get(i64_ty, {i64_ty, i64_ty}, false);
+         auto f64_unop_ty  = llvm::FunctionType::get(i64_ty, {i64_ty}, false);
+
+         sf_f32_add = decl("__psizam_sf_f32_add", f32_binop_ty);
+         sf_f32_sub = decl("__psizam_sf_f32_sub", f32_binop_ty);
+         sf_f32_mul = decl("__psizam_sf_f32_mul", f32_binop_ty);
+         sf_f32_div = decl("__psizam_sf_f32_div", f32_binop_ty);
+         sf_f32_min = decl("__psizam_sf_f32_min", f32_binop_ty);
+         sf_f32_max = decl("__psizam_sf_f32_max", f32_binop_ty);
+         sf_f32_copysign = decl("__psizam_sf_f32_copysign", f32_binop_ty);
+
+         sf_f32_abs     = decl("__psizam_sf_f32_abs", f32_unop_ty);
+         sf_f32_neg     = decl("__psizam_sf_f32_neg", f32_unop_ty);
+         sf_f32_sqrt    = decl("__psizam_sf_f32_sqrt", f32_unop_ty);
+         sf_f32_ceil    = decl("__psizam_sf_f32_ceil", f32_unop_ty);
+         sf_f32_floor   = decl("__psizam_sf_f32_floor", f32_unop_ty);
+         sf_f32_trunc   = decl("__psizam_sf_f32_trunc", f32_unop_ty);
+         sf_f32_nearest = decl("__psizam_sf_f32_nearest", f32_unop_ty);
+
+         sf_f64_add = decl("__psizam_sf_f64_add", f64_binop_ty);
+         sf_f64_sub = decl("__psizam_sf_f64_sub", f64_binop_ty);
+         sf_f64_mul = decl("__psizam_sf_f64_mul", f64_binop_ty);
+         sf_f64_div = decl("__psizam_sf_f64_div", f64_binop_ty);
+         sf_f64_min = decl("__psizam_sf_f64_min", f64_binop_ty);
+         sf_f64_max = decl("__psizam_sf_f64_max", f64_binop_ty);
+         sf_f64_copysign = decl("__psizam_sf_f64_copysign", f64_binop_ty);
+
+         sf_f64_abs     = decl("__psizam_sf_f64_abs", f64_unop_ty);
+         sf_f64_neg     = decl("__psizam_sf_f64_neg", f64_unop_ty);
+         sf_f64_sqrt    = decl("__psizam_sf_f64_sqrt", f64_unop_ty);
+         sf_f64_ceil    = decl("__psizam_sf_f64_ceil", f64_unop_ty);
+         sf_f64_floor   = decl("__psizam_sf_f64_floor", f64_unop_ty);
+         sf_f64_trunc   = decl("__psizam_sf_f64_trunc", f64_unop_ty);
+         sf_f64_nearest = decl("__psizam_sf_f64_nearest", f64_unop_ty);
+
+         // Conversions: int -> float
+         sf_f32_convert_i32s = decl("__psizam_sf_f32_convert_i32s",
+            llvm::FunctionType::get(i32_ty, {i32_ty}, false));
+         sf_f32_convert_i32u = decl("__psizam_sf_f32_convert_i32u",
+            llvm::FunctionType::get(i32_ty, {i32_ty}, false));
+         sf_f32_convert_i64s = decl("__psizam_sf_f32_convert_i64s",
+            llvm::FunctionType::get(i32_ty, {i64_ty}, false));
+         sf_f32_convert_i64u = decl("__psizam_sf_f32_convert_i64u",
+            llvm::FunctionType::get(i32_ty, {i64_ty}, false));
+         sf_f64_convert_i32s = decl("__psizam_sf_f64_convert_i32s",
+            llvm::FunctionType::get(i64_ty, {i32_ty}, false));
+         sf_f64_convert_i32u = decl("__psizam_sf_f64_convert_i32u",
+            llvm::FunctionType::get(i64_ty, {i32_ty}, false));
+         sf_f64_convert_i64s = decl("__psizam_sf_f64_convert_i64s",
+            llvm::FunctionType::get(i64_ty, {i64_ty}, false));
+         sf_f64_convert_i64u = decl("__psizam_sf_f64_convert_i64u",
+            llvm::FunctionType::get(i64_ty, {i64_ty}, false));
+         // float -> float
+         sf_f32_demote_f64  = decl("__psizam_sf_f32_demote_f64",
+            llvm::FunctionType::get(i32_ty, {i64_ty}, false));
+         sf_f64_promote_f32 = decl("__psizam_sf_f64_promote_f32",
+            llvm::FunctionType::get(i64_ty, {i32_ty}, false));
+      }
+
+      // Helpers: call softfloat function with automatic bitcasting
+      llvm::Value* call_sf_f32_binop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a, llvm::Value* b) {
+         auto* ai = builder.CreateBitCast(a, i32_ty);
+         auto* bi = builder.CreateBitCast(b, i32_ty);
+         return builder.CreateBitCast(builder.CreateCall(fn, {ai, bi}), f32_ty);
+      }
+      llvm::Value* call_sf_f32_unop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a) {
+         auto* ai = builder.CreateBitCast(a, i32_ty);
+         return builder.CreateBitCast(builder.CreateCall(fn, {ai}), f32_ty);
+      }
+      llvm::Value* call_sf_f64_binop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a, llvm::Value* b) {
+         auto* ai = builder.CreateBitCast(a, i64_ty);
+         auto* bi = builder.CreateBitCast(b, i64_ty);
+         return builder.CreateBitCast(builder.CreateCall(fn, {ai, bi}), f64_ty);
+      }
+      llvm::Value* call_sf_f64_unop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a) {
+         auto* ai = builder.CreateBitCast(a, i64_ty);
+         return builder.CreateBitCast(builder.CreateCall(fn, {ai}), f64_ty);
+      }
+
       llvm::Type* wasm_type_to_llvm(uint8_t wt) {
          switch (wt) {
             case types::i32:  return i32_ty;
@@ -300,6 +442,8 @@ namespace psizam {
             // quiet sNaN to qNaN.
             if (opts.deterministic || opts.softfloat)
                fn->addFnAttr(llvm::Attribute::StrictFP);
+            if (opts.enable_backtrace)
+               fn->addFnAttr("frame-pointer", "all");
             wasm_funcs[i] = fn;
          }
       }
@@ -340,6 +484,34 @@ namespace psizam {
             return builder.CreateCall(intrinsic, {val, builder.getFalse()});
          }
          return builder.CreateCall(intrinsic, {val});
+      }
+
+      // ──── Backtrace helpers ────
+      // Store current frame address to ctx->_top_frame (offset 8)
+      void emit_backtrace_set_top(llvm::IRBuilder<>& builder, llvm::Value* ctx_ptr) {
+         if (!opts.enable_backtrace) return;
+         auto* fp = builder.CreateCall(frameaddress_intrinsic, {builder.getInt32(0)});
+         auto* slot = builder.CreateGEP(i8_ty, ctx_ptr, builder.getInt64(8));
+         builder.CreateStore(fp, slot, /*isVolatile=*/true);
+      }
+      // Clear ctx->_top_frame (offset 8)
+      void emit_backtrace_clear_top(llvm::IRBuilder<>& builder, llvm::Value* ctx_ptr) {
+         if (!opts.enable_backtrace) return;
+         auto* slot = builder.CreateGEP(i8_ty, ctx_ptr, builder.getInt64(8));
+         builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_ty)),
+                             slot, /*isVolatile=*/true);
+      }
+      // Store current frame address to ctx->_bottom_frame (offset 0)
+      void emit_backtrace_set_bottom(llvm::IRBuilder<>& builder, llvm::Value* ctx_ptr) {
+         if (!opts.enable_backtrace) return;
+         auto* fp = builder.CreateCall(frameaddress_intrinsic, {builder.getInt32(0)});
+         builder.CreateStore(fp, ctx_ptr, /*isVolatile=*/true);
+      }
+      // Clear ctx->_bottom_frame (offset 0)
+      void emit_backtrace_clear_bottom(llvm::IRBuilder<>& builder, llvm::Value* ctx_ptr) {
+         if (!opts.enable_backtrace) return;
+         builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_ty)),
+                             ctx_ptr, /*isVolatile=*/true);
       }
 
       void translate(const ir_function& func) {
@@ -1229,9 +1401,15 @@ namespace psizam {
                      }
                      call_args.clear();
 
+                     emit_backtrace_set_top(builder, ctx_ptr);
+                     emit_backtrace_set_bottom(builder, ctx_ptr);
+
                      llvm::Value* raw = builder.CreateCall(rt_call_host,
                         {ctx_ptr, builder.getInt32(funcnum), args_array,
                          builder.getInt32(nargs)});
+
+                     emit_backtrace_clear_bottom(builder, ctx_ptr);
+                     emit_backtrace_clear_top(builder, ctx_ptr);
 
                      if (inst.dest != ir_vreg_none) {
                         llvm::Type* target_ty = ir_type_to_llvm(inst.type);
@@ -1271,7 +1449,9 @@ namespace psizam {
                      call_args.clear();
 
                      if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
+                        emit_backtrace_set_top(builder, ctx_ptr);
                         auto* result = builder.CreateCall(wasm_funcs[funcnum], args);
+                        emit_backtrace_clear_top(builder, ctx_ptr);
                         if (inst.dest != ir_vreg_none && !result->getType()->isVoidTy()) {
                            if (inst.type == types::v128) {
                               store_v128(static_cast<uint16_t>(inst.dest), result);
@@ -1331,11 +1511,15 @@ namespace psizam {
                   }
 
                   builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
+                  emit_backtrace_set_top(builder, ctx_ptr);
+                  emit_backtrace_set_bottom(builder, ctx_ptr);
 
                   llvm::Value* raw = builder.CreateCall(rt_call_indirect,
                      {ctx_ptr, load_mem_ptr(), builder.getInt32(type_idx),
                       table_elem, args_array, builder.getInt32(nargs)});
 
+                  emit_backtrace_clear_bottom(builder, ctx_ptr);
+                  emit_backtrace_clear_top(builder, ctx_ptr);
                   builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
 
                   // Reload mem_ptr after call_indirect (callee may grow memory)
@@ -1909,138 +2093,278 @@ namespace psizam {
 
                // ──── f32 unary ────
                case ir_op::f32_abs:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_abs,
+                        load_vreg_as(inst.rr.src1, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  }
                   break;
                case ir_op::f32_neg:
-                  store_vreg(inst.dest, builder.CreateFNeg(load_vreg_as(inst.rr.src1, f32_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_neg,
+                        load_vreg_as(inst.rr.src1, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFNeg(load_vreg_as(inst.rr.src1, f32_ty)));
+                  }
                   break;
                case ir_op::f32_ceil:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_ceil,
+                        load_vreg_as(inst.rr.src1, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  }
                   break;
                case ir_op::f32_floor:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_floor,
+                        load_vreg_as(inst.rr.src1, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  }
                   break;
                case ir_op::f32_trunc:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_trunc,
+                        load_vreg_as(inst.rr.src1, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  }
                   break;
                case ir_op::f32_nearest:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_nearest,
+                        load_vreg_as(inst.rr.src1, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  }
                   break;
                case ir_op::f32_sqrt:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_sqrt,
+                        load_vreg_as(inst.rr.src1, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                  }
                   break;
 
                // ──── f64 unary ────
                case ir_op::f64_abs:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_abs,
+                        load_vreg_as(inst.rr.src1, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  }
                   break;
                case ir_op::f64_neg:
-                  store_vreg(inst.dest, builder.CreateFNeg(load_vreg_as(inst.rr.src1, f64_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_neg,
+                        load_vreg_as(inst.rr.src1, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFNeg(load_vreg_as(inst.rr.src1, f64_ty)));
+                  }
                   break;
                case ir_op::f64_ceil:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_ceil,
+                        load_vreg_as(inst.rr.src1, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  }
                   break;
                case ir_op::f64_floor:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_floor,
+                        load_vreg_as(inst.rr.src1, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  }
                   break;
                case ir_op::f64_trunc:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_trunc,
+                        load_vreg_as(inst.rr.src1, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  }
                   break;
                case ir_op::f64_nearest:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_nearest,
+                        load_vreg_as(inst.rr.src1, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  }
                   break;
                case ir_op::f64_sqrt:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_sqrt,
+                        load_vreg_as(inst.rr.src1, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                  }
                   break;
 
                // ──── f32 binary arithmetic ────
                case ir_op::f32_add:
-                  store_vreg(inst.dest, builder.CreateFAdd(
-                     load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_add,
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFAdd(
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  }
                   break;
                case ir_op::f32_sub:
-                  store_vreg(inst.dest, builder.CreateFSub(
-                     load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_sub,
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFSub(
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  }
                   break;
                case ir_op::f32_mul:
-                  store_vreg(inst.dest, builder.CreateFMul(
-                     load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_mul,
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFMul(
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  }
                   break;
                case ir_op::f32_div:
-                  store_vreg(inst.dest, builder.CreateFDiv(
-                     load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_div,
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFDiv(
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  }
                   break;
                case ir_op::f32_min:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_min,
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)}));
+                  }
                   break;
                case ir_op::f32_max:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_max,
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)}));
+                  }
                   break;
                case ir_op::f32_copysign:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::copysign, {f32_ty}),
-                     {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_copysign,
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::copysign, {f32_ty}),
+                        {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)}));
+                  }
                   break;
 
                // ──── f64 binary arithmetic ────
                case ir_op::f64_add:
-                  store_vreg(inst.dest, builder.CreateFAdd(
-                     load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_add,
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFAdd(
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  }
                   break;
                case ir_op::f64_sub:
-                  store_vreg(inst.dest, builder.CreateFSub(
-                     load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_sub,
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFSub(
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  }
                   break;
                case ir_op::f64_mul:
-                  store_vreg(inst.dest, builder.CreateFMul(
-                     load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_mul,
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFMul(
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  }
                   break;
                case ir_op::f64_div:
-                  store_vreg(inst.dest, builder.CreateFDiv(
-                     load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_div,
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFDiv(
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  }
                   break;
                case ir_op::f64_min:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_min,
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)}));
+                  }
                   break;
                case ir_op::f64_max:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_max,
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)}));
+                  }
                   break;
                case ir_op::f64_copysign:
-                  store_vreg(inst.dest, builder.CreateCall(
-                     llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::copysign, {f64_ty}),
-                     {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)}));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_copysign,
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateCall(
+                        llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::copysign, {f64_ty}),
+                        {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)}));
+                  }
                   break;
 
                // ──── Type conversions ────
@@ -2155,36 +2479,86 @@ namespace psizam {
 
                // Float conversions from integers
                case ir_op::f32_convert_s_i32:
-                  store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i32_ty), f32_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f32_convert_i32s, {load_vreg_as(inst.rr.src1, i32_ty)}), f32_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i32_ty), f32_ty));
+                  }
                   break;
                case ir_op::f32_convert_u_i32:
-                  store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i32_ty), f32_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f32_convert_i32u, {load_vreg_as(inst.rr.src1, i32_ty)}), f32_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i32_ty), f32_ty));
+                  }
                   break;
                case ir_op::f32_convert_s_i64:
-                  store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i64_ty), f32_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f32_convert_i64s, {load_vreg_as(inst.rr.src1, i64_ty)}), f32_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i64_ty), f32_ty));
+                  }
                   break;
                case ir_op::f32_convert_u_i64:
-                  store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i64_ty), f32_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f32_convert_i64u, {load_vreg_as(inst.rr.src1, i64_ty)}), f32_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i64_ty), f32_ty));
+                  }
                   break;
                case ir_op::f64_convert_s_i32:
-                  store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i32_ty), f64_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f64_convert_i32s, {load_vreg_as(inst.rr.src1, i32_ty)}), f64_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i32_ty), f64_ty));
+                  }
                   break;
                case ir_op::f64_convert_u_i32:
-                  store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i32_ty), f64_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f64_convert_i32u, {load_vreg_as(inst.rr.src1, i32_ty)}), f64_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i32_ty), f64_ty));
+                  }
                   break;
                case ir_op::f64_convert_s_i64:
-                  store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i64_ty), f64_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f64_convert_i64s, {load_vreg_as(inst.rr.src1, i64_ty)}), f64_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i64_ty), f64_ty));
+                  }
                   break;
                case ir_op::f64_convert_u_i64:
-                  store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i64_ty), f64_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f64_convert_i64u, {load_vreg_as(inst.rr.src1, i64_ty)}), f64_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i64_ty), f64_ty));
+                  }
                   break;
 
                // Float promotions/demotions
                case ir_op::f32_demote_f64:
-                  store_vreg(inst.dest, builder.CreateFPTrunc(load_vreg_as(inst.rr.src1, f64_ty), f32_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f32_demote_f64, {builder.CreateBitCast(load_vreg_as(inst.rr.src1, f64_ty), i64_ty)}), f32_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFPTrunc(load_vreg_as(inst.rr.src1, f64_ty), f32_ty));
+                  }
                   break;
                case ir_op::f64_promote_f32:
-                  store_vreg(inst.dest, builder.CreateFPExt(load_vreg_as(inst.rr.src1, f32_ty), f64_ty));
+                  if (opts.softfloat) {
+                     store_vreg(inst.dest, builder.CreateBitCast(
+                        builder.CreateCall(sf_f64_promote_f32, {builder.CreateBitCast(load_vreg_as(inst.rr.src1, f32_ty), i32_ty)}), f64_ty));
+                  } else {
+                     store_vreg(inst.dest, builder.CreateFPExt(load_vreg_as(inst.rr.src1, f32_ty), f64_ty));
+                  }
                   break;
 
                // Reinterpretations (bitcast)

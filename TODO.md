@@ -2,9 +2,7 @@
 
 ## Active
 
-- [ ] Fix JIT2 branch-out-of-range on large modules (23k+ funcs exceed +-128MB aarch64 B/BL displacement; needs veneer islands or code partitioning)
-- [ ] Fix JIT1 softfloat: wire up float JIT codegen trampolines for softfloat mode, or fix softfloat=OFF build (SIMD stubs referenced unconditionally)
-- [ ] Backend stress test: benchmark pzam-compile.wasm across all engines including wasmer (see `plans/backend-stress-test.md`)
+- [ ] Fix JIT2 runtime crash on complex modules (compiles OK but SEGV at ~5.7MB offset; pre-existing codegen bug, not branch range)
 - [ ] Investigate wasm-ld LTO (`-flto`) for further pzam-compile.wasm size reduction
 
 ## Pending
@@ -15,3 +13,9 @@
 - [ ] True tail call optimization
 - [ ] Audit relaxed SIMD completeness
 - [ ] Fix multi-module elem tests (elem_59/60/68)
+
+## Done
+
+- [x] Fix JIT1 branch-out-of-range on large modules — veneer islands + long-form conditional branches
+- [x] Fix JIT2 branch-out-of-range on large modules — veneer islands + long-form conditional branches + separate scratch allocator
+- [x] Backend stress test: benchmark pzam-compile.wasm across all engines (see `plans/backend-stress-test.md`)

@@ -28,22 +28,20 @@ namespace psizam {
          : ir_writer_impl(alloc, source_bytes, mod, enable_backtrace, stack_limit_is_bytes)
       {
          _skip_codegen = true;
-         // Save offset after _functions array allocation.
-         // Per-function IR resets to this point after each translation.
-         _post_array_offset = alloc._offset;
       }
 
-      // Shadow base class: compile each function immediately after parsing.
+      // Shadow base class: compile each function via LLVM immediately after parsing.
       // Creates a fresh LLVM module per function, translates, optimizes, emits,
       // then discards — bounding LLVM memory to one function at a time.
       void finalize(function_body& body) {
          if (_compile_result && _func && !_had_error) {
             compile_current_function();
          }
-         // Base class clears _func
+         // Base class clears _func and resets IR allocator (since _skip_codegen,
+         // base finalize just clears _func — IR reset done here)
          ir_writer_impl::finalize(body);
-         // Reset allocator to reclaim this function's IR data
-         _allocator._offset = _post_array_offset;
+         // Reset IR allocator to reclaim this function's IR data
+         _ir_alloc._offset = _post_array_offset;
       }
 
       ~ir_writer_llvm_aot() noexcept {
@@ -103,12 +101,11 @@ namespace psizam {
 
          // Create per-function LLVM translator + module
          llvm_translate_options topts;
-         topts.opt_level     = 2;
-         topts.deterministic = true;
-         topts.per_function  = true;
-#ifdef PSIZAM_SOFTFLOAT
-         topts.softfloat     = true;
-#endif
+         topts.opt_level        = 2;
+         topts.deterministic    = true;
+         topts.per_function     = true;
+         topts.softfloat        = _compile_result->softfloat;
+         topts.enable_backtrace = _compile_result->backtrace;
 
          auto do_compile = [&]() {
             llvm_ir_translator translator(get_ir_module(), topts);
@@ -183,7 +180,6 @@ namespace psizam {
       std::vector<code_relocation> _accumulated_relocs;
       std::vector<std::pair<uint32_t, uint32_t>> _function_offsets;  // wasm_entry_N offsets
       std::vector<std::pair<uint32_t, uint32_t>> _func_body_offsets; // wasm_func_N offsets
-      size_t _post_array_offset = 0;
       bool _had_error = false;
    };
 

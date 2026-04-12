@@ -351,11 +351,17 @@ namespace psizam {
          std::memset(call_bmp, 0, bmp_words * sizeof(uint64_t));
          bool has_calls = false;
          for (uint32_t i = 0; i < func.inst_count; ++i) {
-            if (func.insts[i].opcode == ir_op::call ||
-                func.insts[i].opcode == ir_op::call_indirect ||
-                func.insts[i].opcode == ir_op::memory_grow ||
-                func.insts[i].opcode == ir_op::memory_size) {
-               // memory_grow/size call native functions that clobber caller-saved regs
+            auto op = func.insts[i].opcode;
+            if (op == ir_op::call || op == ir_op::call_indirect ||
+                op == ir_op::memory_grow || op == ir_op::memory_size ||
+                // Bulk memory / table ops call native helpers via BLR
+                op == ir_op::memory_fill || op == ir_op::memory_copy ||
+                op == ir_op::memory_init || op == ir_op::data_drop ||
+                op == ir_op::table_init || op == ir_op::elem_drop ||
+                op == ir_op::table_copy || op == ir_op::table_get ||
+                op == ir_op::table_set || op == ir_op::table_grow ||
+                op == ir_op::table_size || op == ir_op::table_fill ||
+                op == ir_op::atomic_op) {
                call_bmp[i / 64] |= uint64_t(1) << (i % 64);
                has_calls = true;
             }
@@ -370,6 +376,12 @@ namespace psizam {
          static constexpr int NUM_REGS = static_cast<int>(phys_reg::count);
          static constexpr int NUM_XMM = 12;
          static constexpr int XMM_BASE = 4; // first allocatable = xmm4
+         // ARM64 has no XMM registers for integer spill — evict directly to memory
+#ifdef __aarch64__
+         static constexpr int INT_XMM_SPILL_COUNT = 0;
+#else
+         static constexpr int INT_XMM_SPILL_COUNT = NUM_XMM;
+#endif
          uint32_t active[NUM_REGS];
          bool reg_used[NUM_REGS] = {};
          int num_active = 0;
@@ -382,9 +394,13 @@ namespace psizam {
          for (uint32_t i = 0; i < func.interval_count; ++i) {
             auto& interval = func.intervals[i];
             if (interval.start == UINT32_MAX) continue;
-            // v128/f32/f64 vregs get XMM registers, not GPRs — handled in second pass
-            if (interval.type == types::v128 || interval.type == types::f32
-                || interval.type == types::f64) continue;
+            // v128 vregs get XMM/NEON registers — handled in second pass
+            if (interval.type == types::v128) continue;
+            // On x86_64, f32/f64 get XMM registers in the second pass.
+            // On ARM64, f32/f64 are GPR bit patterns — allocate them here with integers.
+#ifndef __aarch64__
+            if (interval.type == types::f32 || interval.type == types::f64) continue;
+#endif
 
             // Branchless bitmap check: any call in (start, end)?
             bool crosses_call = false;
@@ -501,7 +517,7 @@ namespace psizam {
                   assigned = victim.phys_reg;
                   victim.phys_reg = -1;
                   int xmm_v = -1;
-                  for (int x = 0; x < NUM_XMM; ++x)
+                  for (int x = 0; x < INT_XMM_SPILL_COUNT; ++x)
                      if (!int_xmm_used[x]) { xmm_v = x; break; }
                   if (xmm_v >= 0) {
                      victim.phys_xmm = static_cast<int8_t>(xmm_v + XMM_BASE);
@@ -516,7 +532,7 @@ namespace psizam {
                   // New interval is colder — spill it to XMM or memory
                   interval.phys_reg = -1;
                   int xmm_assigned = -1;
-                  for (int x = 0; x < NUM_XMM; ++x)
+                  for (int x = 0; x < INT_XMM_SPILL_COUNT; ++x)
                      if (!int_xmm_used[x]) { xmm_assigned = x; break; }
                   if (xmm_assigned >= 0) {
                      interval.phys_xmm = static_cast<int8_t>(xmm_assigned + XMM_BASE);
@@ -567,8 +583,13 @@ namespace psizam {
                continue;
             }
 
+            // On ARM64, f32/f64 are allocated as GPRs in the first pass — skip here
+#ifdef __aarch64__
+            if (interval.type != types::v128) continue;
+#else
             if (interval.type != types::v128 && interval.type != types::f32
                 && interval.type != types::f64) continue;
+#endif
 
             // Expire old XMM intervals
             for (int j = 0; j < num_xmm_active; ) {

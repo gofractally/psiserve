@@ -74,7 +74,8 @@ set(CMAKE_C_FLAGS_INIT "${_COMMON_FLAGS}")
 set(CMAKE_CXX_FLAGS_INIT "${_COMMON_FLAGS} -isystem ${_CXX_INCLUDE} -stdlib=libc++")
 
 # LLVM code generation requires deep recursion; default 64KB stack is too small
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${_CXX_LIB} -L${_RT_LIB} -lc++ -lc++abi -lwasi-emulated-signal -z stack-size=8388608")
+# --max-memory: allow linear memory to grow up to 2GB (psizam allocates ~576MB for large modules)
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${_CXX_LIB} -L${_RT_LIB} -lc++ -lc++abi -lwasi-emulated-signal -z stack-size=8388608 -Wl,--max-memory=2147483648")
 
 # ---------- cmake behavior ----------
 

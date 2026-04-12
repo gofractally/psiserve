@@ -113,6 +113,11 @@ namespace psizam {
          _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()),
          _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
 
+         // Scale veneer island capacity with function count
+         uint32_t num_funcs = mod.get_functions_total();
+         _veneer_island_slots = std::max(uint32_t(2048), num_funcs * 2);
+         _veneer_island_size = VENEER_SLOT_SIZE * _veneer_island_slots;
+
          // Emit ABI interface function
          _code_start = _allocator.alloc<unsigned char>(512);
          _code_end = _code_start + 512;
@@ -321,6 +326,9 @@ namespace psizam {
       static constexpr std::size_t max_epilogue_size = 80;  // includes 3-instruction stack limit restore + debug check
 
       void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& locals, uint32_t funcnum) {
+         // Insert veneer island if enough code has been emitted
+         maybe_insert_veneer_island();
+
          _ft = &_mod.types[_mod.functions[funcnum]];
          _params = function_parameters{_ft};
          _locals = function_locals{locals};
@@ -482,6 +490,7 @@ namespace psizam {
             // B.!cond target (branch if condition is false)
             void* branch = code;
             emit32(0x54000000 | invert_condition(cond->cond));
+            emit32(0xD503201F); // NOP sentinel for long-form conversion
             return branch;
          }
          // Pop condition
@@ -489,6 +498,7 @@ namespace psizam {
          // CBZ W0, target (patched later)
          void* branch = code;
          emit32(0x34000000 | X0);
+         emit32(0xD503201F); // NOP sentinel for long-form conversion
          return branch;
       }
 
@@ -519,6 +529,7 @@ namespace psizam {
                // B.cond target (patched later)
                void* branch = code;
                emit32(0x54000000 | cond->cond);
+               emit32(0xD503201F); // NOP sentinel for long-form conversion
                return branch;
             } else {
                // B.!cond skip
@@ -542,6 +553,7 @@ namespace psizam {
             // CBNZ W0, target (patched later)
             void* branch = code;
             emit32(0x35000000 | X0);
+            emit32(0xD503201F); // NOP sentinel for long-form conversion
             return branch;
          } else {
             // CBZ W0, skip
@@ -626,7 +638,7 @@ namespace psizam {
          auto& vec = _function_relocations;
          if(funcnum >= vec.size()) vec.resize(funcnum + 1);
          if(void** addr = std::get_if<void*>(&vec[funcnum])) {
-            fix_branch(ptr, *addr);
+            fix_branch_or_veneer(ptr, *addr);
          } else {
             std::get<std::vector<void*>>(vec[funcnum]).push_back(ptr);
          }
@@ -636,7 +648,7 @@ namespace psizam {
          auto& vec = _function_relocations;
          if(funcnum >= vec.size()) vec.resize(funcnum + 1);
          for(void* branch : std::get<std::vector<void*>>(vec[funcnum])) {
-            fix_branch(branch, func_start);
+            fix_branch_or_veneer(branch, func_start);
          }
          vec[funcnum] = func_start;
       }
@@ -3683,8 +3695,8 @@ namespace psizam {
       // Branch fixing and finalization
       // ===================================================================
 
-      static void fix_branch(void* branch, void* target) {
-         auto branch_ = static_cast<uint32_t*>(branch);
+      // Try to fix a branch in-place. Returns false if displacement exceeds range.
+      static bool try_fix_branch(void* branch, void* target) {
          auto target_ = static_cast<uint8_t*>(target);
          auto branch_bytes = static_cast<uint8_t*>(branch);
          int64_t offset = (target_ - branch_bytes) / 4;
@@ -3692,38 +3704,151 @@ namespace psizam {
          uint32_t instr;
          std::memcpy(&instr, branch, 4);
 
-         // Determine instruction type from opcode bits
-         uint32_t op = instr >> 24;
-
-         if ((instr & 0xFC000000) == 0x14000000) {
-            // B (unconditional): imm26
-            if (offset > 0x1FFFFFF || offset < -0x2000000) unimplemented();
-            instr = (instr & 0xFC000000) | (static_cast<uint32_t>(offset) & 0x3FFFFFF);
-         } else if ((instr & 0xFC000000) == 0x94000000) {
-            // BL: imm26
-            if (offset > 0x1FFFFFF || offset < -0x2000000) unimplemented();
+         if ((instr & 0xFC000000) == 0x14000000 || (instr & 0xFC000000) == 0x94000000) {
+            // B / BL: imm26 (±128MB)
+            if (offset > 0x1FFFFFF || offset < -0x2000000) return false;
             instr = (instr & 0xFC000000) | (static_cast<uint32_t>(offset) & 0x3FFFFFF);
          } else if ((instr & 0xFF000010) == 0x54000000) {
-            // B.cond: imm19
-            if (offset > 0x3FFFF || offset < -0x40000) unimplemented();
+            // B.cond: imm19 (±1MB)
+            if (offset > 0x3FFFF || offset < -0x40000) return false;
             instr = (instr & 0xFF00001F) | ((static_cast<uint32_t>(offset) & 0x7FFFF) << 5);
          } else if ((instr & 0x7F000000) == 0x34000000 || (instr & 0x7F000000) == 0x35000000) {
-            // CBZ/CBNZ: imm19
-            if (offset > 0x3FFFF || offset < -0x40000) unimplemented();
+            // CBZ/CBNZ 32-bit: imm19 (±1MB)
+            if (offset > 0x3FFFF || offset < -0x40000) return false;
             instr = (instr & 0xFF00001F) | ((static_cast<uint32_t>(offset) & 0x7FFFF) << 5);
          } else if ((instr & 0x7E000000) == 0x36000000) {
-            // TBZ/TBNZ: imm14
-            if (offset > 0x1FFF || offset < -0x2000) unimplemented();
+            // TBZ/TBNZ: imm14 (±32KB)
+            if (offset > 0x1FFF || offset < -0x2000) return false;
             instr = (instr & 0xFFF8001F) | ((static_cast<uint32_t>(offset) & 0x3FFF) << 5);
          } else if ((instr & 0xFF000000) == 0xB4000000 || (instr & 0xFF000000) == 0xB5000000) {
-            // CBZ/CBNZ 64-bit: imm19
-            if (offset > 0x3FFFF || offset < -0x40000) unimplemented();
+            // CBZ/CBNZ 64-bit: imm19 (±1MB)
+            if (offset > 0x3FFFF || offset < -0x40000) return false;
             instr = (instr & 0xFF00001F) | ((static_cast<uint32_t>(offset) & 0x7FFFF) << 5);
          } else {
-            unimplemented();
+            PSIZAM_ASSERT(false, wasm_parse_exception, "unknown branch instruction to fix");
          }
 
          std::memcpy(branch, &instr, 4);
+         return true;
+      }
+
+      // Write an unconditional B instruction at the given address to target.
+      static bool try_fix_branch_b(void* branch, void* target) {
+         int64_t offset = (static_cast<uint8_t*>(target) - static_cast<uint8_t*>(branch)) / 4;
+         if (offset > 0x1FFFFFF || offset < -0x2000000) return false;
+         uint32_t b = 0x14000000 | (static_cast<uint32_t>(offset) & 0x3FFFFFF);
+         std::memcpy(branch, &b, 4);
+         return true;
+      }
+
+      // Fix a branch. For conditional branches out of range, converts to
+      // inverted B.cond +8 followed by unconditional B (requires NOP sentinel).
+      static void fix_branch(void* branch, void* target) {
+         if (try_fix_branch(branch, target)) return;
+
+         uint32_t instr;
+         std::memcpy(&instr, branch, 4);
+         uint32_t next_instr;
+         std::memcpy(&next_instr, static_cast<char*>(branch) + 4, 4);
+
+         // Check if the next instruction is our NOP sentinel
+         if (next_instr == 0xD503201F) {
+            if ((instr & 0xFF000010) == 0x54000000) {
+               // B.cond → invert condition, branch +8, then B target
+               uint32_t cond = instr & 0xF;
+               uint32_t inverted = cond ^ 1;
+               uint32_t short_branch = 0x54000040 | inverted; // B.cond_inv PC+8
+               std::memcpy(branch, &short_branch, 4);
+               void* b_slot = static_cast<char*>(branch) + 4;
+               bool ok = try_fix_branch_b(b_slot, target);
+               PSIZAM_ASSERT(ok, wasm_parse_exception, "long conditional branch out of range");
+               return;
+            }
+            if ((instr & 0x7F000000) == 0x34000000 || (instr & 0x7F000000) == 0x35000000 ||
+                (instr & 0xFF000000) == 0xB4000000 || (instr & 0xFF000000) == 0xB5000000) {
+               // CBZ/CBNZ → invert (CBZ↔CBNZ), branch +8, then B target
+               uint32_t flipped = instr ^ 0x01000000;
+               flipped = (flipped & 0xFF00001F) | (2 << 5); // imm19 = 2 → PC+8
+               std::memcpy(branch, &flipped, 4);
+               void* b_slot = static_cast<char*>(branch) + 4;
+               bool ok = try_fix_branch_b(b_slot, target);
+               PSIZAM_ASSERT(ok, wasm_parse_exception, "long conditional branch out of range");
+               return;
+            }
+         }
+         PSIZAM_ASSERT(false, wasm_parse_exception,
+            "branch out of range (no long-branch NOP available)");
+      }
+
+      // ──────── Veneer islands for long-range inter-function branches ────────
+
+      static constexpr uint32_t VENEER_ISLAND_INTERVAL = 60 * 1024 * 1024; // 60MB between islands
+      static constexpr uint32_t VENEER_SLOT_SIZE = 12;  // ADRP + ADD + BR = 12 bytes
+
+      struct veneer_island {
+         void* start;
+         uint32_t capacity;
+         uint32_t used;
+      };
+
+      // Write a veneer trampoline at veneer_addr that branches to target_addr.
+      // Uses ADRP+ADD+BR X16 (PC-relative, ±4GB range).
+      static void write_veneer(void* veneer_addr, void* target_addr) {
+         auto veneer_pc = reinterpret_cast<uintptr_t>(veneer_addr);
+         auto target = reinterpret_cast<uintptr_t>(target_addr);
+         int64_t page_offset = (static_cast<int64_t>(target & ~0xFFFULL) -
+                                static_cast<int64_t>(veneer_pc & ~0xFFFULL)) >> 12;
+         uint32_t lo12 = target & 0xFFF;
+         uint32_t immlo = static_cast<uint32_t>(page_offset) & 3;
+         uint32_t immhi = (static_cast<uint32_t>(page_offset) >> 2) & 0x7FFFF;
+         uint32_t adrp = 0x90000010 | (immlo << 29) | (immhi << 5);
+         uint32_t add = 0x91000210 | (lo12 << 10);
+         uint32_t br = 0xD61F0200;
+         std::memcpy(veneer_addr, &adrp, 4);
+         std::memcpy(static_cast<char*>(veneer_addr) + 4, &add, 4);
+         std::memcpy(static_cast<char*>(veneer_addr) + 8, &br, 4);
+      }
+
+      void maybe_insert_veneer_island() {
+         auto* current = reinterpret_cast<char*>(_allocator._base) + _allocator._offset;
+         void* ref = _num_veneer_islands > 0
+            ? static_cast<char*>(_veneer_islands[_num_veneer_islands - 1].start)
+              + _veneer_island_size
+            : _code_segment_base;
+         ptrdiff_t distance = current - static_cast<char*>(ref);
+         if (distance < static_cast<ptrdiff_t>(VENEER_ISLAND_INTERVAL)) return;
+         auto* island_buf = _allocator.alloc<unsigned char>(_veneer_island_size);
+         std::memset(island_buf, 0, _veneer_island_size);
+         PSIZAM_ASSERT(_num_veneer_islands < MAX_VENEER_ISLANDS, wasm_parse_exception,
+            "too many veneer islands");
+         _veneer_islands[_num_veneer_islands++] = { island_buf, _veneer_island_slots, 0 };
+      }
+
+      void* allocate_veneer(void* branch_addr, void* target_addr) {
+         for (uint32_t i = 0; i < _num_veneer_islands; ++i) {
+            auto& island = _veneer_islands[i];
+            if (island.used >= island.capacity) continue;
+            void* slot = static_cast<char*>(island.start) + island.used * VENEER_SLOT_SIZE;
+            int64_t dist_bytes = static_cast<char*>(slot) - static_cast<char*>(branch_addr);
+            if (dist_bytes >= -0x8000000LL && dist_bytes <= 0x7FFFFFFLL) {
+               write_veneer(slot, target_addr);
+               island.used++;
+               return slot;
+            }
+         }
+         PSIZAM_ASSERT(false, wasm_parse_exception,
+            "no veneer island reachable for out-of-range branch");
+         return nullptr;
+      }
+
+      // Fix a branch, using a veneer if the displacement exceeds ±128MB.
+      void fix_branch_or_veneer(void* branch, void* target) {
+         if (!try_fix_branch(branch, target)) {
+            void* veneer = allocate_veneer(branch, target);
+            bool ok = try_fix_branch(branch, veneer);
+            PSIZAM_ASSERT(ok, wasm_parse_exception,
+               "veneer island unreachable from branch");
+         }
       }
 
       using fn_type = native_value(*)(void* context, void* memory);
@@ -5093,6 +5218,11 @@ namespace psizam {
       unsigned char* _code_end = nullptr;
       unsigned char* code = nullptr;
       std::vector<std::variant<std::vector<void*>, void*>> _function_relocations;
+      static constexpr uint32_t MAX_VENEER_ISLANDS = 64;
+      veneer_island _veneer_islands[MAX_VENEER_ISLANDS];
+      uint32_t _num_veneer_islands = 0;
+      uint32_t _veneer_island_slots = 2048;
+      uint32_t _veneer_island_size = VENEER_SLOT_SIZE * 2048;
       void* fpe_handler = nullptr;
       void* call_indirect_handler = nullptr;
       void* type_error_handler = nullptr;
