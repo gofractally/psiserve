@@ -533,6 +533,14 @@ namespace psizam {
          emit_check_call_depth_end();
       }
 
+      // Tail calls: desugar to call + return in JIT1 (no frame reuse optimization)
+      void emit_tail_call(const func_type& ft, uint32_t funcnum) {
+         emit_call(ft, funcnum);
+      }
+      void emit_tail_call_indirect(const func_type& ft, uint32_t functypeidx, uint32_t table_idx = 0) {
+         emit_call_indirect(ft, functypeidx, table_idx);
+      }
+
       void emit_drop(uint8_t type) {
          COUNT_INSTR();
          auto icount = variable_size_instr(1, 4);

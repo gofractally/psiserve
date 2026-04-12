@@ -1543,6 +1543,122 @@ namespace psizam {
                   break;
                }
 
+               // ──── Tail calls (emit as call + return) ────
+               case ir_op::tail_call: {
+                  uint32_t funcnum = inst.call.index;
+                  uint32_t num_imports = wasm_mod.get_imported_functions_size();
+
+                  builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
+
+                  if (funcnum < num_imports) {
+                     // Host function tail call
+                     uint32_t nargs = static_cast<uint32_t>(call_args.size());
+                     llvm::Value* args_array = host_args_alloca;
+                     if (!args_array)
+                        args_array = builder.CreateAlloca(i64_ty, builder.getInt32(1));
+                     for (uint32_t a = 0; a < nargs; a++) {
+                        llvm::Value* slot = builder.CreateGEP(i64_ty, args_array, builder.getInt32(a));
+                        llvm::Value* v = call_args[a];
+                        if (v->getType() == i32_ty) v = builder.CreateZExt(v, i64_ty);
+                        else if (v->getType() == f32_ty) v = builder.CreateZExt(builder.CreateBitCast(v, i32_ty), i64_ty);
+                        else if (v->getType() == f64_ty) v = builder.CreateBitCast(v, i64_ty);
+                        builder.CreateStore(v, slot);
+                     }
+                     call_args.clear();
+                     emit_backtrace_set_top(builder, ctx_ptr);
+                     emit_backtrace_set_bottom(builder, ctx_ptr);
+                     llvm::Value* raw = builder.CreateCall(rt_call_host,
+                        {ctx_ptr, builder.getInt32(funcnum), args_array, builder.getInt32(nargs)});
+                     emit_backtrace_clear_bottom(builder, ctx_ptr);
+                     emit_backtrace_clear_top(builder, ctx_ptr);
+                     builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
+                     builder.CreateStore(builder.CreateCall(rt_get_memory, {ctx_ptr}), mem_ptr_alloca);
+                     // Return the result
+                     if (fn->getReturnType()->isVoidTy()) {
+                        builder.CreateRetVoid();
+                     } else {
+                        llvm::Value* result = convert_type(raw, fn->getReturnType());
+                        builder.CreateRet(result);
+                     }
+                  } else {
+                     // WASM-to-WASM tail call
+                     std::vector<llvm::Value*> args;
+                     args.push_back(ctx_ptr);
+                     args.push_back(load_mem_ptr());
+                     if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
+                        auto* callee_ty = wasm_funcs[funcnum]->getFunctionType();
+                        for (uint32_t a = 0; a < call_args.size(); a++) {
+                           uint32_t param_idx = a + 2;
+                           if (param_idx < callee_ty->getNumParams())
+                              call_args[a] = convert_type(call_args[a], callee_ty->getParamType(param_idx));
+                        }
+                     }
+                     for (auto* a : call_args) args.push_back(a);
+                     call_args.clear();
+                     if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
+                        emit_backtrace_set_top(builder, ctx_ptr);
+                        auto* result = builder.CreateCall(wasm_funcs[funcnum], args);
+                        result->setTailCallKind(llvm::CallInst::TCK_Tail);
+                        emit_backtrace_clear_top(builder, ctx_ptr);
+                        builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
+                        if (fn->getReturnType()->isVoidTy()) {
+                           builder.CreateRetVoid();
+                        } else if (!result->getType()->isVoidTy()) {
+                           builder.CreateRet(convert_type(result, fn->getReturnType()));
+                        } else {
+                           builder.CreateRetVoid();
+                        }
+                     } else {
+                        builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
+                        builder.CreateRetVoid();
+                     }
+                  }
+                  break;
+               }
+               case ir_op::tail_call_indirect: {
+                  uint32_t type_idx = inst.call.index;
+                  llvm::Value* table_elem = nullptr;
+                  if (!call_args.empty()) {
+                     table_elem = call_args.back();
+                     call_args.pop_back();
+                  }
+                  if (!table_elem) { call_args.clear(); break; }
+                  uint32_t nargs = static_cast<uint32_t>(call_args.size());
+                  llvm::Value* args_array = host_args_alloca;
+                  if (!args_array)
+                     args_array = builder.CreateAlloca(i64_ty, builder.getInt32(1));
+                  for (uint32_t a = 0; a < nargs; a++) {
+                     llvm::Value* slot = builder.CreateGEP(i64_ty, args_array, builder.getInt32(a));
+                     llvm::Value* v = call_args[a];
+                     if (v->getType() == i32_ty) v = builder.CreateZExt(v, i64_ty);
+                     else if (v->getType() == f32_ty) v = builder.CreateZExt(builder.CreateBitCast(v, i32_ty), i64_ty);
+                     else if (v->getType() == f64_ty) v = builder.CreateBitCast(v, i64_ty);
+                     builder.CreateStore(v, slot);
+                  }
+                  call_args.clear();
+                  if (table_elem->getType() != i32_ty) {
+                     if (table_elem->getType()->isIntegerTy())
+                        table_elem = builder.CreateTrunc(table_elem, i32_ty);
+                  }
+                  builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
+                  emit_backtrace_set_top(builder, ctx_ptr);
+                  emit_backtrace_set_bottom(builder, ctx_ptr);
+                  llvm::Value* raw = builder.CreateCall(rt_call_indirect,
+                     {ctx_ptr, load_mem_ptr(), builder.getInt32(type_idx),
+                      table_elem, args_array, builder.getInt32(nargs)});
+                  emit_backtrace_clear_bottom(builder, ctx_ptr);
+                  emit_backtrace_clear_top(builder, ctx_ptr);
+                  builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
+                  builder.CreateStore(builder.CreateCall(rt_get_memory, {ctx_ptr}), mem_ptr_alloca);
+                  // Return
+                  if (fn->getReturnType()->isVoidTy()) {
+                     builder.CreateRetVoid();
+                  } else {
+                     builder.CreateRet(convert_type(raw, fn->getReturnType()));
+                  }
+                  break;
+               }
+
                // ──── Memory loads ────
                case ir_op::i32_load: case ir_op::i64_load:
                case ir_op::f32_load: case ir_op::f64_load:

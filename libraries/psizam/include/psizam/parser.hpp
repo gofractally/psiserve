@@ -1460,7 +1460,7 @@ namespace psizam {
                   code_writer.emit_call_indirect(ft, type_aliases[functypeidx], table_idx);
                   break;
                }
-               // Tail calls: desugar to call + return (correct but not yet optimized)
+               // Tail calls: optimized frame reuse (no stack growth)
                case 0x12: { // return_call
                   check_in_bounds();
                   uint32_t funcnum = parse_varuint32(code);
@@ -1469,12 +1469,7 @@ namespace psizam {
                      op_stack.pop(ft.param_types[ft.param_types.size() - i - 1]);
                   for(auto rt : ft.return_types)
                      op_stack.push(rt);
-                  code_writer.emit_call(ft, funcnum);
-                  // Emit implicit return
-                  uint32_t label = pc_stack.size() - 1;
-                  auto [depth_change,rt,rc] = compute_depth_change(label);
-                  auto branch = code_writer.emit_return(depth_change, rt, rc);
-                  handle_branch_target(label, branch);
+                  code_writer.emit_tail_call(ft, funcnum);
                   op_stack.start_unreachable();
                } break;
                case 0x13: { // return_call_indirect
@@ -1489,12 +1484,7 @@ namespace psizam {
                      op_stack.push(rt);
                   uint32_t table_idx = parse_varuint32(code);
                   PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "return_call_indirect table index out of range");
-                  code_writer.emit_call_indirect(ft, type_aliases[functypeidx], table_idx);
-                  // Emit implicit return
-                  uint32_t label = pc_stack.size() - 1;
-                  auto [depth_change,rt,rc] = compute_depth_change(label);
-                  auto branch = code_writer.emit_return(depth_change, rt, rc);
-                  handle_branch_target(label, branch);
+                  code_writer.emit_tail_call_indirect(ft, type_aliases[functypeidx], table_idx);
                   op_stack.start_unreachable();
                } break;
                case opcodes::drop: check_in_bounds(); code_writer.emit_drop(op_stack.pop()); break;

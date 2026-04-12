@@ -86,6 +86,19 @@ namespace psizam {
          PSIZAM_ASSERT(actual_type == expected_type, wasm_interpreter_exception, "bad call_indirect type");
          context.call(fn);
       }
+      [[gnu::always_inline]] inline void operator()(const tail_call_t& op) {
+         context.tail_call(op.index);
+      }
+      [[gnu::always_inline]] inline void operator()(const tail_call_indirect_t& op) {
+         uint32_t type_idx = op.index & 0xFFFF;
+         uint32_t table_idx = op.index >> 16;
+         const auto& index = context.pop_operand().to_ui32();
+         uint32_t fn = context.table_elem(index, table_idx);
+         const auto& expected_type = context.get_module().types.at(type_idx);
+         const auto& actual_type = context.get_module().get_function_type(fn);
+         PSIZAM_ASSERT(actual_type == expected_type, wasm_interpreter_exception, "bad call_indirect type");
+         context.tail_call(fn);
+      }
       [[gnu::always_inline]] inline void operator()(const drop_t& op) {
          context.pop_operand();
          context.inc_pc();

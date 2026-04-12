@@ -949,6 +949,81 @@ namespace psizam {
          }
       }
 
+      // ──── Tail calls ────
+      void emit_tail_call(const func_type& ft, uint32_t funcnum) {
+         if (!_unreachable) {
+            uint32_t nparams = ft.param_types.size();
+            uint32_t* param_vregs = _scratch.alloc<uint32_t>(nparams);
+            for (uint32_t i = 0; i < nparams; ++i) {
+               uint32_t pi = nparams - 1 - i;
+               if (ft.param_types[pi] == types::v128) _func->vpop();
+               param_vregs[pi] = _func->vpop();
+            }
+            for (uint32_t i = 0; i < nparams; ++i) {
+               ir_inst arg{};
+               arg.opcode = ir_op::arg;
+               arg.type = types::pseudo;
+               arg.flags = IR_NONE;
+               arg.dest = ir_vreg_none;
+               arg.rr.src1 = param_vregs[i];
+               arg.rr.src2 = ir_vreg_none;
+               _func->emit(arg);
+            }
+            ir_inst inst{};
+            inst.opcode = ir_op::tail_call;
+            inst.type = types::pseudo;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = ir_vreg_none;
+            inst.call.index = funcnum;
+            inst.call.src1 = ir_vreg_none;
+            _func->emit(inst);
+         }
+         _unreachable = true;
+      }
+
+      void emit_tail_call_indirect(const func_type& ft, uint32_t fti, uint32_t table_idx = 0) {
+         if (!_unreachable) {
+            uint32_t elem_idx_vreg = _func->vpop();
+            uint32_t nparams = ft.param_types.size();
+            uint32_t* param_vregs = _scratch.alloc<uint32_t>(nparams);
+            for (uint32_t i = 0; i < nparams; ++i) {
+               uint32_t pi = nparams - 1 - i;
+               if (ft.param_types[pi] == types::v128) _func->vpop();
+               param_vregs[pi] = _func->vpop();
+            }
+            for (uint32_t i = 0; i < nparams; ++i) {
+               ir_inst arg{};
+               arg.opcode = ir_op::arg;
+               arg.type = types::pseudo;
+               arg.flags = IR_NONE;
+               arg.dest = ir_vreg_none;
+               arg.rr.src1 = param_vregs[i];
+               arg.rr.src2 = ir_vreg_none;
+               _func->emit(arg);
+            }
+            {
+               ir_inst arg{};
+               arg.opcode = ir_op::arg;
+               arg.type = types::pseudo;
+               arg.flags = IR_NONE;
+               arg.dest = ir_vreg_none;
+               arg.rr.src1 = elem_idx_vreg;
+               arg.rr.src2 = ir_vreg_none;
+               _func->emit(arg);
+            }
+            uint32_t packed_fti = fti | (table_idx << 16);
+            ir_inst inst{};
+            inst.opcode = ir_op::tail_call_indirect;
+            inst.type = types::pseudo;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = ir_vreg_none;
+            inst.call.index = packed_fti;
+            inst.call.src1 = elem_idx_vreg;
+            _func->emit(inst);
+         }
+         _unreachable = true;
+      }
+
       // ──── Parametric ────
       void emit_drop(uint8_t type) {
          if (!_unreachable) {

@@ -19,7 +19,23 @@ test infrastructure (see task #13).
 The aarch64 JIT backends (jit, jit2, jit_llvm) do not fully implement SIMD
 floating-point operations with softfloat. The interpreter passes all of these.
 
-## call_depth / call_return_stack_bytes (~10 failures)
+## growable_allocator (4 failures)
 
-Pre-existing issues from upstream. `call_depth` hits SIGBUS on JIT backends.
-`call_return_stack_bytes` fails on all backends.
+The allocator tests expect `wasm_bad_alloc` exceptions for allocations above
+certain size limits, but on systems with sufficient address space (64-bit with
+overcommit), `mmap` succeeds and no exception is thrown. These are
+platform-dependent false expectations, not real bugs.
+
+## max_stack_bytes (2 failures: jit2, jit_llvm)
+
+The `max_stack_bytes` option (byte-level stack accounting) is not fully
+implemented for jit2 and jit_llvm backends. These backends don't emit the
+per-function stack usage checks that the `stack_limit_is_bytes` mode requires.
+Calls that should throw "stack overflow" succeed instead, and vice versa.
+
+## call_return_stack_bytes (4 failures: all backends)
+
+`test_double_deref` returns 0 instead of 42. The test uses `stack_limit_is_bytes`
+mode which changes how the operand stack is laid out. The `i32.load` at the
+double-deref level appears to get a stale or zero value. Likely a stack
+accounting bug in the byte-counting mode, not related to normal execution.

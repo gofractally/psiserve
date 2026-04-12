@@ -119,7 +119,8 @@ namespace psizam {
       auto emit_br_table(uint32_t table_size) { return br_table_parser{ *this, table_size }; }
       void emit_call(const func_type& ft, uint32_t funcnum) { fb[op_index++] = call_t{ funcnum }; }
       void emit_call_indirect(const func_type& ft, uint32_t functypeidx, uint32_t table_idx = 0) { fb[op_index++] = call_indirect_t{ functypeidx | (table_idx << 16) }; }
-
+      void emit_tail_call(const func_type& ft, uint32_t funcnum) { fb[op_index++] = tail_call_t{ funcnum, 0, 0 }; }
+      void emit_tail_call_indirect(const func_type& ft, uint32_t functypeidx, uint32_t table_idx = 0) { fb[op_index++] = tail_call_indirect_t{ functypeidx | (table_idx << 16), 0, 0 }; }
 
       void emit_drop(uint8_t /*type*/) { fb[op_index++] = drop_t{}; }
       void emit_select(uint8_t /*type*/) { fb[op_index++] = select_t{}; }

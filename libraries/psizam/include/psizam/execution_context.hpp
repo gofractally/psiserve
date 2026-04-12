@@ -576,7 +576,13 @@ namespace psizam {
          }
          else
          {
-            return (_mod->maximum_stack + 2 /*frame ptr + return ptr*/) * (this->_remaining_call_depth + 1) * sizeof(native_value);
+#ifdef __aarch64__
+            // aarch64 JIT uses 16-byte aligned slots (SP must be 16-byte aligned)
+            constexpr std::size_t slot_size = 16;
+#else
+            constexpr std::size_t slot_size = sizeof(native_value);
+#endif
+            return (_mod->maximum_stack + 2 /*frame ptr + return ptr*/) * (this->_remaining_call_depth + 1) * slot_size;
          }
       }
 
@@ -664,12 +670,20 @@ namespace psizam {
                }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
             } else {
                // Native JIT path: use assembly trampoline at _code_base
-               // reserve 24 bytes for data accessed by inline assembly
                void* stack = alt_stack.top();
+#ifdef __x86_64__
+               // reserve 24 bytes for data accessed by x86 trampoline
                if(stack) {
                   stack = static_cast<char*>(stack) - 24;
                }
+#endif
                auto fn = reinterpret_cast<native_value (*)(void*, void*)>(_mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset + _mod->allocator._code_base);
+
+               // Register the stack guard page so the signal handler catches overflow
+               if (alt_stack.guard_base()) {
+                  stack_guard_range = std::span<std::byte>(
+                     static_cast<std::byte*>(alt_stack.guard_base()), alt_stack.guard_size());
+               }
 
                if constexpr(EnableBacktrace) {
 #ifndef PSIZAM_COMPILE_ONLY
@@ -897,7 +911,7 @@ namespace psizam {
             PSIZAM_ASSERT (frame_size <= _remaining_call_depth, wasm_interpreter_exception, "stack overflow");
             scope_guard g{[this, saved = _remaining_call_depth]{ _remaining_call_depth = saved; }};
             _remaining_call_depth -= frame_size;
-            push_call( activation_frame{ nullptr, 0 } );
+            push_call( activation_frame{ nullptr, 0, frame_size } );
             // Dispatch through host_function_table
             {
                uint32_t mapped_index = _mod->import_functions[index];
@@ -935,6 +949,80 @@ namespace psizam {
          }
       }
 
+      inline void tail_call(uint32_t new_index) {
+         // Undo current function's call depth reservation
+         auto& cur_frame = _as.peek();
+         _remaining_call_depth += cur_frame.frame_size;
+
+         if (new_index < _mod->get_imported_functions_size()) {
+            // Host function: can't truly tail-call; call host then return from current frame
+            const auto& ft = _mod->get_function_type(new_index);
+            uint32_t num_params = ft.param_types.size();
+            uint32_t mapped_index = _mod->import_functions[new_index];
+            const auto& hf = _table->get_entry(mapped_index);
+            native_value args[num_params > 0 ? num_params : 1];
+            for (uint32_t i = num_params; i > 0; --i) {
+               auto el = get_operand_stack().pop();
+               switch(hf.signature.params[i - 1]) {
+                case types::i32: args[i - 1] = native_value{(uint64_t)el.to_ui32()}; break;
+                case types::i64: args[i - 1] = native_value{el.to_ui64()}; break;
+                case types::f32: args[i - 1] = native_value{el.to_f32()}; break;
+                case types::f64: args[i - 1] = native_value{el.to_f64()}; break;
+                default: break;
+               }
+            }
+            // Clean up current function's remaining operands
+            eat_operands(_last_op_index);
+            native_value result = _table->call(_state.host, mapped_index, args, linear_memory());
+            if (!hf.signature.ret.empty()) {
+               switch(hf.signature.ret[0]) {
+                case types::i32: push_operand(i32_const_t{result.i32}); break;
+                case types::i64: push_operand(i64_const_t{result.i64}); break;
+                case types::f32: push_operand(f32_const_t{result.f32}); break;
+                case types::f64: push_operand(f64_const_t{result.f64}); break;
+                default: break;
+               }
+            }
+            // Return from the current (tail-calling) function
+            const auto& af = _as.pop();
+            _state.pc = af.pc;
+            _last_op_index = af.last_op_index;
+            // _remaining_call_depth already restored above via cur_frame.frame_size
+            return;
+         }
+
+         // WASM-to-WASM tail call: reuse the activation frame
+         const func_type& new_ft = _mod->get_function_type(new_index);
+         uint32_t new_param_count = new_ft.param_types.size();
+
+         // Check call depth for new function
+         uint32_t new_frame_size = _mod->get_function_stack_size(new_index);
+         PSIZAM_ASSERT(new_frame_size <= _remaining_call_depth, wasm_interpreter_exception, "stack overflow");
+         _remaining_call_depth -= new_frame_size;
+
+         // Save new function's arguments from stack top (pop in reverse)
+         operand_stack_elem saved_args[new_param_count > 0 ? new_param_count : 1];
+         for (uint32_t i = new_param_count; i > 0; --i)
+            saved_args[i-1] = pop_operand();
+
+         // Clear current function's operands (everything from _last_op_index)
+         eat_operands(_last_op_index);
+
+         // Push new function's arguments
+         for (uint32_t i = 0; i < new_param_count; ++i)
+            push_operand(std::move(saved_args[i]));
+
+         // Update _last_op_index for new function (don't pop/push activation frame)
+         _last_op_index = get_operand_stack().size() - new_param_count;
+
+         // Update frame_size in the existing activation frame
+         cur_frame.frame_size = new_frame_size;
+
+         // Setup locals for new function and jump
+         setup_locals(new_index);
+         set_pc(_mod->get_function_pc(new_index));
+      }
+
       void print_stack() {
          std::cout << "STACK { ";
          for (int i = 0; i < get_operand_stack().size(); i++) {
@@ -965,17 +1053,15 @@ namespace psizam {
          if constexpr (!Should_Exit)
             return_pc = _state.pc + 1;
 
-         {
-            std::uint32_t frame_size = _mod->get_function_stack_size(index);
-            PSIZAM_ASSERT (frame_size <= _remaining_call_depth, wasm_interpreter_exception, "stack overflow");
-            _remaining_call_depth -= frame_size;
-         }
+         std::uint32_t frame_size = _mod->get_function_stack_size(index);
+         PSIZAM_ASSERT (frame_size <= _remaining_call_depth, wasm_interpreter_exception, "stack overflow");
+         _remaining_call_depth -= frame_size;
 
-         _as.push( activation_frame{ return_pc, _last_op_index } );
+         _as.push( activation_frame{ return_pc, _last_op_index, frame_size } );
          _last_op_index = get_operand_stack().size() - _mod->get_function_type(index).param_types.size();
       }
 
-      inline void apply_pop_call(uint32_t num_locals, uint16_t return_count, std::uint32_t frame_size) {
+      inline void apply_pop_call(uint32_t num_locals, uint16_t return_count, std::uint32_t /*frame_size*/) {
          const auto& af = _as.pop();
          _state.pc = af.pc;
          _last_op_index = af.last_op_index;
@@ -985,7 +1071,7 @@ namespace psizam {
             compact_operand_n(get_operand_stack().size() - num_locals - return_count, return_count);
          else
             eat_operands(get_operand_stack().size() - num_locals);
-         _remaining_call_depth += frame_size;
+         _remaining_call_depth += af.frame_size;
       }
       inline operand_stack_elem  pop_operand() { return get_operand_stack().pop(); }
       inline operand_stack_elem& peek_operand(size_t i = 0) { return get_operand_stack().peek(i); }

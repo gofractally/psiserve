@@ -110,6 +110,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <variant>
 
 namespace psizam {
 
@@ -293,6 +294,7 @@ namespace psizam {
 
          start_function(code, func.func_index + _mod.get_imported_functions_size());
          emit_function_prologue(func);
+         _body_start = code;  // saved for self-recursive tail calls
 
          for (uint32_t i = 0; i < func.inst_count; ++i) {
             if (!_use_regalloc || !emit_ir_inst_reg(func, func.insts[i], i)) {
@@ -304,6 +306,12 @@ namespace psizam {
 
          body.jit_code_offset = code_start - static_cast<unsigned char*>(_code_segment_base);
          body.jit_code_size = static_cast<uint32_t>(code - code_start);
+
+         // Reclaim unused code buffer tail to keep code compact.
+         std::size_t used = static_cast<std::size_t>(code - code_start);
+         if (used < est_size) {
+            _allocator.reclaim(code, est_size - used);
+         }
 
          // scratch destructor reclaims all transient data from _scratch_alloc
          _scratch = nullptr;
@@ -324,9 +332,9 @@ namespace psizam {
          for (auto& elem : _mod.elements) {
             for (auto& entry : elem.elems) {
                void* addr = call_indirect_handler;
-               if (entry.index < num_functions && entry.index < _num_relocs) {
-                  if (_relocs[entry.index].address) {
-                     addr = _relocs[entry.index].address;
+               if (entry.index < num_functions && entry.index < _func_relocations.size()) {
+                  if (auto* resolved = std::get_if<void*>(&_func_relocations[entry.index])) {
+                     addr = *resolved;
                   }
                }
                std::size_t offset = static_cast<char*>(addr) - static_cast<char*>(_code_segment_base);
@@ -782,6 +790,16 @@ namespace psizam {
             }
             emit_call_multipop(ft);
             emit_call_depth_inc();
+            break;
+         }
+
+         // ── Tail calls ──
+         case ir_op::tail_call: {
+            emit_tail_call(func, inst);
+            break;
+         }
+         case ir_op::tail_call_indirect: {
+            emit_tail_call_indirect(func, inst);
             break;
          }
 
@@ -2169,6 +2187,16 @@ namespace psizam {
                   store_rax_vreg(inst.dest);
                }
             }
+            return true;
+         }
+
+         // Tail calls (regalloc path delegates to same helpers)
+         case ir_op::tail_call: {
+            emit_tail_call(func, inst);
+            return true;
+         }
+         case ir_op::tail_call_indirect: {
+            emit_tail_call_indirect(func, inst);
             return true;
          }
 
@@ -6030,6 +6058,176 @@ namespace psizam {
          }
       }
 
+      // ──────── Tail call helpers ────────
+
+      // Compute total byte size of param area for a function type
+      uint32_t param_area_bytes(const func_type& ft) {
+         uint32_t bytes = 0;
+         for (uint32_t i = 0; i < ft.param_types.size(); ++i)
+            bytes += (ft.param_types[i] == types::v128) ? 16 : 8;
+         return bytes;
+      }
+
+      // Copy K arguments from RSP (pushed by arg instructions) to param slots at [rbp+16].
+      // After calling this, the K args remain on the x86 stack (caller cleans up).
+      void emit_copy_args_to_params(const func_type& callee_ft) {
+         uint32_t K = callee_ft.param_types.size();
+         // Args on x86 stack: arg[0] at RSP+(K-1)*8, arg[1] at RSP+(K-2)*8, ..., arg[K-1] at RSP
+         // (assuming non-v128; for v128: *16 bytes)
+         // Param slots: param[K-1] at rbp+16, param[K-2] at rbp+16+slot_size(K-1), ...
+         int32_t src_offset = 0; // from RSP, bottom of pushed args (arg[K-1] first)
+         int32_t dst_offset = 16; // from RBP, param[K-1] first
+         for (uint32_t i = K; i > 0; --i) {
+            uint32_t pi = i - 1; // param index: K-1, K-2, ..., 0
+            if (callee_ft.param_types[pi] == types::v128) {
+               // 16-byte v128: use xmm temp
+               this->emit_vmovdqu(*(rsp + src_offset), xmm0);
+               this->emit_vmovdqu(xmm0, *(rbp + dst_offset));
+               src_offset += 16;
+               dst_offset += 16;
+            } else {
+               this->emit_mov(*(rsp + src_offset), rax);
+               this->emit_mov(rax, *(rbp + dst_offset));
+               src_offset += 8;
+               dst_offset += 8;
+            }
+         }
+      }
+
+      void emit_restore_callee_saved() {
+         if (_use_regalloc && _callee_saved_used) {
+            int32_t save_offset = -static_cast<int32_t>((_body_locals + _num_spill_slots + 1) * 8);
+            if (_callee_saved_used & 1)  { this->emit_mov(*(rbp + save_offset), rbx); save_offset -= 8; }
+            if (_callee_saved_used & 2)  { this->emit_mov(*(rbp + save_offset), r12); save_offset -= 8; }
+            if (_callee_saved_used & 4)  { this->emit_mov(*(rbp + save_offset), r13); save_offset -= 8; }
+            if (_callee_saved_used & 8)  { this->emit_mov(*(rbp + save_offset), r14); save_offset -= 8; }
+            if (_callee_saved_used & 16) { this->emit_mov(*(rbp + save_offset), r15); save_offset -= 8; }
+         }
+      }
+
+      void emit_tail_call(ir_function& func, const ir_inst& inst) {
+         uint32_t funcnum = inst.call.index;
+         uint32_t cur_funcnum = func.func_index + _mod.get_imported_functions_size();
+         const func_type& callee_ft = _mod.get_function_type(funcnum);
+         const func_type* cur_ft = func.type;
+         uint32_t K = callee_ft.param_types.size();
+         uint32_t M = cur_ft->param_types.size();
+         uint32_t callee_arg_bytes = param_area_bytes(callee_ft);
+         uint32_t cur_param_bytes = param_area_bytes(*cur_ft);
+
+         if (funcnum == cur_funcnum) {
+            // ── Self-recursive tail call ──
+            // Copy new args from x86 stack to param slots
+            emit_copy_args_to_params(callee_ft);
+            // Pop the args from x86 stack
+            if (callee_arg_bytes > 0)
+               this->emit_add(callee_arg_bytes, rsp);
+            // Re-zero body locals (spills and callee-saved saves stay)
+            if (_body_locals > 0) {
+               this->emit_xor(eax, eax);
+               for (uint32_t i = 0; i < _body_locals; ++i)
+                  this->emit_mov(rax, *(rbp - static_cast<int32_t>((i + 1) * 8)));
+            }
+            // Reset RSP to frame bottom (rbp - total_slots*8)
+            uint32_t total_slots = _body_locals + _num_spill_slots + _callee_saved_count;
+            this->emit_mov(rbp, rsp);
+            if (total_slots > 0)
+               this->emit_sub(static_cast<uint32_t>(total_slots * 8), rsp);
+            // JMP to body_start (after prologue)
+            this->emit_bytes(0xe9); // jmp rel32
+            int32_t rel = static_cast<int32_t>(static_cast<char*>(_body_start) - (reinterpret_cast<char*>(code) + 4));
+            this->emit_operand32(static_cast<uint32_t>(rel));
+         } else if (callee_arg_bytes <= cur_param_bytes) {
+            // ── Cross-function tail call, K ≤ M (by byte size) ──
+            // Copy new args to param slots
+            emit_copy_args_to_params(callee_ft);
+            // Pop args from x86 stack
+            if (callee_arg_bytes > 0)
+               this->emit_add(callee_arg_bytes, rsp);
+            // Restore callee-saved registers
+            emit_restore_callee_saved();
+            // Teardown frame: MOV rbp, rsp; POP rbp
+            this->emit_mov(rbp, rsp);
+            this->emit_pop_raw(rbp);
+            // JMP to callee (rel32, uses same relocation as call)
+            void* branch = this->emit_jmp32();
+            register_call(branch, funcnum);
+         } else {
+            // ── Fallback: K > M — can't fit extra params, use CALL+RET ──
+            // Skip call depth tracking (tail call semantics: no depth change)
+            void* branch = this->emit_call32();
+            register_call(branch, funcnum);
+            emit_call_multipop(callee_ft);
+            // Return
+            emit_restore_callee_saved();
+            this->emit_mov(rbp, rsp);
+            this->emit_pop_raw(rbp);
+            this->emit(base::RET);
+         }
+      }
+
+      void emit_tail_call_indirect(ir_function& func, const ir_inst& inst) {
+         uint32_t packed_fti = inst.call.index;
+         uint32_t fti = packed_fti & 0xFFFF;
+         uint32_t table_idx = packed_fti >> 16;
+         const func_type& ft = _mod.types[fti];
+         const func_type* cur_ft = func.type;
+         uint32_t callee_arg_bytes = param_area_bytes(ft);
+         uint32_t cur_param_bytes = param_area_bytes(*cur_ft);
+
+         // Element index was pushed by an arg instruction — pop it
+         this->emit_pop_raw(rax);
+
+         // Resolve the function pointer (same as call_indirect)
+         if (table_idx != 0) {
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(eax, ecx);
+            this->emit_mov(static_cast<uint32_t>(table_idx), edx);
+            this->emit_mov(static_cast<uint32_t>(fti), esi);
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_resolve_indirect));
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_bytes(0x48, 0x85, 0xc0);
+            base::fix_branch(this->emit_branchcc32(base::JE), call_indirect_handler);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            // rax = code_ptr
+            // For indirect tail calls: always use CALL+RET fallback since we
+            // don't know the target at compile time
+            this->emit_bytes(0xff, 0xd0); // call rax
+         } else {
+            uint32_t table_size = _mod.tables[0].limits.initial;
+            this->emit_cmp(table_size, eax);
+            base::fix_branch(this->emit_branchcc32(base::JAE), call_indirect_handler);
+            this->emit_bytes(0x48, 0xc1, 0xe0, 0x04); // shlq $4, %rax
+            if (_mod.indirect_table(0)) {
+               this->emit_mov(*(rsi + wasm_allocator::table_offset()), rcx);
+               this->emit_add(rcx, rax);
+            } else {
+               this->emit_bytes(0x48, 0x8d, 0x84, 0x06);
+               this->emit_operand32(static_cast<uint32_t>(wasm_allocator::table_offset()));
+            }
+            this->emit_bytes(0x81, 0x38);
+            this->emit_operand32(fti);
+            base::fix_branch(this->emit_branchcc32(base::JNE), type_error_handler);
+            // For indirect: CALL+RET fallback (target not known at compile time)
+            this->emit_bytes(0xff, 0x50, 0x08); // call *8(%rax)
+         }
+
+         // Pop params, handle return value
+         emit_call_multipop(ft);
+         // Return from current function
+         emit_restore_callee_saved();
+         this->emit_mov(rbp, rsp);
+         this->emit_pop_raw(rbp);
+         this->emit(base::RET);
+      }
+
       // ──────── Binary op helpers ────────
 
       // Register-aware binary op: uses physical registers if available
@@ -6149,53 +6347,36 @@ namespace psizam {
       }
 
       // ──────── Function relocation ────────
-      // Linked list node for pending forward-reference fixups.
-      // Allocated from growable_allocator — no malloc, reclaimed by end_code.
-      struct call_fixup {
-         void* branch;       // Code address of the branch to patch
-         call_fixup* next;   // Next pending fixup for the same target, or nullptr
-      };
-
-      // Each function has either a resolved address (non-null) or a linked list
-      // of pending fixups (address is null, pending_fixups points to the list).
-      struct func_reloc {
-         void* address = nullptr;         // Resolved code address, or nullptr if unresolved
-         call_fixup* pending = nullptr;   // Linked list of pending fixups
-      };
+      // Uses std::vector for pending fixups (not the code allocator) so that
+      // code buffer reclaim works with strict LIFO ordering.
+      using func_reloc = std::variant<std::vector<void*>, void*>;
 
       void init_relocations() {
-         uint32_t total = _mod.get_functions_total();
-         _relocs = _allocator.alloc<func_reloc>(total);
-         _num_relocs = total;
-         for (uint32_t i = 0; i < total; ++i) {
-            _relocs[i] = func_reloc{};
-         }
+         _func_relocations.resize(_mod.get_functions_total());
       }
 
       void register_call(void* branch_addr, uint32_t funcnum) {
-         if (funcnum >= _num_relocs) return;
-         auto& r = _relocs[funcnum];
-         if (r.address) {
+         if (funcnum >= _func_relocations.size()) return;
+         auto& entry = _func_relocations[funcnum];
+         if (auto* resolved = std::get_if<void*>(&entry)) {
             // Already compiled — patch immediately
-            base::fix_branch(branch_addr, r.address);
+            base::fix_branch(branch_addr, *resolved);
          } else {
-            // Forward reference — add to linked list
-            auto* fixup = _allocator.alloc<call_fixup>(1);
-            fixup->branch = branch_addr;
-            fixup->next = r.pending;
-            r.pending = fixup;
+            // Forward reference — add to pending list
+            std::get<std::vector<void*>>(entry).push_back(branch_addr);
          }
       }
 
       void start_function(void* func_start, uint32_t funcnum) {
-         if (funcnum >= _num_relocs) return;
-         auto& r = _relocs[funcnum];
-         // Patch all pending forward references
-         for (auto* f = r.pending; f; f = f->next) {
-            base::fix_branch(f->branch, func_start);
+         if (funcnum >= _func_relocations.size()) return;
+         auto& entry = _func_relocations[funcnum];
+         if (auto* pending = std::get_if<std::vector<void*>>(&entry)) {
+            // Patch all pending forward references
+            for (auto* branch : *pending) {
+               base::fix_branch(branch, func_start);
+            }
          }
-         r.address = func_start;
-         r.pending = nullptr;
+         entry = func_start;
       }
 
       // ──────── Static callbacks (same as machine_code_writer) ────────
@@ -6328,8 +6509,7 @@ namespace psizam {
       void* type_error_handler = nullptr;
       void* stack_overflow_handler = nullptr;
       void* memory_handler = nullptr;
-      func_reloc* _relocs = nullptr;
-      uint32_t _num_relocs = 0;
+      std::vector<func_reloc> _func_relocations;
       // Scratch allocator for per-function transient data (reclaimed after each function)
       jit_scratch_allocator* _scratch = nullptr;
       // Per-function block address tracking (set during compile_function)
@@ -6352,6 +6532,7 @@ namespace psizam {
       uint32_t _num_vregs = 0;
       uint32_t _num_spill_slots = 0;
       uint32_t _body_locals = 0;
+      void* _body_start = nullptr;  // for self-recursive tail calls
       bool _use_regalloc = false;
       uint32_t _callee_saved_used = 0;
       uint32_t _callee_saved_count = 0;

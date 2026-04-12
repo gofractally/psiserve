@@ -132,6 +132,8 @@ namespace psizam {
       // Calls
       call,
       call_indirect,
+      tail_call,
+      tail_call_indirect,
       // Move (used at control flow merge points)
       mov,
       // Call argument (pseudo-instruction)

@@ -32,6 +32,7 @@ namespace psizam {
    struct activation_frame {
       opcode* pc;
       uint32_t last_op_index;
+      uint32_t frame_size;  // for tail call depth tracking
    };
 
    struct resizable_limits {

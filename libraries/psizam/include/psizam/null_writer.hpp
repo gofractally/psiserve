@@ -26,6 +26,8 @@ class null_writer {
    br_table_parser emit_br_table(uint32_t /*table_size*/) { return {}; }
    void emit_call(const func_type& /*ft*/, uint32_t /*funcnum*/) {}
    void emit_call_indirect(const func_type& /*ft*/, uint32_t /*functypeidx*/, uint32_t /*table_idx*/ = 0) {}
+   void emit_tail_call(const func_type& /*ft*/, uint32_t /*funcnum*/) {}
+   void emit_tail_call_indirect(const func_type& /*ft*/, uint32_t /*functypeidx*/, uint32_t /*table_idx*/ = 0) {}
 
    void emit_drop(uint8_t /*type*/) {}
    void emit_select(uint8_t /*type*/) {}

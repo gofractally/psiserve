@@ -224,7 +224,7 @@ namespace psizam {
       sa.sa_sigaction = &signal_handler;
       sigemptyset(&sa.sa_mask);
       sigaddset(&sa.sa_mask, SIGPROF);
-      sa.sa_flags = SA_NODEFER | SA_SIGINFO;
+      sa.sa_flags = SA_NODEFER | SA_SIGINFO | SA_ONSTACK;
       sigaction(SIGSEGV, &sa, &prev_signal_handler<SIGSEGV>);
 #ifndef __linux__
       sigaction(SIGBUS, &sa, &prev_signal_handler<SIGBUS>);
@@ -232,10 +232,30 @@ namespace psizam {
       sigaction(SIGFPE, &sa, &prev_signal_handler<SIGFPE>);
    }
 
+   // Set up a per-thread alternate signal stack so that stack overflow
+   // signals can be delivered even when the execution stack is exhausted.
+   inline void setup_thread_signal_stack() {
+      thread_local bool initialized = [] {
+         static constexpr std::size_t min_size = 65536;
+         std::size_t alt_size = SIGSTKSZ > min_size ? SIGSTKSZ : min_size;
+         void* mem = ::mmap(nullptr, alt_size, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+         if (mem == MAP_FAILED) return false;
+         stack_t ss{};
+         ss.ss_sp = mem;
+         ss.ss_size = alt_size;
+         ss.ss_flags = 0;
+         ::sigaltstack(&ss, nullptr);
+         return true;
+      }();
+      ignore_unused_variable_warning(initialized);
+   }
+
    inline void setup_signal_handler() {
       static int init_helper = (setup_signal_handler_impl(), 0);
       ignore_unused_variable_warning(init_helper);
       static_assert(std::atomic<sigjmp_buf*>::is_always_lock_free, "Atomic pointers must be lock-free to be async signal safe.");
+      setup_thread_signal_stack();
    }
 
    /// Call a function with a signal handler installed.  If this thread is

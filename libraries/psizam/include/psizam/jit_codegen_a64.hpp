@@ -1869,6 +1869,82 @@ namespace psizam {
             break;
          }
 
+         // ── Tail calls (fallback: call + return) ──
+         case ir_op::tail_call: {
+            uint32_t funcnum = inst.call.index;
+            const func_type& ft = _mod.get_function_type(funcnum);
+            // Fallback: emit as regular call then return
+            emit_call_depth_dec();
+            void* branch = emit_bl_placeholder();
+            register_call(branch, funcnum);
+            uint32_t arg_bytes = 0;
+            for (uint32_t p = 0; p < ft.param_types.size(); ++p)
+               arg_bytes += (ft.param_types[p] == types::v128) ? 32 : 16;
+            if (arg_bytes > 0) emit_add_imm(SP, SP, arg_bytes);
+            emit_call_depth_inc();
+            // Return: X0 already has result if any
+            emit_function_epilogue(func);
+            break;
+         }
+         case ir_op::tail_call_indirect: {
+            // Fallback: emit as call_indirect + return
+            uint32_t fti_packed = inst.call.index;
+            uint32_t fti = fti_packed & 0xFFFF;
+            uint32_t table_idx = fti_packed >> 16;
+            const func_type& ft = _mod.types[fti];
+            emit_pop(X0);
+            if (table_idx != 0) {
+               emit32(0xAA0003E3);
+               emit_mov_reg(X0, X19);
+               emit_mov_imm32(X1, fti);
+               emit_mov_imm32(X2, table_idx);
+               emit_push(X19); emit_push(X20);
+               emit_reloc_mov_imm64(X8, reloc_symbol::llvm_resolve_indirect,
+                  reinterpret_cast<uint64_t>(&__psizam_resolve_indirect));
+               emit32(0xD63F0100);
+               emit_pop(X20); emit_pop(X19);
+               emit_branch_to_handler_cbz(X0, call_indirect_handler);
+               emit32(0xAA0003E8);
+               emit_call_depth_dec();
+               emit32(0xD63F0100);
+            } else {
+               uint32_t table_size = _mod.tables[0].limits.initial;
+               emit_cmp_imm32(X0, table_size);
+               emit_branch_to_handler(COND_HS, call_indirect_handler);
+               emit32(0xD37CEC00);
+               if (_mod.indirect_table(0)) {
+                  int32_t toff = wasm_allocator::table_offset();
+                  if (toff >= 0) {
+                     emit_ldr_offset(X8, X20, toff);
+                  } else {
+                     emit_mov_imm64(X16, static_cast<uint64_t>(static_cast<int64_t>(toff)));
+                     emit32(0x8B100000 | (X20 << 5) | X8);
+                     emit32(0xF9400108);
+                  }
+                  emit32(0x8B000000 | (X0 << 16) | (X8 << 5) | X0);
+               } else {
+                  int32_t toff = wasm_allocator::table_offset();
+                  emit32(0x8B000000 | (X0 << 16) | (X20 << 5) | X0);
+                  if (toff < 0) emit_sub_imm(X0, X0, static_cast<uint32_t>(-toff));
+                  else emit_add_imm(X0, X0, static_cast<uint32_t>(toff));
+               }
+               emit32(0xB9400008 | (X0 << 5));
+               emit_cmp_imm32(X8, fti);
+               emit_branch_to_handler(COND_NE, type_error_handler);
+               emit_ldr_offset(X8, X0, 8);
+               emit_call_depth_dec();
+               emit32(0xD63F0100);
+            }
+            uint32_t arg_bytes = 0;
+            for (uint32_t p = 0; p < ft.param_types.size(); ++p)
+               arg_bytes += (ft.param_types[p] == types::v128) ? 32 : 16;
+            if (arg_bytes > 0) emit_add_imm(SP, SP, arg_bytes);
+            emit_call_depth_inc();
+            // Return
+            emit_function_epilogue(func);
+            break;
+         }
+
          // ── Local access ──
          case ir_op::local_get: {
             if (inst.type == types::v128) {

@@ -32,46 +32,53 @@ TEST_CASE("Testing growable_allocator alignment", "[growable_allocator]") {
 }
 
 TEST_CASE("Testing maximum single allocation", "[growable_allocator]") {
+   constexpr size_t max_size = growable_allocator::max_memory_size;
    growable_allocator alloc(0);
-   char * ptr = alloc.alloc<char>(0x40000000);
+   char * ptr = alloc.alloc<char>(max_size);
    ptr[0] = 'a';
-   ptr[0x3FFFFFFF] = 'z';
+   ptr[max_size - 1] = 'z';
    alloc.alloc<char>(0);
 }
 
 
 TEST_CASE("Testing maximum multiple allocation", "[growable_allocator]") {
+   constexpr size_t max_size = growable_allocator::max_memory_size;
+   constexpr size_t quarter = max_size / 4;
    growable_allocator alloc(1024);
    for(int i = 0; i < 4; ++i) {
-      char * ptr = alloc.alloc<char>(0x10000000);
+      char * ptr = alloc.alloc<char>(quarter);
       ptr[0] = 'a';
-      ptr[0x0FFFFFFF] = 'z';
+      ptr[quarter - 1] = 'z';
    }
    alloc.alloc<char>(0);
 }
 
 TEST_CASE("Testing too large single allocation", "[growable_allocator]") {
    growable_allocator alloc(1024);
-   CHECK_THROWS_AS(alloc.alloc<char>(0x40000001), wasm_bad_alloc);
+   CHECK_THROWS_AS(alloc.alloc<char>(growable_allocator::max_memory_size + 1), wasm_bad_alloc);
 }
 
 TEST_CASE("Testing too large multiple allocation", "[growable_allocator]") {
+   constexpr size_t max_size = growable_allocator::max_memory_size;
+   constexpr size_t quarter = max_size / 4;
    growable_allocator alloc(1024);
-   alloc.alloc<char>(0x10000000);
-   alloc.alloc<char>(0x10000000);
-   alloc.alloc<char>(0x10000000);
-   CHECK_THROWS_AS(alloc.alloc<char>(0x10000001), wasm_bad_alloc);
+   alloc.alloc<char>(quarter);
+   alloc.alloc<char>(quarter);
+   alloc.alloc<char>(quarter);
+   // Fourth quarter plus 1 byte exceeds capacity (1024 bytes already used by constructor)
+   CHECK_THROWS_AS(alloc.alloc<char>(quarter + 1), wasm_bad_alloc);
 }
 
 TEST_CASE("Testing maximum initial size", "[growable_allocator]") {
-   growable_allocator alloc(0x40000000);
-   char * ptr = alloc.alloc<char>(0x40000000);
+   constexpr size_t max_size = growable_allocator::max_memory_size;
+   growable_allocator alloc(max_size);
+   char * ptr = alloc.alloc<char>(max_size);
    ptr[0] = 'a';
-   ptr[0x3FFFFFFF] = 'z';
+   ptr[max_size - 1] = 'z';
 }
 
 TEST_CASE("Testing too large initial size", "[growable_allocator]") {
-   CHECK_THROWS_AS(growable_allocator{0x40000001}, wasm_bad_alloc);
+   CHECK_THROWS_AS(growable_allocator{growable_allocator::max_memory_size + 1}, wasm_bad_alloc);
    // Check that integer overflow in rounding functions won't cause issues
    CHECK_THROWS_AS(growable_allocator{0x8000000000000000ull}, wasm_bad_alloc);
    CHECK_THROWS_AS(growable_allocator{0xFFFFFFFFFFFE0001ull}, wasm_bad_alloc);
@@ -79,9 +86,10 @@ TEST_CASE("Testing too large initial size", "[growable_allocator]") {
 }
 
 TEST_CASE("Testing maximum aligned allocation", "[growable_allocator]") {
+   constexpr size_t max_size = growable_allocator::max_memory_size;
    growable_allocator alloc(1024);
    struct alignas(8) aligned_t { char a[8]; };
-   alloc.alloc<char>(0x3FFFFFF4);
+   alloc.alloc<char>(max_size - 12);  // leave room for one aligned_t (8 bytes) + alignment
    aligned_t * ptr = alloc.alloc<aligned_t>(1);
    ptr->a[0] = 'a';
    ptr->a[7] = 'z';

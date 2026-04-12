@@ -30,8 +30,8 @@
 #define PSIZAM_CALL_IMM_OPS(opcode_macro)       \
    opcode_macro(call_imm, 0x13)                 \
    opcode_macro(call_indirect_imm, 0x14)        \
-   opcode_macro(padding_call_1, 0x15)           \
-   opcode_macro(padding_call_2, 0x16)           \
+   opcode_macro(tail_call, 0x15)                 \
+   opcode_macro(tail_call_indirect, 0x16)       \
    opcode_macro(padding_call_3, 0x17)
 #define PSIZAM_EH_CATCH_OPS(opcode_macro)       \
    opcode_macro(catch_all_, 0x18)               \
