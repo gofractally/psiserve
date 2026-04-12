@@ -4,113 +4,85 @@
 
 Benchmark every available WASM engine/backend compiling pzam-compile.wasm (the LLVM-in-WASM compiler) as a stress test. This is one of the most complex WASM modules possible — 19-25MB, 23-26k functions, heavy use of floats, bulk-memory, reference-types, and multivalue.
 
-## Test Matrix
+## Results So Far (AArch64-only binary, 19MB, 23k funcs)
 
-### Engines to test
+### Quick task: compile fib_simple.wasm via JIT2 backend
 
-| Engine | Platform | Notes |
-|--------|----------|-------|
-| wasmtime | any | Production JIT, baseline comparison |
-| wasmer (Cranelift) | any | Alternative JIT |
-| wasmer (LLVM) | any | LLVM-based AOT |
-| psizam JIT1 (aarch64) | macOS ARM | Requires softfloat=OFF build |
-| psizam JIT1 (x86_64) | Linux x86 | Requires softfloat=OFF build |
-| psizam JIT2 (x86_64) | Linux x86 | Two-pass JIT, x86_64 only |
-| pzam-run (.pzam) | aarch64 | Pre-compiled native code |
+| Engine | Time | Status |
+|--------|------|--------|
+| psizam interpreter | 0.16s | OK — no compilation overhead |
+| wasmtime | 0.25s | OK — JIT compilation adds startup |
+| psizam JIT1 (aarch64) | — | FAIL: softfloat unimplemented for float codegen |
+| psizam JIT2 (aarch64) | — | FAIL: branch out of range (+-128MB B/BL limit) |
+| psizam LLVM (ORC JIT) | 4:06 | OK but slow — O2 compiles all 23k funcs before executing |
+| pzam-run (.pzam) | ~0.01s | OK — pre-compiled native, near-zero startup |
 
-### Task to benchmark
+### Compute-heavy task: compile fib_simple.wasm via LLVM backend
 
-Compile `fib_simple.wasm` using the LLVM backend inside pzam-compile.wasm:
-```bash
-<engine> pzam-compile.wasm --target=aarch64 --backend=llvm fib_simple.wasm -o /tmp/out.pzam
-```
+| Engine | Time | Speedup |
+|--------|------|---------|
+| wasmtime | 0.5s | 18x |
+| psizam interpreter | 9.0s | 1x |
 
-This exercises: module parsing, IR translation, LLVM optimization (O2), LLVM codegen, ELF parsing, relocation processing, .pzam serialization.
+### Key findings
 
-### Metrics to capture
+1. **psizam interpreter beats wasmtime on quick tasks** (0.16s vs 0.25s) — zero startup cost
+2. **wasmtime dominates compute-heavy tasks** (0.5s vs 9.0s) — JIT compilation pays off 18x
+3. **LLVM ORC JIT is impractical for large modules** — 4 minutes to O2-compile 23k functions before any execution. Only useful if the compilation result is cached (which is exactly what .pzam does)
+4. **JIT1 and JIT2 both fail on this module** — needs fixes before they can be benchmarked
 
-- Wall-clock time (startup + execution)
-- Peak RSS
-- Output correctness (diff against reference .pzam)
+## Blocking Issues
 
-## Prerequisites
+### JIT1: Softfloat float codegen not implemented
 
-### 1. Fix softfloat=OFF build
+The aarch64 JIT backend calls `unimplemented()` for all f32/f64 operations when built with `PSIZAM_ENABLE_SOFTFLOAT=ON`. pzam-compile.wasm has 4,175 float instructions (LLVM cost modeling, printf, strtod, etc.).
 
-The aarch64 JIT and JIT2 backends can't run pzam-compile.wasm because:
-- `PSIZAM_ENABLE_SOFTFLOAT=ON` → JIT doesn't implement float ops (calls `unimplemented()`)
-- `PSIZAM_ENABLE_SOFTFLOAT=OFF` → build fails: SIMD softfloat stubs referenced unconditionally in `interpret_visitor.hpp` and `aarch64.hpp`
+**Fix options:**
+- Implement softfloat trampolines in the JIT (call softfloat library functions instead of native float ops)
+- Fix the `SOFTFLOAT=OFF` build (currently broken: SIMD softfloat stubs are referenced unconditionally in `interpret_visitor.hpp`)
 
-Fix: guard the softfloat SIMD function references with `#ifdef PSIZAM_SOFTFLOAT` so the non-softfloat build compiles. The JIT backends already have native float codegen — they just need to be buildable without softfloat.
+### JIT2: Branch out of range on large modules
 
-Note: running pzam-compile.wasm without softfloat gives non-deterministic float results (native IEEE-754 instead of softfloat). This is fine for benchmarking — the output .pzam may differ in float-dependent codegen decisions but should still be functionally correct.
+With 23k functions, the generated native code exceeds aarch64's +-128MB B/BL displacement limit. The JIT2 allocates all code into a single contiguous buffer.
 
-### 2. Install wasmer
+**Fix options:**
+- Veneer islands: insert branch trampolines at regular intervals in the code buffer
+- Code partitioning: split the code buffer into chunks with indirect dispatch between them
+- Lazy compilation: only JIT the functions that are actually called
 
-```bash
-curl https://get.wasmer.io -sSfL | sh
-```
+## Remaining Tests
 
-### 3. Build psizam-wasi with each backend
+| Engine | Status | Notes |
+|--------|--------|-------|
+| wasmer (Cranelift) | TODO | `wasmer run --dir=. --dir=/tmp` |
+| wasmer (LLVM) | TODO | `wasmer run --llvm --dir=. --dir=/tmp` |
+| psizam JIT1 | BLOCKED | Needs softfloat fix |
+| psizam JIT2 | BLOCKED | Needs branch range fix |
+| pzam-run (.pzam) | TODO | Need to recompile arm binary to .pzam (~20 min) |
 
-```bash
-# Native float build (for JIT testing)
-cmake -B build/Release-nativefp -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DPSIZAM_ENABLE_SOFTFLOAT=OFF -DPSIZAM_ENABLE_TOOLS=ON -DPSIZAM_ENABLE_LLVM=ON
-
-# For JIT2 on x86_64 (needs x86 machine or Rosetta)
-# JIT2 is x86_64-only
-```
-
-### 4. Pre-compile .pzam for pzam-run test
-
-```bash
-build/Release/bin/pzam-compile --target=aarch64 --backend=llvm \
-  build/wasi-arm/bin/pzam-compile -o /tmp/pzam-compile-arm.pzam
-```
-
-## Execution
+## Execution Commands
 
 ```bash
 # wasmtime
 time wasmtime run --dir=. --dir=/tmp -- build/wasi-arm/bin/pzam-compile \
-  --target=aarch64 --backend=llvm ./fib_simple.wasm -o /tmp/out_wasmtime.pzam
+  --target=aarch64 --backend=llvm ./fib_simple.wasm -o /tmp/out.pzam
 
 # wasmer (Cranelift)
 time wasmer run --dir=. --dir=/tmp build/wasi-arm/bin/pzam-compile -- \
-  --target=aarch64 --backend=llvm ./fib_simple.wasm -o /tmp/out_wasmer_cl.pzam
+  --target=aarch64 --backend=llvm ./fib_simple.wasm -o /tmp/out.pzam
 
-# wasmer (LLVM)
-time wasmer run --llvm --dir=. --dir=/tmp build/wasi-arm/bin/pzam-compile -- \
-  --target=aarch64 --backend=llvm ./fib_simple.wasm -o /tmp/out_wasmer_llvm.pzam
-
-# psizam JIT1 (requires softfloat=OFF build)
-time build/Release-nativefp/bin/psizam-wasi --backend=jit --dir=.:. --dir=/tmp:/tmp \
+# psizam interpreter
+time build/Release/bin/psizam-wasi --backend=interpreter --dir=.:. --dir=/tmp:/tmp \
   build/wasi-arm/bin/pzam-compile --target=aarch64 --backend=llvm \
-  ./fib_simple.wasm -o /tmp/out_jit1.pzam
+  ./fib_simple.wasm -o /tmp/out.pzam
+
+# psizam LLVM (ORC JIT)
+time build/Release/bin/psizam-wasi --backend=llvm --dir=.:. --dir=/tmp:/tmp \
+  build/wasi-arm/bin/pzam-compile --target=aarch64 --backend=llvm \
+  ./fib_simple.wasm -o /tmp/out.pzam
 
 # pzam-run (pre-compiled native)
 time build/Release/bin/pzam-run --dir=.:. --dir=/tmp:/tmp \
   build/wasi-arm/bin/pzam-compile /tmp/pzam-compile-arm.pzam \
-  --target=aarch64 --backend=llvm ./fib_simple.wasm -o /tmp/out_pzam.pzam
-
-# Verify all outputs
-for f in /tmp/out_*.pzam; do
-  diff /tmp/out_wasmtime.pzam "$f" > /dev/null 2>&1 && echo "MATCH: $f" || echo "DIFFER: $f"
-done
+  --target=aarch64 --backend=llvm ./fib_simple.wasm -o /tmp/out.pzam
 ```
-
-## Expected Results
-
-Rough estimates based on preliminary data:
-
-| Engine | Expected Time | Why |
-|--------|--------------|-----|
-| pzam-run (.pzam) | ~0.01s | Near-native, no compilation |
-| wasmtime | ~0.5s | Fast JIT, good optimization |
-| wasmer (Cranelift) | ~0.5-1s | Similar to wasmtime |
-| wasmer (LLVM) | ~5-30s | LLVM AOT compilation of 23k WASM funcs, then fast execution |
-| psizam JIT1 | ~0.5-2s | Single-pass JIT, less optimization than wasmtime |
-| psizam JIT2 | ~0.5-2s | Two-pass with IR optimization, x86_64 only |
-
-The key comparison is psizam JIT vs wasmtime/wasmer — this reveals whether psizam's JIT is competitive on real-world complex modules, not just spec tests.

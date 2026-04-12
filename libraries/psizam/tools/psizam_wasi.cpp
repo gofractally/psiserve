@@ -99,9 +99,23 @@ int main(int argc, char** argv) {
          using backend_t = backend<std::nullptr_t, jit>;
          backend_t bkend(code, std::move(table), &wasi, &wa);
          bkend.call(&wasi, "_start");
+      } else if (backend_str == "jit2") {
+         using backend_t = backend<std::nullptr_t, jit2>;
+         backend_t bkend(code, std::move(table), &wasi, &wa);
+         bkend.call(&wasi, "_start");
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+      } else if (backend_str == "llvm") {
+         using backend_t = backend<std::nullptr_t, jit_llvm>;
+         backend_t bkend(code, std::move(table), &wasi, &wa);
+         bkend.call(&wasi, "_start");
+#endif
       } else {
          std::cerr << "Error: unknown backend '" << backend_str << "'\n";
-         std::cerr << "Supported: interpreter, jit\n";
+         std::cerr << "Supported: interpreter, jit, jit2"
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+                   << ", llvm"
+#endif
+                   << "\n";
          return 1;
       }
    } catch (const wasi_host::wasi_exit_exception& e) {

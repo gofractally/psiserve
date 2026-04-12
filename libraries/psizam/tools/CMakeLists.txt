@@ -57,6 +57,10 @@ endif()
 
 add_executable(psizam-wasi ${CMAKE_CURRENT_SOURCE_DIR}/psizam_wasi.cpp)
 target_link_libraries(psizam-wasi psizam psizam-runtime)
+if(TARGET psizam-llvm)
+   target_link_libraries(psizam-wasi psizam-llvm)
+   target_compile_definitions(psizam-wasi PRIVATE PSIZAM_ENABLE_LLVM_BACKEND)
+endif()
 
 if(TARGET psizam-llvm)
    add_executable(pzam-run ${CMAKE_CURRENT_SOURCE_DIR}/pzam_run.cpp)
