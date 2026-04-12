@@ -1,4 +1,5 @@
 #include <psiserve/host_api.hpp>
+#include <psiserve/io_engine.hpp>
 #include <psiserve/log.hpp>
 
 #include <openssl/err.h>
@@ -93,9 +94,9 @@ namespace psiserve
    {
    }
 
-   void HostApi::setFiberRunner(FiberRunner runner)
+   void HostApi::setFiberRunner(const FiberRunner* runner)
    {
-      _fiberRunner = std::move(runner);
+      _fiberRunner = runner;
    }
 
    PsiResult HostApi::psiAccept(VirtualFd listen_fd)
@@ -125,6 +126,11 @@ namespace psiserve
       // Set non-blocking — required for try-before-yield I/O pattern
       int conn_flags = ::fcntl(raw_conn, F_GETFL, 0);
       ::fcntl(raw_conn, F_SETFL, conn_flags | O_NONBLOCK);
+
+      // TCP_NODELAY — send small writes immediately (prevents Nagle deadlocks
+      // in proxy scenarios where both sides wait for each other's data)
+      int nodelay = 1;
+      ::setsockopt(raw_conn, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
       // TLS handshake if listener has an SSL_CTX
       SSL* ssl = nullptr;
@@ -181,6 +187,8 @@ namespace psiserve
          ::close(*real_conn);
          return PsiResult::err(PsiError::too_many_fds);
       }
+      if (++_accept_count % 1000 == 1)
+         PSI_INFO("accepted {} connection(s)", _accept_count);
       return PsiResult::ok(*vfd);
    }
 
@@ -430,7 +438,7 @@ namespace psiserve
 
    void HostApi::psiSpawn(WasmPtr func_table_idx, WasmPtr arg)
    {
-      _fiberRunner(*func_table_idx, static_cast<int32_t>(*arg));
+      (*_fiberRunner)(*func_table_idx, static_cast<int32_t>(*arg));
    }
 
    int64_t HostApi::psiClock(int32_t clock_id)
@@ -566,9 +574,10 @@ namespace psiserve
          return;
 
 #ifdef __APPLE__
-      // macOS: TCP_NOPUSH is the equivalent of TCP_CORK
-      int on = 1;
-      ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_NOPUSH, &on, sizeof(on));
+      // macOS: TCP_NOPUSH has broken uncork semantics (doesn't flush).
+      // Use TCP_NODELAY=0 to re-enable Nagle batching during cork.
+      int off = 0;
+      ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_NODELAY, &off, sizeof(off));
 #else
       int on = 1;
       ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_CORK, &on, sizeof(on));
@@ -585,12 +594,359 @@ namespace psiserve
          return;
 
 #ifdef __APPLE__
-      int off = 0;
-      ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_NOPUSH, &off, sizeof(off));
+      // Re-enable TCP_NODELAY to flush any Nagle-buffered data and
+      // ensure subsequent writes go out immediately.
+      int on = 1;
+      ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
 #else
       int off = 0;
       ::setsockopt(*sock->real_fd, IPPROTO_TCP, TCP_CORK, &off, sizeof(off));
 #endif
+   }
+
+   // ── Async DNS resolver ─────────────────────────────────────────────────
+   //
+   // Resolves hostnames via raw UDP DNS queries, fully integrated with the
+   // fiber scheduler (no threads).  Sends an A record query to the system
+   // nameserver, yields the fiber until the response arrives, parses the
+   // answer section for the first A record.
+
+   namespace
+   {
+      // Cached system nameserver (parsed once from /etc/resolv.conf)
+      struct NameserverCache
+      {
+         struct sockaddr_in addr;
+         bool               valid = false;
+
+         static NameserverCache& instance()
+         {
+            static NameserverCache cache;
+            if (!cache.valid)
+               cache.load();
+            return cache;
+         }
+
+        private:
+         void load()
+         {
+            addr           = {};
+            addr.sin_family = AF_INET;
+            addr.sin_port   = htons(53);
+
+            // Default: 127.0.0.1 (systemd-resolved, dnsmasq, etc.)
+            inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+            FILE* f = fopen("/etc/resolv.conf", "r");
+            if (!f) { valid = true; return; }
+
+            char line[256];
+            while (fgets(line, sizeof(line), f))
+            {
+               // Skip comments and empty lines
+               if (line[0] == '#' || line[0] == ';' || line[0] == '\n')
+                  continue;
+
+               // Match "nameserver <ip>"
+               if (std::strncmp(line, "nameserver", 10) == 0 && line[10] == ' ')
+               {
+                  char* ip = line + 11;
+                  // Trim trailing whitespace
+                  char* end = ip;
+                  while (*end && *end != '\n' && *end != ' ' && *end != '\t') ++end;
+                  *end = '\0';
+
+                  if (inet_pton(AF_INET, ip, &addr.sin_addr) == 1)
+                     break;
+               }
+            }
+            fclose(f);
+            valid = true;
+         }
+      };
+
+      // Encode a hostname as DNS wire-format labels.
+      // "www.example.com" → "\x03www\x07example\x03com\x00"
+      // Returns length written, or -1 on error.
+      int dnsEncodeName(const char* hostname, char* out, int max_len)
+      {
+         int         pos = 0;
+         const char* p   = hostname;
+
+         while (*p)
+         {
+            const char* dot = p;
+            while (*dot && *dot != '.') ++dot;
+            int label_len = static_cast<int>(dot - p);
+
+            if (label_len == 0 || label_len > 63)
+               return -1;
+            if (pos + 1 + label_len >= max_len)
+               return -1;
+
+            out[pos++] = static_cast<char>(label_len);
+            for (int i = 0; i < label_len; ++i)
+               out[pos++] = p[i];
+
+            p = dot;
+            if (*p == '.') ++p;
+         }
+
+         if (pos >= max_len)
+            return -1;
+         out[pos++] = 0;  // root label terminator
+         return pos;
+      }
+
+      // Build a DNS A record query packet.
+      // Returns total packet length, or -1 on error.
+      int dnsBuildQuery(const char* hostname, uint16_t query_id, char* buf, int buf_size)
+      {
+         if (buf_size < 16)
+            return -1;
+
+         // Header (12 bytes)
+         // ID
+         buf[0] = static_cast<char>(query_id >> 8);
+         buf[1] = static_cast<char>(query_id & 0xFF);
+         // Flags: standard query, recursion desired (0x0100)
+         buf[2] = 0x01;
+         buf[3] = 0x00;
+         // QDCOUNT = 1
+         buf[4] = 0x00;
+         buf[5] = 0x01;
+         // ANCOUNT, NSCOUNT, ARCOUNT = 0
+         buf[6] = buf[7] = buf[8] = buf[9] = buf[10] = buf[11] = 0;
+
+         int pos = 12;
+
+         // Question section: encoded name
+         int name_len = dnsEncodeName(hostname, buf + pos, buf_size - pos - 4);
+         if (name_len < 0)
+            return -1;
+         pos += name_len;
+
+         // QTYPE = A (1)
+         buf[pos++] = 0x00;
+         buf[pos++] = 0x01;
+         // QCLASS = IN (1)
+         buf[pos++] = 0x00;
+         buf[pos++] = 0x01;
+
+         return pos;
+      }
+
+      // Skip a DNS wire-format name (handles label compression pointers).
+      // Returns new position, or -1 on error.
+      int dnsSkipName(const char* buf, int len, int pos)
+      {
+         while (pos < len)
+         {
+            uint8_t label = static_cast<uint8_t>(buf[pos]);
+            if (label == 0)
+               return pos + 1;
+            if ((label & 0xC0) == 0xC0)
+               return pos + 2;  // compression pointer (2 bytes)
+            pos += 1 + label;
+         }
+         return -1;
+      }
+
+      // Parse a DNS response and extract the first A record's IPv4 address.
+      // Returns 0 on success, -1 on failure.
+      int dnsParseResponse(const char* buf, int len, uint16_t expected_id,
+                           struct in_addr* addr_out)
+      {
+         if (len < 12)
+            return -1;
+
+         // Verify ID matches
+         uint16_t id = (static_cast<uint8_t>(buf[0]) << 8) | static_cast<uint8_t>(buf[1]);
+         if (id != expected_id)
+            return -1;
+
+         // Check flags: response bit set (0x8000), no error (rcode = 0)
+         uint16_t flags = (static_cast<uint8_t>(buf[2]) << 8) | static_cast<uint8_t>(buf[3]);
+         if (!(flags & 0x8000))
+            return -1;
+         if (flags & 0x000F)
+            return -1;
+
+         uint16_t qdcount = (static_cast<uint8_t>(buf[4]) << 8) | static_cast<uint8_t>(buf[5]);
+         uint16_t ancount = (static_cast<uint8_t>(buf[6]) << 8) | static_cast<uint8_t>(buf[7]);
+
+         if (ancount == 0)
+            return -1;
+
+         int pos = 12;
+
+         // Skip question section
+         for (uint16_t q = 0; q < qdcount; ++q)
+         {
+            pos = dnsSkipName(buf, len, pos);
+            if (pos < 0 || pos + 4 > len)
+               return -1;
+            pos += 4;  // QTYPE + QCLASS
+         }
+
+         // Parse answer section, looking for first A record
+         for (uint16_t a = 0; a < ancount && pos < len; ++a)
+         {
+            pos = dnsSkipName(buf, len, pos);
+            if (pos < 0 || pos + 10 > len)
+               return -1;
+
+            uint16_t rtype = (static_cast<uint8_t>(buf[pos]) << 8) |
+                              static_cast<uint8_t>(buf[pos + 1]);
+            pos += 2;
+            pos += 2;  // RCLASS
+            pos += 4;  // TTL
+            uint16_t rdlength = (static_cast<uint8_t>(buf[pos]) << 8) |
+                                 static_cast<uint8_t>(buf[pos + 1]);
+            pos += 2;
+
+            if (rtype == 1 && rdlength == 4)
+            {
+               // A record — 4-byte IPv4 address
+               if (pos + 4 > len)
+                  return -1;
+               std::memcpy(addr_out, buf + pos, 4);
+               return 0;
+            }
+
+            pos += rdlength;
+         }
+
+         return -1;  // no A record found
+      }
+
+      // Async DNS resolution: sends UDP query, yields fiber, parses response.
+      // Returns 0 on success and fills addr, or -1 on failure.
+      int dnsResolveAsync(Scheduler& sched, const char* hostname,
+                          struct in_addr* addr_out)
+      {
+         // Try parsing as an IP literal first — skip DNS entirely
+         if (inet_pton(AF_INET, hostname, addr_out) == 1)
+            return 0;
+
+         auto& ns = NameserverCache::instance();
+
+         // Create non-blocking UDP socket
+         int udp_fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+         if (udp_fd < 0)
+            return -1;
+
+         int flags = ::fcntl(udp_fd, F_GETFL, 0);
+         ::fcntl(udp_fd, F_SETFL, flags | O_NONBLOCK);
+
+         // Build DNS query
+         static thread_local uint16_t next_query_id = 1;
+         uint16_t                     query_id      = next_query_id++;
+
+         char query_buf[512];
+         int  query_len = dnsBuildQuery(hostname, query_id, query_buf, sizeof(query_buf));
+         if (query_len < 0)
+         {
+            ::close(udp_fd);
+            return -1;
+         }
+
+         // Send query to nameserver
+         ssize_t sent = ::sendto(udp_fd, query_buf, query_len, 0,
+                                 (struct sockaddr*)&ns.addr, sizeof(ns.addr));
+         if (sent < 0)
+         {
+            ::close(udp_fd);
+            return -1;
+         }
+
+         // Yield fiber until response arrives
+         RealFd rfd{udp_fd};
+         sched.yield(rfd, Readable);
+
+         // Read response
+         char    resp_buf[512];
+         ssize_t resp_len = ::recv(udp_fd, resp_buf, sizeof(resp_buf), 0);
+         ::close(udp_fd);
+
+         if (resp_len <= 0)
+            return -1;
+
+         return dnsParseResponse(resp_buf, static_cast<int>(resp_len),
+                                 query_id, addr_out);
+      }
+   }  // namespace
+
+   PsiResult HostApi::psiConnect(WasmPtr host_ptr, WasmSize host_len, int32_t port)
+   {
+      uint32_t len = *host_len;
+      if (len == 0 || len > 253)
+         return PsiResult::err(PsiError::bad_fd);
+
+      // Copy hostname from WASM memory and null-terminate
+      char hostname[256];
+      std::memcpy(hostname, _wasm_memory + *host_ptr, len);
+      hostname[len] = '\0';
+
+      // Async DNS resolution — sends UDP query, yields fiber, no threads
+      struct in_addr resolved_ip;
+      if (dnsResolveAsync(*_sched, hostname, &resolved_ip) != 0)
+         return PsiResult::err(PsiError::conn_refused);
+
+      struct sockaddr_in dest = {};
+      dest.sin_family         = AF_INET;
+      dest.sin_addr           = resolved_ip;
+      dest.sin_port           = htons(static_cast<uint16_t>(port));
+
+      // Create non-blocking TCP socket with TCP_NODELAY
+      int raw_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+      if (raw_fd < 0)
+         return PsiResult::fromErrno();
+
+      int flags = ::fcntl(raw_fd, F_GETFL, 0);
+      ::fcntl(raw_fd, F_SETFL, flags | O_NONBLOCK);
+
+      int nodelay = 1;
+      ::setsockopt(raw_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+      // Non-blocking connect — yields fiber until connected
+      int rc = ::connect(raw_fd, (struct sockaddr*)&dest, sizeof(dest));
+
+      if (rc < 0 && errno != EINPROGRESS)
+      {
+         ::close(raw_fd);
+         return PsiResult::fromErrno();
+      }
+
+      if (rc < 0)
+      {
+         // EINPROGRESS — wait for socket to become writable
+         RealFd real_fd{raw_fd};
+         if (auto r = waitReady(*_sched, real_fd, Writable); r.isErr())
+         {
+            ::close(raw_fd);
+            return r;
+         }
+
+         // Check if connect succeeded
+         int       so_err = 0;
+         socklen_t so_len = sizeof(so_err);
+         ::getsockopt(raw_fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len);
+         if (so_err != 0)
+         {
+            ::close(raw_fd);
+            errno = so_err;
+            return PsiResult::fromErrno();
+         }
+      }
+
+      VirtualFd vfd = _proc->fds.alloc(SocketFd{RealFd{raw_fd}, nullptr, nullptr});
+      if (vfd == invalid_virtual_fd)
+      {
+         ::close(raw_fd);
+         return PsiResult::err(PsiError::too_many_fds);
+      }
+      return PsiResult::ok(*vfd);
    }
 
    PsiResult HostApi::psiUdpBind(int32_t port)

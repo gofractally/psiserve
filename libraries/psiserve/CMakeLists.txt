@@ -2,9 +2,7 @@
 
 add_library(psiserve
    src/host_api.cpp
-   src/io_engine_kqueue.cpp
    src/log.cpp
-   src/scheduler.cpp
    src/runtime.cpp
 )
 
@@ -13,6 +11,7 @@ target_include_directories(psiserve PUBLIC
 )
 
 target_link_libraries(psiserve PUBLIC
+   psiber
    psizam
    psizam-runtime
    ucc

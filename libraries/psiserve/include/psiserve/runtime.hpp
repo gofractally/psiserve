@@ -7,10 +7,12 @@
 
 #include <psizam/backend.hpp>
 
+#include <barrier>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace psiserve
 {
@@ -26,6 +28,7 @@ namespace psiserve
          std::filesystem::path webroot;    ///< Directory to serve files from (fd 1).
          std::filesystem::path tls_cert;   ///< PEM certificate file (empty = no TLS).
          std::filesystem::path tls_key;    ///< PEM private key file.
+         uint32_t threads = std::thread::hardware_concurrency();  ///< Worker threads (0 = auto).
       };
 
       explicit Runtime(Config cfg);
@@ -34,6 +37,9 @@ namespace psiserve
       void run();
 
      private:
+      void runWorker(int worker_id, RealFd listen_fd, SSL_CTX* ssl_ctx,
+                     std::barrier<>& ready_barrier);
+
       Config      _cfg;
       std::string _process_name;  ///< Derived from wasm filename, owns the storage.
    };

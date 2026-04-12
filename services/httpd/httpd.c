@@ -115,13 +115,14 @@ static void send_error(int conn, const char* status, const char* body)
    psi_uncork(conn);
 }
 
-static void handle_request(int conn, const char* method, int method_len,
-                           const char* path, int path_len)
+/* Returns 1 to keep connection alive, 0 to close */
+static int handle_request(int conn, const char* method, int method_len,
+                          const char* path, int path_len, int keep_alive)
 {
    if (method_len != 3 || !str_eq(method, "GET", 3))
    {
       send_error(conn, "405 Method Not Allowed", "Only GET is supported.");
-      return;
+      return 0;
    }
 
    const char* file_path = path;
@@ -136,7 +137,7 @@ static void handle_request(int conn, const char* method, int method_len,
    if (file_fd < 0)
    {
       send_error(conn, "404 Not Found", "The requested file was not found.");
-      return;
+      return 0;
    }
 
    unsigned long long file_size = 0;
@@ -144,7 +145,7 @@ static void handle_request(int conn, const char* method, int method_len,
    {
       psi_close(file_fd);
       send_error(conn, "500 Internal Server Error", "Could not stat file.");
-      return;
+      return 0;
    }
 
    /* Send response headers — corked so they go in one TCP segment */
@@ -157,40 +158,92 @@ static void handle_request(int conn, const char* method, int method_len,
    write_str(conn, ctype);
    write_str(conn, "\r\nContent-Length: ");
    psi_write_all(conn, size_str, size_str_len);
-   write_str(conn, "\r\nConnection: close\r\n\r\n");
+   if (keep_alive)
+      write_str(conn, "\r\nConnection: keep-alive\r\n\r\n");
+   else
+      write_str(conn, "\r\nConnection: close\r\n\r\n");
    psi_uncork(conn);
 
    /* Send file body — zero-copy via OS sendfile */
    psi_sendfile(conn, file_fd, (long long)file_size);
 
    psi_close(file_fd);
+   return keep_alive;
 }
 
 /* ── HTTP request parser ──────────────────────────────────────────── */
 
-static char req_buf[8192];
+/* Case-insensitive byte compare for header matching */
+static int lower(int c)
+{
+   if (c >= 'A' && c <= 'Z') return c + 32;
+   return c;
+}
+
+/* Check if the request has "Connection: close" header */
+static int wants_close(const char* buf, int len)
+{
+   /* Search for "\r\nConnection:" (case-insensitive) */
+   const char* target = "connection:";
+   int tlen = 11;
+
+   for (int i = 0; i + tlen < len; ++i)
+   {
+      if (buf[i] == '\r' && buf[i+1] == '\n')
+      {
+         int match = 1;
+         for (int j = 0; j < tlen; ++j)
+         {
+            if (lower(buf[i+2+j]) != target[j]) { match = 0; break; }
+         }
+         if (match)
+         {
+            /* Skip whitespace after colon */
+            int v = i + 2 + tlen;
+            while (v < len && buf[v] == ' ') ++v;
+            /* Check for "close" */
+            if (v + 5 <= len &&
+                lower(buf[v]) == 'c' && lower(buf[v+1]) == 'l' &&
+                lower(buf[v+2]) == 'o' && lower(buf[v+3]) == 's' &&
+                lower(buf[v+4]) == 'e')
+               return 1;
+         }
+      }
+   }
+   return 0;
+}
 
 static void process_connection(int conn)
 {
-   int total = 0;
+   /* Per-fiber buffer — each fiber has its own WASM stack,
+    * so concurrent connections don't corrupt each other. */
+   char req_buf[4096];
+   int  total = 0;
 
-   while (total < (int)sizeof(req_buf) - 1)
+   for (;;)
    {
-      int n = psi_read(conn, req_buf + total, (int)sizeof(req_buf) - 1 - total);
-      if (n <= 0) return;
-      total += n;
-
-      for (int i = 0; i + 3 < total; ++i)
+      /* Read until we have a complete header block (\r\n\r\n) */
+      int header_end = -1;
+      while (total < (int)sizeof(req_buf) - 1)
       {
-         if (req_buf[i] == '\r' && req_buf[i+1] == '\n' &&
-             req_buf[i+2] == '\r' && req_buf[i+3] == '\n')
-            goto headers_done;
-      }
-   }
+         int n = psi_read(conn, req_buf + total, (int)sizeof(req_buf) - 1 - total);
+         if (n <= 0) return;
+         total += n;
 
-headers_done:
-   {
-      int method_start = 0;
+         for (int i = (total - n > 3 ? total - n - 3 : 0); i + 3 < total; ++i)
+         {
+            if (req_buf[i] == '\r' && req_buf[i+1] == '\n' &&
+                req_buf[i+2] == '\r' && req_buf[i+3] == '\n')
+            {
+               header_end = i + 4;
+               goto headers_done;
+            }
+         }
+      }
+      return;  /* headers too large */
+
+   headers_done:;
+      /* Parse request line */
       int method_end = 0;
       while (method_end < total && req_buf[method_end] != ' ') ++method_end;
 
@@ -199,16 +252,32 @@ headers_done:
       while (path_end < total && req_buf[path_end] != ' ' && req_buf[path_end] != '?')
          ++path_end;
 
-      if (method_end > method_start && path_end > path_start)
+      /* Detect HTTP/1.1 keep-alive (default on) vs Connection: close */
+      int keep_alive = !wants_close(req_buf, header_end);
+
+      if (method_end > 0 && path_end > path_start)
       {
-         handle_request(conn,
-                        req_buf + method_start, method_end - method_start,
-                        req_buf + path_start, path_end - path_start);
+         int alive = handle_request(conn,
+                        req_buf, method_end,
+                        req_buf + path_start, path_end - path_start,
+                        keep_alive);
+         if (!alive)
+            return;
       }
       else
       {
          send_error(conn, "400 Bad Request", "Could not parse request.");
+         return;
       }
+
+      /* Shift leftover data (pipelined request bytes) to front of buffer */
+      int leftover = total - header_end;
+      if (leftover > 0)
+      {
+         for (int i = 0; i < leftover; ++i)
+            req_buf[i] = req_buf[header_end + i];
+      }
+      total = leftover;
    }
 }
 

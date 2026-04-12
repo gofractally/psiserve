@@ -33,6 +33,12 @@ int psi_fstat(int fd, void* out);
 __attribute__((import_module("psi"), import_name("close")))
 void psi_close(int fd);
 
+/* Outbound TCP: resolve hostname via DNS, connect to host:port.
+ * Blocks the fiber during resolution and connect.
+ * Returns a new fd on success, or negative error code. */
+__attribute__((import_module("psi"), import_name("connect")))
+int psi_connect(const char* host, int host_len, int port);
+
 /* ── High-performance I/O ─────────────────────────────────────────── */
 
 /* Zero-copy file-to-socket transfer.  Uses OS sendfile for plain TCP,

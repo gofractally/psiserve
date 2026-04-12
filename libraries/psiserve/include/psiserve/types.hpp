@@ -1,5 +1,7 @@
 #pragma once
 
+#include <psiber/types.hpp>
+
 #include <ucc/typed_int.hpp>
 
 #include <chrono>
@@ -15,17 +17,19 @@ namespace psiserve
    //               Indexes into the per-process FdTable.
    //
    //   RealFd    — the OS kernel fd returned by socket()/accept()/etc.
-   //               Passed to POSIX syscalls (read, write, close, kqueue).
+   //               Defined in psiber (shared with the fiber scheduler).
    //
    // Using typed ints makes it a compile error to pass one where the other
    // is expected — you can't accidentally hand a VirtualFd to ::read() or
    // a RealFd to FdTable::get().
 
    using VirtualFd = ucc::typed_int<int, struct virtual_fd_tag>;
-   using RealFd    = ucc::typed_int<int, struct real_fd_tag>;
+
+   // Re-export from psiber
+   using psiber::RealFd;
+   using psiber::invalid_real_fd;
 
    inline constexpr VirtualFd invalid_virtual_fd{-1};
-   inline constexpr RealFd    invalid_real_fd{-1};
 
    // ── WASM memory types ─────────────────────────────────────────────────────
    //

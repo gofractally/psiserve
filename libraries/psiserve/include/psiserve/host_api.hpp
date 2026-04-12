@@ -38,7 +38,8 @@ namespace psiserve
       HostApi(Process& proc, Scheduler& sched, char* wasm_memory);
 
       /// Set the callback used by psiSpawn to create fibers.
-      void setFiberRunner(FiberRunner runner);
+      /// The pointed-to FiberRunner must outlive this HostApi.
+      void setFiberRunner(const FiberRunner* runner);
 
       // ── WASM imports (psi.*) ───────────────────────────────────────────────
 
@@ -122,11 +123,21 @@ namespace psiserve
       /// Returns bytes sent, or -PsiError on error.
       PsiResult psiSendTo(VirtualFd fd, WasmPtr buf, WasmSize len, WasmPtr addr);
 
+      /// psi.connect(host_ptr: i32, host_len: i32, port: i32) -> i32
+      /// Resolves the hostname via DNS, then connects to the given port.
+      /// Blocks the fiber during DNS resolution and TCP connect.
+      /// Returns a new virtual fd on success, or -PsiError on error.
+      PsiResult psiConnect(WasmPtr host_ptr, WasmSize host_len, int32_t port);
+
+      /// Number of connections accepted by this host instance.
+      uint64_t acceptCount() const { return _accept_count; }
+
      private:
       Process*    _proc;
       Scheduler*  _sched;
       char*       _wasm_memory;
-      FiberRunner _fiberRunner;
+      const FiberRunner* _fiberRunner = nullptr;
+      uint64_t    _accept_count = 0;
    };
 
 }  // namespace psiserve

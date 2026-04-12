@@ -17,6 +17,7 @@ int main(int argc, char** argv)
       ("webroot,w", po::value<std::string>(), "Directory to serve files from (fd 1)")
       ("tls-cert,c", po::value<std::string>(), "PEM certificate file (enables TLS)")
       ("tls-key,k", po::value<std::string>(), "PEM private key file")
+      ("threads,t", po::value<uint32_t>(), "Worker threads (default: CPU count)")
       ("wasm",   po::value<std::string>(), "WASM module file");
 
    po::positional_options_description pos;
@@ -53,6 +54,9 @@ int main(int argc, char** argv)
       cfg.tls_cert = vm["tls-cert"].as<std::string>();
    if (vm.count("tls-key"))
       cfg.tls_key = vm["tls-key"].as<std::string>();
+
+   if (vm.count("threads"))
+      cfg.threads = vm["threads"].as<uint32_t>();
 
    if (!cfg.tls_cert.empty() != !cfg.tls_key.empty())
    {
