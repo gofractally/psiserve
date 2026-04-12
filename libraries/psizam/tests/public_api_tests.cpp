@@ -83,9 +83,9 @@ TEST_CASE("Public API: compiled_module with jit2", "[public_api]") {
 #endif
 
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-#include <psizam/llvm_ir_translator.hpp>
-#include <psizam/llvm_jit_compiler.hpp>
-#include <psizam/jit_ir.hpp>
+#include <psizam/detail/llvm_ir_translator.hpp>
+#include <psizam/detail/llvm_jit_compiler.hpp>
+#include <psizam/detail/jit_ir.hpp>
 
 TEST_CASE("LLVM: standalone IR translate + compile", "[llvm]") {
    // Parse the const42 module with null_backend (validation only) to get the module

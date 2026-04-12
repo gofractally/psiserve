@@ -4,8 +4,8 @@
 //
 // See llvm_runtime_helpers.cpp for the exception escape rationale.
 
-#include <psizam/llvm_runtime_helpers.hpp>
-#include <psizam/execution_context.hpp>
+#include <psizam/detail/llvm_runtime_helpers.hpp>
+#include <psizam/detail/execution_context.hpp>
 #include <psizam/types.hpp>
 
 #include <cstring>

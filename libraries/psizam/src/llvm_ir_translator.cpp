@@ -7,7 +7,7 @@
 // Phase 4b: integers, comparisons, conversions, control flow, memory,
 //           locals/globals, calls, select.
 
-#include <psizam/llvm_ir_translator.hpp>
+#include <psizam/detail/llvm_ir_translator.hpp>
 
 #include <llvm/IR/IRBuilder.h>
 #include <cstdlib>

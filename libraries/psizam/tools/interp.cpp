@@ -1,6 +1,6 @@
 #include <psizam/backend.hpp>
 #include <psizam/error_codes.hpp>
-#include <psizam/watchdog.hpp>
+#include <psizam/detail/watchdog.hpp>
 
 #include <iostream>
 

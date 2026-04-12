@@ -2,7 +2,7 @@
 
 #include <psizam/constants.hpp>
 #include <psizam/exceptions.hpp>
-#include <psizam/span.hpp>
+#include <psizam/detail/span.hpp>
 
 #include <cassert>
 #include <cstddef>

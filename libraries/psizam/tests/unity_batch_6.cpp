@@ -12,8 +12,8 @@
 #include <thread>
 #include <catch2/catch.hpp>
 #include <psizam/backend.hpp>
-#include <psizam/signals.hpp>
-#include <psizam/watchdog.hpp>
+#include <psizam/detail/signals.hpp>
+#include <psizam/detail/watchdog.hpp>
 #include "utils.hpp"
 
 namespace unity_signals_tests {

@@ -3,8 +3,8 @@
 // Uses LLVM ORC JIT v2 to compile LLVM IR modules to native code.
 // Compiled function pointers are registered in the psizam module for execution.
 
-#include <psizam/llvm_jit_compiler.hpp>
-#include <psizam/llvm_runtime_helpers.hpp>
+#include <psizam/detail/llvm_jit_compiler.hpp>
+#include <psizam/detail/llvm_runtime_helpers.hpp>
 
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>

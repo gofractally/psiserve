@@ -1,5 +1,5 @@
 #include <psizam/backend.hpp>
-#include <psizam/wasi_host.hpp>
+#include <psizam/detail/wasi_host.hpp>
 
 #include <cstdlib>
 #include <fstream>

@@ -1,4 +1,4 @@
-#include <psizam/parser.hpp>
+#include <psizam/detail/parser.hpp>
 #include <fstream>
 #include <iostream>
 #include <chrono>

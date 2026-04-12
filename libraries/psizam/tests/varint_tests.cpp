@@ -5,7 +5,7 @@
 
 #include <catch2/catch.hpp>
 
-#include <psizam/leb128.hpp>
+#include <psizam/detail/leb128.hpp>
 #include <psizam/types.hpp>
 
 using namespace psizam;

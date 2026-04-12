@@ -4,7 +4,7 @@
 // then parses the object to extract the .text section and relocations.
 // The result is packaged for .pzam serialization.
 
-#include <psizam/llvm_aot_compiler.hpp>
+#include <psizam/detail/llvm_aot_compiler.hpp>
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>

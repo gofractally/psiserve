@@ -3,9 +3,9 @@
 // Called from ir_writer_llvm's destructor to translate psizam IR functions
 // to LLVM IR and JIT-compile them to native code.
 
-#include <psizam/llvm_ir_translator.hpp>
-#include <psizam/llvm_jit_compiler.hpp>
-#include <psizam/jit_ir.hpp>
+#include <psizam/detail/llvm_ir_translator.hpp>
+#include <psizam/detail/llvm_jit_compiler.hpp>
+#include <psizam/detail/jit_ir.hpp>
 #include <psizam/types.hpp>
 
 #include <llvm/IR/LLVMContext.h>

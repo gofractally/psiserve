@@ -6,14 +6,14 @@
 //
 // Usage: bench-compile --target=x86_64|aarch64 [--backend=jit2|llvm] <dir>
 
-#include <psizam/parser.hpp>
-#include <psizam/ir_writer.hpp>
+#include <psizam/detail/parser.hpp>
+#include <psizam/detail/ir_writer.hpp>
 #include <psizam/pzam_cache.hpp>
 #include <psizam/pzam_format.hpp>
 #include <psizam/utils.hpp>
 
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
-#include <psizam/ir_writer_llvm_aot.hpp>
+#include <psizam/detail/ir_writer_llvm_aot.hpp>
 #endif
 
 #include <chrono>

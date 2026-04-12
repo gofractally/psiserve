@@ -1,4 +1,4 @@
-#include <psizam/guarded_ptr.hpp>
+#include <psizam/detail/guarded_ptr.hpp>
 
 #include <catch2/catch.hpp>
 

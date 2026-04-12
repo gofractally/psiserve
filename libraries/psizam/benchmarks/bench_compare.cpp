@@ -10,7 +10,7 @@
 #include "bench_hosts.hpp"
 #include <psizam/backend.hpp>
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
-#include <psizam/ir_writer_llvm.hpp>
+#include <psizam/detail/ir_writer_llvm.hpp>
 #endif
 #include <chrono>
 #include <cstdio>

@@ -2,27 +2,30 @@
 
 #include <psizam/pzam_cache.hpp>
 #include <psizam/pzam_format.hpp>
-#include <psizam/jit_reloc.hpp>
+#include <psizam/detail/jit_reloc.hpp>
 #include <catch2/catch.hpp>
 
 using namespace psizam;
 
 TEST_CASE("pzam: fracpack serialization roundtrip", "[pzam]") {
    pzam_file file;
-   file.max_stack = 16;
 
-   file.functions = {
+   pzam_code_section cs;
+   cs.max_stack = 16;
+
+   cs.functions = {
       {0, 20, 4},
       {20, 24, 8},
       {44, 20, 4},
    };
 
-   file.relocations = {
+   cs.relocations = {
       {8, static_cast<uint16_t>(reloc_symbol::call_host_function)},
       {32, static_cast<uint16_t>(reloc_symbol::current_memory)},
    };
 
-   file.code_blob.assign(64, 0x90); // NOP fill
+   cs.code_blob.assign(64, 0x90); // NOP fill
+   file.code_sections.push_back(std::move(cs));
 
    auto bytes = pzam_save(file);
 
@@ -32,22 +35,25 @@ TEST_CASE("pzam: fracpack serialization roundtrip", "[pzam]") {
 
    CHECK(loaded.magic == PZAM_MAGIC);
    CHECK(loaded.format_version == PZAM_VERSION);
-   CHECK(loaded.max_stack == 16);
 
-   REQUIRE(loaded.functions.size() == 3);
-   CHECK(loaded.functions[0].code_offset == 0);
-   CHECK(loaded.functions[0].code_size == 20);
-   CHECK(loaded.functions[1].code_offset == 20);
-   CHECK(loaded.functions[2].code_offset == 44);
+   REQUIRE(loaded.code_sections.size() == 1);
+   const auto& lcs = loaded.code_sections[0];
+   CHECK(lcs.max_stack == 16);
 
-   REQUIRE(loaded.relocations.size() == 2);
-   CHECK(loaded.relocations[0].code_offset == 8);
-   CHECK(loaded.relocations[0].symbol == static_cast<uint16_t>(reloc_symbol::call_host_function));
-   CHECK(loaded.relocations[1].code_offset == 32);
-   CHECK(loaded.relocations[1].symbol == static_cast<uint16_t>(reloc_symbol::current_memory));
+   REQUIRE(lcs.functions.size() == 3);
+   CHECK(lcs.functions[0].code_offset == 0);
+   CHECK(lcs.functions[0].code_size == 20);
+   CHECK(lcs.functions[1].code_offset == 20);
+   CHECK(lcs.functions[2].code_offset == 44);
 
-   REQUIRE(loaded.code_blob.size() == 64);
-   CHECK(loaded.code_blob[0] == 0x90);
+   REQUIRE(lcs.relocations.size() == 2);
+   CHECK(lcs.relocations[0].code_offset == 8);
+   CHECK(lcs.relocations[0].symbol == static_cast<uint16_t>(reloc_symbol::call_host_function));
+   CHECK(lcs.relocations[1].code_offset == 32);
+   CHECK(lcs.relocations[1].symbol == static_cast<uint16_t>(reloc_symbol::current_memory));
+
+   REQUIRE(lcs.code_blob.size() == 64);
+   CHECK(lcs.code_blob[0] == 0x90);
 }
 
 TEST_CASE("pzam: hash validation", "[pzam]") {

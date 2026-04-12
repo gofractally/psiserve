@@ -2,7 +2,7 @@
 #include <list>
 
 #include <psizam/backend.hpp>
-#include <psizam/watchdog.hpp>
+#include <psizam/detail/watchdog.hpp>
 
 #include "utils.hpp"
 #include <catch2/catch.hpp>

@@ -13,7 +13,7 @@ target_include_directories(psiserve PUBLIC
 target_link_libraries(psiserve PUBLIC
    psiber
    psizam
-   psizam-runtime
+   psizam-exec
    ucc
    quill::quill
    Threads::Threads

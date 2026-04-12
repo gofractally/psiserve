@@ -121,20 +121,20 @@
 //
 
 #include <psizam/allocator.hpp>
-#include <psizam/bitcode_writer.hpp>
+#include <psizam/detail/bitcode_writer.hpp>
 #include <psizam/config.hpp>
-#include <psizam/debug_visitor.hpp>
-#include <psizam/execution_context.hpp>
-#include <psizam/interpret_visitor.hpp>
-#include <psizam/null_writer.hpp>
-#include <psizam/parser.hpp>
+#include <psizam/detail/debug_visitor.hpp>
+#include <psizam/detail/execution_context.hpp>
+#include <psizam/detail/interpret_visitor.hpp>
+#include <psizam/detail/null_writer.hpp>
+#include <psizam/detail/parser.hpp>
 #include <psizam/types.hpp>
 
-#include <psizam/x86_64.hpp>
-#include <psizam/aarch64.hpp>
-#include <psizam/ir_writer.hpp>
+#include <psizam/detail/x86_64.hpp>
+#include <psizam/detail/aarch64.hpp>
+#include <psizam/detail/ir_writer.hpp>
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-#include <psizam/ir_writer_llvm.hpp>
+#include <psizam/detail/ir_writer_llvm.hpp>
 #endif
 
 #include <atomic>

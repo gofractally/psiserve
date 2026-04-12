@@ -5,9 +5,9 @@
  */
 
 #include <psizam/allocator.hpp>
-#include <psizam/guarded_ptr.hpp>
-#include <psizam/opcodes.hpp>
-#include <psizam/vector.hpp>
+#include <psizam/detail/guarded_ptr.hpp>
+#include <psizam/detail/opcodes.hpp>
+#include <psizam/detail/vector.hpp>
 
 #include <algorithm>
 #include <cstdint>

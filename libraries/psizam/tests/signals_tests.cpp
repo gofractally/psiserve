@@ -1,4 +1,4 @@
-#include <psizam/signals.hpp>
+#include <psizam/detail/signals.hpp>
 #include <chrono>
 #include <csignal>
 #include <thread>

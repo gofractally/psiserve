@@ -1,12 +1,12 @@
 #pragma once
 
 #include <psizam/allocator.hpp>
-#include <psizam/execution_interface.hpp>
-#include <psizam/function_traits.hpp>
-#include <psizam/argument_proxy.hpp>
-#include <psizam/span.hpp>
+#include <psizam/detail/execution_interface.hpp>
+#include <psizam/detail/function_traits.hpp>
+#include <psizam/detail/argument_proxy.hpp>
+#include <psizam/detail/span.hpp>
 #include <psizam/utils.hpp>
-#include <psizam/wasm_stack.hpp>
+#include <psizam/detail/wasm_stack.hpp>
 
 #include <cstddef>
 #include <cstdint>

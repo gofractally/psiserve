@@ -10,7 +10,7 @@
 #include <vector>
 #include <psizam/allocator.hpp>
 #include <psizam/backend.hpp>
-#include <psizam/stack_elem.hpp>
+#include <psizam/detail/stack_elem.hpp>
 #include <psizam/utils.hpp>
 
 struct type_converter32 {

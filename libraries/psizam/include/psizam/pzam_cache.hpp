@@ -14,14 +14,14 @@
 //   }
 
 #include <psizam/allocator.hpp>
-#include <psizam/jit_reloc.hpp>
+#include <psizam/detail/jit_reloc.hpp>
 #include <psizam/pzam_format.hpp>
 #include <psizam/types.hpp>
-#if defined(PSIZAM_ENABLE_LLVM_BACKEND) && !defined(PSIZAM_COMPILE_ONLY)
-#include <psizam/llvm_runtime_helpers.hpp>
+#ifndef PSIZAM_COMPILE_ONLY
+#include <psizam/detail/llvm_runtime_helpers.hpp>
 #endif
 #ifdef PSIZAM_SOFTFLOAT
-#include <psizam/softfloat.hpp>
+#include <psizam/detail/softfloat.hpp>
 #endif
 
 #include <cstring>
@@ -97,7 +97,9 @@ namespace psizam {
 
    /// Build the reloc_symbol -> function address mapping table for LLVM runtime helpers.
    /// Used when loading .pzam files compiled with the LLVM backend.
-#if defined(PSIZAM_ENABLE_LLVM_BACKEND) && !defined(PSIZAM_COMPILE_ONLY)
+   /// Always available in exec contexts — a .pzam compiled elsewhere with LLVM
+   /// can be loaded and run without LLVM installed locally.
+#ifndef PSIZAM_COMPILE_ONLY
    inline void build_llvm_symbol_table(void** table) {
       // LLVM runtime helpers (does not zero-init — caller or build_symbol_table handles that)
       table[static_cast<uint32_t>(reloc_symbol::llvm_global_get)]       = reinterpret_cast<void*>(&__psizam_global_get);
@@ -219,36 +221,41 @@ namespace psizam {
             bool backtrace_enabled = false) {
 
          pzam_file file;
-         file.arch = static_cast<uint8_t>(target_arch);
-         file.opts.softfloat = softfloat_enabled ? 1 : 0;
-         file.opts.async_backtrace = backtrace_enabled ? 1 : 0;
-         file.opts.stack_limit_is_bytes = mod.stack_limit_is_bytes ? 1 : 0;
-         file.max_stack = static_cast<uint32_t>(mod.maximum_stack);
          file.input_hash = hash_wasm(wasm_bytes);
-         file.compiler_hash = compiler_identity(target_arch);
+
+         // Build a single code section
+         pzam_code_section cs;
+         cs.arch = static_cast<uint8_t>(target_arch);
+         cs.instrumentation.softfloat = softfloat_enabled ? 1 : 0;
+         cs.instrumentation.async_backtrace = backtrace_enabled ? 1 : 0;
+         cs.stack_limit_mode = mod.stack_limit_is_bytes ? 1 : 0;
+         cs.max_stack = static_cast<uint32_t>(mod.maximum_stack);
+         cs.compiler.compiler_hash = compiler_identity(target_arch);
 
          // Build function table
-         file.functions.resize(mod.code.size());
+         cs.functions.resize(mod.code.size());
          for (size_t i = 0; i < mod.code.size(); i++) {
-            file.functions[i].code_offset = static_cast<uint32_t>(mod.code[i].jit_code_offset);
-            file.functions[i].code_size = mod.code[i].jit_code_size;
-            file.functions[i].stack_size = mod.code[i].stack_size;
+            cs.functions[i].code_offset = static_cast<uint32_t>(mod.code[i].jit_code_offset);
+            cs.functions[i].code_size = mod.code[i].jit_code_size;
+            cs.functions[i].stack_size = mod.code[i].stack_size;
          }
 
          // Convert relocations
          const auto& reloc_entries = relocs.entries();
-         file.relocations.resize(reloc_entries.size());
+         cs.relocations.resize(reloc_entries.size());
          for (size_t i = 0; i < reloc_entries.size(); i++) {
-            file.relocations[i].code_offset = reloc_entries[i].code_offset;
-            file.relocations[i].symbol = static_cast<uint16_t>(reloc_entries[i].symbol);
-            file.relocations[i].type = static_cast<uint8_t>(reloc_entries[i].type);
-            file.relocations[i].addend = reloc_entries[i].addend;
+            cs.relocations[i].code_offset = reloc_entries[i].code_offset;
+            cs.relocations[i].symbol = static_cast<uint16_t>(reloc_entries[i].symbol);
+            cs.relocations[i].type = static_cast<uint8_t>(reloc_entries[i].type);
+            cs.relocations[i].addend = reloc_entries[i].addend;
          }
 
          // Copy code blob
-         file.code_blob.assign(
+         cs.code_blob.assign(
             static_cast<const uint8_t*>(code_base),
             static_cast<const uint8_t*>(code_base) + code_size);
+
+         file.code_sections.push_back(std::move(cs));
 
          return pzam_save(file);
       }
@@ -278,7 +285,7 @@ namespace psizam {
          // Validate magic and version
          if (file.magic != PZAM_MAGIC) return false;
 
-         // Validate architecture matches current platform
+         // Find a code section matching current platform
          auto expected_arch =
 #if defined(__x86_64__)
             pzam_arch::x86_64;
@@ -287,28 +294,39 @@ namespace psizam {
 #else
             pzam_arch{};
 #endif
-         if (static_cast<pzam_arch>(file.arch) != expected_arch) return false;
 
-         // Validate hashes
+         // Validate input hash
          auto expected_input = hash_wasm(wasm_bytes);
-         auto expected_compiler = compiler_identity(expected_arch);
          if (file.input_hash != expected_input) return false;
-         if (file.compiler_hash != expected_compiler) return false;
+
+         // Find matching code section
+         const pzam_code_section* cs = nullptr;
+         for (const auto& section : file.code_sections) {
+            if (static_cast<pzam_arch>(section.arch) == expected_arch) {
+               cs = &section;
+               break;
+            }
+         }
+         if (!cs) return false;
+
+         // Validate compiler hash
+         auto expected_compiler = compiler_identity(expected_arch);
+         if (cs->compiler.compiler_hash != expected_compiler) return false;
 
          // Verify function count matches
-         if (file.functions.size() != mod.code.size()) return false;
+         if (cs->functions.size() != mod.code.size()) return false;
 
          // Allocate executable memory and copy code
          void* code_dest = alloc.start_code();
-         std::memcpy(code_dest, file.code_blob.data(), file.code_blob.size());
+         std::memcpy(code_dest, cs->code_blob.data(), cs->code_blob.size());
 
          // Convert relocations back to code_relocation and apply
-         std::vector<code_relocation> relocs(file.relocations.size());
-         for (size_t i = 0; i < file.relocations.size(); i++) {
-            relocs[i].code_offset = file.relocations[i].code_offset;
-            relocs[i].symbol = static_cast<reloc_symbol>(file.relocations[i].symbol);
-            relocs[i].type = static_cast<reloc_type>(file.relocations[i].type);
-            relocs[i].addend = file.relocations[i].addend;
+         std::vector<code_relocation> relocs(cs->relocations.size());
+         for (size_t i = 0; i < cs->relocations.size(); i++) {
+            relocs[i].code_offset = cs->relocations[i].code_offset;
+            relocs[i].symbol = static_cast<reloc_symbol>(cs->relocations[i].symbol);
+            relocs[i].type = static_cast<reloc_type>(cs->relocations[i].type);
+            relocs[i].addend = cs->relocations[i].addend;
          }
 
          apply_relocations(static_cast<char*>(code_dest),
@@ -317,14 +335,14 @@ namespace psizam {
                            symbol_table);
 
          // Update module function entries
-         for (size_t i = 0; i < file.functions.size(); i++) {
-            mod.code[i].jit_code_offset = file.functions[i].code_offset;
-            mod.code[i].jit_code_size = file.functions[i].code_size;
-            mod.code[i].stack_size = file.functions[i].stack_size;
+         for (size_t i = 0; i < cs->functions.size(); i++) {
+            mod.code[i].jit_code_offset = cs->functions[i].code_offset;
+            mod.code[i].jit_code_size = cs->functions[i].code_size;
+            mod.code[i].stack_size = cs->functions[i].stack_size;
          }
 
-         mod.maximum_stack = file.max_stack;
-         mod.stack_limit_is_bytes = file.opts.stack_limit_is_bytes;
+         mod.maximum_stack = cs->max_stack;
+         mod.stack_limit_is_bytes = cs->stack_limit_mode != 0;
 
          return true;
       }

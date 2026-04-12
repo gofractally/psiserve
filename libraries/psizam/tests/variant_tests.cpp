@@ -1,4 +1,4 @@
-#include <psizam/variant.hpp>
+#include <psizam/detail/variant.hpp>
 
 #include <catch2/catch.hpp>
 

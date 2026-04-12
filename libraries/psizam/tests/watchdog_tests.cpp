@@ -1,4 +1,4 @@
-#include <psizam/watchdog.hpp>
+#include <psizam/detail/watchdog.hpp>
 #include <atomic>
 #include <chrono>
 

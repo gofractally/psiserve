@@ -7,14 +7,15 @@
 // The .pzam file can later be loaded and relocated at runtime, skipping
 // the compilation step.
 
-#include <psizam/parser.hpp>
-#include <psizam/ir_writer.hpp>
+#include <psizam/detail/parser.hpp>
+#include <psizam/detail/ir_writer.hpp>
 #include <psizam/pzam_cache.hpp>
 #include <psizam/pzam_format.hpp>
+#include <psizam/pzam_metadata.hpp>
 #include <psizam/utils.hpp>
 
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
-#include <psizam/ir_writer_llvm_aot.hpp>
+#include <psizam/detail/ir_writer_llvm_aot.hpp>
 #endif
 
 #include <cstring>
@@ -39,49 +40,56 @@ static std::vector<char> write_pzam(
       bool use_backtrace) {
 
    pzam_file file;
-   file.arch = static_cast<uint8_t>(target_arch);
-   file.opts.softfloat = use_softfloat ? 1 : 0;
-   file.opts.async_backtrace = use_backtrace ? 1 : 0;
-   file.opts.stack_limit_is_bytes = mod.stack_limit_is_bytes ? 1 : 0;
-   // Cross-compiler always uses standard 4096-byte WASM pages, not host page size
-   file.opts.page_size = 4096;
-   file.max_stack = static_cast<uint32_t>(mod.maximum_stack);
    file.input_hash = pzam_cache::hash_wasm(wasm_bytes);
-   file.compiler_hash = pzam_cache::compiler_identity(target_arch);
+   file.metadata = extract_metadata(mod);
 
    bool llvm_aot = !result.code_blob.empty();
-   file.backend = static_cast<uint8_t>(llvm_aot ? pzam_backend::llvm : pzam_backend::jit2);
+
+   // Build a single code section
+   pzam_code_section cs;
+   cs.arch = static_cast<uint8_t>(target_arch);
+   cs.opt_tier = static_cast<uint8_t>(llvm_aot ? pzam_opt_tier::llvm_O3 : pzam_opt_tier::jit2);
+   cs.instrumentation.softfloat = use_softfloat ? 1 : 0;
+   cs.instrumentation.async_backtrace = use_backtrace ? 1 : 0;
+   cs.stack_limit_mode = mod.stack_limit_is_bytes ? 1 : 0;
+   cs.page_size = 4096;
+   cs.max_stack = static_cast<uint32_t>(mod.maximum_stack);
+   cs.compiler.compiler_name = llvm_aot ? "psizam-llvm" : "psizam-jit2";
+   cs.compiler.compiler_version = "0.1.0";
+   cs.compiler.compiler_hash = pzam_cache::compiler_identity(target_arch);
 
    // Function table
-   file.functions.resize(mod.code.size());
+   cs.functions.resize(mod.code.size());
    for (size_t i = 0; i < mod.code.size(); i++) {
       if (llvm_aot && i < result.function_offsets.size()) {
-         file.functions[i].code_offset = result.function_offsets[i].first;
-         file.functions[i].code_size   = result.function_offsets[i].second;
+         cs.functions[i].code_offset = result.function_offsets[i].first;
+         cs.functions[i].code_size   = result.function_offsets[i].second;
       } else {
-         file.functions[i].code_offset = static_cast<uint32_t>(mod.code[i].jit_code_offset);
-         file.functions[i].code_size   = mod.code[i].jit_code_size;
+         cs.functions[i].code_offset = static_cast<uint32_t>(mod.code[i].jit_code_offset);
+         cs.functions[i].code_size   = mod.code[i].jit_code_size;
       }
-      file.functions[i].stack_size = mod.code[i].stack_size;
+      cs.functions[i].stack_size = mod.code[i].stack_size;
    }
 
    // Relocations
-   file.relocations.resize(result.relocs.size());
+   cs.relocations.resize(result.relocs.size());
    for (size_t i = 0; i < result.relocs.size(); i++) {
-      file.relocations[i].code_offset = result.relocs[i].code_offset;
-      file.relocations[i].symbol      = static_cast<uint16_t>(result.relocs[i].symbol);
-      file.relocations[i].type        = static_cast<uint8_t>(result.relocs[i].type);
-      file.relocations[i].addend      = result.relocs[i].addend;
+      cs.relocations[i].code_offset = result.relocs[i].code_offset;
+      cs.relocations[i].symbol      = static_cast<uint16_t>(result.relocs[i].symbol);
+      cs.relocations[i].type        = static_cast<uint8_t>(result.relocs[i].type);
+      cs.relocations[i].addend      = result.relocs[i].addend;
    }
 
    // Code blob — use actual size (no page-alignment padding)
    if (llvm_aot) {
-      file.code_blob = result.code_blob;
+      cs.code_blob = result.code_blob;
    } else {
       auto code_start = reinterpret_cast<const uint8_t*>(alloc.get_code_start());
       size_t actual_size = alloc.get_actual_code_size();
-      file.code_blob.assign(code_start, code_start + actual_size);
+      cs.code_blob.assign(code_start, code_start + actual_size);
    }
+
+   file.code_sections.push_back(std::move(cs));
 
    return pzam_save(file);
 }
@@ -139,7 +147,13 @@ static bool compile_wasm(
    return true;
 }
 
-int main(int argc, char** argv) {
+int pzam_compile_main(int argc, char** argv);
+
+#ifdef PZAM_STANDALONE_COMPILE
+int main(int argc, char** argv) { return pzam_compile_main(argc, argv); }
+#endif
+
+int pzam_compile_main(int argc, char** argv) {
    std::string target_str;
    std::string backend_str = "jit2";
    std::string output_file;

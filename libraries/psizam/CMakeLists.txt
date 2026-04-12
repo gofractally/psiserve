@@ -87,19 +87,43 @@ if(PSIZAM_FULL_DEBUG)
    target_compile_definitions(psizam INTERFACE PSIZAM_FULL_DEBUG)
 endif()
 
-# ── Runtime helpers (non-LLVM, needed by all JIT backends) ────────────────────
+# ── Per-mode per-arch compile targets (INTERFACE, header-only JIT backends) ───
+# These targets document the compile dependency for each backend × architecture.
+# JIT backends are entirely header-only so no source files are compiled.
+
+add_library(psizam-jit1-x86 INTERFACE)
+target_link_libraries(psizam-jit1-x86 INTERFACE psizam)
+
+add_library(psizam-jit1-arm INTERFACE)
+target_link_libraries(psizam-jit1-arm INTERFACE psizam)
+
+add_library(psizam-jit2-x86 INTERFACE)
+target_link_libraries(psizam-jit2-x86 INTERFACE psizam)
+
+add_library(psizam-jit2-arm INTERFACE)
+target_link_libraries(psizam-jit2-arm INTERFACE psizam)
+
+# ── Execution library (native only) ──────────────────────────────────────────
+# Replaces psizam-runtime. Includes LLVM runtime helpers unconditionally so
+# .pzam files compiled with LLVM can be executed without LLVM installed.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
-   add_library(psizam-runtime STATIC
+   add_library(psizam-exec STATIC
       src/runtime_helpers.cpp
       src/call_on_stack.cpp
+      src/llvm_runtime_helpers.cpp
    )
-   target_link_libraries(psizam-runtime PUBLIC psizam)
+   target_link_libraries(psizam-exec PUBLIC psizam)
 endif()
 
-# ── LLVM Backend (opt-in) ─────────────────────────────────────────────────────
+# ── LLVM Compile Backend (opt-in) ────────────────────────────────────────────
 option(PSIZAM_ENABLE_LLVM "Build LLVM AOT/JIT backend" OFF)
 
 if(PSIZAM_ENABLE_LLVM)
+   # PSIZAM_LLVM_TARGETS: semicolon-separated list, e.g. "X86;AArch64" (default: both)
+   if(NOT DEFINED PSIZAM_LLVM_TARGETS)
+      set(PSIZAM_LLVM_TARGETS "X86;AArch64")
+   endif()
+
    if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
       # WASI: use pre-built LLVM WASI libraries
       if(NOT LLVM_WASI_PREFIX)
@@ -109,69 +133,79 @@ if(PSIZAM_ENABLE_LLVM)
       set(LLVM_DIR "${_LLVM_WASI_ABS}/lib/cmake/llvm")
       find_package(LLVM REQUIRED CONFIG NO_CMAKE_FIND_ROOT_PATH)
       message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} (WASI) at ${LLVM_DIR}")
-
-      # Target selection — build one binary per target for smaller binaries.
-      # PSIZAM_LLVM_TARGETS: semicolon-separated list, e.g. "X86;AArch64" (default: both)
-      if(NOT DEFINED PSIZAM_LLVM_TARGETS)
-         set(PSIZAM_LLVM_TARGETS "X86;AArch64")
-      endif()
-
-      # Base components (no 'passes' — we bypass PassBuilder to avoid
-      # pulling in IPO/Vectorize/Coroutines/etc. via PassRegistry.def)
-      set(_LLVM_COMPONENTS core support instcombine scalaropts object)
-
-      if("X86" IN_LIST PSIZAM_LLVM_TARGETS)
-         list(APPEND _LLVM_COMPONENTS x86codegen x86asmparser x86desc x86info)
-      endif()
-      if("AArch64" IN_LIST PSIZAM_LLVM_TARGETS)
-         list(APPEND _LLVM_COMPONENTS aarch64codegen aarch64asmparser aarch64desc aarch64info)
-      endif()
-
-      llvm_map_components_to_libnames(LLVM_LIBS ${_LLVM_COMPONENTS})
-
-      # AOT-only sources (no JIT, no runtime helpers)
-      add_library(psizam-llvm STATIC
-         src/llvm_ir_translator.cpp
-         src/llvm_aot_compiler.cpp
-      )
-      target_link_libraries(psizam-llvm PUBLIC psizam ${LLVM_LIBS})
-
-      # Tell the AOT compiler which targets are available
-      if("X86" IN_LIST PSIZAM_LLVM_TARGETS)
-         target_compile_definitions(psizam-llvm PRIVATE PSIZAM_LLVM_TARGET_X86)
-      endif()
-      if("AArch64" IN_LIST PSIZAM_LLVM_TARGETS)
-         target_compile_definitions(psizam-llvm PRIVATE PSIZAM_LLVM_TARGET_AARCH64)
-      endif()
    else()
-      # Native: full LLVM with ORC JIT
       find_package(LLVM REQUIRED CONFIG)
       message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_DIR}")
-
-      llvm_map_components_to_libnames(LLVM_LIBS
-         core support orcjit native
-         passes instcombine scalaropts
-         x86codegen x86asmparser x86desc x86info
-         aarch64codegen aarch64asmparser aarch64desc aarch64info
-         object
-      )
-
-      add_library(psizam-llvm STATIC
-         src/llvm_ir_translator.cpp
-         src/llvm_jit_compiler.cpp
-         src/llvm_compile.cpp
-         src/llvm_runtime_helpers.cpp
-         src/llvm_aot_compiler.cpp
-      )
-      target_link_libraries(psizam-llvm PUBLIC psizam psizam-runtime ${LLVM_LIBS})
    endif()
 
-   target_include_directories(psizam-llvm PUBLIC ${LLVM_INCLUDE_DIRS})
-   target_compile_definitions(psizam-llvm PUBLIC PSIZAM_ENABLE_LLVM_BACKEND)
+   # ── Per-arch LLVM compile targets ──────────────────────────────────────────
+   # Each produces a STATIC library with AOT compilation for one architecture.
+   set(_LLVM_AOT_SOURCES
+      src/llvm_ir_translator.cpp
+      src/llvm_aot_compiler.cpp
+   )
 
-   # LLVM requires consistent RTTI settings
-   if(NOT LLVM_ENABLE_RTTI)
-      target_compile_options(psizam-llvm PRIVATE -fno-rtti)
+   if("X86" IN_LIST PSIZAM_LLVM_TARGETS)
+      set(_LLVM_X86_COMPONENTS core support instcombine scalaropts object
+         x86codegen x86asmparser x86desc x86info)
+      llvm_map_components_to_libnames(_LLVM_X86_LIBS ${_LLVM_X86_COMPONENTS})
+
+      add_library(psizam-llvm-x86 STATIC ${_LLVM_AOT_SOURCES})
+      target_link_libraries(psizam-llvm-x86 PUBLIC psizam ${_LLVM_X86_LIBS})
+      target_include_directories(psizam-llvm-x86 PUBLIC ${LLVM_INCLUDE_DIRS})
+      target_compile_definitions(psizam-llvm-x86 PUBLIC PSIZAM_ENABLE_LLVM_BACKEND)
+      target_compile_definitions(psizam-llvm-x86 PRIVATE PSIZAM_LLVM_TARGET_X86)
+      if(NOT LLVM_ENABLE_RTTI)
+         target_compile_options(psizam-llvm-x86 PRIVATE -fno-rtti)
+      endif()
+   endif()
+
+   if("AArch64" IN_LIST PSIZAM_LLVM_TARGETS)
+      set(_LLVM_ARM_COMPONENTS core support instcombine scalaropts object
+         aarch64codegen aarch64asmparser aarch64desc aarch64info)
+      llvm_map_components_to_libnames(_LLVM_ARM_LIBS ${_LLVM_ARM_COMPONENTS})
+
+      add_library(psizam-llvm-arm STATIC ${_LLVM_AOT_SOURCES})
+      target_link_libraries(psizam-llvm-arm PUBLIC psizam ${_LLVM_ARM_LIBS})
+      target_include_directories(psizam-llvm-arm PUBLIC ${LLVM_INCLUDE_DIRS})
+      target_compile_definitions(psizam-llvm-arm PUBLIC PSIZAM_ENABLE_LLVM_BACKEND)
+      target_compile_definitions(psizam-llvm-arm PRIVATE PSIZAM_LLVM_TARGET_AARCH64)
+      if(NOT LLVM_ENABLE_RTTI)
+         target_compile_options(psizam-llvm-arm PRIVATE -fno-rtti)
+      endif()
+   endif()
+
+   # ── LLVM JIT runtime (native only) ────────────────────────────────────────
+   # ORC JIT compiler + llvm_compile entry point — only needed for native
+   # live-JIT, not for loading pre-compiled .pzam files.
+   if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
+      llvm_map_components_to_libnames(_LLVM_JIT_LIBS core support orcjit native)
+
+      add_library(psizam-llvm-jit STATIC
+         src/llvm_jit_compiler.cpp
+         src/llvm_compile.cpp
+      )
+      target_link_libraries(psizam-llvm-jit PUBLIC psizam psizam-exec ${_LLVM_JIT_LIBS})
+      target_include_directories(psizam-llvm-jit PUBLIC ${LLVM_INCLUDE_DIRS})
+      target_compile_definitions(psizam-llvm-jit PUBLIC PSIZAM_ENABLE_LLVM_BACKEND)
+      if(NOT LLVM_ENABLE_RTTI)
+         target_compile_options(psizam-llvm-jit PRIVATE -fno-rtti)
+      endif()
+   endif()
+
+   # ── psizam-llvm umbrella target ───────────────────────────────────────────
+   # Links all enabled LLVM compile targets + JIT for backward compatibility
+   # with existing consumers that just say target_link_libraries(... psizam-llvm).
+   add_library(psizam-llvm INTERFACE)
+   target_compile_definitions(psizam-llvm INTERFACE PSIZAM_ENABLE_LLVM_BACKEND)
+   if(TARGET psizam-llvm-x86)
+      target_link_libraries(psizam-llvm INTERFACE psizam-llvm-x86)
+   endif()
+   if(TARGET psizam-llvm-arm)
+      target_link_libraries(psizam-llvm INTERFACE psizam-llvm-arm)
+   endif()
+   if(TARGET psizam-llvm-jit)
+      target_link_libraries(psizam-llvm INTERFACE psizam-llvm-jit)
    endif()
 endif()
 

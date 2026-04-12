@@ -7,7 +7,7 @@
 
 #include <catch2/catch.hpp>
 
-#include <psizam/vector.hpp>
+#include <psizam/detail/vector.hpp>
 
 using namespace psizam;
 

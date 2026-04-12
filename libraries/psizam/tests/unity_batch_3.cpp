@@ -11,10 +11,10 @@
 #include <catch2/catch.hpp>
 #include <psizam/backend.hpp>
 #include <psizam/host_function.hpp>
-#include <psizam/variant.hpp>
-#include <psizam/leb128.hpp>
+#include <psizam/detail/variant.hpp>
+#include <psizam/detail/leb128.hpp>
 #include <psizam/types.hpp>
-#include <psizam/vector.hpp>
+#include <psizam/detail/vector.hpp>
 #include "utils.hpp"
 
 namespace unity_variant_tests {

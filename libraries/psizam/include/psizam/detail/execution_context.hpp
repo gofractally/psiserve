@@ -1,0 +1,1472 @@
+#pragma once
+
+#include <psizam/allocator.hpp>
+#include <psizam/constants.hpp>
+#include <psizam/exceptions.hpp>
+#include <psizam/detail/execution_interface.hpp>
+#include <psizam/host_function.hpp>
+#include <psizam/host_function_table.hpp>
+#include <psizam/detail/opcodes.hpp>
+#include <psizam/detail/signals.hpp>
+#include <psizam/types.hpp>
+#include <psizam/utils.hpp>
+#include <psizam/detail/wasm_stack.hpp>
+
+#include <algorithm>
+#include <cassert>
+#include <signal.h>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
+#include <limits>
+#include <optional>
+#include <string_view>
+#include <system_error>
+#include <utility>
+
+#ifndef PSIZAM_COMPILE_ONLY
+// OSX requires _XOPEN_SOURCE to #include <ucontext.h>
+#ifdef __APPLE__
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
+#endif
+#include <ucontext.h>
+#endif
+
+namespace psizam {
+
+   // Forward declaration — implemented in llvm_runtime_helpers.cpp
+   using llvm_entry_fn_t = int64_t(*)(void*, void*, void*);
+   int64_t call_on_stack(void* stack_top, llvm_entry_fn_t fn,
+                         void* ctx, void* mem, void* args,
+                         std::exception_ptr* exc_out);
+
+   struct null_host_functions {
+      template<typename... A>
+      void operator()(A&&...) const {
+         PSIZAM_ASSERT(false, wasm_interpreter_exception,
+                       "Should never get here because it's impossible to link a module "
+                       "that imports any host functions, when no host functions are available");
+      }
+   };
+
+   namespace detail {
+      template <typename HostFunctions>
+      struct host_type {
+         using type = typename HostFunctions::host_type_t;
+      };
+      template <>
+      struct host_type<std::nullptr_t> {
+         using type = std::nullptr_t;
+      };
+
+      template <typename HF>
+      using host_type_t = typename host_type<HF>::type;
+
+      template <typename HostFunctions>
+      struct type_converter {
+         using type = typename HostFunctions::type_converter_t;
+      };
+      template <>
+      struct type_converter<std::nullptr_t> {
+         using type = psizam::type_converter<std::nullptr_t, psizam::execution_interface>;
+      };
+
+      template <typename HF>
+      using type_converter_t = typename type_converter<HF>::type;
+
+      template <typename HostFunctions>
+      struct host_invoker {
+         using type = HostFunctions;
+      };
+      template <>
+      struct host_invoker<std::nullptr_t> {
+         using type = null_host_functions;
+      };
+      template <typename HF>
+      using host_invoker_t = typename host_invoker<HF>::type;
+   }
+
+   template<typename T>
+   struct local {
+      local(T& loc) : location(&loc), value(loc) {}
+      ~local() { *location = std::move(value); }
+      T* location;
+      T value;
+   };
+
+   //
+   struct stack_manager {
+      static constexpr std::size_t default_stack_size = 4*1024*1024;
+      static constexpr std::size_t untracked_stack_size = 4*1024*1024;
+      // refers to the current stack
+      stack_manager() = default;
+      decltype(auto) execute(std::size_t sz, auto f)
+      {
+         local saved{*this};
+         auto p = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+         if (base == 0 && size == 0)
+         {
+            base = p - default_stack_size;
+            size = default_stack_size;
+         }
+
+         std::size_t available_stack = (p >= base && p <= base + size) ? p - base : 0;
+         stack_allocator alt_stack{sz, available_stack};
+         if (alt_stack.top())
+         {
+            size = sz;
+            base = reinterpret_cast<std::uintptr_t>(alt_stack.top()) - sz;
+         }
+         return f(alt_stack);
+      }
+      std::uintptr_t base = 0;
+      std::size_t size = 0;
+   };
+
+   template<typename Derived, bool IsJit>
+   class execution_context_base {
+    public:
+      Derived& derived() { return static_cast<Derived&>(*this); }
+      auto& resolve_module() {
+         return *_mod;
+      }
+      execution_context_base() {}
+      execution_context_base(module* m) : _mod(m) {}
+
+      inline void initialize_globals() {
+         return initialize_globals_impl(*_mod);
+      }
+
+      template<typename Module>
+      inline void initialize_globals_impl(const Module& mod) {
+         PSIZAM_ASSERT(_globals.empty(), wasm_memory_exception, "initialize_globals called on non-empty _globals");
+         _globals.reserve(mod.globals.size());
+         for (uint32_t i = 0; i < mod.globals.size(); i++) {
+            init_expr evaluated;
+            evaluated.value = mod.globals[i].init.evaluate(_globals);
+            evaluated.opcode = mod.globals[i].init.opcode;
+            _globals.emplace_back(evaluated);
+         }
+      }
+
+      inline int32_t grow_linear_memory(int32_t pages) {
+         return grow_linear_memory_impl(*_mod, pages);
+      }
+
+      template<typename Module>
+      inline int32_t grow_linear_memory_impl(const Module& mod, int32_t pages) {
+         const int32_t sz = _wasm_alloc->get_current_page();
+         if (pages < 0) {
+            if (sz + pages < 0)
+               return -1;
+            _wasm_alloc->free<char>(-pages);
+         } else {
+            if (!mod.memories.size() || _max_pages - sz < static_cast<uint32_t>(pages) ||
+                (mod.memories[0].limits.flags && (static_cast<int32_t>(mod.memories[0].limits.maximum) - sz < pages)))
+               return -1;
+            _wasm_alloc->alloc<char>(pages);
+         }
+         return sz;
+      }
+
+      inline int32_t current_linear_memory() const { return _wasm_alloc->get_current_page(); }
+      inline void    exit(std::error_code err = std::error_code()) {
+         // FIXME: system_error?
+         _error_code = err;
+         PSIZAM_THROW(wasm_exit_exception, "Exiting");
+      }
+
+      inline void        set_module(module* mod) {
+         _mod = mod;
+         _alt_table.reset();
+      }
+      inline module&     get_module() { return *_mod; }
+      inline void        set_wasm_allocator(wasm_allocator* alloc) { _wasm_alloc = alloc; }
+      inline auto        get_wasm_allocator() { return _wasm_alloc; }
+      inline char*       linear_memory() { return _linear_memory; }
+      inline auto&       get_operand_stack() { return _os; }
+      inline const auto& get_operand_stack() const { return _os; }
+      inline auto        get_interface() { return execution_interface{ _linear_memory, &_os }; }
+      void               set_max_pages(std::uint32_t max_pages) { _max_pages = std::min(max_pages, static_cast<std::uint32_t>(psizam::max_pages)); }
+
+      inline std::error_code get_error_code() const { return _error_code; }
+
+      // ── LLVM runtime helper accessors ──
+      inline init_expr& get_global(uint32_t idx) { return _globals[idx]; }
+      inline const init_expr& get_global(uint32_t idx) const { return _globals[idx]; }
+      inline host_function_table* get_host_table() const { return _table; }
+      inline void set_host_table(host_function_table* table) { _table = table; }
+      inline std::vector<bool>&  get_dropped_elems() { return _dropped_elems; }
+      inline std::vector<bool>&  get_dropped_data()  { return _dropped_data; }
+
+      template<typename Module>
+      inline void reset(Module& mod) {
+         PSIZAM_ASSERT(_mod->error == nullptr, wasm_interpreter_exception, _mod->error);
+
+         // Reset the capacity of underlying memory used by operand stack if it is
+         // greater than initial_stack_size
+         _os.reset_capacity();
+
+         _linear_memory = _wasm_alloc->get_base_ptr<char>();
+         if(mod.memories.size()) {
+            PSIZAM_ASSERT(mod.memories[0].limits.initial <= _max_pages, wasm_bad_alloc, "Cannot allocate initial linear memory.");
+            _wasm_alloc->reset(mod.memories[0].limits.initial);
+         } else
+            _wasm_alloc->reset();
+
+         // Spec order: globals first (data/elem offsets may reference them via global.get)
+         _globals.clear();
+         _globals.reserve(mod.globals.size());
+         for (uint32_t i = 0; i < mod.globals.size(); i++) {
+            auto& gv = mod.globals[i];
+            init_expr evaluated;
+            evaluated.value = gv.init.evaluate(_globals);
+            evaluated.opcode = gv.init.opcode;
+            _globals.emplace_back(evaluated);
+         }
+         // Write a pointer to the globals into the context page
+         auto* globals_start = _globals.data();
+         char* globals_location = _linear_memory + wasm_allocator::globals_end();
+         std::memcpy(globals_location - sizeof(globals_start), &globals_start, sizeof(globals_start));
+
+         _dropped_data.assign(mod.data.size(), false);
+         for (uint32_t i = 0; i < mod.data.size(); i++) {
+            auto& data_seg = mod.data[i];
+            if (!data_seg.passive) {
+               uint32_t offset = data_seg.offset.evaluate(_globals).i32;
+               assert(!mod.memories.empty() && "Validation should ensure that an active data segment has a valid memory");
+               auto available_memory =  mod.memories[0].limits.initial * static_cast<uint64_t>(page_size);
+               auto required_memory = static_cast<uint64_t>(offset) + data_seg.data.size();
+               PSIZAM_ASSERT(required_memory <= available_memory, wasm_memory_exception, "data out of range");
+               auto addr = _linear_memory + offset;
+               if(data_seg.data.size())
+                  memcpy((char*)(addr), data_seg.data.data(), data_seg.data.size());
+               _dropped_data[i] = true;
+            }
+         }
+
+         // reset tables (multi-table support)
+         _extra_tables.clear();
+         _table_data.resize(mod.tables.size());
+         _table_sizes.resize(mod.tables.size());
+         for (uint32_t t = 0; t < mod.tables.size(); ++t) {
+            uint32_t tsize = mod.tables[t].limits.initial;
+            _table_sizes[t] = tsize;
+            if (t == 0) {
+               // Table 0 uses the guard-paged prefix area (backward compat with JIT)
+               char* table_location = _linear_memory + wasm_allocator::table_offset();
+               table_entry* table_start;
+               if (_mod->indirect_table(0)) {
+                  _alt_table.reset(new table_entry[tsize]);
+                  table_start = _alt_table.get();
+                  std::memcpy(table_location, &table_start, sizeof(table_start));
+               } else {
+                  _alt_table.reset();
+                  table_start = new (table_location) table_entry[tsize];
+               }
+               std::memset(table_start, 0xff, tsize * sizeof(table_entry));
+               _table_data[0] = table_start;
+            } else {
+               // Additional tables use heap allocation
+               _extra_tables.emplace_back(std::make_unique<table_entry[]>(tsize));
+               auto* table_start = _extra_tables.back().get();
+               std::memset(table_start, 0xff, tsize * sizeof(table_entry));
+               _table_data[t] = table_start;
+            }
+         }
+         if (mod.tables.size() != 0) {
+            _dropped_elems.assign(mod.elements.size(), false);
+            for (uint32_t i = 0; i < mod.elements.size(); ++i) {
+               auto& elem_seg = mod.elements[i];
+               if (elem_seg.mode == elem_mode::passive) {
+               } else if (elem_seg.mode == elem_mode::declarative) {
+                  _dropped_elems[i] = true;
+               } else {
+                  uint32_t tidx = elem_seg.index;
+                  PSIZAM_ASSERT(tidx < mod.tables.size(), wasm_memory_exception, "elem segment table index out of range");
+                  uint32_t offset = elem_seg.offset.evaluate(_globals).i32;
+                  PSIZAM_ASSERT(static_cast<std::uint64_t>(offset) + elem_seg.elems.size() <= _table_sizes[tidx], wasm_memory_exception, "elem out of range");
+                  if (elem_seg.elems.size())
+                     std::memcpy(_table_data[tidx] + offset, elem_seg.elems.data(), elem_seg.elems.size() * sizeof(table_entry));
+                  _dropped_elems[i] = true;
+               }
+            }
+         }
+      }
+
+      void init_linear_memory(uint32_t x, uint32_t d, uint32_t s, uint32_t n) {
+         auto& mod = resolve_module();
+         assert(x < mod.data.size());
+         const auto& data_seg = mod.data[x];
+         auto data_len = _dropped_data[x]? 0 : data_seg.data.size();
+         if (std::uint64_t{s} + n > data_len)
+            signal_throw<wasm_memory_exception>("data out of range");
+         void* dest = get_interface().template validate_pointer<unsigned char>(d, n);
+         if (data_len)
+            std::memcpy(dest, data_seg.data.data() + s, n);
+      }
+
+      void drop_data(uint32_t x) {
+         auto& mod = resolve_module();
+         assert(x < mod.data.size());
+         auto& data_seg = mod.data[x];
+         _dropped_data[x] = true;
+      }
+
+      table_entry* get_table_base(uint32_t table_idx = 0) {
+         if (table_idx == 0) {
+            if (_mod->indirect_table(0)) {
+               return (*reinterpret_cast<table_entry**>(linear_memory() + wasm_allocator::table_offset()));
+            } else {
+               return reinterpret_cast<table_entry*>(linear_memory() + wasm_allocator::table_offset());
+            }
+         }
+         return _table_data[table_idx];
+      }
+
+      uint32_t get_table_size(uint32_t table_idx) const {
+         return _table_sizes[table_idx];
+      }
+
+      inline uint32_t table_elem(uint32_t i, uint32_t table_idx = 0) {
+         PSIZAM_ASSERT(i < _table_sizes[table_idx], wasm_interpreter_exception, "table index out of range");
+         return get_table_base(table_idx)[i].index;
+      }
+
+      void init_table(uint32_t x, uint32_t d, uint32_t s, uint32_t n, uint32_t table_idx = 0) {
+         auto& mod = resolve_module();
+         assert(x < mod.elements.size());
+         const auto& elem_seg = mod.elements[x];
+         auto elem_len = _dropped_elems[x]? 0 : elem_seg.elems.size();
+         if (std::uint64_t{s} + n > elem_len)
+            signal_throw<wasm_memory_exception>("elem out of range");
+         if (std::uint64_t{d} + n > _table_sizes[table_idx])
+            signal_throw<wasm_memory_exception>("wasm memory out-of-bounds");
+         if (elem_len)
+            std::memcpy(get_table_base(table_idx) + d, elem_seg.elems.data() + s, n * sizeof(table_entry));
+      }
+
+      void drop_elem(uint32_t x) {
+         auto& mod = resolve_module();
+         assert(x < mod.elements.size());
+         _dropped_elems[x] = true;
+      }
+
+      table_entry* get_table_ptr(uint32_t base, uint32_t size, uint32_t table_idx = 0) {
+         if (std::uint64_t{base} + size > _table_sizes[table_idx])
+            signal_throw<wasm_memory_exception>("table out of range");
+         return get_table_base(table_idx) + base;
+      }
+
+      // table.grow: grows a table, returns previous size or -1 on failure
+      uint32_t table_grow(uint32_t table_idx, uint32_t delta, table_entry init_val) {
+         auto& mod = resolve_module();
+         uint32_t old_size = _table_sizes[table_idx];
+         uint64_t new_size = static_cast<uint64_t>(old_size) + delta;
+         uint32_t max_size = mod.tables[table_idx].limits.flags ?
+                             mod.tables[table_idx].limits.maximum : 0xFFFFFFFFu;
+         if (new_size > max_size) return static_cast<uint32_t>(-1);
+
+         auto new_data = std::make_unique<table_entry[]>(new_size);
+         std::memcpy(new_data.get(), _table_data[table_idx], old_size * sizeof(table_entry));
+         for (uint64_t i = old_size; i < new_size; ++i)
+            new_data[i] = init_val;
+
+         if (table_idx == 0) {
+            _alt_table = std::move(new_data);
+            _table_data[0] = _alt_table.get();
+            // Update the pointer in the prefix area for JIT compat
+            char* table_location = _linear_memory + wasm_allocator::table_offset();
+            table_entry* ptr = _alt_table.get();
+            std::memcpy(table_location, &ptr, sizeof(ptr));
+         } else {
+            // Find and replace the extra_tables entry
+            for (auto& et : _extra_tables) {
+               if (et.get() == _table_data[table_idx]) {
+                  et = std::move(new_data);
+                  _table_data[table_idx] = et.get();
+                  break;
+               }
+            }
+         }
+         _table_sizes[table_idx] = static_cast<uint32_t>(new_size);
+         return old_size;
+      }
+
+      // table.fill: fill n entries starting at i with value val
+      void table_fill(uint32_t table_idx, uint32_t i, table_entry val, uint32_t n) {
+         if (std::uint64_t{i} + n > _table_sizes[table_idx])
+            signal_throw<wasm_memory_exception>("table out of range");
+         auto* base = get_table_base(table_idx);
+         for (uint32_t j = 0; j < n; ++j)
+            base[i + j] = val;
+      }
+
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, const std::string_view func,
+                                               Args&&... args) {
+         uint32_t func_index = _mod->get_exported_function(func);
+         return derived().template execute<TC>(host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
+      }
+
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(stack_manager& alt_stack, void* host, Visitor&& visitor, const std::string_view func,
+                                               Args... args) {
+         uint32_t func_index = _mod->get_exported_function(func);
+         return derived().template execute<TC>(alt_stack, host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
+      }
+
+      /// Execute a function by its indirect table index (resolves table entry → function index).
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute_func_table(void* host, Visitor&& visitor, uint32_t table_index,
+                                                                  Args&&... args) {
+         return derived().template execute<TC>(host, std::forward<Visitor>(visitor), table_elem(table_index), std::forward<Args>(args)...);
+      }
+
+      template <typename Visitor, typename... Args>
+      inline void execute_start(void* host, Visitor&& visitor) {
+         if (_mod->start != std::numeric_limits<uint32_t>::max())
+            derived().execute(host, std::forward<Visitor>(visitor), _mod->start);
+      }
+
+      template <typename Visitor, typename... Args>
+      inline void execute_start(stack_manager& alt_stack, void* host, Visitor&& visitor) {
+         if (_mod->start != std::numeric_limits<uint32_t>::max())
+            derived().execute(alt_stack, host, std::forward<Visitor>(visitor), _mod->start);
+      }
+
+      /// Create a sibling execution context that shares this context's linear memory,
+      /// module, and host function table, but has its own stacks and globals.
+      /// Used for fiber spawning — each fiber gets an independent execution context
+      /// pointing to the same WASM heap.
+      std::unique_ptr<Derived> create_fiber_context() {
+         auto ctx = std::make_unique<Derived>();
+         // Share module, allocator, linear memory, and host function table
+         ctx->_mod           = _mod;
+         ctx->set_wasm_allocator(_wasm_alloc);
+         ctx->_linear_memory = _linear_memory;
+         ctx->_max_pages     = _max_pages;
+         ctx->_table         = _table;
+         // Share function tables (read-only after init)
+         ctx->_table_data    = _table_data;
+         ctx->_table_sizes   = _table_sizes;
+         // Clone globals (each fiber needs its own __stack_pointer)
+         ctx->_globals       = _globals;
+         // Clone dropped state
+         ctx->_dropped_elems = _dropped_elems;
+         ctx->_dropped_data  = _dropped_data;
+         // Set call depth limit via derived accessor
+         ctx->set_max_call_depth(derived().get_remaining_call_depth());
+         return ctx;
+      }
+
+    protected:
+
+      template<typename TC = type_converter<standalone_function_t>, typename Func_type, typename... Args>
+      static void type_check_args(const Func_type& ft, Args&&...) {
+         PSIZAM_ASSERT(sizeof...(Args) == ft.param_types.size(), wasm_interpreter_exception, "wrong number of arguments");
+         uint32_t i = 0;
+         PSIZAM_ASSERT((... && (to_wasm_type_v<TC, std::decay_t<Args>> == ft.param_types.at(i++))), wasm_interpreter_exception, "unexpected argument type");
+      }
+
+      static void handle_signal(int sig) {
+         switch(sig) {
+          case SIGSEGV:
+          case SIGBUS:
+          case SIGFPE:
+            break;
+          default:
+            /* TODO fix this */
+            assert(!"??????");
+         }
+         PSIZAM_THROW(wasm_memory_exception, "wasm memory out-of-bounds");
+      }
+
+      char*                           _linear_memory    = nullptr;
+      module*                         _mod = nullptr;
+      wasm_allocator*                 _wasm_alloc;
+      uint32_t                        _max_pages = max_pages;
+      host_function_table*            _table = nullptr;
+      std::error_code                 _error_code;
+      operand_stack                   _os;
+      std::unique_ptr<table_entry[]>  _alt_table;
+      std::vector<std::unique_ptr<table_entry[]>> _extra_tables;
+      std::vector<table_entry*>       _table_data;
+      std::vector<uint32_t>           _table_sizes;
+      std::vector<init_expr>          _globals;
+      std::vector<bool>               _dropped_elems;
+      std::vector<bool>               _dropped_data;
+   };
+
+   struct jit_visitor { template<typename T> jit_visitor(T&&) {} };
+
+   class null_execution_context : public execution_context_base<null_execution_context, false> {
+      using base_type = execution_context_base<null_execution_context, false>;
+   public:
+      null_execution_context() {}
+      null_execution_context(module& m, std::uint32_t max_call_depth) : base_type(&m) {}
+   };
+
+   // Unified layout: always include backtrace fields so JIT code generators
+   // can use fixed offsets regardless of EnableBacktrace setting.
+   template<bool EnableBacktrace>
+   struct frame_info_holder {
+      void* volatile _bottom_frame = nullptr;    // offset 0
+      void* volatile _top_frame = nullptr;       // offset 8
+      uint32_t _remaining_call_depth;             // offset 16
+      uint32_t _multi_return_count = 0;           // offset 20: number of return values stored
+      native_value _multi_return[16] = {};        // offset 24: buffer for multi-value returns (up to 16 values)
+   };
+
+   template<bool EnableBacktrace = false>
+   class jit_execution_context : public frame_info_holder<EnableBacktrace>, public execution_context_base<jit_execution_context<EnableBacktrace>, true> {
+      using base_type = execution_context_base<jit_execution_context<EnableBacktrace>, true>;
+   public:
+      using base_type::execute;
+      using base_type::base_type;
+      using base_type::_mod;
+      using base_type::_table;
+      using base_type::_error_code;
+      using base_type::handle_signal;
+      using base_type::get_operand_stack;
+      using base_type::linear_memory;
+      using base_type::get_interface;
+      using base_type::_globals;
+
+      jit_execution_context() {}
+
+      jit_execution_context(module& m, std::uint32_t max_call_depth) : base_type(&m) {
+         this->_remaining_call_depth = max_call_depth;
+      }
+
+      void set_max_call_depth(std::uint32_t max_call_depth) {
+         this->_remaining_call_depth = max_call_depth;
+      }
+
+      std::uint32_t get_remaining_call_depth() const { return this->_remaining_call_depth; }
+
+      inline native_value call_host_function(native_value* stack, uint32_t index) {
+         uint32_t mapped_index = _mod->import_functions[index];
+
+         // JIT passes args in reverse stack order: stack[0] = last param.
+         // Convert to forward order for the unified host_function_table.
+         const auto& ft = _mod->get_function_type(index);
+         uint32_t num_params = ft.param_types.size();
+         native_value fwd_args[num_params > 0 ? num_params : 1];
+         for (uint32_t i = 0; i < num_params; ++i) {
+            fwd_args[i] = stack[num_params - 1 - i];
+         }
+
+         return _table->call(_host, mapped_index, fwd_args, linear_memory());
+      }
+
+      inline void reset() {
+         base_type::reset(*_mod);
+         get_operand_stack().eat(0);
+      }
+
+      std::size_t get_maximum_stack_size()
+      {
+         if (_mod->stack_limit_is_bytes)
+         {
+            return this->_remaining_call_depth * 2;
+         }
+         else
+         {
+#ifdef __aarch64__
+            // aarch64 JIT uses 16-byte aligned slots (SP must be 16-byte aligned)
+            constexpr std::size_t slot_size = 16;
+#else
+            constexpr std::size_t slot_size = sizeof(native_value);
+#endif
+            return (_mod->maximum_stack + 2 /*frame ptr + return ptr*/) * (this->_remaining_call_depth + 1) * slot_size;
+         }
+      }
+
+      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      inline std::optional<operand_stack_elem> execute(void* host, jit_visitor vis, uint32_t func_index, Args&&... args)
+      {
+         stack_allocator alt_stack(get_maximum_stack_size());
+         return execute<TC>(alt_stack, host, vis, func_index, std::forward<Args>(args)...);
+      }
+      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      inline std::optional<operand_stack_elem> execute(stack_manager& alloc, void* host, jit_visitor vis, uint32_t func_index, Args&&... args)
+      {
+         return alloc.execute(get_maximum_stack_size(), [&](stack_allocator& alt_stack){
+            return execute<TC>(alt_stack, host, vis, func_index, std::forward<Args>(args)...);
+         });
+      }
+
+      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      inline std::optional<operand_stack_elem> execute(stack_allocator& alt_stack, void* host, jit_visitor, uint32_t func_index, Args... args) {
+         auto saved_host = _host;
+         auto saved_os_size = get_operand_stack().size();
+         auto g = scope_guard([&](){ _host = saved_host; get_operand_stack().eat(saved_os_size); });
+
+         _host = host;
+
+         const auto& ft = _mod->get_function_type(func_index);
+         this->template type_check_args<TC>(ft, std::forward<Args>(args)... ); // args not modified by type_check_args
+         native_value_extended result;
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-value"
+         // Calling execute() with no `args` (i.e. `execute(host_type,jit_visitor,uint32_t)`) results in a "statement has no
+         // effect [-Werror=unused-value]" warning on this line. Dissable warning.
+         constexpr std::size_t args_count = (0 + ... + (to_wasm_type_v<TC, Args> == types::v128 ? 2 : 1));
+         // Ensure at least 2 slots: LLVM entry wrapper stores v128 result (16 bytes) back into args_raw
+         constexpr std::size_t buf_count = args_count < 2 ? 2 : args_count;
+         native_value args_raw[buf_count];
+         {
+            native_value* p = args_raw;
+            ((append_arg<TC>(static_cast<Args&&>(args), p)), ...);
+         }
+#pragma GCC diagnostic pop
+
+         try {
+            if (func_index < _mod->get_imported_functions_size()) {
+               std::reverse(args_raw + 0, args_raw + args_count);
+               result.scalar = call_host_function(args_raw, func_index);
+            } else if (_mod->allocator._code_base == nullptr) {
+               // LLVM backend: jit_code_offset is an absolute address to an entry wrapper
+               // with signature: int64_t(*)(void* ctx, void* mem, native_value* args)
+               using llvm_entry_fn_t = int64_t(*)(void*, void*, native_value*);
+               auto entry = reinterpret_cast<llvm_entry_fn_t>(
+                  _mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset);
+               // Save call depth — LLVM code uses C++ exceptions for traps, which
+               // skip the generated depth_inc cleanup code during unwinding.
+               auto saved_call_depth = this->_remaining_call_depth;
+               auto depth_guard = scope_guard([&](){ this->_remaining_call_depth = saved_call_depth; });
+
+               // Register the stack guard page so the signal handler catches overflow
+               if (alt_stack.guard_base()) {
+                  stack_guard_range = std::span<std::byte>(
+                     static_cast<std::byte*>(alt_stack.guard_base()), alt_stack.guard_size());
+               }
+
+               psizam::invoke_with_signal_handler([&]() {
+                  if (alt_stack.top()) {
+                     // Execute on the dedicated stack — isolates WASM from host C stack
+                     std::exception_ptr exc;
+                     using stack_fn_t = int64_t(*)(void*, void*, void*);
+                     result.scalar.i64 = call_on_stack(
+                        alt_stack.top(), reinterpret_cast<stack_fn_t>(entry),
+                        this, base_type::linear_memory(), args_raw, &exc);
+                     if (exc) std::rethrow_exception(exc);
+                  } else {
+                     // No alternate stack allocated (fits in current stack) — call directly
+                     result.scalar.i64 = entry(this, base_type::linear_memory(), args_raw);
+                  }
+                  // For v128 returns, the entry wrapper stores the full v128 into args_raw
+                  // LLVM stores <2 x i64> as [elem0, elem1] in memory order.
+                  // v128_t is {low, high} so elem0 → low, elem1 → high.
+                  if (ft.return_type == types::v128) {
+                     result.vector.low  = args_raw[0].i64;
+                     result.vector.high = args_raw[1].i64;
+                  }
+               }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
+            } else {
+               // Native JIT path: use assembly trampoline at _code_base
+               void* stack = alt_stack.top();
+#ifdef __x86_64__
+               // reserve 24 bytes for data accessed by x86 trampoline
+               if(stack) {
+                  stack = static_cast<char*>(stack) - 24;
+               }
+#endif
+               auto fn = reinterpret_cast<native_value (*)(void*, void*)>(_mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset + _mod->allocator._code_base);
+
+               // Register the stack guard page so the signal handler catches overflow
+               if (alt_stack.guard_base()) {
+                  stack_guard_range = std::span<std::byte>(
+                     static_cast<std::byte*>(alt_stack.guard_base()), alt_stack.guard_size());
+               }
+
+               if constexpr(EnableBacktrace) {
+#ifndef PSIZAM_COMPILE_ONLY
+                  sigset_t block_mask;
+                  sigemptyset(&block_mask);
+                  sigaddset(&block_mask, SIGPROF);
+                  pthread_sigmask(SIG_BLOCK, &block_mask, nullptr);
+                  auto restore = scope_guard{[this, &block_mask] {
+                     this->_top_frame = nullptr;
+                     this->_bottom_frame = nullptr;
+                     pthread_sigmask(SIG_UNBLOCK, &block_mask, nullptr);
+                  }};
+
+                  psizam::invoke_with_signal_handler([&]() {
+                     result = execute<args_count>(args_raw, fn, this, base_type::linear_memory(), stack, ft.return_type);
+                  }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
+#endif
+               } else {
+                  psizam::invoke_with_signal_handler([&]() {
+                     result = execute<args_count>(args_raw, fn, this, base_type::linear_memory(), stack, ft.return_type);
+                  }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
+               }
+            }
+         } catch(wasm_exit_exception&) {
+            return {};
+         }
+
+         if(!ft.return_count)
+            return {};
+         else if (ft.return_count > 1) {
+            // Multi-value return: JIT backends store all values to _multi_return[]
+            auto& val = this->_multi_return[0];
+            switch (ft.return_type) {
+               case i32: return {i32_const_t{val.i32}};
+               case i64: return {i64_const_t{val.i64}};
+               case f32: return {f32_const_t{val.f32}};
+               case f64: return {f64_const_t{val.f64}};
+               default: assert(!"Unexpected multi-value return type");
+            }
+         }
+         else switch (ft.return_type) {
+            case i32: return {i32_const_t{result.scalar.i32}};
+            case i64: return {i64_const_t{result.scalar.i64}};
+            case f32: return {f32_const_t{result.scalar.f32}};
+            case f64: return {f64_const_t{result.scalar.f64}};
+            case v128: return {v128_const_t{result.vector}};
+            default: assert(!"Unexpected function return type");
+         }
+         __builtin_unreachable();
+      }
+
+#ifdef __x86_64__
+      int backtrace(void** out, int count, void* uc) const {
+         static_assert(EnableBacktrace);
+         void* end = this->_top_frame;
+         if(end == nullptr) return 0;
+         void* rbp;
+         int i = 0;
+         if(this->_bottom_frame) {
+            rbp = this->_bottom_frame;
+         } else if(count != 0) {
+            if(uc) {
+#ifdef __APPLE__
+               auto rip = reinterpret_cast<unsigned char*>(static_cast<ucontext_t*>(uc)->uc_mcontext->__ss.__rip);
+               rbp = reinterpret_cast<void*>(static_cast<ucontext_t*>(uc)->uc_mcontext->__ss.__rbp);
+               auto rsp = reinterpret_cast<void*>(static_cast<ucontext_t*>(uc)->uc_mcontext->__ss.__rsp);
+#elif defined __FreeBSD__
+               auto rip = reinterpret_cast<unsigned char*>(static_cast<ucontext_t*>(uc)->uc_mcontext.mc_rip);
+               rbp = reinterpret_cast<void*>(static_cast<ucontext_t*>(uc)->uc_mcontext.mc_rbp);
+               auto rsp = reinterpret_cast<void*>(static_cast<ucontext_t*>(uc)->uc_mcontext.mc_rsp);
+#else
+               auto rip = reinterpret_cast<unsigned char*>(static_cast<ucontext_t*>(uc)->uc_mcontext.gregs[REG_RIP]);
+               rbp = reinterpret_cast<void*>(static_cast<ucontext_t*>(uc)->uc_mcontext.gregs[REG_RBP]);
+               auto rsp = reinterpret_cast<void*>(static_cast<ucontext_t*>(uc)->uc_mcontext.gregs[REG_RSP]);
+#endif
+               out[i++] = rip;
+               // If we were interrupted in the function prologue or epilogue,
+               // avoid dropping the parent frame.
+               auto code_base = reinterpret_cast<const unsigned char*>(_mod->allocator.get_code_start());
+               auto code_end = code_base + _mod->allocator._code_size;
+               if(rip >= code_base && rip < code_end && count > 1) {
+                  // function prologue
+                  if(*reinterpret_cast<const unsigned char*>(rip) == 0x55) {
+                     if(rip != *static_cast<void**>(rsp)) { // Ignore fake frame set up for softfloat calls
+                        out[i++] = *static_cast<void**>(rsp);
+                     }
+                  } else if(rip[0] == 0x48 && rip[1] == 0x89 && (rip[2] == 0xe5 || rip[2] == 0x27)) {
+                     if((rip - 1) != static_cast<void**>(rsp)[1]) { // Ignore fake frame set up for softfloat calls
+                        out[i++] = static_cast<void**>(rsp)[1];
+                     }
+                  }
+                  // function epilogue
+                  else if(rip[0] == 0xc3) {
+                     out[i++] = *static_cast<void**>(rsp);
+                  }
+               }
+            } else {
+               rbp = __builtin_frame_address(0);
+            }
+         }
+         while(i < count) {
+            void* rip = static_cast<void**>(rbp)[1];
+            if(rbp == end) break;
+            out[i++] = rip;
+            rbp = *static_cast<void**>(rbp);
+         }
+         return i;
+      }
+
+#endif
+
+      static constexpr bool async_backtrace() { return EnableBacktrace; }
+
+      inline int32_t get_global_i32(uint32_t index) {
+         return _globals[index].value.i32;
+      }
+
+      inline int64_t get_global_i64(uint32_t index) {
+         return _globals[index].value.i64;
+      }
+
+      inline uint32_t get_global_f32(uint32_t index) {
+         return _globals[index].value.f32;
+      }
+
+      inline uint64_t get_global_f64(uint32_t index) {
+         return _globals[index].value.f64;
+      }
+
+      inline v128_t get_global_v128(uint32_t index) {
+         return _globals[index].value.v128;
+      }
+
+      inline void set_global_i32(uint32_t index, int32_t value) {
+         _globals[index].value.i32 = value;
+      }
+
+      inline void set_global_i64(uint32_t index, int64_t value) {
+         _globals[index].value.i64 = value;
+      }
+
+      inline void set_global_f32(uint32_t index, uint32_t value) {
+          _globals[index].value.f32 = value;
+      }
+
+      inline void set_global_f64(uint32_t index, uint64_t value) {
+         _globals[index].value.f64 = value;
+      }
+
+      inline void set_global_v128(uint32_t index, v128_t value) {
+         _globals[index].value.v128 = value;
+      }
+
+   protected:
+
+      template<typename TC = type_converter<standalone_function_t>, typename T>
+      void append_arg(T&& value, native_value*& out) {
+         auto tc = TC{nullptr, get_interface()};
+         auto transformed_value = detail::resolve_result(tc, static_cast<T&&>(value)).data;
+         if constexpr (std::is_same_v<decltype(transformed_value), v128_t>) {
+            out[0] = transformed_value.high;
+            out[1] = transformed_value.low;
+            out += 2;
+         } else {
+            static_assert(sizeof(transformed_value) <= 8);
+            // make sure that the garbage bits are always zero.
+            native_value result;
+            std::memset(out, 0, sizeof(*out));
+            std::memcpy(out, &transformed_value, sizeof(transformed_value));
+            ++out;
+         }
+      }
+
+      template<typename TC = type_converter<standalone_function_t>, typename T>
+      native_value transform_arg(T&& value) {
+         // make sure that the garbage bits are always zero.
+         native_value result;
+         std::memset(&result, 0, sizeof(result));
+         auto tc = TC{nullptr, get_interface()};
+         auto transformed_value = detail::resolve_result(tc, std::forward<T>(value)).data;
+         std::memcpy(&result, &transformed_value, sizeof(transformed_value));
+         return result;
+      }
+
+      using wasm_interface_function_type = native_value_extended(*)(jit_execution_context* context, void* linear_memory, native_value* data, native_value (*fun)(void*, void*), void* stack, uint64_t count, uint32_t vector_result);
+
+      wasm_interface_function_type get_execute() {
+         return reinterpret_cast<wasm_interface_function_type>(this->get_module().allocator._code_base);
+      }
+
+      template<int Count>
+      static native_value_extended execute(native_value* data, native_value (*fun)(void*, void*), jit_execution_context* context, void* linear_memory, void* stack, uint8_t result_type) {
+         static_assert(sizeof(native_value) == 8, "8-bytes expected for native_value");
+         return context->get_execute()(context, linear_memory, data, fun, stack, Count, result_type == types::v128);
+      }
+
+   public:
+      inline void* get_host_ptr() const { return _host; }
+   protected:
+      void* _host = nullptr;
+   };
+
+   class execution_context : public execution_context_base<execution_context, false> {
+      using base_type = execution_context_base<execution_context, false>;
+    public:
+      using base_type::_mod;
+      using base_type::_table;
+      using base_type::_error_code;
+      using base_type::handle_signal;
+      using base_type::get_operand_stack;
+      using base_type::linear_memory;
+      using base_type::get_interface;
+      using base_type::_globals;
+
+      execution_context()
+       : base_type(), _halt(exit_t{}) {}
+
+      execution_context(module& m, uint32_t max_call_depth)
+         : base_type(&m), _as{}, _halt(exit_t{}),
+         _remaining_call_depth{max_call_depth} {}
+
+      void set_max_call_depth(uint32_t max_call_depth) {
+         _remaining_call_depth = max_call_depth;
+      }
+
+      std::uint32_t get_remaining_call_depth() const { return _remaining_call_depth; }
+
+      inline void call(uint32_t index) {
+         // TODO validate index is valid
+         if (index < _mod->get_imported_functions_size()) {
+            // TODO validate only importing functions
+            const auto& ft = _mod->types[_mod->imports[index].type.func_t];
+            type_check(ft);
+            inc_pc();
+            std::uint32_t frame_size = _mod->get_function_stack_size(index);
+            PSIZAM_ASSERT (frame_size <= _remaining_call_depth, wasm_interpreter_exception, "stack overflow");
+            scope_guard g{[this, saved = _remaining_call_depth]{ _remaining_call_depth = saved; }};
+            _remaining_call_depth -= frame_size;
+            push_call( activation_frame{ nullptr, 0, frame_size } );
+            // Dispatch through host_function_table
+            {
+               uint32_t mapped_index = _mod->import_functions[index];
+               const auto& hf = _table->get_entry(mapped_index);
+               uint32_t num_params = hf.signature.params.size();
+               native_value args[num_params > 0 ? num_params : 1];
+               for (uint32_t i = num_params; i > 0; --i) {
+                  auto el = get_operand_stack().pop();
+                  switch(hf.signature.params[i - 1]) {
+                   case types::i32: args[i - 1] = native_value{(uint64_t)el.to_ui32()}; break;
+                   case types::i64: args[i - 1] = native_value{el.to_ui64()}; break;
+                   case types::f32: args[i - 1] = native_value{el.to_f32()}; break;
+                   case types::f64: args[i - 1] = native_value{el.to_f64()}; break;
+                   default: break;
+                  }
+               }
+               native_value result = _table->call(_state.host, mapped_index, args, linear_memory());
+               if (!hf.signature.ret.empty()) {
+                  switch(hf.signature.ret[0]) {
+                   case types::i32: push_operand(i32_const_t{result.i32}); break;
+                   case types::i64: push_operand(i64_const_t{result.i64}); break;
+                   case types::f32: push_operand(f32_const_t{result.f32}); break;
+                   case types::f64: push_operand(f64_const_t{result.f64}); break;
+                   default: break;
+                  }
+               }
+            }
+            pop_call();
+         } else {
+            // const auto& ft = _mod->types[_mod->functions[index - _mod->get_imported_functions_size()]];
+            // type_check(ft);
+            push_call(index);
+            setup_locals(index);
+            set_pc( _mod->get_function_pc(index) );
+         }
+      }
+
+      inline void tail_call(uint32_t new_index) {
+         // Undo current function's call depth reservation
+         auto& cur_frame = _as.peek();
+         _remaining_call_depth += cur_frame.frame_size;
+
+         if (new_index < _mod->get_imported_functions_size()) {
+            // Host function: can't truly tail-call; call host then return from current frame
+            const auto& ft = _mod->get_function_type(new_index);
+            uint32_t num_params = ft.param_types.size();
+            uint32_t mapped_index = _mod->import_functions[new_index];
+            const auto& hf = _table->get_entry(mapped_index);
+            native_value args[num_params > 0 ? num_params : 1];
+            for (uint32_t i = num_params; i > 0; --i) {
+               auto el = get_operand_stack().pop();
+               switch(hf.signature.params[i - 1]) {
+                case types::i32: args[i - 1] = native_value{(uint64_t)el.to_ui32()}; break;
+                case types::i64: args[i - 1] = native_value{el.to_ui64()}; break;
+                case types::f32: args[i - 1] = native_value{el.to_f32()}; break;
+                case types::f64: args[i - 1] = native_value{el.to_f64()}; break;
+                default: break;
+               }
+            }
+            // Clean up current function's remaining operands
+            eat_operands(_last_op_index);
+            native_value result = _table->call(_state.host, mapped_index, args, linear_memory());
+            if (!hf.signature.ret.empty()) {
+               switch(hf.signature.ret[0]) {
+                case types::i32: push_operand(i32_const_t{result.i32}); break;
+                case types::i64: push_operand(i64_const_t{result.i64}); break;
+                case types::f32: push_operand(f32_const_t{result.f32}); break;
+                case types::f64: push_operand(f64_const_t{result.f64}); break;
+                default: break;
+               }
+            }
+            // Return from the current (tail-calling) function
+            const auto& af = _as.pop();
+            _state.pc = af.pc;
+            _last_op_index = af.last_op_index;
+            // _remaining_call_depth already restored above via cur_frame.frame_size
+            return;
+         }
+
+         // WASM-to-WASM tail call: reuse the activation frame
+         const func_type& new_ft = _mod->get_function_type(new_index);
+         uint32_t new_param_count = new_ft.param_types.size();
+
+         // Check call depth for new function
+         uint32_t new_frame_size = _mod->get_function_stack_size(new_index);
+         PSIZAM_ASSERT(new_frame_size <= _remaining_call_depth, wasm_interpreter_exception, "stack overflow");
+         _remaining_call_depth -= new_frame_size;
+
+         // Save new function's arguments from stack top (pop in reverse)
+         operand_stack_elem saved_args[new_param_count > 0 ? new_param_count : 1];
+         for (uint32_t i = new_param_count; i > 0; --i)
+            saved_args[i-1] = pop_operand();
+
+         // Clear current function's operands (everything from _last_op_index)
+         eat_operands(_last_op_index);
+
+         // Push new function's arguments
+         for (uint32_t i = 0; i < new_param_count; ++i)
+            push_operand(std::move(saved_args[i]));
+
+         // Update _last_op_index for new function (don't pop/push activation frame)
+         _last_op_index = get_operand_stack().size() - new_param_count;
+
+         // Update frame_size in the existing activation frame
+         cur_frame.frame_size = new_frame_size;
+
+         // Setup locals for new function and jump
+         setup_locals(new_index);
+         set_pc(_mod->get_function_pc(new_index));
+      }
+
+      void print_stack() {
+         std::cout << "STACK { ";
+         for (int i = 0; i < get_operand_stack().size(); i++) {
+            std::cout << "(" << i << ")";
+            visit(overloaded { [&](i32_const_t el) { std::cout << "i32:" << el.data.ui << ", "; },
+                               [&](i64_const_t el) { std::cout << "i64:" << el.data.ui << ", "; },
+                               [&](f32_const_t el) { std::cout << "f32:" << el.data.f << ", "; },
+                               [&](f64_const_t el) { std::cout << "f64:" << el.data.f << ", "; },
+                               [&](v128_const_t) { std::cout << "v128, "; },
+                               [&](auto el) { std::cout << "(INDEX " << el.index() << "), "; } }, get_operand_stack().get(i));
+         }
+         std::cout << " }\n";
+      }
+
+      inline void           push_operand(operand_stack_elem el) { get_operand_stack().push(std::move(el)); }
+      inline operand_stack_elem get_operand(uint32_t index) const { return get_operand_stack().get(_last_op_index + index); }
+      inline void           eat_operands(uint32_t index) { get_operand_stack().eat(index); }
+      inline void           compact_operand(uint32_t index) { get_operand_stack().compact(index); }
+      inline void           compact_operand_n(uint32_t index, uint32_t n) { get_operand_stack().compact_n(index, n); }
+      inline void           set_operand(uint32_t index, const operand_stack_elem& el) { get_operand_stack().set(_last_op_index + index, el); }
+      inline uint32_t       current_operands_index() const { return get_operand_stack().current_index(); }
+      inline void           push_call(activation_frame&& el) { _as.push(std::move(el)); }
+      inline activation_frame pop_call() { return _as.pop(); }
+      inline uint32_t       call_depth()const { return _as.size(); }
+      template <bool Should_Exit=false>
+      inline void           push_call(uint32_t index) {
+         opcode* return_pc = static_cast<opcode*>(&_halt);
+         if constexpr (!Should_Exit)
+            return_pc = _state.pc + 1;
+
+         std::uint32_t frame_size = _mod->get_function_stack_size(index);
+         PSIZAM_ASSERT (frame_size <= _remaining_call_depth, wasm_interpreter_exception, "stack overflow");
+         _remaining_call_depth -= frame_size;
+
+         _as.push( activation_frame{ return_pc, _last_op_index, frame_size } );
+         _last_op_index = get_operand_stack().size() - _mod->get_function_type(index).param_types.size();
+      }
+
+      inline void apply_pop_call(uint32_t num_locals, uint16_t return_count, std::uint32_t /*frame_size*/) {
+         const auto& af = _as.pop();
+         _state.pc = af.pc;
+         _last_op_index = af.last_op_index;
+         if (return_count == 1)
+            compact_operand(get_operand_stack().size() - num_locals - 1);
+         else if (return_count > 1)
+            compact_operand_n(get_operand_stack().size() - num_locals - return_count, return_count);
+         else
+            eat_operands(get_operand_stack().size() - num_locals);
+         _remaining_call_depth += af.frame_size;
+      }
+      inline operand_stack_elem  pop_operand() { return get_operand_stack().pop(); }
+      inline operand_stack_elem& peek_operand(size_t i = 0) { return get_operand_stack().peek(i); }
+      inline operand_stack_elem  get_global(uint32_t index) {
+         PSIZAM_ASSERT(index < _mod->globals.size(), wasm_interpreter_exception, "global index out of range");
+         const auto& gl = _mod->globals[index];
+         switch (gl.type.content_type) {
+            case types::i32: return i32_const_t{ _globals[index].value.i32 };
+            case types::i64: return i64_const_t{ _globals[index].value.i64 };
+            case types::f32: return f32_const_t{ _globals[index].value.f32 };
+            case types::f64: return f64_const_t{ _globals[index].value.f64 };
+            case types::v128: return v128_const_t{ _globals[index].value.v128 };
+            default: PSIZAM_THROW(wasm_interpreter_exception, "invalid global type");
+         }
+      }
+
+      inline void set_global(uint32_t index, const operand_stack_elem& el) {
+         PSIZAM_ASSERT(index < _mod->globals.size(), wasm_interpreter_exception, "global index out of range");
+         auto& gl = _mod->globals[index];
+         PSIZAM_ASSERT(gl.type.mutability, wasm_interpreter_exception, "global is not mutable");
+         visit(overloaded{ [&](const i32_const_t& i) {
+                                  PSIZAM_ASSERT(gl.type.content_type == types::i32, wasm_interpreter_exception,
+                                                "expected i32 global type");
+                                  _globals[index].value.i32 = i.data.ui;
+                               },
+                                [&](const i64_const_t& i) {
+                                   PSIZAM_ASSERT(gl.type.content_type == types::i64, wasm_interpreter_exception,
+                                                 "expected i64 global type");
+                                   _globals[index].value.i64 = i.data.ui;
+                                },
+                                [&](const f32_const_t& f) {
+                                   PSIZAM_ASSERT(gl.type.content_type == types::f32, wasm_interpreter_exception,
+                                                 "expected f32 global type");
+                                   _globals[index].value.f32 = f.data.ui;
+                                },
+                                [&](const f64_const_t& f) {
+                                   PSIZAM_ASSERT(gl.type.content_type == types::f64, wasm_interpreter_exception,
+                                                 "expected f64 global type");
+                                   _globals[index].value.f64 = f.data.ui;
+                                },
+                                [&](const v128_const_t& v) {
+                                   PSIZAM_ASSERT(gl.type.content_type == types::v128, wasm_interpreter_exception,
+                                                 "expected v128 global type");
+                                   _globals[index].value.v128 = v.data;
+                                },
+                                [](auto) { PSIZAM_THROW(wasm_interpreter_exception, "invalid global type"); } },
+                    el);
+      }
+
+      inline bool is_true(const operand_stack_elem& el) {
+         bool ret_val = false;
+         visit(overloaded{ [&](const i32_const_t& i32) { ret_val = i32.data.ui; },
+                           [&](auto) { PSIZAM_THROW(wasm_invalid_element, "should be an i32 type"); } },
+                    el);
+         return ret_val;
+      }
+
+      inline void type_check(const func_type& ft) {
+         for (uint32_t i = 0; i < ft.param_types.size(); i++) {
+            const auto& op = peek_operand((ft.param_types.size() - 1) - i);
+            visit(overloaded{ [&](const i32_const_t&) {
+                                     PSIZAM_ASSERT(ft.param_types[i] == types::i32, wasm_interpreter_exception,
+                                                   "function param type mismatch");
+                                  },
+                                   [&](const f32_const_t&) {
+                                      PSIZAM_ASSERT(ft.param_types[i] == types::f32, wasm_interpreter_exception,
+                                                    "function param type mismatch");
+                                   },
+                                   [&](const i64_const_t&) {
+                                      PSIZAM_ASSERT(ft.param_types[i] == types::i64, wasm_interpreter_exception,
+                                                    "function param type mismatch");
+                                   },
+                                   [&](const f64_const_t&) {
+                                      PSIZAM_ASSERT(ft.param_types[i] == types::f64, wasm_interpreter_exception,
+                                                    "function param type mismatch");
+                                   },
+                                   [&](const v128_const_t&) {
+                                      PSIZAM_ASSERT(ft.param_types[i] == types::v128, wasm_interpreter_exception,
+                                                    "function param type mismatch");
+                                   },
+                                   [&](auto) { PSIZAM_THROW(wasm_interpreter_exception, "function param invalid type"); } },
+                       op);
+         }
+      }
+
+      inline opcode*  get_pc() const { return _state.pc; }
+      inline void     set_relative_pc(uint32_t pc_offset) {
+         _state.pc = _mod->code[0].code + pc_offset;
+      }
+      inline void     set_pc(opcode* pc) { _state.pc = pc; }
+      inline void     inc_pc(uint32_t offset=1) { _state.pc += offset; }
+      inline void     exit(std::error_code err = std::error_code()) {
+         _error_code = err;
+         _state.pc = &_halt;
+         _state.exiting = true;
+      }
+
+      inline void reset() {
+         base_type::reset(*_mod);
+         _state = execution_state{};
+         get_operand_stack().eat(_state.os_index);
+         _as.eat(_state.as_index);
+      }
+
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, const std::string_view func,
+                                                       Args&&... args) {
+         uint32_t func_index = _mod->get_exported_function(func);
+         return execute<TC>(host, std::forward<Visitor>(visitor), func_index, std::forward<Args>(args)...);
+      }
+
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(stack_manager&, void* host, Visitor&& visitor, const std::string_view func,
+                                                       Args... args) {
+         return execute<TC>(host, std::forward<Visitor>(visitor), func, std::forward<Args>(args)...);
+      }
+
+      template <typename Visitor, typename... Args>
+      inline void execute_start(void* host, Visitor&& visitor) {
+         if (_mod->start != std::numeric_limits<uint32_t>::max())
+            execute(host, std::forward<Visitor>(visitor), _mod->start);
+      }
+
+      template <typename Visitor>
+      inline void execute_start(stack_manager&, void* host, Visitor&& visitor) {
+         execute_start(host, std::forward<Visitor>(visitor));
+      }
+
+      template <typename TC = type_converter<standalone_function_t>, typename Visitor, typename... Args>
+      inline std::optional<operand_stack_elem> execute(void* host, Visitor&& visitor, uint32_t func_index, Args&&... args) {
+         PSIZAM_ASSERT(func_index < std::numeric_limits<uint32_t>::max(), wasm_interpreter_exception,
+                       "cannot execute function, function not found");
+
+         auto last_last_op_index = _last_op_index;
+         auto saved_call_depth   = _remaining_call_depth;
+
+         // save the state of the original calling context
+         execution_state saved_state = _state;
+
+         _state.host             = host;
+         _state.as_index         = _as.size();
+         _state.os_index         = get_operand_stack().size();
+
+         auto cleanup = scope_guard([&]() {
+            get_operand_stack().eat(_state.os_index);
+            _as.eat(_state.as_index);
+            _state = saved_state;
+
+            _last_op_index = last_last_op_index;
+
+            _remaining_call_depth = saved_call_depth;
+         });
+
+         this->template type_check_args<TC>(_mod->get_function_type(func_index), std::forward<Args>(args)...); // args not modified
+         push_args<TC>(std::forward<Args>(args)...);
+         push_call<true>(func_index);
+
+         if (func_index < _mod->get_imported_functions_size()) {
+            // Dispatch through host_function_table
+            {
+               uint32_t mapped_index = _mod->import_functions[func_index];
+               const auto& hf = _table->get_entry(mapped_index);
+               uint32_t num_params = hf.signature.params.size();
+               native_value hf_args[num_params > 0 ? num_params : 1];
+               for (uint32_t i = num_params; i > 0; --i) {
+                  auto el = pop_operand();
+                  switch(hf.signature.params[i - 1]) {
+                   case types::i32: hf_args[i - 1] = native_value{(uint64_t)el.to_ui32()}; break;
+                   case types::i64: hf_args[i - 1] = native_value{el.to_ui64()}; break;
+                   case types::f32: hf_args[i - 1] = native_value{el.to_f32()}; break;
+                   case types::f64: hf_args[i - 1] = native_value{el.to_f64()}; break;
+                   default: break;
+                  }
+               }
+               native_value result = _table->call(_state.host, mapped_index, hf_args, linear_memory());
+               if (!hf.signature.ret.empty()) {
+                  switch(hf.signature.ret[0]) {
+                   case types::i32: push_operand(i32_const_t{result.i32}); break;
+                   case types::i64: push_operand(i64_const_t{result.i64}); break;
+                   case types::f32: push_operand(f32_const_t{result.f32}); break;
+                   case types::f64: push_operand(f64_const_t{result.f64}); break;
+                   default: break;
+                  }
+               }
+            }
+         } else {
+            _state.pc = _mod->get_function_pc(func_index);
+            setup_locals(func_index);
+            psizam::invoke_with_signal_handler([&]() {
+               execute(std::forward<Visitor>(visitor));
+            }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
+         }
+
+         const auto& ret_ft = _mod->get_function_type(func_index);
+         if (ret_ft.return_count && !_state.exiting) {
+            // For multi-value returns, the first return value is deepest on stack.
+            // Peek at it before popping all values.
+            auto first = peek_operand(ret_ft.return_count - 1);
+            for (uint32_t i = 0; i < ret_ft.return_count; ++i)
+               pop_operand();
+            return first;
+         } else {
+            return {};
+         }
+      }
+
+      inline void jump(uint32_t pop_info, uint32_t new_pc) {
+         set_relative_pc(new_pc);
+         uint32_t depth_change = pop_info & 0x00FFFFFFu;
+         uint32_t result_count = pop_info >> 24;
+         if (result_count == 1) {
+            const auto& op = pop_operand();
+            eat_operands(get_operand_stack().size() - (depth_change - 1));
+            push_operand(op);
+         } else if (result_count > 1) {
+            // Multi-value: save N results, unwind stack, push results back
+            operand_stack_elem results[256];
+            for (uint32_t i = 0; i < result_count; i++)
+               results[i] = pop_operand();
+            eat_operands(get_operand_stack().size() - (depth_change - result_count));
+            // Push back in reverse order (first result on bottom)
+            for (int i = static_cast<int>(result_count) - 1; i >= 0; --i)
+               push_operand(results[i]);
+         } else {
+            eat_operands(get_operand_stack().size() - depth_change);
+         }
+      }
+
+      // This isn't async-signal-safe.  Cross fingers and hope for the best.
+      // It's only used for profiling.
+      int backtrace(void** data, int limit, void* uc) const {
+         int out = 0;
+         if(limit != 0) {
+            data[out++] = _state.pc;
+         }
+         for(int i = 0; out < limit && i < _as.size(); ++i) {
+            data[out++] = _as.get_back(i).pc;
+         }
+         return out;
+      }
+
+    private:
+
+      template <typename TC = type_converter<standalone_function_t>, typename... Args>
+      void push_args(Args... args) {
+         auto tc = TC{ nullptr, get_interface() };
+         (void)tc;
+         (... , push_operand(detail::resolve_result(tc, std::forward<Args>(args))));
+      }
+
+      inline void setup_locals(uint32_t index) {
+         const auto& fn = _mod->code[index - _mod->get_imported_functions_size()];
+         for (uint32_t i = 0; i < fn.locals.size(); i++) {
+            for (uint32_t j = 0; j < fn.locals[i].count; j++)
+               switch (fn.locals[i].type) {
+                  case types::i32: push_operand(i32_const_t{ (uint32_t)0 }); break;
+                  case types::i64: push_operand(i64_const_t{ (uint64_t)0 }); break;
+                  case types::f32: push_operand(f32_const_t{ (uint32_t)0 }); break;
+                  case types::f64: push_operand(f64_const_t{ (uint64_t)0 }); break;
+                  case types::v128: push_operand(v128_const_t{ v128_t{} }); break;
+                  default: PSIZAM_THROW(wasm_interpreter_exception, "invalid function param type");
+               }
+         }
+      }
+
+#define CREATE_TABLE_ENTRY(NAME, CODE) &&ev_label_##NAME,
+#define CREATE_LABEL(NAME, CODE)                                                                                  \
+      ev_label_##NAME : std::forward<Visitor>(visitor)(ev_variant->template get<psizam::PSIZAM_OPCODE_T(NAME)>()); \
+      ev_variant = _state.pc; \
+      goto* dispatch_table[ev_variant->index()];
+#define CREATE_EXIT_LABEL(NAME, CODE) ev_label_##NAME : \
+      return;
+#define CREATE_EMPTY_LABEL(NAME, CODE) ev_label_##NAME :  \
+      PSIZAM_THROW(wasm_interpreter_exception, "empty operand");
+
+      template <typename Visitor>
+      void execute(Visitor&& visitor) {
+         static void* dispatch_table[] = {
+            PSIZAM_CONTROL_FLOW_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_BR_TABLE_OP(CREATE_TABLE_ENTRY)
+            PSIZAM_RETURN_OP(CREATE_TABLE_ENTRY)
+            PSIZAM_CALL_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_CALL_IMM_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_EH_CATCH_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_PARAMETRIC_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VARIABLE_ACCESS_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_MEMORY_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_I32_CONSTANT_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_I64_CONSTANT_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_F32_CONSTANT_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_F64_CONSTANT_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_COMPARISON_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_NUMERIC_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_CONVERSION_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_EXIT_OP(CREATE_TABLE_ENTRY)
+            PSIZAM_REF_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_EMPTY_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_DATA_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_EXT_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VEC_MEMORY_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VEC_LANE_MEMORY_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VEC_CONSTANT_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VEC_SHUFFLE_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VEC_LANE_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VEC_NUMERIC_OPS(CREATE_TABLE_ENTRY)
+            PSIZAM_VEC_RELAXED_OPS(CREATE_TABLE_ENTRY)
+            &&ev_label_atomic_op,
+            PSIZAM_ERROR_OPS(CREATE_TABLE_ENTRY)
+            &&__ev_last
+         };
+         static_assert(opcode::variant_size() + 1 == sizeof(dispatch_table)/sizeof(dispatch_table[0]));
+         auto* ev_variant = _state.pc;
+         goto *dispatch_table[ev_variant->index()];
+         while (1) {
+             PSIZAM_CONTROL_FLOW_OPS(CREATE_LABEL);
+             PSIZAM_BR_TABLE_OP(CREATE_LABEL);
+             PSIZAM_RETURN_OP(CREATE_LABEL);
+             PSIZAM_CALL_OPS(CREATE_LABEL);
+             PSIZAM_CALL_IMM_OPS(CREATE_LABEL);
+             PSIZAM_EH_CATCH_OPS(CREATE_LABEL);
+             PSIZAM_PARAMETRIC_OPS(CREATE_LABEL);
+             PSIZAM_VARIABLE_ACCESS_OPS(CREATE_LABEL);
+             PSIZAM_MEMORY_OPS(CREATE_LABEL);
+             PSIZAM_I32_CONSTANT_OPS(CREATE_LABEL);
+             PSIZAM_I64_CONSTANT_OPS(CREATE_LABEL);
+             PSIZAM_F32_CONSTANT_OPS(CREATE_LABEL);
+             PSIZAM_F64_CONSTANT_OPS(CREATE_LABEL);
+             PSIZAM_COMPARISON_OPS(CREATE_LABEL);
+             PSIZAM_NUMERIC_OPS(CREATE_LABEL);
+             PSIZAM_CONVERSION_OPS(CREATE_LABEL);
+             PSIZAM_EXIT_OP(CREATE_EXIT_LABEL);
+             PSIZAM_REF_OPS(CREATE_LABEL);
+             PSIZAM_EMPTY_OPS(CREATE_EMPTY_LABEL);
+             PSIZAM_DATA_OPS(CREATE_LABEL);
+             PSIZAM_EXT_OPS(CREATE_LABEL);
+             PSIZAM_VEC_MEMORY_OPS(CREATE_LABEL);
+             PSIZAM_VEC_LANE_MEMORY_OPS(CREATE_LABEL);
+             PSIZAM_VEC_CONSTANT_OPS(CREATE_LABEL);
+             PSIZAM_VEC_SHUFFLE_OPS(CREATE_LABEL);
+             PSIZAM_VEC_LANE_OPS(CREATE_LABEL);
+             PSIZAM_VEC_NUMERIC_OPS(CREATE_LABEL);
+             PSIZAM_VEC_RELAXED_OPS(CREATE_LABEL);
+             ev_label_atomic_op : std::forward<Visitor>(visitor)(ev_variant->template get<psizam::atomic_op_t>());
+             ev_variant = _state.pc;
+             goto* dispatch_table[ev_variant->index()];
+             PSIZAM_ERROR_OPS(CREATE_LABEL);
+             __ev_last:
+                PSIZAM_THROW(wasm_interpreter_exception, "should never reach here");
+         }
+      }
+
+#undef CREATE_EMPTY_LABEL
+#undef CREATE_LABEL
+#undef CREATE_TABLE_ENTRY
+
+      struct execution_state {
+         void*    host             = nullptr;
+         uint32_t as_index         = 0;
+         uint32_t os_index         = 0;
+         opcode*  pc               = nullptr;
+         bool     exiting          = false;
+      };
+
+      // Exception handler entry for WASM EH
+      struct eh_handler {
+         uint32_t tag_index;      // tag to catch (UINT32_MAX = catch_all)
+         uint32_t catch_pc;       // bitcode PC of catch handler
+         uint32_t operand_depth;  // operand stack depth to restore
+         uint32_t call_depth;     // call stack depth at try entry
+      };
+
+      // WASM exception payload
+      struct wasm_exception_t {
+         uint32_t tag_index = UINT32_MAX;
+         std::vector<uint64_t> values;  // payload values
+      };
+
+      execution_state _state;
+      uint32_t                        _last_op_index    = 0;
+      call_stack                      _as;
+      opcode                          _halt;
+      void*                           _host = nullptr;
+      uint32_t                        _remaining_call_depth;
+      std::vector<eh_handler>         _eh_stack;       // exception handler stack
+      std::vector<wasm_exception_t>   _eh_exn_stack;   // caught exception stack (for rethrow)
+   };
+} // namespace psizam

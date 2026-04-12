@@ -12,7 +12,7 @@
 #include <psizam/backend.hpp>
 #include "wasm_config.hpp"
 #include "utils.hpp"
-#include <psizam/guarded_ptr.hpp>
+#include <psizam/detail/guarded_ptr.hpp>
 
 namespace unity_host_functions_tests {
 #include "host_functions_tests.cpp"

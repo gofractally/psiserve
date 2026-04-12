@@ -7,7 +7,7 @@
 #include <catch2/catch.hpp>
 #include <psizam/backend.hpp>
 #include <psizam/psizam.hpp>
-#include <psizam/watchdog.hpp>
+#include <psizam/detail/watchdog.hpp>
 #include "utils.hpp"
 
 namespace unity_instantiation_tests {
