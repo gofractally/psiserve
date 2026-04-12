@@ -218,26 +218,59 @@ namespace psiber
 
             if (!any_alive)
             {
-               // Terminate daemon fibers — resume them so they throw
-               // shutdown_exception and cleanly exit their entry loop.
-               // Without this, Boost.Context's forced_unwind during
-               // destruction would crash (sched continuation is stale).
-               _interrupted = true;
-               bool any_remaining = false;
-               for (auto& f : _fibers)
+               // Reactor-bound schedulers stay alive until the reactor
+               // stops.  They may receive work via cross-thread post()
+               // or the reactor's ready-strand queue even with no
+               // current local fibers.  Fall through to the shutdown
+               // check / reactor pull / poll path.
+               if (_reactor)
                {
-                  if (f->state == FiberState::Parked ||
-                      f->state == FiberState::Blocked ||
-                      f->state == FiberState::Sleeping)
+                  if (_shutdownCheck && _shutdownCheck())
                   {
-                     f->state = FiberState::Ready;
-                     addToReadyQueue(f.get());
-                     any_remaining = true;
+                     // Reactor is stopping — terminate daemons and exit.
+                     _interrupted = true;
+                     bool any_remaining = false;
+                     for (auto& f : _fibers)
+                     {
+                        if (f->state == FiberState::Parked ||
+                            f->state == FiberState::Blocked ||
+                            f->state == FiberState::Sleeping)
+                        {
+                           f->state = FiberState::Ready;
+                           addToReadyQueue(f.get());
+                           any_remaining = true;
+                        }
+                     }
+                     if (any_remaining)
+                        continue;
+                     break;
                   }
+                  // Not stopping — skip shutdown, wait for work below.
                }
-               if (any_remaining)
-                  continue;  // resume daemons so they exit cleanly
-               break;
+               else
+               {
+                  // Standalone scheduler: no external work source.
+                  // Terminate daemon fibers — resume them so they throw
+                  // shutdown_exception and cleanly exit their entry loop.
+                  // Without this, Boost.Context's forced_unwind during
+                  // destruction would crash (sched continuation is stale).
+                  _interrupted = true;
+                  bool any_remaining = false;
+                  for (auto& f : _fibers)
+                  {
+                     if (f->state == FiberState::Parked ||
+                         f->state == FiberState::Blocked ||
+                         f->state == FiberState::Sleeping)
+                     {
+                        f->state = FiberState::Ready;
+                        addToReadyQueue(f.get());
+                        any_remaining = true;
+                     }
+                  }
+                  if (any_remaining)
+                     continue;  // resume daemons so they exit cleanly
+                  break;
+               }
             }
 
             if (_shutdownCheck && _shutdownCheck())

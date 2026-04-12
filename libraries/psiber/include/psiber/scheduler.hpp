@@ -337,10 +337,12 @@ namespace psiber
             _free_fibers.erase(it);
 
             fp->setEntry(std::forward<F>(entry));
-            fp->name       = name;
-            fp->state      = FiberState::Ready;
-            fp->priority   = 1;
-            fp->posted_num = _posted_counter++;
+            fp->name        = name;
+            fp->state       = FiberState::Ready;
+            fp->priority    = 1;
+            fp->posted_num  = _posted_counter++;
+            fp->home_sched  = this;
+            fp->home_strand = nullptr;  // clear stale strand affinity
             addToReadyQueue(fp);
             return;
          }

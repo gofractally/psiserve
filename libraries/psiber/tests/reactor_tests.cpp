@@ -14,6 +14,9 @@ using namespace psiber;
 TEST_CASE("reactor: post and pop single strand", "[reactor]")
 {
    reactor pool(2);
+   // Stop workers so they don't steal strands during raw queue tests
+   pool.stop();
+   pool.join();
 
    strand s;
    detail::Fiber f;
@@ -26,14 +29,14 @@ TEST_CASE("reactor: post and pop single strand", "[reactor]")
 
    // Queue should now be empty
    REQUIRE(pool.try_pop_strand() == nullptr);
-
-   pool.stop();
-   pool.join();
 }
 
 TEST_CASE("reactor: post multiple, pop all", "[reactor]")
 {
    reactor pool(2);
+   // Stop workers so they don't steal strands during raw queue tests
+   pool.stop();
+   pool.join();
 
    constexpr int N = 8;
    strand strands[N];
@@ -66,9 +69,6 @@ TEST_CASE("reactor: post multiple, pop all", "[reactor]")
       }
       REQUIRE(found);
    }
-
-   pool.stop();
-   pool.join();
 }
 
 TEST_CASE("reactor: pop from empty returns nullptr", "[reactor]")
@@ -85,6 +85,9 @@ TEST_CASE("reactor: pop from empty returns nullptr", "[reactor]")
 TEST_CASE("reactor: concurrent post and pop", "[reactor]")
 {
    reactor pool(2);
+   // Stop workers so they don't interfere with raw queue tests
+   pool.stop();
+   pool.join();
 
    constexpr int num_strands   = 64;
    constexpr int num_producers = 4;
@@ -134,9 +137,6 @@ TEST_CASE("reactor: concurrent post and pop", "[reactor]")
 
    REQUIRE(posted.load() == num_strands);
    REQUIRE(consumed.load() == num_strands);
-
-   pool.stop();
-   pool.join();
 }
 
 TEST_CASE("reactor: stop and join", "[reactor]")
@@ -164,6 +164,9 @@ TEST_CASE("reactor: num_threads accessor", "[reactor]")
 TEST_CASE("reactor: strand enqueue posts to reactor", "[reactor]")
 {
    reactor pool(2);
+   // Stop workers so they don't steal the strand before we can pop it
+   pool.stop();
+   pool.join();
 
    strand s(pool);
 
@@ -177,7 +180,4 @@ TEST_CASE("reactor: strand enqueue posts to reactor", "[reactor]")
    // The strand should be in the reactor's ready queue
    strand* popped = pool.try_pop_strand();
    REQUIRE(popped == &s);
-
-   pool.stop();
-   pool.join();
 }

@@ -5,6 +5,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -255,4 +257,405 @@ TEST_CASE("reactor integration: reactor-bound strand release returns next fiber"
 
    pool.stop();
    pool.join();
+}
+
+// ── Stress tests ─────────────────────────────────────────────────────────
+
+TEST_CASE("reactor stress: many strands many fibers", "[reactor-stress]")
+{
+   // N strands, M fibers per strand, W workers.
+   // Verifies serialization holds and all fibers complete.
+   constexpr int W = 4;
+   constexpr int N = 8;
+   constexpr int M = 16;
+
+   reactor pool(W);
+
+   std::atomic<int> total_completed{0};
+
+   // Per-strand concurrency tracking
+   struct StrandState
+   {
+      std::atomic<int> concurrent{0};
+      std::atomic<int> max_concurrent{0};
+      std::atomic<int> completed{0};
+   };
+   std::vector<StrandState> states(N);
+   std::vector<std::unique_ptr<strand>> strands;
+   for (int i = 0; i < N; ++i)
+      strands.push_back(std::make_unique<strand>(pool));
+
+   for (int i = 0; i < N; ++i)
+   {
+      for (int j = 0; j < M; ++j)
+      {
+         auto& sched = pool.scheduler((i * M + j) % pool.num_threads());
+         int si = i;
+         sched.post([&, si]() noexcept {
+            strands[si]->post([&, si]() {
+               auto& st = states[si];
+               int cur = st.concurrent.fetch_add(1, std::memory_order_relaxed) + 1;
+               int old_max = st.max_concurrent.load(std::memory_order_relaxed);
+               while (cur > old_max &&
+                      !st.max_concurrent.compare_exchange_weak(old_max, cur))
+                  ;
+
+               // Yield mid-task to give other fibers a chance to violate serialization
+               Scheduler::current()->yieldCurrentFiber();
+
+               st.concurrent.fetch_sub(1, std::memory_order_relaxed);
+               st.completed.fetch_add(1, std::memory_order_relaxed);
+               total_completed.fetch_add(1, std::memory_order_relaxed);
+            });
+         });
+      }
+   }
+
+   // Wait with timeout
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+   while (total_completed.load() < N * M &&
+          std::chrono::steady_clock::now() < deadline)
+   {
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+   }
+
+   pool.stop();
+   pool.join();
+
+   REQUIRE(total_completed.load() == N * M);
+   for (int i = 0; i < N; ++i)
+   {
+      INFO("strand " << i << " max_concurrent=" << states[i].max_concurrent.load());
+      REQUIRE(states[i].max_concurrent.load() == 1);
+      REQUIRE(states[i].completed.load() == M);
+   }
+}
+
+TEST_CASE("reactor stress: single worker with strand", "[reactor-stress]")
+{
+   // Edge case: single worker, strand must serialize locally
+   reactor pool(1);
+   strand s(pool);
+
+   constexpr int N = 8;
+   std::atomic<int> completed{0};
+   std::atomic<int> concurrent{0};
+   std::atomic<int> max_concurrent{0};
+
+   pool.scheduler(0).post([&]() noexcept {
+      for (int i = 0; i < N; ++i)
+      {
+         s.post([&]() {
+            int cur = concurrent.fetch_add(1) + 1;
+            int old_max = max_concurrent.load();
+            while (cur > old_max && !max_concurrent.compare_exchange_weak(old_max, cur))
+               ;
+
+            Scheduler::current()->yieldCurrentFiber();
+
+            concurrent.fetch_sub(1);
+            completed.fetch_add(1);
+         });
+      }
+   });
+
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+   while (completed.load() < N &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+
+   pool.stop();
+   pool.join();
+
+   REQUIRE(completed.load() == N);
+   REQUIRE(max_concurrent.load() == 1);
+}
+
+TEST_CASE("reactor stress: strand fibers sleep without releasing strand", "[reactor-stress]")
+{
+   // A strand fiber that sleeps stays "active" — the strand is NOT released.
+   // Verify the next fiber waits until the sleep completes.
+   reactor pool(2);
+   strand s(pool);
+
+   std::atomic<int> order_counter{0};
+   int first_order = -1;
+   int second_order = -1;
+
+   pool.scheduler(0).post([&]() noexcept {
+      s.post([&]() {
+         // First fiber: sleep briefly, then record order
+         Scheduler::current()->sleep(std::chrono::milliseconds{50});
+         first_order = order_counter.fetch_add(1);
+      });
+      s.post([&]() {
+         // Second fiber: should run AFTER first completes
+         second_order = order_counter.fetch_add(1);
+      });
+   });
+
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+   while (order_counter.load() < 2 &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+
+   pool.stop();
+   pool.join();
+
+   REQUIRE(order_counter.load() == 2);
+   REQUIRE(first_order == 0);
+   REQUIRE(second_order == 1);
+}
+
+TEST_CASE("reactor stress: pooled fiber reuse clears strand affinity", "[reactor-stress]")
+{
+   // Verify that a recycled fiber with home_strand set does NOT
+   // pollute the next fiber that reuses it.
+   reactor pool(2);
+   strand s(pool);
+
+   std::atomic<bool> strand_fiber_done{false};
+   std::atomic<bool> plain_fiber_done{false};
+   detail::Fiber* strand_fiber_ptr = nullptr;
+   detail::Fiber* reused_fiber_ptr = nullptr;
+
+   // Phase 1: spawn a strand fiber, let it complete
+   pool.scheduler(0).post([&]() noexcept {
+      s.post([&]() {
+         strand_fiber_ptr = Scheduler::current()->currentFiber();
+         // This fiber has home_strand set
+      });
+   });
+
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+   while (!strand_fiber_ptr &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{5});
+
+   // Give time for the fiber to finish and enter the pool
+   std::this_thread::sleep_for(std::chrono::milliseconds{50});
+
+   // Phase 2: spawn a plain fiber (no strand) — it might reuse the pooled fiber
+   pool.scheduler(0).post([&]() noexcept {
+      Scheduler::current()->spawnFiber([&]() {
+         auto* me = Scheduler::current()->currentFiber();
+         reused_fiber_ptr = me;
+         // If this is the same fiber as strand_fiber_ptr,
+         // home_strand MUST be nullptr (cleared on reuse)
+         REQUIRE(me->home_strand == nullptr);
+         plain_fiber_done.store(true);
+      });
+   });
+
+   deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+   while (!plain_fiber_done.load() &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{5});
+
+   pool.stop();
+   pool.join();
+
+   REQUIRE(plain_fiber_done.load());
+}
+
+TEST_CASE("reactor stress: shutdown with active strand fibers", "[reactor-stress]")
+{
+   // Verify clean shutdown when strand fibers are parked/waiting/sleeping
+   reactor pool(2);
+   strand s(pool);
+
+   std::atomic<int> started{0};
+
+   // Spawn several strand fibers that park indefinitely
+   pool.scheduler(0).post([&]() noexcept {
+      for (int i = 0; i < 4; ++i)
+      {
+         s.post([&]() {
+            started.fetch_add(1);
+            Scheduler::current()->sleep(std::chrono::milliseconds{60000});
+         });
+      }
+   });
+
+   // Wait for at least the first fiber to start
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+   while (started.load() < 1 &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{5});
+
+   // Shutdown should not hang or crash
+   pool.stop();
+   pool.join();
+
+   REQUIRE(started.load() >= 1);
+}
+
+TEST_CASE("reactor stress: cross-thread strand post", "[reactor-stress]")
+{
+   // Multiple workers post to the same strand concurrently
+   constexpr int W = 4;
+   constexpr int N = 32;
+
+   reactor pool(W);
+   strand s(pool);
+
+   std::atomic<int> completed{0};
+   std::atomic<int> concurrent{0};
+   std::atomic<int> max_concurrent{0};
+
+   for (int i = 0; i < N; ++i)
+   {
+      pool.scheduler(i % W).post([&]() noexcept {
+         s.post([&]() {
+            int cur = concurrent.fetch_add(1) + 1;
+            int old_max = max_concurrent.load();
+            while (cur > old_max && !max_concurrent.compare_exchange_weak(old_max, cur))
+               ;
+            concurrent.fetch_sub(1);
+            completed.fetch_add(1);
+         });
+      });
+   }
+
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+   while (completed.load() < N &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+
+   pool.stop();
+   pool.join();
+
+   REQUIRE(completed.load() == N);
+   REQUIRE(max_concurrent.load() == 1);
+}
+
+TEST_CASE("reactor stress: multiple independent strands run in parallel", "[reactor-stress]")
+{
+   // Different strands should execute concurrently on different workers
+   constexpr int W = 4;
+
+   reactor pool(W);
+
+   std::atomic<int> peak_parallel{0};
+   std::atomic<int> running{0};
+   std::atomic<int> completed{0};
+
+   std::vector<std::unique_ptr<strand>> strands;
+   for (int i = 0; i < W; ++i)
+      strands.push_back(std::make_unique<strand>(pool));
+
+   for (int i = 0; i < W; ++i)
+   {
+      int si = i;
+      pool.scheduler(i).post([&, si]() noexcept {
+         strands[si]->post([&]() {
+            int cur = running.fetch_add(1) + 1;
+            int old_peak = peak_parallel.load();
+            while (cur > old_peak && !peak_parallel.compare_exchange_weak(old_peak, cur))
+               ;
+
+            // Sleep to keep multiple strands running concurrently
+            Scheduler::current()->sleep(std::chrono::milliseconds{50});
+
+            running.fetch_sub(1);
+            completed.fetch_add(1);
+         });
+      });
+   }
+
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+   while (completed.load() < W &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+
+   pool.stop();
+   pool.join();
+
+   REQUIRE(completed.load() == W);
+   // Different strands should have run in parallel on different workers
+   INFO("peak_parallel=" << peak_parallel.load());
+   REQUIRE(peak_parallel.load() >= 2);
+}
+
+TEST_CASE("reactor stress: strand::post arena exhaustion returns false", "[reactor-stress]")
+{
+   // Verify that strand::post returns false when the arena is full
+   reactor pool(1);
+   strand s(pool, 128);  // tiny arena — 128 bytes
+
+   std::atomic<int> succeeded{0};
+   std::atomic<int> failed{0};
+   std::atomic<bool> done{false};
+
+   pool.scheduler(0).post([&]() noexcept {
+      // Try to post many tasks — some should fail due to arena exhaustion
+      for (int i = 0; i < 20; ++i)
+      {
+         bool ok = s.post([&]() {
+            succeeded.fetch_add(1);
+         });
+         if (!ok)
+            failed.fetch_add(1);
+      }
+      done.store(true);
+   });
+
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+   while (!done.load() &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+
+   // Give strand fibers time to complete
+   std::this_thread::sleep_for(std::chrono::milliseconds{100});
+
+   pool.stop();
+   pool.join();
+
+   REQUIRE(done.load());
+   // At least some should have failed with 128 bytes
+   INFO("succeeded=" << succeeded.load() << " failed=" << failed.load());
+   REQUIRE(failed.load() > 0);
+   REQUIRE(succeeded.load() + failed.load() == 20);
+}
+
+TEST_CASE("reactor stress: fiber yield inside strand preserves serialization", "[reactor-stress]")
+{
+   // Fiber yields back to ready queue but strand stays active.
+   // Other strand fibers must NOT run during the yield.
+   reactor pool(2);
+   strand s(pool);
+
+   constexpr int N = 4;
+   constexpr int YIELDS = 10;
+   std::atomic<int> completed{0};
+   std::atomic<int> concurrent{0};
+   bool violation = false;
+
+   pool.scheduler(0).post([&]() noexcept {
+      for (int i = 0; i < N; ++i)
+      {
+         s.post([&]() {
+            for (int y = 0; y < YIELDS; ++y)
+            {
+               int cur = concurrent.fetch_add(1) + 1;
+               if (cur > 1)
+                  violation = true;
+               Scheduler::current()->yieldCurrentFiber();
+               concurrent.fetch_sub(1);
+            }
+            completed.fetch_add(1);
+         });
+      }
+   });
+
+   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+   while (completed.load() < N &&
+          std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+
+   pool.stop();
+   pool.join();
+
+   REQUIRE(completed.load() == N);
+   REQUIRE_FALSE(violation);
 }
