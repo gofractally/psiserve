@@ -58,6 +58,20 @@ int main() {
 }
 ```
 
+With options (all fields are bitmaps — compile for multiple targets in one call):
+
+```cpp
+using enum psizam::pzam_arch_flags;
+using enum psizam::pzam_tier_flags;
+using enum psizam::pzam_compile_flags;
+
+// Cross-compile for both architectures, two tiers, with softfloat
+// Produces 4 code sections: x86_64/jit2, x86_64/llvm_O3, aarch64/jit2, aarch64/llvm_O3
+psizam::pzam_compile_file("module.wasm", "module.pzam",
+                          {.arch = x86_64 | aarch64, .tier = jit2 | llvm_O3,
+                           .flags = softfloat});
+```
+
 #### Step 2: Load and call from C++
 
 ```cpp
