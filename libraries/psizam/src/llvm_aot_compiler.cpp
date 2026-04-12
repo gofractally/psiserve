@@ -13,16 +13,26 @@
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/TargetSelect.h>
 
-// Explicit target initialization (avoid linking all targets)
+// Explicit target initialization (avoid linking all targets).
+// Guarded by PSIZAM_LLVM_TARGET_* defines for single-target builds.
 extern "C" {
+#if !defined(PSIZAM_LLVM_TARGET_X86) && !defined(PSIZAM_LLVM_TARGET_AARCH64)
+   // Default: both targets
+   #define PSIZAM_LLVM_TARGET_X86
+   #define PSIZAM_LLVM_TARGET_AARCH64
+#endif
+#ifdef PSIZAM_LLVM_TARGET_X86
    void LLVMInitializeX86TargetInfo();
    void LLVMInitializeX86Target();
    void LLVMInitializeX86TargetMC();
    void LLVMInitializeX86AsmPrinter();
+#endif
+#ifdef PSIZAM_LLVM_TARGET_AARCH64
    void LLVMInitializeAArch64TargetInfo();
    void LLVMInitializeAArch64Target();
    void LLVMInitializeAArch64TargetMC();
    void LLVMInitializeAArch64AsmPrinter();
+#endif
 }
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
@@ -41,14 +51,18 @@ namespace psizam {
    // Only these two are linked, so we can't use InitializeAllTargets().
    static bool ensure_llvm_targets() {
       static bool done = [] {
+#ifdef PSIZAM_LLVM_TARGET_X86
          LLVMInitializeX86TargetInfo();
          LLVMInitializeX86Target();
          LLVMInitializeX86TargetMC();
          LLVMInitializeX86AsmPrinter();
+#endif
+#ifdef PSIZAM_LLVM_TARGET_AARCH64
          LLVMInitializeAArch64TargetInfo();
          LLVMInitializeAArch64Target();
          LLVMInitializeAArch64TargetMC();
          LLVMInitializeAArch64AsmPrinter();
+#endif
          return true;
       }();
       return done;

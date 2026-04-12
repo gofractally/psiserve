@@ -110,13 +110,24 @@ if(PSIZAM_ENABLE_LLVM)
       find_package(LLVM REQUIRED CONFIG NO_CMAKE_FIND_ROOT_PATH)
       message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} (WASI) at ${LLVM_DIR}")
 
-      llvm_map_components_to_libnames(LLVM_LIBS
-         core support
-         passes instcombine scalaropts
-         x86codegen x86asmparser x86desc x86info
-         aarch64codegen aarch64asmparser aarch64desc aarch64info
-         object
-      )
+      # Target selection — build one binary per target for smaller binaries.
+      # PSIZAM_LLVM_TARGETS: semicolon-separated list, e.g. "X86;AArch64" (default: both)
+      if(NOT DEFINED PSIZAM_LLVM_TARGETS)
+         set(PSIZAM_LLVM_TARGETS "X86;AArch64")
+      endif()
+
+      # Base components (no 'passes' — we bypass PassBuilder to avoid
+      # pulling in IPO/Vectorize/Coroutines/etc. via PassRegistry.def)
+      set(_LLVM_COMPONENTS core support instcombine scalaropts object)
+
+      if("X86" IN_LIST PSIZAM_LLVM_TARGETS)
+         list(APPEND _LLVM_COMPONENTS x86codegen x86asmparser x86desc x86info)
+      endif()
+      if("AArch64" IN_LIST PSIZAM_LLVM_TARGETS)
+         list(APPEND _LLVM_COMPONENTS aarch64codegen aarch64asmparser aarch64desc aarch64info)
+      endif()
+
+      llvm_map_components_to_libnames(LLVM_LIBS ${_LLVM_COMPONENTS})
 
       # AOT-only sources (no JIT, no runtime helpers)
       add_library(psizam-llvm STATIC
@@ -124,6 +135,14 @@ if(PSIZAM_ENABLE_LLVM)
          src/llvm_aot_compiler.cpp
       )
       target_link_libraries(psizam-llvm PUBLIC psizam ${LLVM_LIBS})
+
+      # Tell the AOT compiler which targets are available
+      if("X86" IN_LIST PSIZAM_LLVM_TARGETS)
+         target_compile_definitions(psizam-llvm PRIVATE PSIZAM_LLVM_TARGET_X86)
+      endif()
+      if("AArch64" IN_LIST PSIZAM_LLVM_TARGETS)
+         target_compile_definitions(psizam-llvm PRIVATE PSIZAM_LLVM_TARGET_AARCH64)
+      endif()
    else()
       # Native: full LLVM with ORC JIT
       find_package(LLVM REQUIRED CONFIG)

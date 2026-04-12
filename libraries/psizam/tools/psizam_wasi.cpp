@@ -95,9 +95,13 @@ int main(int argc, char** argv) {
          using backend_t = backend<std::nullptr_t, interpreter>;
          backend_t bkend(code, std::move(table), &wasi, &wa);
          bkend.call(&wasi, "_start");
+      } else if (backend_str == "jit") {
+         using backend_t = backend<std::nullptr_t, jit>;
+         backend_t bkend(code, std::move(table), &wasi, &wa);
+         bkend.call(&wasi, "_start");
       } else {
          std::cerr << "Error: unknown backend '" << backend_str << "'\n";
-         std::cerr << "Supported: interpreter\n";
+         std::cerr << "Supported: interpreter, jit\n";
          return 1;
       }
    } catch (const wasi_host::wasi_exit_exception& e) {

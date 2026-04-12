@@ -16,10 +16,11 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
-#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/raw_ostream.h>
+
+// Optimization passes — individual includes instead of PassBuilder to avoid
+// pulling in all registered passes (saves ~20MB in WASM binary).
 #include <llvm/Transforms/InstCombine/InstCombine.h>
-#include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Scalar/ADCE.h>
 #include <llvm/Transforms/Scalar/EarlyCSE.h>
 #include <llvm/Transforms/Scalar/GVN.h>
@@ -28,6 +29,30 @@
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Scalar/SROA.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
+
+// Analysis passes — only what our 10 passes actually need.
+// PassBuilder::registerFunctionAnalyses() registers ALL 36+ analyses from
+// PassRegistry.def, keeping ~20MB of IPO/Vectorize/Coroutines/etc. alive.
+// Manual registration of just these 13 analyses cuts the dependency graph.
+#include <llvm/Analysis/AliasAnalysis.h>
+#include <llvm/Analysis/AssumptionCache.h>
+#include <llvm/Analysis/BasicAliasAnalysis.h>
+#include <llvm/Analysis/BlockFrequencyInfo.h>
+#include <llvm/Analysis/CGSCCPassManager.h>
+#include <llvm/Analysis/GlobalsModRef.h>
+#include <llvm/Analysis/LastRunTrackingAnalysis.h>
+#include <llvm/Analysis/LoopAnalysisManager.h>
+#include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/MemoryDependenceAnalysis.h>
+#include <llvm/Analysis/MemorySSA.h>
+#include <llvm/Analysis/OptimizationRemarkEmitter.h>
+#include <llvm/Analysis/PostDominators.h>
+#include <llvm/Analysis/ScalarEvolution.h>
+#include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/Analysis/TargetTransformInfo.h>
+#include <llvm/IR/Dominators.h>
+#include <llvm/IR/PassManager.h>
+#include <llvm/Transforms/Scalar/LoopPassManager.h>
 
 #include <cassert>
 #include <climits>
@@ -3734,60 +3759,90 @@ namespace psizam {
          std::abort();
       }
 
-      // Run optimization passes
+      // Run optimization passes.
+      // Manual analysis registration instead of PassBuilder to avoid pulling in
+      // all 65+ analyses from PassRegistry.def (IPO, Vectorize, Coroutines, etc.)
       if (_impl->opts.opt_level > 0) {
-         llvm::PassBuilder pb;
          llvm::LoopAnalysisManager lam;
          llvm::FunctionAnalysisManager fam;
          llvm::CGSCCAnalysisManager cgam;
          llvm::ModuleAnalysisManager mam;
 
-         pb.registerModuleAnalyses(mam);
-         pb.registerCGSCCAnalyses(cgam);
-         pb.registerFunctionAnalyses(fam);
-         pb.registerLoopAnalyses(lam);
-         pb.crossRegisterProxies(lam, fam, cgam, mam);
+         // Register only the analyses our passes actually need.
+         // Function analyses (13 of 36+ in PassRegistry.def):
+         fam.registerPass([&] { return llvm::DominatorTreeAnalysis(); });
+         fam.registerPass([&] { return llvm::AssumptionAnalysis(); });
+         fam.registerPass([&] { return llvm::TargetLibraryAnalysis(); });
+         fam.registerPass([&] { return llvm::TargetIRAnalysis(); });
+         fam.registerPass([&] { return llvm::LoopAnalysis(); });
+         fam.registerPass([&] { return llvm::PostDominatorTreeAnalysis(); });
+         fam.registerPass([&] { return llvm::OptimizationRemarkEmitterAnalysis(); });
+         fam.registerPass([&] { return llvm::MemorySSAAnalysis(); });
+         fam.registerPass([&] { return llvm::MemoryDependenceAnalysis(); });
+         fam.registerPass([&] { return llvm::ScalarEvolutionAnalysis(); });
+         fam.registerPass([&] { return llvm::BlockFrequencyAnalysis(); });
+         fam.registerPass([&] { return llvm::LastRunTrackingAnalysis(); });
+         fam.registerPass([&] { return llvm::PassInstrumentationAnalysis(); });
+         // Alias analysis: BasicAA registered in FAM, then AAManager uses it
+         fam.registerPass([&] { return llvm::BasicAA(); });
+         fam.registerPass([&] {
+            llvm::AAManager aa;
+            aa.registerFunctionAnalysis<llvm::BasicAA>();
+            return aa;
+         });
 
-         if (_impl->opts.opt_level == 5) {
-            // Standard LLVM pipeline (opt_level 5 = use generic O2)
-            auto mpm = pb.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
-            mpm.run(*_impl->llvm_mod, mam);
-         } else {
-            // Custom WASM-tuned pipeline: only passes that matter for translated WASM IR.
-            // ~10 passes vs ~60 in the generic pipeline — compiles ~45% faster with
-            // identical or slightly better execution speed.
-            llvm::ModulePassManager mpm;
-            llvm::FunctionPassManager fpm;
+         // Loop analyses (only what LICM needs):
+         lam.registerPass([&] { return llvm::PassInstrumentationAnalysis(); });
 
-            // Phase 1: Canonicalize — cheap, huge IR reduction.
-            // mem2reg is critical: promotes alloca-per-register to SSA.
-            // SROA breaks up the host_args alloca when it can.
-            fpm.addPass(llvm::PromotePass());
-            fpm.addPass(llvm::SROAPass(llvm::SROAOptions::ModifyCFG));
-            fpm.addPass(llvm::EarlyCSEPass(/*UseMemorySSA=*/false));
-            fpm.addPass(llvm::InstCombinePass());
-            fpm.addPass(llvm::SimplifyCFGPass());
+         // Module analyses: just PassInstrumentation
+         mam.registerPass([&] { return llvm::PassInstrumentationAnalysis(); });
 
-            // Phase 2: Optimize — moderate cost, good speedup.
-            // Reassociate enables better constant folding.
-            // GVN eliminates redundant loads (e.g., repeated ctx pointer loads).
-            // LICM hoists loop-invariant computations (loop pass, needs adaptor).
-            fpm.addPass(llvm::ReassociatePass());
-            fpm.addPass(llvm::GVNPass());
-            {
-               llvm::LoopPassManager lpm;
-               lpm.addPass(llvm::LICMPass(llvm::LICMOptions()));
-               fpm.addPass(llvm::createFunctionToLoopPassAdaptor(std::move(lpm), /*UseMemorySSA=*/true));
-            }
+         // CGSCC analyses: just PassInstrumentation
+         cgam.registerPass([&] { return llvm::PassInstrumentationAnalysis(); });
 
-            // Phase 3: Cleanup — removes dead code exposed by earlier passes.
-            fpm.addPass(llvm::ADCEPass());
-            fpm.addPass(llvm::InstCombinePass());
-            fpm.addPass(llvm::SimplifyCFGPass());
+         // Cross-register proxies (same as PassBuilder::crossRegisterProxies)
+         mam.registerPass([&] { return llvm::FunctionAnalysisManagerModuleProxy(fam); });
+         mam.registerPass([&] { return llvm::CGSCCAnalysisManagerModuleProxy(cgam); });
+         cgam.registerPass([&] { return llvm::ModuleAnalysisManagerCGSCCProxy(mam); });
+         fam.registerPass([&] { return llvm::CGSCCAnalysisManagerFunctionProxy(cgam); });
+         fam.registerPass([&] { return llvm::ModuleAnalysisManagerFunctionProxy(mam); });
+         fam.registerPass([&] { return llvm::LoopAnalysisManagerFunctionProxy(lam); });
+         lam.registerPass([&] { return llvm::FunctionAnalysisManagerLoopProxy(fam); });
 
-            mpm.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
-            mpm.run(*_impl->llvm_mod, mam);
+         // Custom WASM-tuned pipeline: only passes that matter for translated WASM IR.
+         // ~10 passes vs ~60 in the generic pipeline — compiles ~45% faster with
+         // identical or slightly better execution speed.
+         llvm::ModulePassManager mpm;
+         llvm::FunctionPassManager fpm;
+
+         // Phase 1: Canonicalize — cheap, huge IR reduction.
+         // mem2reg is critical: promotes alloca-per-register to SSA.
+         // SROA breaks up the host_args alloca when it can.
+         fpm.addPass(llvm::PromotePass());
+         fpm.addPass(llvm::SROAPass(llvm::SROAOptions::ModifyCFG));
+         fpm.addPass(llvm::EarlyCSEPass(/*UseMemorySSA=*/false));
+         fpm.addPass(llvm::InstCombinePass());
+         fpm.addPass(llvm::SimplifyCFGPass());
+
+         // Phase 2: Optimize — moderate cost, good speedup.
+         // Reassociate enables better constant folding.
+         // GVN eliminates redundant loads (e.g., repeated ctx pointer loads).
+         // LICM hoists loop-invariant computations (loop pass, needs adaptor).
+         fpm.addPass(llvm::ReassociatePass());
+         fpm.addPass(llvm::GVNPass());
+         {
+            llvm::LoopPassManager lpm;
+            lpm.addPass(llvm::LICMPass(llvm::LICMOptions()));
+            fpm.addPass(llvm::createFunctionToLoopPassAdaptor(std::move(lpm), /*UseMemorySSA=*/true));
          }
+
+         // Phase 3: Cleanup — removes dead code exposed by earlier passes.
+         fpm.addPass(llvm::ADCEPass());
+         fpm.addPass(llvm::InstCombinePass());
+         fpm.addPass(llvm::SimplifyCFGPass());
+
+         mpm.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
+         mpm.run(*_impl->llvm_mod, mam);
       }
    }
 
