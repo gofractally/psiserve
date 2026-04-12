@@ -24,6 +24,15 @@
 #include <exception>
 #include <optional>
 
+#if !defined(__wasi__)
+#include <pthread.h>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <vector>
+#include <functional>
+#endif
+
 namespace psizam {
 
    /// Result from compilation — captures relocations before codegen is destroyed.
@@ -37,6 +46,149 @@ namespace psizam {
       bool                         softfloat = false;   // use softfloat wrappers (runtime option)
       bool                         backtrace = false;   // enable async backtrace frame tracking
    };
+
+#if !defined(__wasi__)
+   // Reactor-pattern compilation thread pool.
+   // Workers are pre-spawned once and persist for the process lifetime.
+   // Two-phase batch execution:
+   //   Phase 1 (compile): workers claim function indices via atomic counter
+   //   Phase 2 (merge):   workers copy their code + patch calls in parallel
+   class compile_reactor {
+    public:
+      explicit compile_reactor(uint32_t num_threads, size_t stack_size = 8 * 1024 * 1024)
+         : _num_workers(num_threads) {
+         for (uint32_t i = 0; i < num_threads; ++i) {
+            // Use pthread with 8MB stack (matching main thread) for LLVM's deep recursion.
+            // Default std::thread gets 512KB on macOS which overflows on large WASM modules.
+            pthread_t tid;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, stack_size);
+            auto* ctx = new std::pair<compile_reactor*, uint32_t>(this, i);
+            pthread_create(&tid, &attr, [](void* arg) -> void* {
+               auto* p = static_cast<std::pair<compile_reactor*, uint32_t>*>(arg);
+               p->first->worker_loop(p->second);
+               delete p;
+               return nullptr;
+            }, ctx);
+            pthread_attr_destroy(&attr);
+            _pthreads.push_back(tid);
+         }
+      }
+      ~compile_reactor() {
+         _phase.store(PHASE_SHUTDOWN, std::memory_order_release);
+         _phase_cv.notify_all();
+         for (auto tid : _pthreads) pthread_join(tid, nullptr);
+      }
+      compile_reactor(const compile_reactor&) = delete;
+      compile_reactor& operator=(const compile_reactor&) = delete;
+
+      // Execute a two-phase batch:
+      //   Phase 1: workers call work_fn(worker_id, item_idx) for items claimed via atomic counter
+      //   between_fn: main thread runs between phases (prefix sums, buffer allocation)
+      //   Phase 2: workers call merge_fn(worker_id)
+      void run_batch(
+         uint32_t num_items,
+         std::function<void(uint32_t, uint32_t)> work_fn,
+         std::function<void()> between_fn,
+         std::function<void(uint32_t)> merge_fn)
+      {
+         _work_fn = std::move(work_fn);
+         _merge_fn = std::move(merge_fn);
+         _num_items = num_items;
+         _next_item.store(0, std::memory_order_relaxed);
+
+         // Phase 1: compile
+         _workers_done.store(0, std::memory_order_relaxed);
+         _phase.store(PHASE_COMPILE, std::memory_order_release);
+         _phase_cv.notify_all();
+         {
+            std::unique_lock<std::mutex> lk(_mu);
+            _done_cv.wait(lk, [this] { return _workers_done.load(std::memory_order_acquire) >= _num_workers; });
+         }
+
+         // Between phases (main thread)
+         between_fn();
+
+         // Phase 2: merge
+         _workers_done.store(0, std::memory_order_relaxed);
+         _phase.store(PHASE_MERGE, std::memory_order_release);
+         _phase_cv.notify_all();
+         {
+            std::unique_lock<std::mutex> lk(_mu);
+            _done_cv.wait(lk, [this] { return _workers_done.load(std::memory_order_acquire) >= _num_workers; });
+         }
+
+         // Park workers
+         _phase.store(PHASE_IDLE, std::memory_order_release);
+         _phase_cv.notify_all();
+      }
+
+      uint32_t num_workers() const { return _num_workers; }
+
+    private:
+      static constexpr uint32_t PHASE_IDLE     = 0;
+      static constexpr uint32_t PHASE_COMPILE  = 1;
+      static constexpr uint32_t PHASE_MERGE    = 2;
+      static constexpr uint32_t PHASE_SHUTDOWN  = 3;
+
+      void worker_loop(uint32_t id) {
+         uint32_t last_phase = PHASE_IDLE;
+         while (true) {
+            // Wait for phase change
+            uint32_t phase;
+            {
+               std::unique_lock<std::mutex> lk(_mu);
+               _phase_cv.wait(lk, [&] {
+                  phase = _phase.load(std::memory_order_acquire);
+                  return phase != last_phase;
+               });
+            }
+            last_phase = phase;
+
+            if (phase == PHASE_SHUTDOWN) return;
+            if (phase == PHASE_IDLE) continue;
+
+            if (phase == PHASE_COMPILE) {
+               // Claim and process items via atomic counter
+               while (true) {
+                  uint32_t idx = _next_item.fetch_add(1, std::memory_order_relaxed);
+                  if (idx >= _num_items) break;
+                  _work_fn(id, idx);
+               }
+            } else if (phase == PHASE_MERGE) {
+               _merge_fn(id);
+            }
+
+            // Signal done
+            if (_workers_done.fetch_add(1, std::memory_order_acq_rel) + 1 >= _num_workers) {
+               std::lock_guard<std::mutex> lk(_mu);
+               _done_cv.notify_one();
+            }
+         }
+      }
+
+      std::vector<pthread_t> _pthreads;
+      uint32_t _num_workers;
+
+      std::function<void(uint32_t, uint32_t)> _work_fn;
+      std::function<void(uint32_t)> _merge_fn;
+      uint32_t _num_items = 0;
+
+      std::atomic<uint32_t> _next_item{0};
+      std::atomic<uint32_t> _workers_done{0};
+      std::atomic<uint32_t> _phase{PHASE_IDLE};
+
+      std::mutex _mu;
+      std::condition_variable _phase_cv, _done_cv;
+   };
+
+   // Get persistent reactor (created once, lives for process lifetime).
+   inline compile_reactor& get_compile_reactor(uint32_t num_threads) {
+      static compile_reactor instance(num_threads);
+      return instance;
+   }
+#endif
 
    template<typename CodeGen>
    class ir_writer_impl {
@@ -53,37 +205,63 @@ namespace psizam {
       // but never interprets them. fix_branch is a no-op.
       using branch_t = uint32_t;
       using label_t  = uint32_t;
+      using base_writer_t = ir_writer_impl;
+      using parse_callback_t = std::function<void(uint32_t, ir_writer_impl&, uint64_t&)>;
 
       ir_writer_impl(growable_allocator& alloc, std::size_t source_bytes, module& mod,
-                bool enable_backtrace = false, bool stack_limit_is_bytes = false)
+                bool enable_backtrace = false, bool stack_limit_is_bytes = false,
+                uint32_t compile_threads = 0)
          : _allocator(alloc), _source_bytes(source_bytes), _mod(mod),
-           _scratch(_ir_alloc),
+           _scratch(_ir_alloc), _compile_threads(compile_threads),
            _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
          // IR allocator — holds per-function IR data, reset after each function.
-         // Separate from _allocator so the code segment isn't affected by IR resets.
-         // Size based on largest function: ~250 bytes of IR per WASM byte
-         // (insts×3×24 + blocks×2×20 + vstack×2×4 + ctrl_stack×1×100 ≈ 220 B/B + margin).
-         // Minimum 16MB to avoid tiny-function underallocation.
+         // In serial mode, a single allocator is used and reset after each function.
+         // In parallel mode, each pipeline slot gets its own allocator so parsing
+         // overlaps with optimization of the previous function.
+         size_t max_func_size = 0;
+         for (uint32_t i = 0; i < mod.code.size(); ++i) {
+            if (mod.code[i].size > max_func_size)
+               max_func_size = mod.code[i].size;
+         }
 #ifdef PSIZAM_COMPILE_ONLY
          {
-            size_t max_func_size = 0;
-            for (uint32_t i = 0; i < mod.code.size(); ++i) {
-               if (mod.code[i].size > max_func_size)
-                  max_func_size = mod.code[i].size;
+            size_t ir_size;
+            if (compile_threads > 1) {
+               // Parallel mode: _functions array + one function's IR (parsed on main
+               // thread before being compiled on workers, then reset per-function).
+               ir_size = mod.code.size() * sizeof(ir_function) + max_func_size * 250 + 1024 * 1024;
+            } else {
+               ir_size = max_func_size * 250 + 1024 * 1024;
             }
-            size_t ir_size = max_func_size * 250 + 1024 * 1024;  // 250× + 1MB headroom
             if (ir_size < 16 * 1024 * 1024) ir_size = 16 * 1024 * 1024;
+            ir_size = growable_allocator::align_to_page(ir_size);
             _ir_alloc.use_fixed_memory(ir_size);
          }
 #else
          _ir_alloc.use_default_memory();
 #endif
+         _max_func_bytes = max_func_size;
          _num_functions = mod.code.size();
          _functions = _scratch.alloc<ir_function>(_num_functions);
          for (uint32_t i = 0; i < _num_functions; ++i) {
             _functions[i] = ir_function{};
          }
          _post_array_offset = _ir_alloc._offset;
+      }
+
+      // Worker constructor: lightweight instance for parallel parse threads.
+      // Shares _functions array and module with the parent writer.
+      // Has its own _func/_unreachable (member vars) and IR allocator.
+      // Destructor is a no-op (_skip_codegen = true).
+      ir_writer_impl(module& mod, ir_function* functions, uint32_t num_functions,
+                     growable_allocator& worker_ir_alloc,
+                     bool enable_backtrace, bool stack_limit_is_bytes)
+         : _allocator(worker_ir_alloc), _source_bytes(0), _mod(mod),
+           _scratch(worker_ir_alloc), _compile_threads(0),
+           _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
+         _functions = functions;
+         _num_functions = num_functions;
+         _skip_codegen = true;
       }
 
       ~ir_writer_impl() {
@@ -100,10 +278,18 @@ namespace psizam {
             return;
          }
 
+#if !defined(__wasi__)
+         if (_compile_threads > 1) {
+            parallel_parse_compile_all();
+            _allocator.reset();
+            return;
+         }
+#endif
+
          // Finalize the code segment (all functions already compiled in finalize()).
          if (_codegen) {
             _codegen->finalize_code();
-#if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS)
+#if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS) && !defined(PSIZAM_COMPILE_ONLY)
             // Build function range table for crash diagnostics
             {
                uint32_t num_imported = _mod.get_imported_functions_size();
@@ -186,31 +372,42 @@ namespace psizam {
          // Nothing to do — IR is complete after parsing
       }
 
+      void ensure_codegen() {
+         if (!_codegen) {
+#ifdef PSIZAM_COMPILE_ONLY
+            // Scratch must hold per-function transient data (vreg maps, block fixups, etc.)
+            // Scale with largest function: ~20 bytes per WASM byte for scratch data.
+            size_t scratch_size = std::max<size_t>(32 * 1024 * 1024,
+               growable_allocator::align_to_page(_max_func_bytes * 20 + 4 * 1024 * 1024));
+            _codegen_scratch.use_fixed_memory(scratch_size);
+            _opt_scratch_alloc.use_fixed_memory(scratch_size);
+#else
+            _codegen_scratch.use_default_memory();
+            _opt_scratch_alloc.use_default_memory();
+#endif
+            _codegen.emplace(_allocator, _mod, _codegen_scratch, _enable_backtrace, _stack_limit_is_bytes);
+            _codegen->emit_entry_and_error_handlers();
+         }
+      }
+
       void finalize(function_body& body) {
          if (!_skip_codegen && _func) {
-            // Lazy-init codegen on first function
-            if (!_codegen) {
-#ifdef PSIZAM_COMPILE_ONLY
-               _codegen_scratch.use_fixed_memory(32 * 1024 * 1024);
-               _opt_scratch_alloc.use_fixed_memory(32 * 1024 * 1024);
-#else
-               _codegen_scratch.use_default_memory();
-               _opt_scratch_alloc.use_default_memory();
-#endif
-               _codegen.emplace(_allocator, _mod, _codegen_scratch, _enable_backtrace, _stack_limit_is_bytes);
-               _codegen->emit_entry_and_error_handlers();
+#if !defined(__wasi__)
+            if (_compile_threads > 1) {
+               // Parallel mode: leave IR in place, compile later in destructor
+               _func = nullptr;
+               return;
             }
-            // Compile this function immediately: optimize → regalloc → emit native code
+#endif
+            // Serial mode: compile immediately
+            ensure_codegen();
             {
                jit_scratch_allocator opt_scratch(_opt_scratch_alloc);
                jit_optimizer::optimize(*_func, opt_scratch);
                jit_regalloc::compute_live_intervals(*_func, opt_scratch);
                jit_regalloc::allocate_registers(*_func);
                _codegen->compile_function(*_func, body);
-               // opt_scratch destructor resets _opt_scratch_alloc
             }
-            // Reset IR allocator — reclaim this function's IR data.
-            // Preserves the _functions array (allocated before _post_array_offset).
             _ir_alloc._offset = _post_array_offset;
          }
          _func = nullptr;
@@ -814,13 +1011,13 @@ namespace psizam {
       void emit_table_get(uint32_t table_idx) {
          if (!_unreachable) {
             uint32_t idx_vreg = _func->vpop();
+            ir_emit_arg(idx_vreg);
             uint32_t dest = _func->alloc_vreg(types::i32);
             ir_inst inst{};
             inst.opcode = ir_op::table_get;
             inst.type = types::i32;
             inst.flags = IR_SIDE_EFFECT;
             inst.dest = dest;
-            inst.ri.src1 = idx_vreg;
             inst.ri.imm = static_cast<int32_t>(table_idx);
             _func->emit(inst);
             _func->vpush(dest);
@@ -846,13 +1043,13 @@ namespace psizam {
          if (!_unreachable) {
             uint32_t val_vreg = _func->vpop();
             uint32_t idx_vreg = _func->vpop();
+            ir_emit_arg(idx_vreg);
+            ir_emit_arg(val_vreg);
             ir_inst inst{};
             inst.opcode = ir_op::table_set;
             inst.type = types::pseudo;
             inst.flags = IR_SIDE_EFFECT;
             inst.dest = ir_vreg_none;
-            inst.rr.src1 = idx_vreg;
-            inst.rr.src2 = val_vreg;
             inst.ri.imm = static_cast<int32_t>(table_idx);
             _func->emit(inst);
          }
@@ -861,14 +1058,14 @@ namespace psizam {
          if (!_unreachable) {
             uint32_t delta_vreg = _func->vpop();
             uint32_t init_vreg = _func->vpop();
+            ir_emit_arg(init_vreg);
+            ir_emit_arg(delta_vreg);
             uint32_t dest = _func->alloc_vreg(types::i32);
             ir_inst inst{};
             inst.opcode = ir_op::table_grow;
             inst.type = types::i32;
             inst.flags = IR_SIDE_EFFECT;
             inst.dest = dest;
-            inst.rr.src1 = init_vreg;
-            inst.rr.src2 = delta_vreg;
             inst.ri.imm = static_cast<int32_t>(table_idx);
             _func->emit(inst);
             _func->vpush(dest);
@@ -2384,6 +2581,17 @@ namespace psizam {
          ir_simd_emit_with_offset(sub, 0, d, static_cast<uint16_t>(s1));
          _func->vpush(d);
       }
+      void ir_emit_arg(uint32_t vreg) {
+         ir_inst a{};
+         a.opcode = ir_op::arg;
+         a.type = types::pseudo;
+         a.flags = IR_NONE;
+         a.dest = ir_vreg_none;
+         a.rr.src1 = vreg;
+         a.rr.src2 = ir_vreg_none;
+         _func->emit(a);
+      }
+
       void ir_bulk_mem3() {
          if (_unreachable) return;
          // Pop 3 operands and emit arg instructions so register mode
@@ -2391,25 +2599,17 @@ namespace psizam {
          uint32_t v2 = _func->vpop(); // count (top)
          uint32_t v1 = _func->vpop(); // val/src
          uint32_t v0 = _func->vpop(); // dest
-         uint32_t vregs[3] = {v0, v1, v2};
-         for (int i = 0; i < 3; ++i) {
-            ir_inst arg{};
-            arg.opcode = ir_op::arg;
-            arg.type = types::pseudo;
-            arg.flags = IR_NONE;
-            arg.dest = ir_vreg_none;
-            arg.rr.src1 = vregs[i];
-            arg.rr.src2 = ir_vreg_none;
-            _func->emit(arg);
-         }
+         ir_emit_arg(v0);
+         ir_emit_arg(v1);
+         ir_emit_arg(v2);
       }
 
       // ──── State ────
       std::size_t _source_bytes;
       bool _unreachable = false;
+    protected:
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;
-    protected:
       growable_allocator& _allocator;       // Code segment (native code, permanent)
       growable_allocator _ir_alloc;         // IR data (per-function, reset after compilation)
       module& _mod;
@@ -2424,8 +2624,246 @@ namespace psizam {
       growable_allocator _codegen_scratch;
       growable_allocator _opt_scratch_alloc;
       std::optional<codegen_t> _codegen;
+      // Parallel compilation state
+      uint32_t _compile_threads = 0;          // 0 or 1 = serial, >1 = parallel threads
+      std::size_t _max_func_bytes = 0;        // Largest function body in module
+
+#if !defined(__wasi__)
+      parse_callback_t _parse_callback;
+
+      // Reactor-pattern parallel compilation: workers parse + optimize + regalloc + codegen.
+      // Phase 1 (workers): each claims functions via atomic counter, parse+compile each one.
+      // Between phases (main): compute prefix sums, allocate final buffer.
+      // Phase 2 (workers): copy own code, adjust offsets, patch cross-worker calls.
+      void parallel_parse_compile_all() {
+         uint32_t N = _compile_threads;
+         if (_num_functions == 0) return;
+         if (N > _num_functions) N = _num_functions;
+
+         struct worker_state {
+            growable_allocator ir_alloc;       // Per-function IR, reset after each
+            growable_allocator code_alloc;     // Accumulates native code
+            growable_allocator codegen_scratch;
+            growable_allocator opt_scratch_alloc;
+            std::optional<codegen_t> codegen;
+            void* code_base = nullptr;
+            size_t code_size = 0;             // Total native code bytes
+            size_t final_offset = 0;          // Offset into merged buffer
+            uint64_t max_stack = 0;           // Per-worker maximum_stack accumulator
+            std::vector<std::pair<uint32_t, uint32_t>> pending_calls;
+         };
+
+         auto workers = std::make_unique<worker_state[]>(N);
+
+         // Track which worker compiled each function (for merge phase)
+         auto func_worker = std::make_unique<uint32_t[]>(_num_functions);
+
+         // Get persistent reactor
+         auto& reactor = get_compile_reactor(N);
+
+         // Phase 1: parallel parse + compile
+         reactor.run_batch(
+            _num_functions,
+
+            // work_fn(worker_id, func_idx): parse + compile one function
+            [this, &workers, &func_worker](uint32_t worker_id, uint32_t func_idx) {
+               auto& ws = workers[worker_id];
+
+               // Lazy init worker state on first use
+               if (!ws.codegen) {
+#ifdef PSIZAM_COMPILE_ONLY
+                  // Conservative estimate: will grow via realloc if needed
+                  ws.ir_alloc.use_fixed_memory(growable_allocator::align_to_page(
+                     _max_func_bytes * 250 + 1024 * 1024));
+                  // Worst case: largest function may need max_func_bytes * 64 bytes of
+                  // native code, plus average ~2KB per remaining function.
+                  size_t code_est = (_num_functions / _compile_threads + 1) * 2048 + 2 * 1024 * 1024;
+                  size_t max_func_code = static_cast<size_t>(_max_func_bytes) * 64 + 1024 * 1024;
+                  if (max_func_code > code_est) code_est = max_func_code;
+                  ws.code_alloc.use_fixed_memory(growable_allocator::align_to_page(code_est));
+                  size_t scratch_size = std::max<size_t>(32 * 1024 * 1024,
+                     growable_allocator::align_to_page(_max_func_bytes * 20 + 4 * 1024 * 1024));
+                  ws.codegen_scratch.use_fixed_memory(scratch_size);
+                  ws.opt_scratch_alloc.use_fixed_memory(scratch_size);
+#else
+                  ws.ir_alloc.use_default_memory();
+                  ws.code_alloc.use_default_memory();
+                  ws.codegen_scratch.use_default_memory();
+                  ws.opt_scratch_alloc.use_default_memory();
+#endif
+                  ws.codegen.emplace(ws.code_alloc, _mod, ws.codegen_scratch,
+                                   _enable_backtrace, _stack_limit_is_bytes);
+                  ws.codegen->emit_entry_and_error_handlers();
+                  ws.code_base = ws.codegen->get_code_segment_base();
+               }
+
+               // Create per-function worker writer (lightweight, shares _functions array)
+               // The writer's _func and _unreachable are per-instance, so thread-safe.
+               ir_writer_impl worker_writer(_mod, _functions, _num_functions,
+                                           ws.ir_alloc, _enable_backtrace, _stack_limit_is_bytes);
+
+               // Parse bytecodes → IR via callback from parser
+               _parse_callback(func_idx, worker_writer, ws.max_stack);
+
+               // Optimize → regalloc → codegen
+               auto& func = _functions[func_idx];
+               {
+                  jit_scratch_allocator scratch(ws.opt_scratch_alloc);
+                  jit_optimizer::optimize(func, scratch);
+                  jit_regalloc::compute_live_intervals(func, scratch);
+                  jit_regalloc::allocate_registers(func);
+               }
+               ws.codegen->compile_function(func, _mod.code[func_idx]);
+
+               // Reset IR allocator (only need 1 function's IR at a time)
+               ws.ir_alloc._offset = 0;
+
+               func_worker[func_idx] = worker_id;
+            },
+
+            // between_fn: compute prefix sums, adjust function offsets, allocate final buffer
+            [this, &workers, &func_worker, N]() {
+               // Compute per-worker code sizes
+               for (uint32_t w = 0; w < N; ++w) {
+                  auto& ws = workers[w];
+                  if (!ws.codegen) continue;
+                  ws.code_size = ws.code_alloc._offset -
+                     static_cast<size_t>(static_cast<char*>(ws.code_base) - ws.code_alloc._base);
+               }
+
+               // Prefix sum → offsets into final buffer
+               void* final_base = _allocator.start_code();
+               size_t running = 0;
+               for (uint32_t w = 0; w < N; ++w) {
+                  workers[w].final_offset = running;
+                  running += workers[w].code_size;
+               }
+               _allocator.alloc<unsigned char>(running);
+
+               // Adjust all function code offsets (serial, O(num_functions))
+               // jit_code_offset was set by compile_function relative to the worker's
+               // code buffer. Add the worker's final_offset so it's relative to the
+               // merged buffer. Must be done before call patching in merge phase.
+               for (uint32_t f = 0; f < _num_functions; ++f) {
+                  _mod.code[f].jit_code_offset += workers[func_worker[f]].final_offset;
+               }
+
+               // Collect pending cross-worker calls (before merge uses them)
+               for (uint32_t w = 0; w < N; ++w) {
+                  if (workers[w].codegen)
+                     workers[w].codegen->collect_pending_relocs(workers[w].pending_calls);
+               }
+
+               // Merge per-worker max_stack into module
+               for (uint32_t w = 0; w < N; ++w) {
+                  _mod.maximum_stack = std::max(_mod.maximum_stack, workers[w].max_stack);
+               }
+
+               // Store final_base for merge phase
+               _merge_final_base = final_base;
+            },
+
+            // merge_fn(worker_id): parallel copy + patch
+            [this, &workers](uint32_t worker_id) {
+               auto& ws = workers[worker_id];
+               if (!ws.codegen) return;
+
+               void* final_base = _merge_final_base;
+               auto* dest = static_cast<unsigned char*>(final_base) + ws.final_offset;
+
+               // Copy this worker's native code into the merged buffer
+               std::memcpy(dest, ws.code_base, ws.code_size);
+
+               // Patch cross-worker calls for this worker's pending list.
+               // All function offsets were already adjusted in between_fn.
+               uint32_t num_imported = _mod.get_imported_functions_size();
+               for (auto& [branch_offset, target_func] : ws.pending_calls) {
+                  void* branch_addr = static_cast<char*>(final_base) + ws.final_offset + branch_offset;
+                  void* target_addr;
+                  if (target_func < num_imported) {
+                     // Imported function: use worker 0's host thunk
+                     void* thunk = workers[0].codegen->get_func_addr(target_func);
+                     size_t thunk_off = static_cast<char*>(thunk) -
+                                        static_cast<char*>(workers[0].code_base);
+                     target_addr = static_cast<char*>(final_base) + workers[0].final_offset + thunk_off;
+                  } else {
+                     // WASM function: offset already adjusted in between_fn
+                     uint32_t wasm_idx = target_func - num_imported;
+                     target_addr = static_cast<char*>(final_base) + _mod.code[wasm_idx].jit_code_offset;
+                  }
+                  codegen_t::fix_branch(branch_addr, target_addr);
+               }
+            }
+         ); // end run_batch
+
+         // Post-merge: finalize the merged code buffer
+         _allocator.end_code<true>(_merge_final_base);
+
+         // Collect PIC relocations from all workers
+         if (_compile_result) {
+            for (uint32_t w = 0; w < N; ++w) {
+               auto& ws = workers[w];
+               if (!ws.codegen) continue;
+               const auto& entries = ws.codegen->relocations().entries();
+               for (const auto& e : entries) {
+                  _compile_result->relocs.push_back(
+                     {e.code_offset + static_cast<uint32_t>(ws.final_offset),
+                      e.symbol, e.type, e.reserved, e.addend});
+               }
+            }
+         }
+
+         // Patch element table entries
+         uint32_t num_imported = _mod.get_imported_functions_size();
+         uint32_t num_functions_total = _mod.get_functions_total();
+         for (auto& elem : _mod.elements) {
+            for (auto& entry : elem.elems) {
+               void* addr = nullptr;
+               if (entry.index < num_functions_total) {
+                  if (entry.index < num_imported) {
+                     void* thunk = workers[0].codegen->get_func_addr(entry.index);
+                     if (thunk) {
+                        size_t thunk_off = static_cast<char*>(thunk) -
+                                           static_cast<char*>(workers[0].code_base);
+                        addr = _mod.allocator._code_base + workers[0].final_offset + thunk_off;
+                     }
+                  } else {
+                     uint32_t wasm_idx = entry.index - num_imported;
+                     addr = _mod.allocator._code_base + _mod.code[wasm_idx].jit_code_offset;
+                  }
+               }
+               if (!addr) {
+                  void* handler = workers[0].codegen->get_call_indirect_handler();
+                  size_t handler_off = static_cast<char*>(handler) -
+                                       static_cast<char*>(workers[0].code_base);
+                  addr = _mod.allocator._code_base + workers[0].final_offset + handler_off;
+               }
+               entry.code_ptr = addr;
+            }
+         }
+
+#if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS) && !defined(PSIZAM_COMPILE_ONLY)
+         {
+            uint32_t num_imp = _mod.get_imported_functions_size();
+            auto* ranges = new jit_func_range[_num_functions];
+            for (uint32_t i = 0; i < _num_functions; ++i) {
+               auto& body = _mod.code[i];
+               ranges[i] = { static_cast<uint32_t>(body.jit_code_offset),
+                              body.jit_code_size, i + num_imp };
+            }
+            jit_func_ranges = ranges;
+            jit_func_range_count = _num_functions;
+         }
+#endif
+      }
+
+      void* _merge_final_base = nullptr;  // Shared between phases
+#endif
     public:
       void set_compile_result(pzam_compile_result* r) { _compile_result = r; }
+#if !defined(__wasi__)
+      void set_parse_callback(parse_callback_t cb) { _parse_callback = std::move(cb); }
+#endif
    };
 
    // Architecture-specific aliases

@@ -195,6 +195,7 @@ namespace psizam {
    PARSER_OPTION(enable_bulk_memory, true, bool)
    PARSER_OPTION(enable_sign_ext, true, bool)
    PARSER_OPTION(enable_nontrapping_fptoint, true, bool)
+   PARSER_OPTION(compile_threads, static_cast<std::uint32_t>(0), std::uint32_t)
 
 #undef MAX_ELEMENTS
 #undef PARSER_OPTION
@@ -1015,6 +1016,17 @@ namespace psizam {
 
       void parse_function_body_code(wasm_code_ptr& code, size_t bounds, const detail::max_func_local_bytes_stack_checker<Options>& local_bytes_checker,
                                     Writer& code_writer, const func_type& ft, const local_types_t& local_types) {
+         parse_function_body_code_impl(code, bounds, local_bytes_checker, code_writer, ft, local_types,
+                                       _nested_checker, imap, _mod->maximum_stack);
+      }
+
+      // Thread-safe version: takes mutable state as parameters so each worker thread
+      // can provide its own checker/imap/max_stack accumulator.
+      template<typename WriterT, typename Checker, typename DebugInfoBuilder>
+      void parse_function_body_code_impl(wasm_code_ptr& code, size_t bounds,
+                                    const detail::max_func_local_bytes_stack_checker<Options>& local_bytes_checker,
+                                    WriterT& code_writer, const func_type& ft, const local_types_t& local_types,
+                                    Checker& nested_checker, DebugInfoBuilder& imap_ref, uint64_t& max_stack_out) {
 
          // Initialize the control stack with the current function as the sole element
          operand_stack_type_tracker op_stack{local_bytes_checker, _options};
@@ -1104,7 +1116,7 @@ namespace psizam {
             PSIZAM_ASSERT(pc_stack.size() <= detail::get_max_nested_structures(_options), wasm_parse_exception,
                           "nested structures validation failure");
 
-            imap.on_instr_start(code_writer.get_addr(), code.raw());
+            imap_ref.on_instr_start(code_writer.get_addr(), code.raw());
 
             switch (*code++) {
                case opcodes::unreachable: check_in_bounds(); code_writer.emit_unreachable(); op_stack.start_unreachable(); break;
@@ -1113,7 +1125,7 @@ namespace psizam {
                   check_in_bounds();
                   exit_scope();
                   PSIZAM_ASSERT(!pc_stack.empty() || code.offset() == bounds, wasm_parse_exception, "function too short");
-                  _nested_checker.on_end(_options);
+                  nested_checker.on_end(_options);
                   break;
                }
                case opcodes::return_: {
@@ -1168,7 +1180,7 @@ namespace psizam {
                   // Push params back inside the block scope
                   for (auto p : pc_stack.back().block_params)
                      op_stack.push(p);
-                  _nested_checker.on_control(_options);
+                  nested_checker.on_control(_options);
                } break;
                case opcodes::loop: {
                   uint8_t first_byte = *code;
@@ -1213,7 +1225,7 @@ namespace psizam {
                   // Push params back inside the loop scope
                   for (auto p : pc_stack.back().block_params)
                      op_stack.push(p);
-                  _nested_checker.on_control(_options);
+                  nested_checker.on_control(_options);
                } break;
                case opcodes::if_: {
                   check_in_bounds();
@@ -1260,7 +1272,7 @@ namespace psizam {
                   // Push params back inside the if scope
                   for (auto p : pc_stack.back().block_params)
                      op_stack.push(p);
-                  _nested_checker.on_control(_options);
+                  nested_checker.on_control(_options);
                } break;
                case opcodes::else_: {
                   check_in_bounds();
@@ -1284,7 +1296,7 @@ namespace psizam {
                   // branches to the corresponding `end`
                   relocations[0] = code_writer.emit_else(relocations[0]);
                   old_index.is_if = false;
-                  _nested_checker.on_control(_options);
+                  nested_checker.on_control(_options);
                   break;
                }
                // ── Exception handling opcodes ──
@@ -1322,7 +1334,7 @@ namespace psizam {
                   op_stack.push_scope();
                   for (auto p : pc_stack.back().block_params)
                      op_stack.push(p);
-                  _nested_checker.on_control(_options);
+                  nested_checker.on_control(_options);
                } break;
                case opcodes::catch_: {
                   check_in_bounds();
@@ -1344,7 +1356,7 @@ namespace psizam {
                      op_stack.push(pt);
                   auto& relocations = std::get<std::vector<branch_t>>(old_index.relocations);
                   relocations.push_back(code_writer.emit_catch(tag_index));
-                  _nested_checker.on_control(_options);
+                  nested_checker.on_control(_options);
                } break;
                case opcodes::throw_: {
                   check_in_bounds();
@@ -1378,7 +1390,7 @@ namespace psizam {
                   // catch_all receives no values
                   auto& relocations = std::get<std::vector<branch_t>>(old_index.relocations);
                   relocations.push_back(code_writer.emit_catch_all());
-                  _nested_checker.on_control(_options);
+                  nested_checker.on_control(_options);
                } break;
                case opcodes::delegate_: {
                   check_in_bounds();
@@ -1387,7 +1399,7 @@ namespace psizam {
                   code_writer.emit_delegate(depth_change, rt, label, rc);
                   // delegate acts as end of the try block
                   exit_scope();
-                  _nested_checker.on_end(_options);
+                  nested_checker.on_end(_options);
                } break;
                case opcodes::br: {
                   check_in_bounds();
@@ -2557,7 +2569,7 @@ namespace psizam {
             code_writer.set_stack_usage(op_stack.stack_usage._max);
          }
          PSIZAM_ASSERT( pc_stack.empty(), wasm_parse_exception, "function body too long" );
-         _mod->maximum_stack = std::max(_mod->maximum_stack, static_cast<uint64_t>(op_stack.maximum_operand_depth) + local_types.locals_count());
+         max_stack_out = std::max(max_stack_out, static_cast<uint64_t>(op_stack.maximum_operand_depth) + local_types.locals_count());
       }
 
       void parse_data_segment(wasm_code_ptr& code, data_segment& ds) {
@@ -2697,11 +2709,37 @@ namespace psizam {
       }
 
       void write_code_out(growable_allocator& allocator, wasm_code_ptr& code, const void* code_start) {
+         auto _compile_threads = detail::get_compile_threads(_options);
          Writer code_writer(allocator, code.bounds() - code.offset(), *_mod,
-                            _enable_backtrace, _stack_limit_is_bytes);
+                            _enable_backtrace, _stack_limit_is_bytes, _compile_threads);
          if constexpr (requires { code_writer.set_compile_result(_compile_result); }) {
             code_writer.set_compile_result(_compile_result);
          }
+#if !defined(__wasi__)
+         if constexpr (requires { code_writer.set_parse_callback(std::declval<typename Writer::parse_callback_t>()); }) {
+            if (_compile_threads > 1) {
+               // Parallel mode: pass a parse callback to the writer.
+               // Each worker thread calls this with its own writer instance
+               // (ir_writer_impl base type), so use base class reference.
+               code_writer.set_parse_callback(
+                  [this](uint32_t func_idx, typename Writer::base_writer_t& w, uint64_t& max_stack) {
+                     function_body& fb = _mod->code[func_idx];
+                     func_type& ft = _mod->types.at(_mod->functions.at(func_idx));
+                     local_types_t local_types(ft, fb.locals);
+                     w.emit_prologue(ft, fb.locals, func_idx);
+                     detail::psizam_max_nested_structures_checker<Options> checker;
+                     null_debug_info::builder dummy_imap;
+                     parse_function_body_code_impl(
+                        _function_bodies[func_idx].first, fb.size,
+                        _function_bodies[func_idx].second, w, ft, local_types,
+                        checker, dummy_imap, max_stack);
+                     w.emit_epilogue(ft, fb.locals, func_idx);
+                  });
+               // Writer destructor triggers parallel compilation
+               return;
+            }
+         }
+#endif
          imap.on_code_start(code_writer.get_base_addr(), code_start);
          for (size_t i = 0; i < _function_bodies.size(); i++) {
             function_body& fb = _mod->code[i];

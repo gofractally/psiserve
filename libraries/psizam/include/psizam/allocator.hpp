@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#ifndef PSIZAM_COMPILE_ONLY
+#if !defined(PSIZAM_COMPILE_ONLY) || defined(__LP64__)
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
@@ -365,17 +365,16 @@ namespace psizam {
 
       void use_default_memory() {
          PSIZAM_ASSERT(_base == nullptr, wasm_bad_alloc, "default memory already allocated");
-#ifdef PSIZAM_COMPILE_ONLY
+#if defined(PSIZAM_COMPILE_ONLY) && !defined(__LP64__)
          // On wasm32, IR data uses a separate per-function allocator so the main
          // allocator only holds parsed module data + native code.  256MB is enough
          // for modules up to ~23k functions producing ~104MB of native code.
-         constexpr size_t alloc_size = sizeof(size_t) >= 8
-            ? max_memory_size           // 64-bit: full allocation
-            : 256 * 1024 * 1024;        // 32-bit: 256MB (leaves ~3.7GB for heap/LLVM)
+         constexpr size_t alloc_size = 256 * 1024 * 1024;
          _base = (char*)std::malloc(alloc_size);
          PSIZAM_ASSERT(_base != nullptr, wasm_bad_alloc, "failed to allocate default memory.");
          _capacity = alloc_size;
 #else
+         // 64-bit (native or COMPILE_ONLY): mmap demand-paged virtual memory
          _base = (char*)mmap(NULL, max_memory_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
          PSIZAM_ASSERT(_base != MAP_FAILED, wasm_bad_alloc, "failed to mmap for default memory.");
          _capacity = max_memory_size;
@@ -386,10 +385,12 @@ namespace psizam {
       void use_fixed_memory(size_t size) {
          PSIZAM_ASSERT(0 < size && size <= max_memory_size, wasm_bad_alloc, "Too large or 0 fixed memory size");
          PSIZAM_ASSERT(_base == nullptr, wasm_bad_alloc, "Fixed memory already allocated");
-#ifdef PSIZAM_COMPILE_ONLY
+#if defined(PSIZAM_COMPILE_ONLY) && !defined(__LP64__)
+         // 32-bit COMPILE_ONLY (WASM32): use malloc
          _base = (char*)std::malloc(size);
          PSIZAM_ASSERT(_base != nullptr, wasm_bad_alloc, "malloc in use_fixed_memory failed.");
 #else
+         // 64-bit (native or COMPILE_ONLY): mmap demand-paged
          _base = (char*)mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
          PSIZAM_ASSERT(_base != MAP_FAILED, wasm_bad_alloc, "mmap in use_fixed_memory failed.");
 #endif
@@ -398,7 +399,8 @@ namespace psizam {
 
       ~growable_allocator() {
          if (_base != nullptr) {
-#ifdef PSIZAM_COMPILE_ONLY
+#if defined(PSIZAM_COMPILE_ONLY) && !defined(__LP64__)
+            // 32-bit COMPILE_ONLY (WASM32): free malloc'd memory
             std::free(_base);
 #else
             munmap(_base, _capacity);

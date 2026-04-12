@@ -483,3 +483,64 @@ TEST_CASE("multi-value returns: jit", "[multi_value]") {
    CHECK(bkend.call_with_return("env", "test_swap", (uint32_t)10, (uint32_t)3)->to_i32() == -7);
    CHECK(bkend.call_with_return("env", "test_swap", (uint32_t)5, (uint32_t)5)->to_i32() == 0);
 }
+
+// Parallel compilation test: module with 8 exported functions compiled with 4 threads.
+// (module
+//   (func (export "f0") (param i32) (result i32) local.get 0 i32.const 0 i32.add)
+//   (func (export "f1") (param i32) (result i32) local.get 0 i32.const 1 i32.add)
+//   ...
+//   (func (export "f7") (param i32) (result i32) local.get 0 i32.const 7 i32.add)
+// )
+static std::vector<uint8_t> parallel_test_wasm = []() {
+   std::vector<uint8_t> w;
+   auto emit = [&](std::initializer_list<uint8_t> bytes) { for (auto b : bytes) w.push_back(b); };
+   auto emit_u8 = [&](uint8_t b) { w.push_back(b); };
+   emit({0x00,0x61,0x73,0x6d, 0x01,0x00,0x00,0x00}); // magic + version
+   // Type section: 1 type (i32)->i32
+   emit({0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f});
+   // Function section: 8 functions, all type 0
+   emit({0x03, 0x09, 0x08}); // id=3, size=9, count=8
+   for (int i = 0; i < 8; ++i) emit_u8(0x00);
+   // Export section: 8 exports "f0".."f7"
+   std::vector<uint8_t> exports;
+   exports.push_back(0x08); // 8 exports
+   for (int i = 0; i < 8; ++i) {
+      exports.push_back(0x02); // name length = 2
+      exports.push_back('f');
+      exports.push_back('0' + i);
+      exports.push_back(0x00); // export kind = func
+      exports.push_back(static_cast<uint8_t>(i)); // func index
+   }
+   emit_u8(0x07); // export section id
+   emit_u8(static_cast<uint8_t>(exports.size()));
+   w.insert(w.end(), exports.begin(), exports.end());
+   // Code section: 8 bodies, each: local.get 0, i32.const i, i32.add
+   std::vector<uint8_t> code;
+   code.push_back(0x08); // 8 bodies
+   for (int i = 0; i < 8; ++i) {
+      code.push_back(0x07); // body size = 7
+      code.push_back(0x00); // 0 local decls
+      code.push_back(0x20); code.push_back(0x00); // local.get 0
+      code.push_back(0x41); code.push_back(static_cast<uint8_t>(i)); // i32.const i
+      code.push_back(0x6a); // i32.add
+      code.push_back(0x0b); // end
+   }
+   emit_u8(0x0a); // code section id
+   emit_u8(static_cast<uint8_t>(code.size()));
+   w.insert(w.end(), code.begin(), code.end());
+   return w;
+}();
+
+struct parallel_options : psizam::default_options {
+   uint32_t compile_threads = 4;
+};
+
+TEST_CASE("jit2: parallel compilation", "[jit2_parallel]") {
+   using backend_t = backend<std::nullptr_t, psizam::jit2>;
+   parallel_options opts;
+   backend_t bkend(parallel_test_wasm, &wa, opts);
+   for (uint32_t i = 0; i < 8; ++i) {
+      std::string name = "f" + std::to_string(i);
+      CHECK(bkend.call_with_return("env", name, (uint32_t)100)->to_ui32() == 100 + i);
+   }
+}

@@ -74,7 +74,8 @@ namespace psizam {
    class machine_code_writer_t {
     public:
       machine_code_writer_t(growable_allocator& alloc, std::size_t source_bytes, module& mod,
-                          bool enable_backtrace, bool stack_limit_is_bytes) :
+                          bool enable_backtrace, bool stack_limit_is_bytes,
+                          uint32_t /*compile_threads*/ = 0) :
          _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()),
          _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
          _code_start = _allocator.alloc<unsigned char>(128);

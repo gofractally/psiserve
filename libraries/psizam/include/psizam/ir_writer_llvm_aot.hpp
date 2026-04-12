@@ -24,8 +24,9 @@ namespace psizam {
    class ir_writer_llvm_aot : public ir_writer {
     public:
       ir_writer_llvm_aot(growable_allocator& alloc, std::size_t source_bytes, module& mod,
-                         bool enable_backtrace = false, bool stack_limit_is_bytes = false)
-         : ir_writer_impl(alloc, source_bytes, mod, enable_backtrace, stack_limit_is_bytes)
+                         bool enable_backtrace = false, bool stack_limit_is_bytes = false,
+                         uint32_t compile_threads = 0)
+         : ir_writer_impl(alloc, source_bytes, mod, enable_backtrace, stack_limit_is_bytes, compile_threads)
       {
          _skip_codegen = true;
       }
@@ -34,6 +35,14 @@ namespace psizam {
       // Creates a fresh LLVM module per function, translates, optimizes, emits,
       // then discards — bounding LLVM memory to one function at a time.
       void finalize(function_body& body) {
+#if !defined(__wasi__)
+         if (_compile_threads > 1) {
+            // Parallel mode: skip serial compilation, will be done in destructor
+            ir_writer_impl::finalize(body);
+            _ir_alloc._offset = _post_array_offset;
+            return;
+         }
+#endif
          if (_compile_result && _func && !_had_error) {
             compile_current_function();
          }
@@ -56,6 +65,23 @@ namespace psizam {
             return;
          }
 
+#if !defined(__wasi__)
+         if (_compile_threads > 1 && _parse_callback) {
+            parallel_llvm_compile_all();
+            return;
+         }
+#endif
+
+         resolve_cross_function_relocs();
+
+         _compile_result->relocs = std::move(_accumulated_relocs);
+         _compile_result->code_blob = std::move(_accumulated_code);
+         _compile_result->function_offsets = std::move(_function_offsets);
+      }
+
+    private:
+
+      void resolve_cross_function_relocs() {
          // Resolve pending cross-function relocations.
          // Negative addends encode function indices:
          //   Body refs:  addend = -(code_idx + 1)              [range -1..-N]
@@ -79,13 +105,212 @@ namespace psizam {
                }
             }
          }
+      }
+
+#if !defined(__wasi__)
+      void parallel_llvm_compile_all() {
+         uint32_t N = _compile_threads;
+         if (_num_functions == 0) return;
+         if (N > _num_functions) N = _num_functions;
+
+         // Per-function results (populated by workers, read by merge)
+         struct func_result_t {
+            std::vector<uint8_t> code;
+            std::vector<code_relocation> relocations;
+            std::vector<std::pair<uint32_t, uint32_t>> function_offsets;
+            std::vector<std::pair<uint32_t, uint32_t>> body_offsets;
+            uint32_t blob_offset = 0;  // set during between phase
+         };
+         auto func_results = std::make_unique<func_result_t[]>(_num_functions);
+
+         // Per-worker state
+         struct worker_state {
+            growable_allocator ir_alloc;
+            uint64_t max_stack = 0;
+            bool had_error = false;
+            std::string error;
+         };
+         auto workers = std::make_unique<worker_state[]>(N);
+
+         // Build translate options (shared, read-only)
+         llvm_translate_options topts;
+         topts.opt_level        = 2;
+         topts.deterministic    = true;
+         topts.per_function     = true;
+         topts.softfloat        = _compile_result->softfloat;
+         topts.enable_backtrace = _compile_result->backtrace;
+         const std::string& target_triple = _compile_result->target_triple;
+
+         auto& reactor = get_compile_reactor(N);
+
+         // Initialize function/body offset arrays
+         _function_offsets.resize(_num_functions, {0, 0});
+         _func_body_offsets.resize(_num_functions, {0, 0});
+
+         std::atomic<bool> any_error{false};
+
+         reactor.run_batch(
+            _num_functions,
+
+            // work_fn: parse + translate + LLVM compile one function
+            [this, &workers, &func_results, &topts, &target_triple, &any_error]
+            (uint32_t worker_id, uint32_t func_idx) {
+               if (any_error.load(std::memory_order_relaxed)) return;
+               auto& ws = workers[worker_id];
+
+               // Lazy init worker IR allocator
+               if (!ws.ir_alloc._base) {
+#if defined(PSIZAM_COMPILE_ONLY) && !defined(__LP64__)
+                  // WASM32: fixed allocation sized for largest function
+                  ws.ir_alloc.use_fixed_memory(growable_allocator::align_to_page(
+                     _max_func_bytes * 250 + 1024 * 1024));
+#else
+                  // Native or 64-bit: demand-paged, only commits what's used
+                  ws.ir_alloc.use_default_memory();
+#endif
+               }
+
+               // Create per-function worker writer for parsing
+               ir_writer_impl worker_writer(_mod, _functions, _num_functions,
+                                           ws.ir_alloc, _enable_backtrace, _stack_limit_is_bytes);
+
+               // Parse WASM bytecodes → IR
+               _parse_callback(func_idx, worker_writer, ws.max_stack);
+
+               auto& func = _functions[func_idx];
+
+               // Translate IR → LLVM IR → native code
+               auto do_compile = [&]() {
+                  llvm_ir_translator translator(get_ir_module(), topts);
+                  translator.translate_function(func);
+                  translator.finalize();
+
+                  auto llvm_mod = translator.take_module();
+                  auto llvm_ctx = translator.take_context();
+                  auto result = llvm_aot_compile(std::move(llvm_mod), std::move(llvm_ctx),
+                                                  get_ir_module(), target_triple);
+
+                  if (!result.error.empty()) {
+                     ws.had_error = true;
+                     ws.error = std::move(result.error);
+                     any_error.store(true, std::memory_order_relaxed);
+                     return;
+                  }
+
+                  func_results[func_idx].code = std::move(result.code);
+                  func_results[func_idx].relocations = std::move(result.relocations);
+                  func_results[func_idx].function_offsets = std::move(result.function_offsets);
+                  func_results[func_idx].body_offsets = std::move(result.body_offsets);
+               };
+
+#ifdef __EXCEPTIONS
+               try {
+                  do_compile();
+               } catch (const std::exception& ex) {
+                  ws.had_error = true;
+                  ws.error = ex.what();
+                  any_error.store(true, std::memory_order_relaxed);
+               } catch (...) {
+                  ws.had_error = true;
+                  ws.error = "unknown error during parallel LLVM AOT compilation";
+                  any_error.store(true, std::memory_order_relaxed);
+               }
+#else
+               do_compile();
+#endif
+
+               // Reset IR allocator — only 1 function's IR alive at a time
+               ws.ir_alloc._offset = 0;
+            },
+
+            // between_fn: compute prefix sums, set blob offsets
+            [this, &workers, &func_results, N]() {
+               // Check for errors
+               for (uint32_t w = 0; w < N; ++w) {
+                  if (workers[w].had_error) {
+                     _compile_result->error = std::move(workers[w].error);
+                     _had_error = true;
+                     return;
+                  }
+               }
+
+               // Compute total code size and per-function offsets (prefix sum)
+               size_t total_size = 0;
+               for (uint32_t f = 0; f < _num_functions; ++f) {
+                  // Align to 16 bytes
+                  size_t align_pad = (16 - (total_size % 16)) % 16;
+                  total_size += align_pad;
+                  func_results[f].blob_offset = static_cast<uint32_t>(total_size);
+                  total_size += func_results[f].code.size();
+               }
+
+               // Pre-allocate merged code blob
+               _accumulated_code.resize(total_size, 0x00);
+
+               // Set function/body offsets in merged blob
+               for (uint32_t f = 0; f < _num_functions; ++f) {
+                  uint32_t blob_offset = func_results[f].blob_offset;
+                  if (f < func_results[f].function_offsets.size()) {
+                     auto [entry_off, entry_sz] = func_results[f].function_offsets[f];
+                     _function_offsets[f] = {blob_offset + entry_off, entry_sz};
+                  }
+                  if (f < func_results[f].body_offsets.size()) {
+                     auto [body_off, body_sz] = func_results[f].body_offsets[f];
+                     _func_body_offsets[f] = {blob_offset + body_off, body_sz};
+                  }
+               }
+
+               // Merge per-worker max_stack
+               for (uint32_t w = 0; w < N; ++w) {
+                  _mod.maximum_stack = std::max(_mod.maximum_stack, workers[w].max_stack);
+               }
+            },
+
+            // merge_fn: parallel copy + reloc adjustment
+            [this, &func_results](uint32_t worker_id) {
+               if (_had_error) return;
+               // Each worker copies a stripe of functions
+               uint32_t funcs_per_worker = (_num_functions + _compile_threads - 1) / _compile_threads;
+               uint32_t start = worker_id * funcs_per_worker;
+               uint32_t end = std::min(start + funcs_per_worker, _num_functions);
+
+               for (uint32_t f = start; f < end; ++f) {
+                  auto& fr = func_results[f];
+                  if (fr.code.empty()) continue;
+
+                  // Copy this function's code into merged blob
+                  std::memcpy(_accumulated_code.data() + fr.blob_offset,
+                              fr.code.data(), fr.code.size());
+
+                  // Adjust relocations and accumulate
+                  for (auto& reloc : fr.relocations) {
+                     reloc.code_offset += fr.blob_offset;
+                     if (reloc.symbol == reloc_symbol::code_blob_self && reloc.addend >= 0) {
+                        reloc.addend += static_cast<int32_t>(fr.blob_offset);
+                     }
+                  }
+               }
+            }
+         ); // end run_batch
+
+         if (_had_error) return;
+
+         // Collect all relocations (serial — order matters for determinism)
+         for (uint32_t f = 0; f < _num_functions; ++f) {
+            for (auto& reloc : func_results[f].relocations) {
+               _accumulated_relocs.push_back(std::move(reloc));
+            }
+         }
+
+         // Resolve cross-function relocations
+         resolve_cross_function_relocs();
 
          _compile_result->relocs = std::move(_accumulated_relocs);
          _compile_result->code_blob = std::move(_accumulated_code);
          _compile_result->function_offsets = std::move(_function_offsets);
       }
+#endif // !__wasi__
 
-    private:
       void compile_current_function() {
          if (_compile_result->target_triple.empty()) {
             _compile_result->error = "ir_writer_llvm_aot: target_triple not set";

@@ -109,7 +109,8 @@ namespace psizam {
       static constexpr uint32_t invert_condition(uint32_t cond) { return cond ^ 1; }
 
       machine_code_writer_a64(growable_allocator& alloc, std::size_t source_bytes, module& mod,
-                          bool enable_backtrace = false, bool stack_limit_is_bytes = false) :
+                          bool enable_backtrace = false, bool stack_limit_is_bytes = false,
+                          uint32_t /*compile_threads*/ = 0) :
          _mod(mod), _allocator(alloc), _code_segment_base(_allocator.start_code()),
          _enable_backtrace(enable_backtrace), _stack_limit_is_bytes(stack_limit_is_bytes) {
 

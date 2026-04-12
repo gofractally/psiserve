@@ -160,6 +160,36 @@ namespace psizam {
       /// Access the recorded relocations (for .pzam serialization).
       const relocation_recorder& relocations() const { return _reloc_recorder; }
 
+      /// Access to code segment base for parallel compilation merge.
+      void* get_code_segment_base() const { return _code_segment_base; }
+
+      /// Get the call_indirect error handler address (for element table patching).
+      void* get_call_indirect_handler() const { return call_indirect_handler; }
+
+      /// Get resolved function address (nullptr if still pending).
+      void* get_func_addr(uint32_t funcnum) const {
+         if (funcnum < _func_relocations.size()) {
+            if (auto* resolved = std::get_if<void*>(&_func_relocations[funcnum])) {
+               return *resolved;
+            }
+         }
+         return nullptr;
+      }
+
+      /// Collect pending (unresolved) cross-function call relocations.
+      /// Each entry: (offset_from_code_segment_base, target_function_index).
+      void collect_pending_relocs(std::vector<std::pair<uint32_t, uint32_t>>& out) const {
+         for (uint32_t i = 0; i < _func_relocations.size(); ++i) {
+            if (auto* pending = std::get_if<std::vector<void*>>(&_func_relocations[i])) {
+               for (void* addr : *pending) {
+                  uint32_t offset = static_cast<uint32_t>(
+                     static_cast<char*>(addr) - static_cast<char*>(_code_segment_base));
+                  out.push_back({offset, i});
+               }
+            }
+         }
+      }
+
       // Offset of _multi_return buffer in frame_info_holder (accessed via RDI)
       static constexpr int32_t multi_return_offset = 24;
 
@@ -280,10 +310,12 @@ namespace psizam {
          _fixup_pool_next = 0;
          _fixup_pool_size = func.inst_count + 1;
 
-         // Disarm scratch so its destructor won't reclaim the code buffer.
-         // When _scratch_alloc == _allocator, scratch data stays interleaved
-         // with code — the waste is acceptable given deterministic limits.
-         scratch.disarm();
+         // When scratch and code share the same allocator, disarm scratch so its
+         // destructor won't reclaim the code buffer (scratch data stays interleaved).
+         // When they're separate allocators, let scratch reclaim after each function.
+         if (&_scratch_alloc == &_allocator) {
+            scratch.disarm();
+         }
 
          // Code buffer
          const std::size_t bytes_per_inst = func.has_simd ? 128 : 64;

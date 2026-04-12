@@ -2826,25 +2826,39 @@ namespace psizam {
                }
 
                case ir_op::table_get: {
-                  auto* elem_idx = load_vreg(inst.ri.src1);
-                  auto* result = builder.CreateCall(rt_table_get,
-                     {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), elem_idx});
-                  store_vreg(inst.dest, result);
+                  // Operand comes via preceding arg instruction
+                  if (call_args.size() >= 1) {
+                     auto* idx = convert_type(call_args[0], i32_ty);
+                     auto* result = builder.CreateCall(rt_table_get,
+                        {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), idx});
+                     store_vreg(inst.dest, result);
+                  }
+                  call_args.clear();
                   break;
                }
                case ir_op::table_set: {
-                  auto* elem_idx = load_vreg(inst.rr.src1);
-                  auto* val = load_vreg(inst.rr.src2);
-                  builder.CreateCall(rt_table_set,
-                     {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), elem_idx, val});
+                  // Operands come via preceding arg instructions: [idx, val]
+                  if (call_args.size() >= 2) {
+                     auto* idx = convert_type(call_args[0], i32_ty);
+                     auto* val = convert_type(call_args[1], i32_ty);
+                     builder.CreateCall(rt_table_set,
+                        {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)),
+                         idx, val});
+                  }
+                  call_args.clear();
                   break;
                }
                case ir_op::table_grow: {
-                  auto* init_val = load_vreg(inst.rr.src1);
-                  auto* delta = load_vreg(inst.rr.src2);
-                  auto* result = builder.CreateCall(rt_table_grow,
-                     {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)), delta, init_val});
-                  store_vreg(inst.dest, result);
+                  // Operands come via preceding arg instructions: [init_val, delta]
+                  if (call_args.size() >= 2) {
+                     auto* init_val = convert_type(call_args[0], i32_ty);
+                     auto* delta = convert_type(call_args[1], i32_ty);
+                     auto* result = builder.CreateCall(rt_table_grow,
+                        {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)),
+                         delta, init_val});
+                     store_vreg(inst.dest, result);
+                  }
+                  call_args.clear();
                   break;
                }
                case ir_op::table_size: {
@@ -2855,9 +2869,12 @@ namespace psizam {
                }
                case ir_op::table_fill: {
                   if (call_args.size() >= 3) {
+                     auto* i = convert_type(call_args[0], i32_ty);
+                     auto* val = convert_type(call_args[1], i32_ty);
+                     auto* n = convert_type(call_args[2], i32_ty);
                      builder.CreateCall(rt_table_fill,
                         {ctx_ptr, builder.getInt32(static_cast<uint32_t>(inst.ri.imm)),
-                         call_args[0], call_args[1], call_args[2]});
+                         i, val, n});
                   }
                   call_args.clear();
                   break;

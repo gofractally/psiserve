@@ -20,7 +20,8 @@ namespace psizam {
 
     public:
       explicit bitcode_writer(growable_allocator& alloc, std::size_t source_bytes, module& mod,
-                             bool /*enable_backtrace*/ = false, bool /*stack_limit_is_bytes*/ = false) :
+                             bool /*enable_backtrace*/ = false, bool /*stack_limit_is_bytes*/ = false,
+                             uint32_t /*compile_threads*/ = 0) :
          _allocator(alloc),
          _code_segment_base(alloc.start_code()),
          fb(alloc, source_bytes),

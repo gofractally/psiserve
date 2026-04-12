@@ -28,8 +28,8 @@ namespace psizam {
     public:
       ir_writer_llvm(growable_allocator& alloc, std::size_t source_bytes, module& mod,
                      bool enable_backtrace = false, bool stack_limit_is_bytes = false,
-                     bool deterministic = true)
-         : ir_writer_impl(alloc, source_bytes, mod, enable_backtrace, stack_limit_is_bytes),
+                     uint32_t compile_threads = 0, bool deterministic = true)
+         : ir_writer_impl(alloc, source_bytes, mod, enable_backtrace, stack_limit_is_bytes, compile_threads),
            _deterministic(deterministic)
       {
          _skip_codegen = true;

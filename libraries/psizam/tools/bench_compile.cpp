@@ -29,6 +29,12 @@
 using namespace psizam;
 namespace fs = std::filesystem;
 
+struct bench_options : default_options {
+   uint32_t compile_threads = 0;
+};
+
+static bench_options g_opts;
+
 template<typename IrWriter>
 static bool try_compile(std::vector<uint8_t>& wasm_bytes,
                         pzam_arch target_arch,
@@ -40,8 +46,8 @@ static bool try_compile(std::vector<uint8_t>& wasm_bytes,
    compile_result.target_triple = target_triple;
    null_debug_info debug;
 
-   using parser_t = binary_parser<IrWriter, default_options, null_debug_info>;
-   parser_t parser(mod.allocator, default_options{}, false, false);
+   using parser_t = binary_parser<IrWriter, bench_options, null_debug_info>;
+   parser_t parser(mod.allocator, g_opts, false, false);
    parser.set_compile_result(&compile_result);
 
    parser.parse_module(wasm_bytes, mod, debug);
@@ -55,6 +61,8 @@ int main(int argc, char** argv) {
    std::string target_str;
    std::string backend_str = "jit2";
    std::string dir_path;
+   uint32_t threads = 0;
+   int runs = 1;
 
    for (int i = 1; i < argc; i++) {
       std::string arg = argv[i];
@@ -62,13 +70,19 @@ int main(int argc, char** argv) {
          target_str = arg.substr(9);
       } else if (arg.starts_with("--backend=")) {
          backend_str = arg.substr(10);
+      } else if (arg.starts_with("--threads=")) {
+         threads = std::stoul(arg.substr(10));
+      } else if (arg.starts_with("--runs=")) {
+         runs = std::stoi(arg.substr(7));
       } else if (arg[0] != '-') {
          dir_path = arg;
       }
    }
 
+   g_opts.compile_threads = threads;
+
    if (dir_path.empty() || target_str.empty()) {
-      std::cerr << "Usage: bench-compile --target=x86_64|aarch64 [--backend=jit2|llvm] <wasm-dir>\n";
+      std::cerr << "Usage: bench-compile --target=x86_64|aarch64 [--backend=jit2|llvm] [--threads=N] [--runs=N] <wasm-dir-or-file>\n";
       return 1;
    }
 
@@ -85,77 +99,116 @@ int main(int argc, char** argv) {
       return 1;
    }
 
-   // Collect all .wasm files
+   // Collect .wasm files (single file or directory)
    std::vector<fs::path> wasm_files;
-   for (const auto& entry : fs::directory_iterator(dir_path)) {
-      if (entry.path().extension() == ".wasm")
-         wasm_files.push_back(entry.path());
+   if (fs::is_regular_file(dir_path)) {
+      wasm_files.push_back(dir_path);
+   } else {
+      for (const auto& entry : fs::directory_iterator(dir_path)) {
+         if (entry.path().extension() == ".wasm")
+            wasm_files.push_back(entry.path());
+      }
    }
    std::sort(wasm_files.begin(), wasm_files.end());
 
-   std::cerr << "Found " << wasm_files.size() << " .wasm files in " << dir_path << "\n";
-   std::cerr << "Target: " << target_str << "  Backend: " << backend_str << "\n\n";
-
-   uint32_t ok_count = 0, fail_count = 0, crash_count = 0;
-   uint64_t total_wasm_bytes = 0;
-   double total_compile_ms = 0;
+   std::cerr << "Found " << wasm_files.size() << " .wasm files\n";
+   std::cerr << "Target: " << target_str << "  Backend: " << backend_str
+             << "  Threads: " << threads << "  Runs: " << runs << "\n\n";
 
    struct Result {
       std::string name;
       size_t      wasm_size;
-      double      compile_ms;
+      double      compile_ms; // best of all runs
       bool        ok;
       std::string error;
    };
-   std::vector<Result> results;
 
+   // Pre-read all WASM files
+   struct WasmFile {
+      std::string name;
+      std::vector<uint8_t> bytes;
+   };
+   std::vector<WasmFile> wasm_data;
    for (const auto& path : wasm_files) {
-      Result r;
-      r.name = path.filename().string();
-
-      // Read WASM file
       std::ifstream ifs(path, std::ios::binary);
-      std::vector<uint8_t> wasm_bytes(
-         (std::istreambuf_iterator<char>(ifs)),
-         std::istreambuf_iterator<char>());
-      r.wasm_size = wasm_bytes.size();
+      wasm_data.push_back({
+         path.filename().string(),
+         std::vector<uint8_t>((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>())
+      });
+   }
 
-      auto t0 = std::chrono::high_resolution_clock::now();
+   std::vector<Result> best_results;
+   double best_total_ms = std::numeric_limits<double>::max();
 
-      try {
-         if (backend_str == "jit2") {
-            if (target_arch == pzam_arch::x86_64)
-               try_compile<ir_writer_x64>(wasm_bytes, target_arch);
-            else
-               try_compile<ir_writer_a64>(wasm_bytes, target_arch);
-         }
+   for (int run = 0; run < runs; ++run) {
+      uint32_t ok_count = 0, fail_count = 0;
+      double run_total_ms = 0;
+      std::vector<Result> run_results;
+
+      for (auto& wf : wasm_data) {
+         Result r;
+         r.name = wf.name;
+         r.wasm_size = wf.bytes.size();
+
+         auto t0 = std::chrono::high_resolution_clock::now();
+
+         try {
+            if (backend_str == "jit2") {
+               if (target_arch == pzam_arch::x86_64)
+                  try_compile<ir_writer_x64>(wf.bytes, target_arch);
+               else
+                  try_compile<ir_writer_a64>(wf.bytes, target_arch);
+            }
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
-         else if (backend_str == "llvm") {
-            try_compile<ir_writer_llvm_aot>(wasm_bytes, target_arch, target_triple);
-         }
+            else if (backend_str == "llvm") {
+               try_compile<ir_writer_llvm_aot>(wf.bytes, target_arch, target_triple);
+            }
 #endif
-         r.ok = true;
-      } catch (const psizam::exception& ex) {
-         r.ok = false;
-         r.error = ex.detail();
-      } catch (const std::exception& ex) {
-         r.ok = false;
-         r.error = std::string("CRASH: ") + ex.what();
-         crash_count++;
+            r.ok = true;
+         } catch (const psizam::exception& ex) {
+            r.ok = false;
+            r.error = ex.detail();
+         } catch (const std::exception& ex) {
+            r.ok = false;
+            r.error = std::string("CRASH: ") + ex.what();
+         }
+
+         auto t1 = std::chrono::high_resolution_clock::now();
+         r.compile_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+         if (r.ok) {
+            ok_count++;
+            run_total_ms += r.compile_ms;
+         } else {
+            fail_count++;
+            std::cerr << "  FAIL: " << r.name << ": " << r.error << "\n";
+         }
+
+         run_results.push_back(std::move(r));
       }
 
-      auto t1 = std::chrono::high_resolution_clock::now();
-      r.compile_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+      if (runs > 1)
+         std::cerr << "Run " << (run+1) << "/" << runs << ": " << std::fixed << std::setprecision(3) << run_total_ms << " ms\n";
 
+      if (run_total_ms < best_total_ms) {
+         best_total_ms = run_total_ms;
+         best_results = std::move(run_results);
+      }
+   }
+
+   auto& results = best_results;
+   uint32_t ok_count = 0, fail_count = 0, crash_count = 0;
+   uint64_t total_wasm_bytes = 0;
+   double total_compile_ms = 0;
+   for (auto& r : results) {
       if (r.ok) {
          ok_count++;
          total_wasm_bytes += r.wasm_size;
          total_compile_ms += r.compile_ms;
       } else {
          fail_count++;
+         if (r.error.starts_with("CRASH:")) crash_count++;
       }
-
-      results.push_back(std::move(r));
    }
 
    // Print results — successful compilations sorted by time (slowest first)

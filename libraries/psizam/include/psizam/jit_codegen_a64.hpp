@@ -215,16 +215,7 @@ namespace psizam {
          }
       }
 
-    private:
-
-      // ──────── Instruction emission ────────
-
-      void emit32(uint32_t instr) {
-         std::memcpy(code, &instr, 4);
-         code += 4;
-      }
-
-      // ──────── Branch fixup ────────
+      // ──────── Branch fixup (public for parallel compilation merge) ────────
 
       // Try to fix a branch to target. Returns false if displacement exceeds
       // the instruction's encoding range (caller must use a veneer instead).
@@ -307,6 +298,15 @@ namespace psizam {
          uint32_t b = 0x14000000 | (static_cast<uint32_t>(offset) & 0x3FFFFFF);
          std::memcpy(branch, &b, 4);
          return true;
+      }
+
+    private:
+
+      // ──────── Instruction emission ────────
+
+      void emit32(uint32_t instr) {
+         std::memcpy(code, &instr, 4);
+         code += 4;
       }
 
       // ──────── Immediate encoding helpers ────────
@@ -2306,7 +2306,7 @@ namespace psizam {
                reinterpret_cast<uint64_t>(&__psizam_table_get));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
-            emit_push(X0); // push result
+            store_x0_vreg(inst.dest);
             break;
          }
          case ir_op::table_set: {
@@ -2332,7 +2332,7 @@ namespace psizam {
                reinterpret_cast<uint64_t>(&__psizam_table_grow));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
-            emit_push(X0); // push result
+            store_x0_vreg(inst.dest);
             break;
          }
          case ir_op::table_size: {
@@ -2343,7 +2343,7 @@ namespace psizam {
                reinterpret_cast<uint64_t>(&__psizam_table_size));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
-            emit_push(X0); // push result
+            store_x0_vreg(inst.dest);
             break;
          }
          case ir_op::table_fill: {
@@ -3848,6 +3848,30 @@ namespace psizam {
       relocation_recorder _reloc_recorder;
     public:
       const relocation_recorder& relocations() const { return _reloc_recorder; }
+
+      void* get_code_segment_base() const { return _code_segment_base; }
+      void* get_call_indirect_handler() const { return call_indirect_handler; }
+
+      void* get_func_addr(uint32_t funcnum) const {
+         if (funcnum < _func_relocations.size()) {
+            if (auto* resolved = std::get_if<void*>(&_func_relocations[funcnum])) {
+               return *resolved;
+            }
+         }
+         return nullptr;
+      }
+
+      void collect_pending_relocs(std::vector<std::pair<uint32_t, uint32_t>>& out) const {
+         for (uint32_t i = 0; i < _func_relocations.size(); ++i) {
+            if (auto* pending = std::get_if<std::vector<void*>>(&_func_relocations[i])) {
+               for (void* addr : *pending) {
+                  uint32_t offset = static_cast<uint32_t>(
+                     static_cast<char*>(addr) - static_cast<char*>(_code_segment_base));
+                  out.push_back({offset, i});
+               }
+            }
+         }
+      }
    };
 
 } // namespace psizam
