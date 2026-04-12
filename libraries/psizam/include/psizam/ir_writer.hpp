@@ -161,9 +161,20 @@ namespace psizam {
          entry.is_loop = 0;
          entry.is_function = 1;
          entry.entered_unreachable = 0;
-         // Allocate merge vreg so br-to-function-body can pass return values
-         if (entry.result_type != types::pseudo) {
+         entry.result_count = ft.return_count;
+         std::memset(entry.result_types, 0, sizeof(entry.result_types));
+         std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs));
+         // Allocate merge vregs so br-to-function-body can pass return values
+         if (ft.return_count > 1) {
+            for (uint32_t i = 0; i < ft.return_count && i < 16; ++i) {
+               entry.merge_vregs[i] = _func->alloc_vreg(types::i64);
+               entry.result_types[i] = types::i64;
+            }
+            entry.merge_vreg = entry.merge_vregs[0];
+         } else if (entry.result_type != types::pseudo) {
             entry.merge_vreg = _func->alloc_vreg(entry.result_type);
+            entry.merge_vregs[0] = entry.merge_vreg;
+            entry.result_types[0] = entry.result_type;
          } else {
             entry.merge_vreg = ir_vreg_none;
          }
@@ -228,26 +239,44 @@ namespace psizam {
             block_idx = entry.block_idx;
 
             if (entry.result_count > 1) {
-               // Multi-value block end: mov N results to merge vregs, push them
-               if (!_unreachable && _func->vstack_depth() > entry.stack_depth) {
-                  // Pop N results from vstack and mov to merge vregs
-                  for (int i = static_cast<int>(entry.result_count) - 1; i >= 0; --i) {
-                     uint32_t src = _func->vpop();
-                     if (src != entry.merge_vregs[i]) {
-                        ir_inst mov{};
-                        mov.opcode = ir_op::mov;
-                        mov.type = types::i64;
-                        mov.flags = IR_NONE;
-                        mov.dest = entry.merge_vregs[i];
-                        mov.rr.src1 = src;
-                        mov.rr.src2 = ir_vreg_none;
-                        _func->emit(mov);
+               if (entry.is_function) {
+                  // Function scope multi-value: emit multi_return_store IR ops
+                  // so regalloc sees the stores (epilogue can't reference vregs safely)
+                  if (!_unreachable && _func->vstack_depth() > entry.stack_depth) {
+                     for (uint32_t i = entry.result_count; i > 0; --i) {
+                        uint32_t src = _func->vpop();
+                        ir_inst store{};
+                        store.opcode = ir_op::multi_return_store;
+                        store.type = types::i64;
+                        store.flags = IR_SIDE_EFFECT;
+                        store.dest = ir_vreg_none;
+                        store.ri.src1 = src;
+                        store.ri.imm = static_cast<int32_t>((i - 1) * 8);
+                        _func->emit(store);
                      }
                   }
-               }
-               _func->vstack_resize(entry.stack_depth);
-               for (uint32_t i = 0; i < entry.result_count; ++i) {
-                  _func->vpush(entry.merge_vregs[i]);
+                  _func->vstack_resize(entry.stack_depth);
+               } else {
+                  // Non-function multi-value block end: mov N results to merge vregs, push them
+                  if (!_unreachable && _func->vstack_depth() > entry.stack_depth) {
+                     for (int i = static_cast<int>(entry.result_count) - 1; i >= 0; --i) {
+                        uint32_t src = _func->vpop();
+                        if (src != entry.merge_vregs[i]) {
+                           ir_inst mov{};
+                           mov.opcode = ir_op::mov;
+                           mov.type = types::i64;
+                           mov.flags = IR_NONE;
+                           mov.dest = entry.merge_vregs[i];
+                           mov.rr.src1 = src;
+                           mov.rr.src2 = ir_vreg_none;
+                           _func->emit(mov);
+                        }
+                     }
+                  }
+                  _func->vstack_resize(entry.stack_depth);
+                  for (uint32_t i = 0; i < entry.result_count; ++i) {
+                     _func->vpush(entry.merge_vregs[i]);
+                  }
                }
             } else if (entry.merge_vreg != ir_vreg_none) {
                // Single-value: existing path

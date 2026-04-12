@@ -713,6 +713,17 @@ namespace psizam {
 
          if(!ft.return_count)
             return {};
+         else if (ft.return_count > 1) {
+            // Multi-value return: JIT backends store all values to _multi_return[]
+            auto& val = this->_multi_return[0];
+            switch (ft.return_type) {
+               case i32: return {i32_const_t{val.i32}};
+               case i64: return {i64_const_t{val.i64}};
+               case f32: return {f32_const_t{val.f32}};
+               case f64: return {f64_const_t{val.f64}};
+               default: assert(!"Unexpected multi-value return type");
+            }
+         }
          else switch (ft.return_type) {
             case i32: return {i32_const_t{result.scalar.i32}};
             case i64: return {i64_const_t{result.scalar.i64}};
@@ -1265,8 +1276,14 @@ namespace psizam {
             }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
          }
 
-         if (_mod->get_function_type(func_index).return_count && !_state.exiting) {
-            return pop_operand();
+         const auto& ret_ft = _mod->get_function_type(func_index);
+         if (ret_ft.return_count && !_state.exiting) {
+            // For multi-value returns, the first return value is deepest on stack.
+            // Peek at it before popping all values.
+            auto first = peek_operand(ret_ft.return_count - 1);
+            for (uint32_t i = 0; i < ret_ft.return_count; ++i)
+               pop_operand();
+            return first;
          } else {
             return {};
          }

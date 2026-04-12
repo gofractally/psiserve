@@ -795,7 +795,10 @@ namespace psizam {
 
       void emit_function_epilogue(ir_function& func) {
          if (func.type->return_count > 1) {
-            // Multi-value return: values already stored to _multi_return by multi_return_store ops
+            // Multi-value return: values already stored to _multi_return by
+            // multi_return_store IR ops (emitted in emit_end/emit_return).
+            // Nothing to do here — the stores are in the IR so regalloc
+            // correctly tracks their liveness.
          } else if (_use_regalloc) {
             if (func.type->return_count != 0 && func.vstack_top > 0) {
                if (func.type->return_type == types::v128) {

@@ -24,6 +24,7 @@ BACKEND_TEST_CASE( "Testing wasm <call_0_wasm>", "[call_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "type-i64")->to_ui64() == UINT64_C(356));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-f32")->to_f32()) == UINT32_C(1165172736));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-f64")->to_f64()) == UINT64_C(4660882566700597248));
+   CHECK(bkend.call_with_return("env", "type-i32-i64")->to_ui32() == UINT32_C(306));
    CHECK(bkend.call_with_return("env", "type-first-i32")->to_ui32() == UINT32_C(32));
    CHECK(bkend.call_with_return("env", "type-first-i64")->to_ui64() == UINT64_C(64));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-first-f32")->to_f32()) == UINT32_C(1068037571));
@@ -32,6 +33,13 @@ BACKEND_TEST_CASE( "Testing wasm <call_0_wasm>", "[call_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "type-second-i64")->to_ui64() == UINT64_C(64));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-second-f32")->to_f32()) == UINT32_C(1107296256));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-second-f64")->to_f64()) == UINT64_C(4634211053438658150));
+   CHECK(bkend.call_with_return("env", "type-all-i32-f64")->to_ui32() == UINT32_C(32));
+   CHECK(bkend.call_with_return("env", "type-all-i32-i32")->to_ui32() == UINT32_C(2));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-all-f32-f64")->to_f64()) == UINT64_C(4611686018427387904));
+   CHECK(bkend.call_with_return("env", "type-all-f64-i32")->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "as-binary-all-operands")->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "as-mixed-operands")->to_ui32() == UINT32_C(32));
+   CHECK(bkend.call_with_return("env", "as-call-all-operands")->to_ui32() == UINT32_C(3));
    CHECK(bkend.call_with_return("env", "fac", UINT64_C(0))->to_ui64() == UINT64_C(1));
    CHECK(bkend.call_with_return("env", "fac", UINT64_C(1))->to_ui64() == UINT64_C(1));
    CHECK(bkend.call_with_return("env", "fac", UINT64_C(5))->to_ui64() == UINT64_C(120));

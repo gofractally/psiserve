@@ -4107,6 +4107,21 @@ namespace psizam {
             if (bb.getTerminator()) continue;
             builder.SetInsertPoint(&bb);
             if (func.block_count > 0 && &bb == block_exits[0]) {
+               // Multi-value: store all return values to ctx->_multi_return[]
+               if (ft.return_count > 1) {
+                  for (uint32_t i = 0; i < ft.return_count; ++i) {
+                     llvm::Value* val = load_vreg(i);
+                     if (!val) val = llvm::Constant::getNullValue(builder.getInt64Ty());
+                     if (val->getType() != builder.getInt64Ty())
+                        val = builder.CreateBitOrPointerCast(val, builder.getInt64Ty());
+                     int32_t offset = 24 + static_cast<int32_t>(i * 8);
+                     auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
+                        builder.getInt32(offset));
+                     auto* typed_ptr = builder.CreateBitCast(ptr,
+                        llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                     builder.CreateStore(val, typed_ptr);
+                  }
+               }
                // Function exit block — return merge vreg v0
                if (fn->getReturnType()->isVoidTy()) {
                   builder.CreateRetVoid();

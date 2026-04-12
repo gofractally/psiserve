@@ -291,6 +291,10 @@ namespace psizam {
             case ir_op::memory_grow:
                count_use(inst.rr.src1);
                break;
+            // Multi-value return store: ri.src1 = value vreg
+            case ir_op::multi_return_store:
+               count_use(inst.ri.src1);
+               break;
             case ir_op::v128_op: {
                auto sub = static_cast<simd_sub>(inst.dest);
                // For scalar-producing ops, addr is a DEST vreg, not a source.
@@ -623,6 +627,10 @@ namespace psizam {
             try_replace(inst.sel.val1);
             try_replace(inst.sel.val2);
             try_replace(inst.sel.cond);
+            break;
+         // multi_return_store: ri.src1 = value vreg
+         case ir_op::multi_return_store:
+            try_replace(inst.ri.src1);
             break;
          default:
             break;

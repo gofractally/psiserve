@@ -45,13 +45,16 @@ endmacro()
 if(PSIZAM_ENABLE_SPEC_TESTS)
 
 foreach(testcase address align binary binary-leb128 block br br_if br_table break-drop call_indirect
-                 call const conversions custom data
+                 call comments const conversions custom data
                  endianness f32 f32_bitwise f32_cmp f64 f64_bitwise f64_cmp
                  fac float_exprs float_literals float_memory float_misc forward
                  func func_ptrs global i32 i64 if int_exprs int_literals labels left-to-right
                  load local_get local_set local_tee loop memory
                  memory_redundancy memory_grow memory_size memory_trap names nop return
-                 select stack start store switch traps type
+                 return_call return_call_indirect
+                 select stack start store switch
+                 table_get table_set table_grow table_size table_fill
+                 token traps type
                  unreachable unreached-invalid unwind
                  utf8-custom-section-id utf8-import-field utf8-import-module
                  )
@@ -103,6 +106,9 @@ set(SIMD_TESTS
     simd_load_extend simd_load_splat simd_load_zero
     simd_splat simd_store
     simd_store8_lane simd_store16_lane simd_store32_lane simd_store64_lane
+    simd_select simd_linking
+    i16x8_relaxed_q15mulr_s i32x4_relaxed_trunc i8x16_relaxed_swizzle
+    relaxed_dot_product relaxed_laneselect relaxed_madd_nmadd relaxed_min_max
 )
 # SIMD tests — not in w3c-1.0 spec, always use pre-generated files
 foreach(testcase ${SIMD_TESTS})

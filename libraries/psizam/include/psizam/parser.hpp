@@ -1464,27 +1464,34 @@ namespace psizam {
                case 0x12: { // return_call
                   check_in_bounds();
                   uint32_t funcnum = parse_varuint32(code);
-                  const func_type& ft = _mod->get_function_type(funcnum);
-                  for(uint32_t i = 0; i < ft.param_types.size(); ++i)
-                     op_stack.pop(ft.param_types[ft.param_types.size() - i - 1]);
-                  for(auto rt : ft.return_types)
+                  PSIZAM_ASSERT(funcnum < _mod->get_imported_functions_size() + _mod->functions.size(),
+                                wasm_parse_exception, "return_call function index out of range");
+                  const func_type& target_ft = _mod->get_function_type(funcnum);
+                  PSIZAM_ASSERT(target_ft.return_types == ft.return_types,
+                                wasm_parse_exception, "return_call type mismatch");
+                  for(uint32_t i = 0; i < target_ft.param_types.size(); ++i)
+                     op_stack.pop(target_ft.param_types[target_ft.param_types.size() - i - 1]);
+                  for(auto rt : target_ft.return_types)
                      op_stack.push(rt);
-                  code_writer.emit_tail_call(ft, funcnum);
+                  code_writer.emit_tail_call(target_ft, funcnum);
                   op_stack.start_unreachable();
                } break;
                case 0x13: { // return_call_indirect
                   check_in_bounds();
                   uint32_t functypeidx = parse_varuint32(code);
-                  const func_type& ft = _mod->types.at(functypeidx);
+                  const func_type& target_ft = _mod->types.at(functypeidx);
+                  PSIZAM_ASSERT(target_ft.return_types == ft.return_types,
+                                wasm_parse_exception, "return_call_indirect type mismatch");
                   PSIZAM_ASSERT(_mod->tables.size() > 0, wasm_parse_exception, "return_call_indirect requires a table");
                   op_stack.pop(types::i32);
-                  for(uint32_t i = 0; i < ft.param_types.size(); ++i)
-                     op_stack.pop(ft.param_types[ft.param_types.size() - i - 1]);
-                  for(auto rt : ft.return_types)
+                  for(uint32_t i = 0; i < target_ft.param_types.size(); ++i)
+                     op_stack.pop(target_ft.param_types[target_ft.param_types.size() - i - 1]);
+                  for(auto rt : target_ft.return_types)
                      op_stack.push(rt);
                   uint32_t table_idx = parse_varuint32(code);
                   PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "return_call_indirect table index out of range");
-                  code_writer.emit_tail_call_indirect(ft, type_aliases[functypeidx], table_idx);
+                  PSIZAM_ASSERT(_mod->tables[table_idx].element_type == types::funcref, wasm_parse_exception, "return_call_indirect requires funcref table");
+                  code_writer.emit_tail_call_indirect(target_ft, type_aliases[functypeidx], table_idx);
                   op_stack.start_unreachable();
                } break;
                case opcodes::drop: check_in_bounds(); code_writer.emit_drop(op_stack.pop()); break;
@@ -2428,7 +2435,7 @@ namespace psizam {
                         auto table_idx = parse_varuint32(code);
                         PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.grow table index out of range");
                         op_stack.pop(types::i32);  // delta
-                        op_stack.pop(types::i32);  // init value (ref)
+                        op_stack.pop(_mod->tables[table_idx].element_type);  // init value (ref)
                         op_stack.push(types::i32); // previous size or -1
                         code_writer.emit_table_grow(table_idx);
                      } break;
@@ -2444,7 +2451,7 @@ namespace psizam {
                         auto table_idx = parse_varuint32(code);
                         PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "table.fill table index out of range");
                         op_stack.pop(types::i32);  // n
-                        op_stack.pop(types::i32);  // value (ref)
+                        op_stack.pop(_mod->tables[table_idx].element_type);  // value (ref)
                         op_stack.pop(types::i32);  // i (start index)
                         code_writer.emit_table_fill(table_idx);
                      } break;

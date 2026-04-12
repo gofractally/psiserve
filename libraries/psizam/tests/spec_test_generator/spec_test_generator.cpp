@@ -1291,6 +1291,39 @@ string generate_test_call_nan(picojson::object obj) {
    return ss.str();
 }
 
+string generate_call_result_expr(picojson::object obj, const string& result_type) {
+   stringstream ss;
+   ss << "bkend.call_with_return(\"env\", ";
+   ss << cpp_string(obj["field"]);
+   for (picojson::value argv : obj["args"].get<picojson::array>()) {
+      ss << ", ";
+      picojson::object arg = argv.get<picojson::object>();
+      translate_arg(ss, arg);
+   }
+   ss << ")";
+   if (result_type == "i32") ss << "->to_ui32()";
+   else if (result_type == "i64") ss << "->to_ui64()";
+   else if (result_type == "f32") ss << "->to_f32()";
+   else if (result_type == "f64") ss << "->to_f64()";
+   else if (result_type == "v128") ss << "->to_v128()";
+   return ss.str();
+}
+
+string format_expected_value(const string& exp_t, const string& exp_v) {
+   if (exp_t == "i32") return "UINT32_C(" + exp_v + ")";
+   if (exp_t == "i64") return "UINT64_C(" + exp_v + ")";
+   if (exp_t == "f32") {
+      if (exp_v.substr(0, 3) == "nan") return exp_v;
+      return "bit_cast<float>(UINT32_C(" + exp_v + "))";
+   }
+   if (exp_t == "f64") {
+      if (exp_v.substr(0, 3) == "nan") return exp_v;
+      return "bit_cast<double>(UINT64_C(" + exp_v + "))";
+   }
+   if (exp_t == "v128") return exp_v;
+   return exp_v;
+}
+
 string generate_trap_call(picojson::object obj) {
    stringstream ss;
 
@@ -1331,7 +1364,10 @@ const std::set<std::string> blacklist = {
    "elem.11.wasm", "elem.14.wasm", "elem.15.wasm", "elem.16.wasm", "elem.17.wasm", "elem.23.wasm",
    "elem.25.wasm", "elem.27.wasm", "elem.29.wasm", "elem.37.wasm", "elem.39.wasm", "elem.40.wasm",
    "func_ptrs.0.wasm", "globals.14.wasm", "names.3.wasm",
-   "start.5.wasm", "start.6.wasm", "start.7.wasm"
+   "return_call.0.wasm", "return_call_indirect.0.wasm",
+   "start.5.wasm", "start.6.wasm", "start.7.wasm",
+   "table_get.0.wasm", "table_set.0.wasm", "table_grow.0.wasm",
+   "table_fill.0.wasm"
 };
 
 void generate_tests(const map<string, vector<picojson::object>>& mappings) {
@@ -1401,14 +1437,32 @@ void generate_tests(const map<string, vector<picojson::object>>& mappings) {
                continue;
             }
             if (cmd["type"].to_str() == "assert_return") {
-               unit_tests << "   CHECK(";
-               exp_t = "";
-               exp_v = "";
-               if (cmd["expected"].get<picojson::array>().size() > 0) {
-                  grab_expected(cmd["expected"].get<picojson::array>()[0].get<picojson::object>());
-                  unit_tests << generate_test_call(cmd["action"].get<picojson::object>(), exp_t, exp_v) << ");\n";
+               auto& either_val = cmd["either"];
+               if (either_val.is<picojson::array>() && !either_val.get<picojson::array>().empty()) {
+                  // Relaxed SIMD: multiple valid results — check result matches any
+                  auto& alternatives = either_val.get<picojson::array>();
+                  grab_expected(alternatives[0].get<picojson::object>());
+                  string result_type = exp_t;
+                  auto& action = cmd["action"].get<picojson::object>();
+                  unit_tests << "   { auto _r = " << generate_call_result_expr(action, result_type) << ";\n";
+                  unit_tests << "     CHECK((";
+                  for (size_t i = 0; i < alternatives.size(); ++i) {
+                     grab_expected(alternatives[i].get<picojson::object>());
+                     if (i > 0) unit_tests << " || ";
+                     unit_tests << "_r == " << format_expected_value(exp_t, exp_v);
+                  }
+                  unit_tests << ")); }\n";
                } else {
-                  unit_tests << generate_test_call(cmd["action"].get<picojson::object>(), exp_t, exp_v) << ");\n";
+                  unit_tests << "   CHECK(";
+                  exp_t = "";
+                  exp_v = "";
+                  auto& expected_val = cmd["expected"];
+                  if (expected_val.is<picojson::array>() && expected_val.get<picojson::array>().size() > 0) {
+                     grab_expected(expected_val.get<picojson::array>()[0].get<picojson::object>());
+                     unit_tests << generate_test_call(cmd["action"].get<picojson::object>(), exp_t, exp_v) << ");\n";
+                  } else {
+                     unit_tests << generate_test_call(cmd["action"].get<picojson::object>(), exp_t, exp_v) << ");\n";
+                  }
                }
             } else if (cmd["type"].to_str() == "assert_trap") {
                unit_tests << "   CHECK_THROWS_AS(";

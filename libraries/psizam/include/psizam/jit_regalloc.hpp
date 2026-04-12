@@ -292,6 +292,15 @@ namespace psizam {
                break;
             }
 
+            // Multi-value return store: ri.src1 = value vreg (no dest)
+            case ir_op::multi_return_store:
+               use_vreg(inst.ri.src1);
+               break;
+
+            // Multi-value return load: dest = loaded vreg (no source vregs)
+            case ir_op::multi_return_load:
+               break;
+
             // No source vregs
             case ir_op::nop: case ir_op::unreachable: case ir_op::drop:
             case ir_op::const_i32: case ir_op::const_i64:
