@@ -2,7 +2,6 @@
 #include <catch2/catch.hpp>
 
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <atomic>
 #include <thread>
@@ -11,8 +10,7 @@ using namespace psiber;
 
 TEST_CASE("Same-thread park and wake", "[wake]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 1);
+   auto sched = scheduler_access::make(1);
 
    std::atomic<int> step{0};
 
@@ -39,8 +37,7 @@ TEST_CASE("Same-thread park and wake", "[wake]")
 
    // Reset
    step.store(0);
-   auto io2 = std::make_unique<KqueueEngine>();
-   Scheduler sched2(std::move(io2), 2);
+   auto sched2 = scheduler_access::make(2);
 
    Fiber* fiber_a = nullptr;
 
@@ -65,8 +62,7 @@ TEST_CASE("Same-thread park and wake", "[wake]")
 
 TEST_CASE("Cross-thread park and wake", "[wake]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 3);
+   auto sched = scheduler_access::make(3);
 
    std::atomic<int>  step{0};
    Fiber*            target_fiber = nullptr;
@@ -95,8 +91,7 @@ TEST_CASE("Cross-thread park and wake", "[wake]")
 
 TEST_CASE("Multiple cross-thread wakes batch correctly", "[wake]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 4);
+   auto sched = scheduler_access::make(4);
 
    constexpr int    num_fibers = 8;
    std::atomic<int> woken_count{0};
@@ -131,8 +126,7 @@ TEST_CASE("Multiple cross-thread wakes batch correctly", "[wake]")
 
 TEST_CASE("Wake preserves FIFO order", "[wake]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 5);
+   auto sched = scheduler_access::make(5);
 
    constexpr int    num_fibers = 4;
    std::vector<int> wake_order;

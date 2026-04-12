@@ -11,7 +11,7 @@ typedef struct ssl_st     SSL;
 
 namespace psiber
 {
-   class Scheduler;
+   // Scheduler is forward-declared via tcp_socket.hpp → basic_scheduler
 
    /// TLS context — wraps SSL_CTX.
    ///

@@ -4,7 +4,6 @@
 
 namespace psiber
 {
-   class Scheduler;  // forward declaration for spin_yield_lock
 
    /// Pure atomic spin lock. For nanosecond critical sections only.
    ///

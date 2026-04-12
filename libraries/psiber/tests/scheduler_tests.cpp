@@ -1,8 +1,8 @@
 #include <catch2/catch.hpp>
 
 #include <psiber/scheduler.hpp>
+#include <psiber/send_queue.hpp>
 #include <psiber/spin_lock.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <atomic>
 #include <thread>
@@ -13,9 +13,7 @@ using namespace psiber;
 TEST_CASE("Scheduler::current() is thread-local", "[scheduler]")
 {
    REQUIRE(Scheduler::current() == nullptr);
-
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 20);
+   auto sched = scheduler_access::make(20);
 
    Scheduler* captured = nullptr;
    sched.spawnFiber([&]() {
@@ -29,8 +27,7 @@ TEST_CASE("Scheduler::current() is thread-local", "[scheduler]")
 
 TEST_CASE("Basic fiber execution", "[scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 21);
+   auto sched = scheduler_access::make(21);
 
    int result = 0;
    sched.spawnFiber([&]() { result = 42; });
@@ -41,8 +38,7 @@ TEST_CASE("Basic fiber execution", "[scheduler]")
 
 TEST_CASE("Multiple fibers execute in order", "[scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 22);
+   auto sched = scheduler_access::make(22);
 
    std::vector<int> order;
 
@@ -57,8 +53,7 @@ TEST_CASE("Multiple fibers execute in order", "[scheduler]")
 
 TEST_CASE("Fiber sleep and resume", "[scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 23);
+   auto sched = scheduler_access::make(23);
 
    std::vector<int> order;
 
@@ -80,8 +75,7 @@ TEST_CASE("Fiber sleep and resume", "[scheduler]")
 
 TEST_CASE("Priority queues: high before normal before low", "[scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 24);
+   auto sched = scheduler_access::make(24);
 
    std::vector<int> order;
    Fiber* fiber_ptrs[3] = {};
@@ -123,8 +117,7 @@ TEST_CASE("Priority queues: high before normal before low", "[scheduler]")
 
 TEST_CASE("Scheduler interrupt for clean shutdown", "[scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 25);
+   auto sched = scheduler_access::make(25);
 
    std::atomic<bool> fiber_started{false};
 
@@ -145,8 +138,7 @@ TEST_CASE("Scheduler interrupt for clean shutdown", "[scheduler]")
 
 TEST_CASE("Cross-thread postTask executes on scheduler thread", "[scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 26);
+   auto sched = scheduler_access::make(26);
 
    std::atomic<int>     result{0};
    std::atomic<bool>    task_done{false};

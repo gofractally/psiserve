@@ -1,7 +1,6 @@
 #include <catch2/catch.hpp>
 
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <vector>
 
@@ -11,8 +10,7 @@ using namespace psiber;
 
 TEST_CASE("scheduler: LIFO slot promotes recently woken fiber", "[lifo][scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 500);
+   auto sched = scheduler_access::make(500);
 
    // Track execution order to verify LIFO behavior.
    // The LIFO slot is populated by wake(). When a fiber is woken,
@@ -58,8 +56,7 @@ TEST_CASE("scheduler: LIFO slot promotes recently woken fiber", "[lifo][schedule
 
 TEST_CASE("scheduler: LIFO slot caps at 3 consecutive uses", "[lifo][scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 501);
+   auto sched = scheduler_access::make(501);
 
    // Create a pattern where the same fiber keeps getting woken and would
    // monopolize the LIFO slot. After 3 consecutive LIFO dispatches,
@@ -107,8 +104,7 @@ TEST_CASE("scheduler: LIFO slot caps at 3 consecutive uses", "[lifo][scheduler]"
 
 TEST_CASE("scheduler: yieldCurrentFiber uses ready queue, not LIFO slot", "[lifo][scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 502);
+   auto sched = scheduler_access::make(502);
 
    std::vector<int> order;
 
@@ -142,8 +138,7 @@ TEST_CASE("scheduler: yieldCurrentFiber uses ready queue, not LIFO slot", "[lifo
 
 TEST_CASE("scheduler: high-priority fiber runs before normal priority", "[lifo][scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 503);
+   auto sched = scheduler_access::make(503);
 
    std::vector<int> order;
 

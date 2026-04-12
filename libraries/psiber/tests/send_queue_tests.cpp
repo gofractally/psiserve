@@ -2,7 +2,6 @@
 
 #include <psiber/send_queue.hpp>
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <atomic>
 #include <thread>
@@ -122,8 +121,7 @@ TEST_CASE("SendQueue wrap-around", "[send_queue]")
 
 TEST_CASE("SendQueue cross-thread task dispatch", "[send_queue]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 10);
+   auto sched = scheduler_access::make(10);
 
    std::atomic<int> result{0};
    SendQueue        sq(4096);

@@ -1,8 +1,9 @@
 #pragma once
 
-// I/O engine now lives in psiber — this header re-exports for psiserve code.
+// I/O engine types now live in psiber — this header re-exports for psiserve code.
 
 #include <psiber/io_engine.hpp>
+#include <psiber/types.hpp>
 
 namespace psiserve
 {
@@ -11,5 +12,4 @@ namespace psiserve
    using psiber::Writable;
    using psiber::FdChange;
    using psiber::IoEvent;
-   using psiber::IoEngine;
 }  // namespace psiserve

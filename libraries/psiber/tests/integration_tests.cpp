@@ -4,9 +4,10 @@
 #include <psiber/fiber_promise.hpp>
 #include <psiber/send_queue.hpp>
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
+#include <psiber/thread.hpp>
 
 #include <atomic>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -17,12 +18,10 @@ using namespace psiber;
 TEST_CASE("integration: cross-thread task dispatch with promise return", "[integration]")
 {
    // Scheduler A: sender (main scheduler)
-   auto io_a = std::make_unique<KqueueEngine>();
-   Scheduler sched_a(std::move(io_a), 400);
+   auto sched_a = scheduler_access::make(400);
 
    // Scheduler B: receiver (runs on another thread)
-   auto io_b = std::make_unique<KqueueEngine>();
-   Scheduler sched_b(std::move(io_b), 401);
+   auto sched_b = scheduler_access::make(401);
 
    SendQueue sq(4096);
 
@@ -75,11 +74,8 @@ TEST_CASE("integration: cross-thread task dispatch with promise return", "[integ
 
 TEST_CASE("integration: sequential cross-thread dispatches", "[integration]")
 {
-   auto io_a = std::make_unique<KqueueEngine>();
-   Scheduler sched_a(std::move(io_a), 410);
-
-   auto io_b = std::make_unique<KqueueEngine>();
-   Scheduler sched_b(std::move(io_b), 411);
+   auto sched_a = scheduler_access::make(410);
+   auto sched_b = scheduler_access::make(411);
 
    SendQueue sq(4096);
 
@@ -129,11 +125,8 @@ TEST_CASE("integration: sequential cross-thread dispatches", "[integration]")
 
 TEST_CASE("integration: multiple fibers dispatch to same remote scheduler", "[integration]")
 {
-   auto io_a = std::make_unique<KqueueEngine>();
-   Scheduler sched_a(std::move(io_a), 420);
-
-   auto io_b = std::make_unique<KqueueEngine>();
-   Scheduler sched_b(std::move(io_b), 421);
+   auto sched_a = scheduler_access::make(420);
+   auto sched_b = scheduler_access::make(421);
 
    constexpr int num_fibers = 4;
 
@@ -186,12 +179,134 @@ TEST_CASE("integration: multiple fibers dispatch to same remote scheduler", "[in
    REQUIRE(total.load() == 1000);
 }
 
+// ── Exception propagation through thread::call ──────────────────────────────
+
+TEST_CASE("integration: thread::call propagates exceptions", "[integration][exception]")
+{
+   psiber::thread worker("worker");
+
+   bool caught = false;
+   std::string msg;
+
+   psiber::thread caller([&]() {
+      try
+      {
+         worker.call([]() -> int {
+            throw std::runtime_error("remote failure");
+         });
+      }
+      catch (const std::runtime_error& e)
+      {
+         caught = true;
+         msg    = e.what();
+      }
+   });
+
+   caller.quit();
+   worker.quit();
+
+   REQUIRE(caught);
+   REQUIRE(msg == "remote failure");
+}
+
+TEST_CASE("integration: thread::call propagates void exceptions", "[integration][exception]")
+{
+   psiber::thread worker("worker");
+
+   bool caught = false;
+
+   psiber::thread caller([&]() {
+      try
+      {
+         worker.call([]() {
+            throw std::logic_error("void failure");
+         });
+      }
+      catch (const std::logic_error& e)
+      {
+         caught = true;
+      }
+   });
+
+   caller.quit();
+   worker.quit();
+
+   REQUIRE(caught);
+}
+
+TEST_CASE("integration: thread::call works after exception", "[integration][exception]")
+{
+   psiber::thread worker("worker");
+
+   int result = 0;
+   bool caught = false;
+
+   psiber::thread caller([&]() {
+      // First call throws
+      try
+      {
+         worker.call([]() -> int {
+            throw std::runtime_error("fail");
+         });
+      }
+      catch (...)
+      {
+         caught = true;
+      }
+
+      // Second call succeeds — channel isn't broken
+      result = worker.call([]() { return 42; });
+   });
+
+   caller.quit();
+   worker.quit();
+
+   REQUIRE(caught);
+   REQUIRE(result == 42);
+}
+
+TEST_CASE("integration: fiber_promise propagates exception", "[integration][exception]")
+{
+   auto sched = scheduler_access::make(440);
+
+   bool caught = false;
+   std::string msg;
+
+   sched.spawnFiber([&]() {
+      fiber_promise<int> promise;
+      promise.waiting_fiber = sched.currentFiber();
+
+      // Simulate: another fiber fulfills with an exception
+      sched.spawnFiber([&]() {
+         promise.set_exception(
+            std::make_exception_ptr(std::runtime_error("async boom")));
+         Scheduler::wake(promise.waiting_fiber);
+      });
+
+      sched.parkCurrentFiber();
+
+      try
+      {
+         promise.get();
+      }
+      catch (const std::runtime_error& e)
+      {
+         caught = true;
+         msg    = e.what();
+      }
+   });
+
+   sched.run();
+
+   REQUIRE(caught);
+   REQUIRE(msg == "async boom");
+}
+
 // ── End-to-end: fiber_mutex protecting shared state across fibers ────────────
 
 TEST_CASE("integration: fiber_mutex protects cross-fiber state", "[integration]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 430);
+   auto sched = scheduler_access::make(430);
 
    fiber_mutex mtx;
    int shared_state = 0;

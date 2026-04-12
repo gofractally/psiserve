@@ -1,4 +1,4 @@
-#include <psiber/io_engine_kqueue.hpp>
+#include <psiber/detail/io_engine_kqueue.hpp>
 
 #include <sys/event.h>
 #include <sys/time.h>
@@ -7,7 +7,7 @@
 #include <cerrno>
 #include <stdexcept>
 
-namespace psiber
+namespace psiber::detail
 {
    KqueueEngine::KqueueEngine()
    {
@@ -171,4 +171,4 @@ namespace psiber
          throw std::runtime_error("kevent registerSignal failed");
    }
 
-}  // namespace psiber
+}  // namespace psiber::detail

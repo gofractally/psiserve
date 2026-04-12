@@ -1,9 +1,9 @@
-#include <psiber/send_queue.hpp>
+#include <psiber/detail/send_queue.hpp>
 
 #include <cstdlib>
 #include <stdexcept>
 
-namespace psiber
+namespace psiber::detail
 {
    SendQueue::SendQueue(uint32_t ring_bytes)
       : _ring_bytes(align_up(ring_bytes)), _free_bytes(align_up(ring_bytes))
@@ -109,4 +109,4 @@ namespace psiber
       return _free_bytes.load(std::memory_order_relaxed) >= total;
    }
 
-}  // namespace psiber
+}  // namespace psiber::detail

@@ -3,7 +3,6 @@
 #include <psiber/tcp_socket.hpp>
 #include <psiber/fiber_promise.hpp>
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <cstring>
 #include <thread>
@@ -15,8 +14,7 @@ using namespace psiber;
 
 TEST_CASE("tcp_socket: loopback echo on same scheduler", "[tcp][socket]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 600);
+   auto sched = scheduler_access::make(600);
 
    fiber_promise<uint16_t> port_promise;
    bool                    echo_ok = false;
@@ -64,8 +62,7 @@ TEST_CASE("tcp_socket: loopback echo on same scheduler", "[tcp][socket]")
 
 TEST_CASE("tcp_socket: write_all delivers all bytes", "[tcp][socket]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 601);
+   auto sched = scheduler_access::make(601);
 
    fiber_promise<uint16_t> port_promise;
 
@@ -106,8 +103,7 @@ TEST_CASE("tcp_socket: write_all delivers all bytes", "[tcp][socket]")
 
 TEST_CASE("tcp_socket: writev sends multiple buffers atomically", "[tcp][socket]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 602);
+   auto sched = scheduler_access::make(602);
 
    fiber_promise<uint16_t> port_promise;
    bool                    ok = false;
@@ -146,8 +142,7 @@ TEST_CASE("tcp_socket: writev sends multiple buffers atomically", "[tcp][socket]
 
 TEST_CASE("tcp_socket: multiple concurrent connections", "[tcp][socket]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 603);
+   auto sched = scheduler_access::make(603);
 
    fiber_promise<uint16_t> port_promise;
    constexpr int           num_clients = 4;
@@ -205,8 +200,7 @@ TEST_CASE("tcp_socket: cross-thread client and server", "[tcp][socket]")
 
    // Server thread
    std::thread server_thread([&]() {
-      auto io = std::make_unique<KqueueEngine>();
-      Scheduler sched(std::move(io), 610);
+   auto sched = scheduler_access::make(610);
 
       sched.spawnFiber([&]() {
          auto listener = tcp_listener::bind(0);
@@ -228,8 +222,7 @@ TEST_CASE("tcp_socket: cross-thread client and server", "[tcp][socket]")
 
    // Client thread
    std::thread client_thread([&]() {
-      auto io = std::make_unique<KqueueEngine>();
-      Scheduler sched(std::move(io), 611);
+   auto sched = scheduler_access::make(611);
 
       sched.spawnFiber([&]() {
          port_promise.waiting_fiber = sched.currentFiber();
@@ -259,8 +252,7 @@ TEST_CASE("tcp_socket: cross-thread client and server", "[tcp][socket]")
 
 TEST_CASE("tcp_socket: detects EOF when peer closes", "[tcp][socket]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 604);
+   auto sched = scheduler_access::make(604);
 
    fiber_promise<uint16_t> port_promise;
    bool                    eof_detected = false;
@@ -303,8 +295,7 @@ TEST_CASE("tcp_socket: detects EOF when peer closes", "[tcp][socket]")
 
 TEST_CASE("tcp_socket: socket options don't crash", "[tcp][socket]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 605);
+   auto sched = scheduler_access::make(605);
 
    fiber_promise<uint16_t> port_promise;
 

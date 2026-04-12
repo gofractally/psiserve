@@ -1,5 +1,4 @@
 #include <psiber/thread.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 namespace psiber
 {
@@ -15,8 +14,7 @@ namespace psiber
 
    void thread::start(std::function<void()> entry)
    {
-      auto io = std::make_unique<KqueueEngine>();
-      _sched  = std::make_unique<Scheduler>(std::move(io), s_next_index++);
+      _sched.reset(new Scheduler(s_next_index++));
 
       // Keep-alive fiber: parks until quit() wakes it.
       // This prevents run() from exiting when user fibers complete.
@@ -24,10 +22,10 @@ namespace psiber
          _keepalive.store(_sched->currentFiber(), std::memory_order_release);
          _sched->parkCurrentFiber();
          // Woken by quit() → exit cleanly, allowing run() to finish
-      });
+      }, "keepalive");
 
       if (entry)
-         _sched->spawnFiber(std::move(entry));
+         _sched->spawnFiber(std::move(entry), "main");
 
       _os_thread = std::thread([this]() { _sched->run(); });
    }
@@ -55,13 +53,6 @@ namespace psiber
          Scheduler::wake(ka);
          _os_thread.join();
       }
-   }
-
-   void thread::spawn(std::function<void()> fn)
-   {
-      _sched->post([this, f = std::move(fn)]() {
-         _sched->spawnFiber(std::move(f));
-      });
    }
 
 }  // namespace psiber

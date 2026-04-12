@@ -4,7 +4,6 @@
 #include <psiber/fiber_promise.hpp>
 #include <psiber/send_queue.hpp>
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <atomic>
 #include <thread>
@@ -16,8 +15,7 @@ using namespace psiber;
 
 TEST_CASE("scheduler: multiple park/wake cycles on same fiber", "[edge][wake]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 300);
+   auto sched = scheduler_access::make(300);
 
    constexpr int cycles = 50;
    int           count  = 0;
@@ -51,8 +49,7 @@ TEST_CASE("scheduler: multiple park/wake cycles on same fiber", "[edge][wake]")
 
 TEST_CASE("fiber_promise: value set before get (no parking needed)", "[edge][promise]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 301);
+   auto sched = scheduler_access::make(301);
 
    int result = 0;
 
@@ -127,8 +124,7 @@ TEST_CASE("SendQueue: multiple reclaim cycles reuse ring space", "[edge][send_qu
 
 TEST_CASE("scheduler: interrupt wakes all blocked/parked fibers", "[edge][scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 302);
+   auto sched = scheduler_access::make(302);
 
    bool fiber1_resumed = false;
    bool fiber2_resumed = false;
@@ -174,8 +170,7 @@ TEST_CASE("scheduler: interrupt wakes all blocked/parked fibers", "[edge][schedu
 
 TEST_CASE("fiber_mutex: try_lock fails when another fiber holds lock", "[edge][mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 303);
+   auto sched = scheduler_access::make(303);
 
    fiber_mutex mtx;
    bool        try_result = true;
@@ -200,8 +195,7 @@ TEST_CASE("fiber_mutex: try_lock fails when another fiber holds lock", "[edge][m
 
 TEST_CASE("fiber_promise: cross-thread with string value", "[edge][promise]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 304);
+   auto sched = scheduler_access::make(304);
 
    std::string result;
 
@@ -227,8 +221,7 @@ TEST_CASE("fiber_promise: cross-thread with string value", "[edge][promise]")
 
 TEST_CASE("scheduler: fiber spawning child fibers", "[edge][scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 305);
+   auto sched = scheduler_access::make(305);
 
    std::vector<int> order;
 
@@ -258,8 +251,7 @@ TEST_CASE("scheduler: fiber spawning child fibers", "[edge][scheduler]")
 
 TEST_CASE("scheduler: 100 fibers complete cleanly", "[edge][scheduler]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 306);
+   auto sched = scheduler_access::make(306);
 
    std::atomic<int> completed{0};
 

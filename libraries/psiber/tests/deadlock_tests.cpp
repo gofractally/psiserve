@@ -4,7 +4,6 @@
 #include <psiber/fiber_tx_mutex.hpp>
 #include <psiber/fiber_shared_mutex.hpp>
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <atomic>
 #include <thread>
@@ -16,8 +15,7 @@ using namespace psiber;
 
 TEST_CASE("fiber_tx_mutex: holder checks wounded and aborts", "[wound-wait][deadlock]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 200);
+   auto sched = scheduler_access::make(200);
 
    fiber_tx_mutex mtx;
    bool           younger_threw = false;
@@ -63,8 +61,7 @@ TEST_CASE("fiber_tx_mutex: holder checks wounded and aborts", "[wound-wait][dead
 
 TEST_CASE("fiber_tx_mutex: three transactions, no deadlock", "[wound-wait][deadlock]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 201);
+   auto sched = scheduler_access::make(201);
 
    // Three mutexes, three transactions
    fiber_tx_mutex mtx_a, mtx_b, mtx_c;
@@ -141,8 +138,7 @@ TEST_CASE("fiber_tx_mutex: three transactions, no deadlock", "[wound-wait][deadl
 
 TEST_CASE("fiber_shared_mutex: writer eventually acquires despite readers", "[deadlock][mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 202);
+   auto sched = scheduler_access::make(202);
 
    fiber_shared_mutex mtx;
    bool               writer_done = false;
@@ -178,8 +174,7 @@ TEST_CASE("fiber_shared_mutex: writer eventually acquires despite readers", "[de
 
 TEST_CASE("fiber_shared_mutex: new readers queue behind pending writer", "[deadlock][mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 203);
+   auto sched = scheduler_access::make(203);
 
    fiber_shared_mutex mtx;
    std::vector<int>   order;
@@ -228,8 +223,7 @@ TEST_CASE("fiber_shared_mutex: new readers queue behind pending writer", "[deadl
 
 TEST_CASE("fiber_mutex: opposite order doesn't deadlock with cooperative scheduling", "[deadlock][mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 204);
+   auto sched = scheduler_access::make(204);
 
    fiber_mutex mtx_a, mtx_b;
    int         result = 0;
@@ -263,8 +257,7 @@ TEST_CASE("fiber_mutex: opposite order doesn't deadlock with cooperative schedul
 
 TEST_CASE("fiber_tx_mutex: opposite order resolved by wound-wait", "[wound-wait][deadlock]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 205);
+   auto sched = scheduler_access::make(205);
 
    fiber_tx_mutex mtx_a, mtx_b;
    std::atomic<int> completed{0};

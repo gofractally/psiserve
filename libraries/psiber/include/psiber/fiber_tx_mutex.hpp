@@ -1,6 +1,7 @@
 #pragma once
 
 #include <psiber/fiber.hpp>
+#include <psiber/detail/platform_engine.hpp>
 #include <psiber/spin_lock.hpp>
 
 #include <atomic>
@@ -8,7 +9,7 @@
 
 namespace psiber
 {
-   class Scheduler;
+   using Scheduler = basic_scheduler<detail::PlatformEngine>;
 
    /// Exception thrown when a transaction is wounded by an older transaction.
    struct wound_exception {};

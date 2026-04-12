@@ -1,7 +1,6 @@
 #include <catch2/catch.hpp>
 
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <csignal>
 #include <thread>
@@ -12,8 +11,7 @@ using namespace psiber;
 
 TEST_CASE("signal: fiber wakes on SIGUSR1", "[signal]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 700);
+   auto sched = scheduler_access::make(700);
 
    sched.registerSignal(SIGUSR1);
 
@@ -38,8 +36,7 @@ TEST_CASE("signal: fiber wakes on SIGUSR1", "[signal]")
 
 TEST_CASE("signal: cross-thread signal delivery", "[signal]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 701);
+   auto sched = scheduler_access::make(701);
 
    sched.registerSignal(SIGUSR2);
 
@@ -66,8 +63,7 @@ TEST_CASE("signal: cross-thread signal delivery", "[signal]")
 
 TEST_CASE("signal: multiple SIGUSR1 in sequence", "[signal]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 702);
+   auto sched = scheduler_access::make(702);
 
    sched.registerSignal(SIGUSR1);
 

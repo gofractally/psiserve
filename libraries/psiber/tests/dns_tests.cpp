@@ -2,7 +2,6 @@
 
 #include <psiber/dns.hpp>
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <arpa/inet.h>
 #include <cstring>
@@ -13,8 +12,7 @@ using namespace psiber;
 
 TEST_CASE("dns: resolve localhost", "[dns]")
 {
-   auto      io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 800);
+   auto sched = scheduler_access::make(800);
 
    bool resolved = false;
 
@@ -59,8 +57,7 @@ TEST_CASE("dns: resolve localhost", "[dns]")
 
 TEST_CASE("dns: resolve dns.google", "[dns][network]")
 {
-   auto      io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 801);
+   auto sched = scheduler_access::make(801);
 
    bool resolved = false;
 
@@ -95,8 +92,7 @@ TEST_CASE("dns: resolve dns.google", "[dns][network]")
 
 TEST_CASE("dns: non-existent domain throws", "[dns]")
 {
-   auto      io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 802);
+   auto sched = scheduler_access::make(802);
 
    bool threw = false;
 
@@ -122,8 +118,7 @@ TEST_CASE("dns: non-existent domain throws", "[dns]")
 
 TEST_CASE("dns: multiple sequential resolutions", "[dns][network]")
 {
-   auto      io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 803);
+   auto sched = scheduler_access::make(803);
 
    int count = 0;
 

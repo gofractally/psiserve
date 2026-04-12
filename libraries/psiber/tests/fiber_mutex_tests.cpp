@@ -5,7 +5,6 @@
 #include <psiber/fiber_shared_mutex.hpp>
 #include <psiber/fiber_promise.hpp>
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <atomic>
 #include <thread>
@@ -15,8 +14,7 @@ using namespace psiber;
 
 TEST_CASE("fiber_mutex basic lock/unlock", "[mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 30);
+   auto sched = scheduler_access::make(30);
 
    fiber_mutex mtx;
    int         counter = 0;
@@ -39,8 +37,7 @@ TEST_CASE("fiber_mutex basic lock/unlock", "[mutex]")
 
 TEST_CASE("fiber_mutex FIFO ordering under contention", "[mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 31);
+   auto sched = scheduler_access::make(31);
 
    fiber_mutex      mtx;
    std::vector<int> order;
@@ -75,8 +72,7 @@ TEST_CASE("fiber_mutex FIFO ordering under contention", "[mutex]")
 
 TEST_CASE("fiber_mutex try_lock", "[mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 32);
+   auto sched = scheduler_access::make(32);
 
    fiber_mutex mtx;
    bool        try_result = false;
@@ -98,8 +94,7 @@ TEST_CASE("fiber_mutex try_lock", "[mutex]")
 
 TEST_CASE("fiber_shared_mutex concurrent readers", "[mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 33);
+   auto sched = scheduler_access::make(33);
 
    fiber_shared_mutex mtx;
    std::atomic<int>   concurrent{0};
@@ -124,8 +119,7 @@ TEST_CASE("fiber_shared_mutex concurrent readers", "[mutex]")
 
 TEST_CASE("fiber_shared_mutex writer excludes readers", "[mutex]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 34);
+   auto sched = scheduler_access::make(34);
 
    fiber_shared_mutex mtx;
    std::vector<int>   order;
@@ -151,8 +145,7 @@ TEST_CASE("fiber_shared_mutex writer excludes readers", "[mutex]")
 
 TEST_CASE("fiber_promise same-thread", "[promise]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 35);
+   auto sched = scheduler_access::make(35);
 
    fiber_promise<int> promise;
    int                result = 0;
@@ -176,8 +169,7 @@ TEST_CASE("fiber_promise same-thread", "[promise]")
 
 TEST_CASE("fiber_promise<void>", "[promise]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 36);
+   auto sched = scheduler_access::make(36);
 
    fiber_promise<void> promise;
    bool                signaled = false;
@@ -201,8 +193,7 @@ TEST_CASE("fiber_promise<void>", "[promise]")
 
 TEST_CASE("fiber_promise cross-thread", "[promise]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 37);
+   auto sched = scheduler_access::make(37);
 
    fiber_promise<int> promise;
    int                result = 0;
@@ -226,8 +217,7 @@ TEST_CASE("fiber_promise cross-thread", "[promise]")
 
 TEST_CASE("fiber_tx_mutex wound-wait: older wounds younger", "[wound-wait]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 38);
+   auto sched = scheduler_access::make(38);
 
    fiber_tx_mutex mtx;
    bool           younger_wounded = false;
@@ -262,8 +252,7 @@ TEST_CASE("fiber_tx_mutex wound-wait: older wounds younger", "[wound-wait]")
 
 TEST_CASE("fiber_tx_mutex younger waits for older", "[wound-wait]")
 {
-   auto io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 39);
+   auto sched = scheduler_access::make(39);
 
    fiber_tx_mutex   mtx;
    std::vector<int> order;

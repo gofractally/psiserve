@@ -1,5 +1,6 @@
 #pragma once
 
+#include <psiber/detail/platform_engine.hpp>
 #include <psiber/types.hpp>
 
 #include <cstddef>
@@ -10,7 +11,9 @@
 
 namespace psiber
 {
-   class Scheduler;
+   template <typename Engine>
+   class basic_scheduler;
+   using Scheduler = basic_scheduler<detail::PlatformEngine>;
 
    /// Result of a socket I/O operation.
    ///

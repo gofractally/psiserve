@@ -4,7 +4,6 @@
 #include <psiber/tcp_socket.hpp>
 #include <psiber/fiber_promise.hpp>
 #include <psiber/scheduler.hpp>
-#include <psiber/io_engine_kqueue.hpp>
 
 #include <cstdlib>
 #include <cstring>
@@ -54,9 +53,7 @@ TEST_CASE("tls_socket: loopback echo", "[tls][socket]")
 
    auto      server_ctx = tls_context::server(certs.cert.c_str(), certs.key.c_str());
    auto      client_ctx = tls_context::client(certs.cert.c_str());  // trust our self-signed cert
-
-   auto      io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 900);
+   auto sched = scheduler_access::make(900);
 
    fiber_promise<uint16_t> port_promise;
    bool                    echo_ok = false;
@@ -110,9 +107,7 @@ TEST_CASE("tls_socket: large transfer", "[tls][socket]")
 
    auto server_ctx = tls_context::server(certs.cert.c_str(), certs.key.c_str());
    auto client_ctx = tls_context::client(certs.cert.c_str());
-
-   auto      io = std::make_unique<KqueueEngine>();
-   Scheduler sched(std::move(io), 901);
+   auto sched = scheduler_access::make(901);
 
    fiber_promise<uint16_t> port_promise;
 

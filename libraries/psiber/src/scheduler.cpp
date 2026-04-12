@@ -1,75 +1,128 @@
 #include <psiber/scheduler.hpp>
+#include <psiber/detail/io_engine_kqueue.hpp>
+#include <psiber/reactor.hpp>
 #include <psiber/spin_lock.hpp>
-
-#include <boost/context/protected_fixedsize_stack.hpp>
 
 #include <algorithm>
 #include <cassert>
 
 namespace psiber
 {
-   namespace
-   {
-      /// Thrown inside a fiber when the scheduler is shutting down.
-      /// Forces the fiber to unwind its stack and exit cleanly.
-      struct shutdown_exception {};
-   }  // namespace
-
-   static constexpr std::size_t fiber_native_stack_size = 512 * 1024;  // 512KB per fiber
+   using Fiber          = detail::Fiber;
+   using FiberState     = detail::FiberState;
+   using TaskSlotHeader = detail::TaskSlotHeader;
 
    static thread_local Scheduler* t_current = nullptr;
 
-   Scheduler* Scheduler::current() { return t_current; }
+   template <typename Engine>
+   basic_scheduler<Engine>* basic_scheduler<Engine>::current() { return static_cast<basic_scheduler*>(t_current); }
 
-   Scheduler::Scheduler(std::unique_ptr<IoEngine> io, uint32_t index)
-      : _index(index), _io(std::move(io))
+   template <typename Engine>
+   basic_scheduler<Engine>::basic_scheduler(uint32_t index)
+      : _index(index),
+        _work_pool(std::make_unique<WorkItem[]>(work_pool_size))
    {
+      // Chain all pool items into the freelist
+      for (uint32_t i = 0; i < work_pool_size; ++i)
+         _work_pool[i].next = (i + 1 < work_pool_size) ? &_work_pool[i + 1] : nullptr;
+      _work_free.store(&_work_pool[0], std::memory_order_relaxed);
    }
 
-   void Scheduler::spawnFiber(std::function<void()> entry)
+   template <typename Engine>
+   void basic_scheduler<Engine>::registerFiber(std::unique_ptr<Fiber> fiber)
    {
-      auto  fiber = std::make_unique<Fiber>();
-      Fiber* fp   = fiber.get();
-      fp->id         = _next_id++;
-      fp->home_sched = this;
-
-      // Create the fiber's native stack and continuation.
-      fp->cont = ctx::callcc(
-         std::allocator_arg,
-         ctx::protected_fixedsize_stack(fiber_native_stack_size),
-         [this, fp, entry = std::move(entry)](ctx::continuation&& sched)
-         {
-            fp->sched_cont = &sched;
-            // Yield immediately -- wait for the scheduler to run us
-            sched = sched.resume();
-
-            try
-            {
-               entry();
-            }
-            catch (const shutdown_exception&)
-            {
-               // Clean shutdown
-            }
-            catch (...)
-            {
-               // Prevent exceptions from escaping the continuation
-            }
-
-            fp->state = FiberState::Done;
-            return std::move(sched);
-         }
-      );
-
+      Fiber* fp = fiber.get();
       fp->posted_num = _posted_counter++;
       addToReadyQueue(fp);
       _fibers.push_back(std::move(fiber));
    }
 
-   void Scheduler::run()
+   template <typename Engine>
+   void basic_scheduler<Engine>::run()
    {
       t_current = this;
-      _io->registerUserEvent(_index);
+      _io.registerUserEvent(_index);
+
+      // Spawn the drain fiber — a daemon that executes work items
+      // in fiber context so callables can use post(), sleep(), etc.
+      spawnFiber([this]() {
+         while (true)
+         {
+            WorkItem* batch = _work_head.exchange(nullptr, std::memory_order_acquire);
+            if (batch)
+            {
+               _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
+
+               // Reverse for FIFO order
+               WorkItem* reversed = nullptr;
+               while (batch)
+               {
+                  WorkItem* next = batch->next;
+                  batch->next    = reversed;
+                  reversed       = batch;
+                  batch          = next;
+               }
+
+               // Execute, destroy, and return each item to the freelist
+               while (reversed)
+               {
+                  WorkItem* next = reversed->next;
+
+                  _drain_executing = true;
+                  try
+                  {
+                     reversed->run(reversed->payload);
+                  }
+                  catch (...)
+                  {
+                     // For noexcept post() callables, drain_yield_error
+                     // calls std::terminate before reaching here.
+                     // For invoke() callables, exceptions are caught by
+                     // the run() callback and stored in the promise.
+                     // This catch handles any unexpected leakage.
+                  }
+                  _drain_executing = false;
+                  if (reversed->dtor)
+                     reversed->dtor(reversed->payload);
+                  reversed->run  = nullptr;
+                  reversed->dtor = nullptr;
+
+                  // CAS-push back onto freelist
+                  WorkItem* old_free = _work_free.load(std::memory_order_relaxed);
+                  do
+                  {
+                     reversed->next = old_free;
+                  } while (!_work_free.compare_exchange_weak(
+                     old_free, reversed, std::memory_order_release, std::memory_order_relaxed));
+
+                  reversed = next;
+               }
+
+               // Wake fibers waiting for pool space
+               _work_space_lock.lock();
+               Fiber* waiters = _work_space_wait_head;
+               _work_space_wait_head = nullptr;
+               _work_space_lock.unlock();
+
+               while (waiters)
+               {
+                  Fiber* next = waiters->next_wake;
+                  waiters->next_wake = nullptr;
+                  basic_scheduler::wake(waiters);
+                  waiters = next;
+               }
+            }
+
+            // Check for more work before parking
+            if (_work_head.load(std::memory_order_acquire))
+               continue;
+
+            parkCurrentFiber();
+         }
+      }, "drain");
+      _drain_fiber = _fibers.back().get();
+      _drain_fiber->daemon   = true;
+      _drain_fiber->priority = 0;  // high priority — run before normal fibers
 
       while (true)
       {
@@ -129,15 +182,62 @@ namespace psiber
             fiber->cont = fiber->cont.resume();
 
             _current = nullptr;
+
+            // Strand release: if a strand fiber parks or finishes,
+            // release the strand so the next waiting fiber can run.
+            // I/O-blocked and sleeping fibers stay "active" — they'll
+            // resume on this thread when the event/timer fires.
+            if (fiber->home_strand &&
+                (fiber->state == FiberState::Parked ||
+                 fiber->state == FiberState::Recyclable))
+            {
+               Fiber* next = fiber->home_strand->release();
+               if (next)
+               {
+                  next->home_sched = this;
+                  next->state      = FiberState::Ready;
+                  next->posted_num = _posted_counter++;
+                  addToReadyQueue(next);
+               }
+            }
+
+            // If the fiber's entry finished, pool it for reuse
+            if (fiber->state == FiberState::Recyclable)
+               _free_fibers.push_back(fiber);
          }
          else
          {
-            // Check if any fibers are still alive
+            // Check if any fibers are still alive (pooled/daemon fibers don't count)
             bool any_alive = std::any_of(_fibers.begin(), _fibers.end(),
-               [](const auto& f) { return f->state != FiberState::Done; });
+               [](const auto& f) {
+                  return f->state != FiberState::Done &&
+                         f->state != FiberState::Recyclable &&
+                         !f->daemon;
+               });
 
             if (!any_alive)
+            {
+               // Terminate daemon fibers — resume them so they throw
+               // shutdown_exception and cleanly exit their entry loop.
+               // Without this, Boost.Context's forced_unwind during
+               // destruction would crash (sched continuation is stale).
+               _interrupted = true;
+               bool any_remaining = false;
+               for (auto& f : _fibers)
+               {
+                  if (f->state == FiberState::Parked ||
+                      f->state == FiberState::Blocked ||
+                      f->state == FiberState::Sleeping)
+                  {
+                     f->state = FiberState::Ready;
+                     addToReadyQueue(f.get());
+                     any_remaining = true;
+                  }
+               }
+               if (any_remaining)
+                  continue;  // resume daemons so they exit cleanly
                break;
+            }
 
             if (_shutdownCheck && _shutdownCheck())
                _interrupted = true;
@@ -159,6 +259,24 @@ namespace psiber
                if (!any_resumed)
                   break;
                continue;
+            }
+
+            // ── Reactor pull: steal work from the shared strand queue ──
+            if (_reactor)
+            {
+               strand* s = _reactor->try_pop_strand();
+               if (s)
+               {
+                  Fiber* f = s->active();
+                  if (f)
+                  {
+                     f->home_sched = this;
+                     f->state      = FiberState::Ready;
+                     f->posted_num = _posted_counter++;
+                     addToReadyQueue(f);
+                  }
+                  continue;
+               }
             }
 
             // ── Adaptive spin-before-block ──
@@ -196,12 +314,10 @@ namespace psiber
             }
 
             // All living fibers are blocked -- wait for I/O or cross-thread wake.
-            // _run_state is already 0 (scheduling), so senders will trigger
-            // EVFILT_USER to wake us from the blocking kevent.
             pollAndUnblock(/*blocking=*/true);
          }
 
-         // Clean up completed fibers
+         // Clean up completed fibers (Recyclable ones stay in _fibers for ownership)
          std::erase_if(_fibers,
             [](const auto& f) { return f->state == FiberState::Done; });
       }
@@ -209,12 +325,26 @@ namespace psiber
       t_current = nullptr;
    }
 
-   void Scheduler::yield(RealFd fd, EventKind events)
+   template <typename Engine>
+   void basic_scheduler<Engine>::checkNotDrainFiber() const
    {
+      if (_drain_executing) [[unlikely]]
+      {
+         std::fprintf(stderr,
+            "psiber: post()/invoke() callable attempted to yield (sleep/park/I/O). "
+            "Use spawn() or async() for work that may suspend.\n");
+         throw drain_yield_error{};
+      }
+   }
+
+   template <typename Engine>
+   void basic_scheduler<Engine>::yield(RealFd fd, EventKind events)
+   {
+      checkNotDrainFiber();
       _current->state          = FiberState::Blocked;
       _current->blocked_fd     = fd;
       _current->blocked_events = events;
-      _io->addFd(fd, events);
+      _io.addFd(fd, events);
 
       auto& sched = *_current->sched_cont;
       sched       = sched.resume();
@@ -222,11 +352,13 @@ namespace psiber
       if (_interrupted)
          throw shutdown_exception{};
 
-      _io->removeFdEvents(fd, events);
+      _io.removeFdEvents(fd, events);
    }
 
-   void Scheduler::sleep(std::chrono::milliseconds duration)
+   template <typename Engine>
+   void basic_scheduler<Engine>::sleep(std::chrono::milliseconds duration)
    {
+      checkNotDrainFiber();
       _current->state     = FiberState::Sleeping;
       _current->wake_time = std::chrono::steady_clock::now() + duration;
 
@@ -237,9 +369,11 @@ namespace psiber
          throw shutdown_exception{};
    }
 
-   void Scheduler::parkCurrentFiber()
+   template <typename Engine>
+   void basic_scheduler<Engine>::parkCurrentFiber()
    {
       assert(_current && "parkCurrentFiber called with no current fiber");
+      checkNotDrainFiber();
       _current->state = FiberState::Parked;
 
       auto& sched = *_current->sched_cont;
@@ -249,14 +383,17 @@ namespace psiber
          throw shutdown_exception{};
    }
 
-   void Scheduler::registerSignal(int signo)
+   template <typename Engine>
+   void basic_scheduler<Engine>::registerSignal(int signo)
    {
-      _io->registerSignal(signo);
+      _io.registerSignal(signo);
    }
 
-   void Scheduler::waitForSignal(int signo)
+   template <typename Engine>
+   void basic_scheduler<Engine>::waitForSignal(int signo)
    {
       assert(_current && "waitForSignal called with no current fiber");
+      checkNotDrainFiber();
       _current->state          = FiberState::Blocked;
       _current->blocked_fd     = RealFd{signo};
       _current->blocked_events = Signal;
@@ -268,9 +405,11 @@ namespace psiber
          throw shutdown_exception{};
    }
 
-   void Scheduler::yieldCurrentFiber()
+   template <typename Engine>
+   void basic_scheduler<Engine>::yieldCurrentFiber()
    {
       assert(_current && "yieldCurrentFiber called with no current fiber");
+      checkNotDrainFiber();
       _current->state      = FiberState::Ready;
       _current->posted_num = _posted_counter++;
       addToReadyQueue(_current);
@@ -284,15 +423,17 @@ namespace psiber
 
    // ── Cross-thread notify (only triggers kevent when receiver is blocked) ──
 
-   void Scheduler::notifyIfPolling()
+   template <typename Engine>
+   void basic_scheduler<Engine>::notifyIfPolling()
    {
-      _io->triggerUserEvent(_index);
+      _io.triggerUserEvent(_index);
    }
 
-   void Scheduler::wake(Fiber* fiber)
+   template <typename Engine>
+   void basic_scheduler<Engine>::wake(Fiber* fiber)
    {
       assert(fiber && fiber->home_sched);
-      Scheduler* target = fiber->home_sched;
+      basic_scheduler* target = fiber->home_sched;
 
       // CAS-push onto the target scheduler's wake list
       Fiber* old_head = target->_wake_head.load(std::memory_order_relaxed);
@@ -310,22 +451,8 @@ namespace psiber
          target->notifyIfPolling();
    }
 
-   void Scheduler::post(std::function<void()> fn)
-   {
-      auto* item = new WorkItem{nullptr, std::move(fn)};
-
-      // CAS-push onto the work list
-      WorkItem* old_head = _work_head.load(std::memory_order_relaxed);
-      do
-      {
-         item->next = old_head;
-      } while (!_work_head.compare_exchange_weak(
-         old_head, item, std::memory_order_release, std::memory_order_relaxed));
-
-      notifyIfPolling();
-   }
-
-   void Scheduler::postTask(TaskSlotHeader* slot)
+   template <typename Engine>
+   void basic_scheduler<Engine>::postTask(TaskSlotHeader* slot)
    {
       // CAS-push onto the task intake list
       TaskSlotHeader* old_head = _task_head.load(std::memory_order_relaxed);
@@ -340,7 +467,8 @@ namespace psiber
 
    // ── Drain helpers ────────────────────────────────────────────────────────
 
-   void Scheduler::drainWakeList()
+   template <typename Engine>
+   void basic_scheduler<Engine>::drainWakeList()
    {
       Fiber* batch = _wake_head.exchange(nullptr, std::memory_order_acquire);
       if (!batch)
@@ -359,9 +487,35 @@ namespace psiber
          batch            = next;
       }
 
+      // Route a woken fiber: strand fibers re-enter their strand,
+      // standalone fibers go directly to the ready queue.
+      auto routeWokenFiber = [this](Fiber* f) {
+         f->next_wake = nullptr;
+         if (f->home_strand)
+         {
+            // Re-enter the strand.  If the fiber becomes active and
+            // the strand has no reactor, enqueue returns the fiber
+            // for us to handle locally.
+            Fiber* local = f->home_strand->enqueue(f);
+            if (local)
+            {
+               local->state      = FiberState::Ready;
+               local->posted_num = _posted_counter++;
+               addToReadyQueue(local);
+            }
+            // else: strand posted to reactor, or fiber is waiting
+         }
+         else
+         {
+            f->state      = FiberState::Ready;
+            f->posted_num = _posted_counter++;
+            addToReadyQueue(f);
+         }
+      };
+
       // Single-fiber wake: promote to LIFO slot for request-response
-      // cache locality (Tokio pattern).
-      if (!reversed->next_wake && !_lifo_slot)
+      // cache locality (Tokio pattern).  Only for non-strand fibers.
+      if (!reversed->next_wake && !_lifo_slot && !reversed->home_strand)
       {
          reversed->next_wake  = nullptr;
          reversed->state      = FiberState::Ready;
@@ -370,19 +524,17 @@ namespace psiber
          return;
       }
 
-      // Enqueue all woken fibers into ready queues
+      // Enqueue all woken fibers
       while (reversed)
       {
-         Fiber* next          = reversed->next_wake;
-         reversed->next_wake  = nullptr;
-         reversed->state      = FiberState::Ready;
-         reversed->posted_num = _posted_counter++;
-         addToReadyQueue(reversed);
+         Fiber* next = reversed->next_wake;
+         routeWokenFiber(reversed);
          reversed = next;
       }
    }
 
-   void Scheduler::drainTaskList()
+   template <typename Engine>
+   void basic_scheduler<Engine>::drainTaskList()
    {
       TaskSlotHeader* batch = _task_head.exchange(nullptr, std::memory_order_acquire);
       if (!batch)
@@ -409,40 +561,42 @@ namespace psiber
             void* payload = reversed + 1;
             reversed->run(payload);
          }
-         reversed->consumed.store(true, std::memory_order_release);
+         if (reversed->heap_owned)
+         {
+            // Heap-allocated slot: destroy payload and free the block.
+            // No consumed signal — nobody is waiting on it.
+            if (reversed->destroy)
+            {
+               void* payload = reversed + 1;
+               reversed->destroy(payload);
+            }
+            delete[] reinterpret_cast<char*>(reversed);
+         }
+         else
+         {
+            reversed->consumed.store(true, std::memory_order_release);
+         }
          reversed = next;
       }
    }
 
-   void Scheduler::drainWorkList()
+   template <typename Engine>
+   void basic_scheduler<Engine>::drainWorkList()
    {
-      WorkItem* batch = _work_head.exchange(nullptr, std::memory_order_acquire);
-      if (!batch)
-         return;
-
-      _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
-
-      // Reverse for FIFO order
-      WorkItem* reversed = nullptr;
-      while (batch)
+      // Poke the drain fiber if work is pending and it's parked.
+      // The drain fiber does the actual exchange + execute + return cycle
+      // in fiber context, so callables have full fiber capabilities.
+      if (_work_head.load(std::memory_order_acquire) &&
+          _drain_fiber && _drain_fiber->state == FiberState::Parked)
       {
-         WorkItem* next = batch->next;
-         batch->next    = reversed;
-         reversed       = batch;
-         batch          = next;
-      }
-
-      // Execute and delete each work item
-      while (reversed)
-      {
-         WorkItem* next = reversed->next;
-         reversed->fn();
-         delete reversed;
-         reversed = next;
+         _drain_fiber->state      = FiberState::Ready;
+         _drain_fiber->posted_num = _posted_counter++;
+         addToReadyQueue(_drain_fiber);
       }
    }
 
-   void Scheduler::pollAndUnblock(bool blocking)
+   template <typename Engine>
+   void basic_scheduler<Engine>::pollAndUnblock(bool blocking)
    {
       auto now = std::chrono::steady_clock::now();
 
@@ -494,7 +648,7 @@ namespace psiber
       }
 
       IoEvent events[64];
-      int     n = _io->poll(events, timeout);
+      int     n = _io.poll(events, timeout);
 
       for (int i = 0; i < n; ++i)
       {
@@ -518,7 +672,8 @@ namespace psiber
       }
    }
 
-   Fiber* Scheduler::popFromReadyQueues()
+   template <typename Engine>
+   Fiber* basic_scheduler<Engine>::popFromReadyQueues()
    {
       for (auto& q : _ready_queues)
       {
@@ -532,11 +687,18 @@ namespace psiber
       return nullptr;
    }
 
-   void Scheduler::addToReadyQueue(Fiber* fiber)
+   template <typename Engine>
+   void basic_scheduler<Engine>::addToReadyQueue(Fiber* fiber)
    {
       uint8_t prio = std::min<uint8_t>(fiber->priority, 2);
       _ready_queues[prio].push_back(fiber);
    }
+
+   // ── Explicit instantiation ────────────────────────────────────────────────
+
+   static_assert(io_engine<detail::PlatformEngine>,
+                 "PlatformEngine must satisfy the io_engine concept");
+   template class basic_scheduler<detail::PlatformEngine>;
 
    // ── spin_yield_lock implementation (needs Scheduler::current) ──────────
 

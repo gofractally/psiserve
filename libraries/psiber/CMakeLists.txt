@@ -5,6 +5,8 @@ add_library(psiber
    src/io_engine_kqueue.cpp
    src/send_queue.cpp
    src/fiber_mutex.cpp
+   src/strand.cpp
+   src/reactor.cpp
    src/tcp_socket.cpp
    src/thread.cpp
 )
@@ -64,6 +66,9 @@ if(PSIBER_ENABLE_TESTS)
       tests/lifo_slot_tests.cpp
       tests/tcp_socket_tests.cpp
       tests/signal_tests.cpp
+      tests/strand_tests.cpp
+      tests/reactor_tests.cpp
+      tests/reactor_integration_tests.cpp
    )
 
    if(c-ares_FOUND AND PSIBER_ENABLE_DNS)

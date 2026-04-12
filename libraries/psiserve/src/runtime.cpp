@@ -196,9 +196,8 @@ namespace psiserve
       table.add<&HostApi::psiRecvFrom>("psi", "recvfrom");
       table.add<&HostApi::psiSendTo>("psi", "sendto");
 
-      // Each worker gets its own I/O engine and scheduler
-      auto io = std::make_unique<KqueueEngine>();
-      Scheduler sched(std::move(io), static_cast<uint32_t>(worker_id));
+      // Each worker gets its own scheduler (engine created internally)
+      auto sched = psiber::scheduler_access::make(static_cast<uint32_t>(worker_id));
 
       // Each worker gets its own process (own fd table, shared listen socket)
       Process proc;
@@ -261,7 +260,8 @@ namespace psiserve
                      PSI_ERROR("fiber exception: func_idx={} arg={}: type={} what={}",
                                func_idx, arg, typeid(e).name(), e.what());
                   }
-               });
+               },
+               "wasm");
          };
       host.setFiberRunner(&fiber_runner);
 
@@ -287,7 +287,8 @@ namespace psiserve
             // Accept loop exited — tell scheduler to stop waiting for
             // blocked fibers (idle keep-alive connections).
             sched.interrupt();
-         });
+         },
+         "_start");
 
       // Run scheduler — blocks until all fibers complete
       try
