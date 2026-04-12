@@ -1,0 +1,392 @@
+#include <psiber/scheduler.hpp>
+#include <psiber/io_engine_kqueue.hpp>
+#include <psiber/tcp_socket.hpp>
+#include <psiber/fiber_mutex.hpp>
+#include <psiber/fiber_promise.hpp>
+#include <psiber/spin_lock.hpp>
+
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <thread>
+#include <vector>
+
+using namespace psiber;
+using Clock = std::chrono::steady_clock;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+static double elapsed_us(Clock::time_point start, Clock::time_point end)
+{
+   return std::chrono::duration<double, std::micro>(end - start).count();
+}
+
+static void report(const char* name, int ops, double us)
+{
+   double ops_per_sec = (ops / us) * 1e6;
+   double ns_per_op   = (us * 1e3) / ops;
+   std::printf("  %-40s %10d ops  %8.1f ns/op  %10.0f ops/sec\n",
+               name, ops, ns_per_op, ops_per_sec);
+   std::fflush(stdout);
+}
+
+// ── Benchmarks ───────────────────────────────────────────────────────────────
+
+static void bench_fiber_create_destroy()
+{
+   constexpr int N = 10'000;
+
+   auto      io = std::make_unique<KqueueEngine>();
+   Scheduler sched(std::move(io), 1000);
+
+   auto start = Clock::now();
+
+   for (int i = 0; i < N; ++i)
+      sched.spawnFiber([]() {});
+
+   sched.run();
+   auto end = Clock::now();
+
+   report("fiber create+run+destroy", N, elapsed_us(start, end));
+}
+
+static void bench_context_switch()
+{
+   constexpr int N = 100'000;
+
+   auto      io = std::make_unique<KqueueEngine>();
+   Scheduler sched(std::move(io), 1001);
+
+   int count = 0;
+
+   // Two fibers ping-ponging via yield
+   sched.spawnFiber([&]() {
+      for (int i = 0; i < N; ++i)
+      {
+         ++count;
+         sched.yieldCurrentFiber();
+      }
+   });
+
+   sched.spawnFiber([&]() {
+      for (int i = 0; i < N; ++i)
+      {
+         ++count;
+         sched.yieldCurrentFiber();
+      }
+   });
+
+   auto start = Clock::now();
+   sched.run();
+   auto end = Clock::now();
+
+   report("context switch (yield)", count, elapsed_us(start, end));
+}
+
+static void bench_cross_thread_wake()
+{
+   constexpr int N = 10'000;
+
+   auto      io = std::make_unique<KqueueEngine>();
+   Scheduler sched(std::move(io), 1002);
+
+   Fiber*           fiber_ptr = nullptr;
+   std::atomic<int> parked{0};
+   int              wakes = 0;
+
+   sched.spawnFiber([&]() {
+      fiber_ptr = sched.currentFiber();
+      for (int i = 0; i < N; ++i)
+      {
+         parked.store(i + 1, std::memory_order_release);
+         sched.parkCurrentFiber();
+         ++wakes;
+      }
+   });
+
+   std::thread sender([&]() {
+      for (int i = 0; i < N; ++i)
+      {
+         while (parked.load(std::memory_order_acquire) != i + 1)
+            ;
+         Scheduler::wake(fiber_ptr);
+      }
+   });
+
+   auto start = Clock::now();
+   sched.run();
+   auto end = Clock::now();
+   sender.join();
+
+   report("cross-thread wake (park+wake)", wakes, elapsed_us(start, end));
+}
+
+static void bench_fiber_mutex()
+{
+   constexpr int N = 500'000;
+
+   auto      io = std::make_unique<KqueueEngine>();
+   Scheduler sched(std::move(io), 1003);
+
+   fiber_mutex mtx;
+   int         count = 0;
+
+   // Single fiber: uncontended lock/unlock
+   sched.spawnFiber([&]() {
+      for (int i = 0; i < N; ++i)
+      {
+         mtx.lock(sched);
+         ++count;
+         mtx.unlock();
+      }
+   });
+
+   auto start = Clock::now();
+   sched.run();
+   auto end = Clock::now();
+
+   report("fiber_mutex lock+unlock (uncontended)", count, elapsed_us(start, end));
+}
+
+static void bench_spin_lock()
+{
+   constexpr int N = 1'000'000;
+
+   spin_lock lk;
+   int       count = 0;
+
+   auto start = Clock::now();
+   for (int i = 0; i < N; ++i)
+   {
+      lk.lock();
+      ++count;
+      lk.unlock();
+   }
+   auto end = Clock::now();
+
+   report("spin_lock lock+unlock (uncontended)", count, elapsed_us(start, end));
+}
+
+static void bench_tcp_echo_throughput()
+{
+   constexpr int    iterations  = 50'000;
+   constexpr size_t msg_size    = 64;
+
+   auto      io = std::make_unique<KqueueEngine>();
+   Scheduler sched(std::move(io), 1004);
+
+   fiber_promise<uint16_t> port_promise;
+   ssize_t                 total_bytes = 0;
+
+   // Server
+   sched.spawnFiber([&]() {
+      auto listener = tcp_listener::bind(0);
+      port_promise.set_value(listener.port());
+
+      auto conn = listener.accept(sched);
+      conn.set_nodelay(true);
+
+      char buf[msg_size];
+      for (int i = 0; i < iterations; ++i)
+      {
+         auto r = conn.read_all(sched, buf, msg_size);
+         if (!r)
+            break;
+         conn.write_all(sched, buf, msg_size);
+      }
+      conn.close();
+      listener.close();
+   });
+
+   // Client
+   sched.spawnFiber([&]() {
+      sched.yieldCurrentFiber();
+      auto sock = tcp_socket::connect(sched, "127.0.0.1", port_promise.get());
+      sock.set_nodelay(true);
+
+      char send_buf[msg_size];
+      char recv_buf[msg_size];
+      std::memset(send_buf, 'A', msg_size);
+
+      for (int i = 0; i < iterations; ++i)
+      {
+         sock.write_all(sched, send_buf, msg_size);
+         auto r = sock.read_all(sched, recv_buf, msg_size);
+         if (!r)
+            break;
+         total_bytes += r.bytes;
+      }
+      sock.close();
+   });
+
+   auto start = Clock::now();
+   sched.run();
+   auto end = Clock::now();
+
+   double us    = elapsed_us(start, end);
+   double mbps  = (total_bytes / (us / 1e6)) / (1024.0 * 1024.0);
+   report("tcp echo roundtrip (64B)", iterations, us);
+   std::printf("  %-40s %8.1f MB/s\n", "  throughput", mbps);
+}
+
+static void bench_tcp_throughput_bulk()
+{
+   constexpr size_t chunk_size  = 64 * 1024;
+   constexpr size_t total_size  = 64 * 1024 * 1024;  // 64 MB
+   constexpr int    num_chunks  = total_size / chunk_size;
+
+   auto      io = std::make_unique<KqueueEngine>();
+   Scheduler sched(std::move(io), 1005);
+
+   fiber_promise<uint16_t> port_promise;
+   ssize_t                 total_received = 0;
+
+   std::vector<char> data(chunk_size, 'B');
+
+   // Server: just read everything
+   sched.spawnFiber([&]() {
+      auto listener = tcp_listener::bind(0);
+      port_promise.set_value(listener.port());
+
+      auto conn = listener.accept(sched);
+      char buf[chunk_size];
+      while (true)
+      {
+         auto r = conn.read(sched, buf, sizeof(buf));
+         if (!r)
+            break;
+         total_received += r.bytes;
+      }
+      conn.close();
+      listener.close();
+   });
+
+   // Client: write total_size bytes
+   sched.spawnFiber([&]() {
+      sched.yieldCurrentFiber();
+      auto sock = tcp_socket::connect(sched, "127.0.0.1", port_promise.get());
+
+      for (int i = 0; i < num_chunks; ++i)
+         sock.write_all(sched, data.data(), chunk_size);
+
+      sock.shutdown_write();
+      sched.sleep(std::chrono::milliseconds{10});
+      sock.close();
+   });
+
+   auto start = Clock::now();
+   sched.run();
+   auto end = Clock::now();
+
+   double us   = elapsed_us(start, end);
+   double mbps = (total_received / (us / 1e6)) / (1024.0 * 1024.0);
+   std::printf("  %-40s %8.1f MB/s  (%zd bytes in %.1f ms)\n",
+               "tcp bulk throughput (64KB chunks)", mbps,
+               total_received, us / 1000.0);
+}
+
+static void bench_fiber_spawn_rate()
+{
+   constexpr int N = 10'000;
+
+   auto      io = std::make_unique<KqueueEngine>();
+   Scheduler sched(std::move(io), 1006);
+
+   // Measure just spawn (no run)
+   auto start = Clock::now();
+   for (int i = 0; i < N; ++i)
+      sched.spawnFiber([]() {});
+   auto end = Clock::now();
+
+   report("fiber spawn (no run)", N, elapsed_us(start, end));
+
+   sched.run();  // drain
+}
+
+static void bench_tcp_connection_rate()
+{
+   constexpr int N = 1'000;
+
+   auto      io = std::make_unique<KqueueEngine>();
+   Scheduler sched(std::move(io), 1007);
+
+   fiber_promise<uint16_t> port_promise;
+   int                     accepted = 0;
+
+   // Server: accept N connections
+   sched.spawnFiber([&]() {
+      auto listener = tcp_listener::bind(0);
+      port_promise.set_value(listener.port());
+
+      for (int i = 0; i < N; ++i)
+      {
+         auto conn = listener.accept(sched);
+         ++accepted;
+         conn.close();
+      }
+      listener.close();
+   });
+
+   // Client: connect N times
+   sched.spawnFiber([&]() {
+      sched.yieldCurrentFiber();
+      uint16_t port = port_promise.get();
+
+      for (int i = 0; i < N; ++i)
+      {
+         auto sock = tcp_socket::connect(sched, "127.0.0.1", port);
+         sock.close();
+      }
+   });
+
+   auto start = Clock::now();
+   sched.run();
+   auto end = Clock::now();
+
+   report("tcp connect+accept+close", accepted, elapsed_us(start, end));
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+
+static void run_bench(const char* name, void (*fn)())
+{
+   std::printf("  [running: %s]\n", name);
+   std::fflush(stdout);
+
+   // Watchdog: kill the whole process if a benchmark hangs
+   std::atomic<bool> done{false};
+   std::thread       watchdog([&done, name]() {
+      for (int i = 0; i < 100; ++i)  // 10 seconds max
+      {
+         std::this_thread::sleep_for(std::chrono::milliseconds{100});
+         if (done.load(std::memory_order_relaxed))
+            return;
+      }
+      std::printf("  *** TIMEOUT: %s hung after 10s ***\n", name);
+      std::fflush(stdout);
+      std::_Exit(1);
+   });
+   watchdog.detach();
+
+   fn();
+   done.store(true, std::memory_order_relaxed);
+}
+
+int main()
+{
+   std::printf("\n=== psiber benchmarks ===\n\n");
+
+   run_bench("fiber_spawn_rate",      bench_fiber_spawn_rate);
+   run_bench("fiber_create_destroy",  bench_fiber_create_destroy);
+   run_bench("context_switch",        bench_context_switch);
+   run_bench("cross_thread_wake",     bench_cross_thread_wake);
+   run_bench("spin_lock",             bench_spin_lock);
+   run_bench("fiber_mutex",           bench_fiber_mutex);
+   run_bench("tcp_connection_rate",   bench_tcp_connection_rate);
+   run_bench("tcp_echo_throughput",   bench_tcp_echo_throughput);
+   run_bench("tcp_throughput_bulk",   bench_tcp_throughput_bulk);
+
+   std::printf("\n");
+   return 0;
+}
