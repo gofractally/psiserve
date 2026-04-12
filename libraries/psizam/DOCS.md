@@ -57,8 +57,7 @@ struct my_host {
 
 int main() {
    // Read WASM bytes
-   auto wasm = psizam::read_wasm("module.wasm");
-   psizam::wasm_code code(wasm.begin(), wasm.end());
+   auto code = psizam::read_wasm("module.wasm");
 
    // Register host functions
    psizam::host_function_table table;

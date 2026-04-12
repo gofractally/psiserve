@@ -298,7 +298,7 @@ static double run_eosvm(wasm_code& code, wasm_allocator& wa, const char* func, u
 template<typename Impl>
 static double compile_eosvm(const std::vector<uint8_t>& wasm_bytes) {
    using backend_t = psizam::backend<std::nullptr_t, Impl>;
-   wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+   wasm_code code = wasm_bytes;
    wasm_allocator wa;
 
    auto t1 = std::chrono::high_resolution_clock::now();
@@ -453,7 +453,7 @@ template<typename Impl>
 static void dump_code_sizes(const std::vector<uint8_t>& wasm_bytes, const char* label) {
    if constexpr (!Impl::is_jit) return;
    using backend_t = psizam::backend<std::nullptr_t, Impl>;
-   wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+   wasm_code code = wasm_bytes;
    wasm_allocator wa;
    backend_t bkend(code, &wa);
    bkend.initialize(nullptr);
@@ -473,7 +473,7 @@ static void dump_code_sizes(const std::vector<uint8_t>& wasm_bytes, const char* 
 template<typename Impl>
 static double run_eosvm_compute(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n) {
    using backend_t = psizam::backend<std::nullptr_t, Impl>;
-   wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+   wasm_code code = wasm_bytes;
    wasm_allocator wa;
    backend_t bkend(code, &wa);
    bkend.initialize(nullptr);
@@ -561,8 +561,8 @@ static double run_wamr_compute(const std::vector<uint8_t>& wasm, const char* fun
 int main() {
    register_eosvm_hosts();
 
-   auto wasm_bytes = build_bench_wasm();
-   wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+   wasm_code wasm_bytes = build_bench_wasm();
+   wasm_code& code = wasm_bytes;
    wasm_allocator wa;
 
    const uint32_t N = 10'000'000;

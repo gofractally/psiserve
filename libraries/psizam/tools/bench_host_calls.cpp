@@ -280,8 +280,7 @@ int main() {
    rhf_t::add<&host_mix>("env", "mix");
    rhf_t::add<&host_read_mem>("env", "read_mem");
 
-   auto wasm = build_host_call_wasm();
-   wasm_code code(wasm.begin(), wasm.end());
+   wasm_code code = build_host_call_wasm();
 
    const uint32_t N = 10'000'000;
 

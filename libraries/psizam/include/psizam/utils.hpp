@@ -26,7 +26,7 @@
 #endif
 
 namespace psizam {
-   // helper to read a wasm file into a vector of bytes
+   // helper to read a wasm file into a vector of bytes (returns wasm_code)
    inline std::vector<uint8_t> read_wasm(const std::string& fname) {
       std::ifstream wasm_file(fname, std::ios::binary);
       if (!wasm_file.is_open()) {

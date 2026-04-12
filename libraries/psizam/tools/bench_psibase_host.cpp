@@ -336,8 +336,7 @@ int main() {
    rhf_t::add<&host_context::getCurrentAction>("env", "getCurrentAction");
    rhf_t::add<&host_context::kvGreaterEqual>("env", "kvGreaterEqual");
 
-   auto wasm = build_wasm();
-   wasm_code code(wasm.begin(), wasm.end());
+   wasm_code code = build_wasm();
 
    const uint32_t N = 5'000'000;
 
