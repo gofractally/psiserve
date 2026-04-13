@@ -24,7 +24,7 @@ namespace psizam {
    using detail::opcode;
    using detail::opcodes;
 
-   enum types { i32 = 0x7f, i64 = 0x7e, f32 = 0x7d, f64 = 0x7c, v128 = 0x7b, anyfunc = 0x70, funcref = anyfunc, externref = 0x6f, func = 0x60, pseudo = 0x40, ret_void };
+   enum types { i32 = 0x7f, i64 = 0x7e, f32 = 0x7d, f64 = 0x7c, v128 = 0x7b, anyfunc = 0x70, funcref = anyfunc, externref = 0x6f, exnref = 0x69, func = 0x60, pseudo = 0x40, ret_void };
 
    enum external_kind { Function = 0, Table = 1, Memory = 2, Global = 3, Tag = 4 };
 
@@ -214,6 +214,20 @@ namespace psizam {
    struct tag_type {
       uint8_t  attribute;   // always 0 (exception)
       uint32_t type_index;  // index into module.types (params = exception payload)
+   };
+
+   // WASM 3.0 try_table catch clause kinds
+   enum catch_kind : uint8_t {
+      catch_tag     = 0x00,  // catch tag_idx label — push payload
+      catch_tag_ref = 0x01,  // catch_ref tag_idx label — push payload + exnref
+      catch_all_    = 0x02,  // catch_all label — no payload
+      catch_all_ref = 0x03,  // catch_all_ref label — push exnref only
+   };
+
+   struct catch_clause {
+      uint8_t  kind;       // catch_kind
+      uint32_t tag_index;  // tag index (only for catch_tag/catch_tag_ref)
+      uint32_t label;      // branch target (depth into pc_stack)
    };
 
    union import_type {

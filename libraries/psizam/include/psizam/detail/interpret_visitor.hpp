@@ -3085,42 +3085,158 @@ namespace psizam::detail {
       }
 
       // ── Exception handling ──
+
+      // v1 legacy: try just advances PC (catch handlers registered by catch_t/catch_all_t opcodes)
       [[gnu::always_inline]] inline void operator()(const try_t& op) {
-         // try acts like block but pushes a handler.
-         // The bitcode for the try body is followed by catch/catch_all/end.
-         // op.pc points to the first catch handler (or end if no catch).
-         // op.data holds the number of catch clauses that follow.
-         // We register each catch target later when we encounter catch/catch_all opcodes.
-         // For now, just advance PC. The parser emits catch_t opcodes inline.
          context.inc_pc();
       }
 
+      // v1 legacy: reached during normal flow — jump past catch handlers
       [[gnu::always_inline]] inline void operator()(const catch_t& op) {
-         // Reached during normal flow (try body completed without exception).
-         // Jump past all catch handlers to the end.
          context.set_relative_pc(op.pc);
       }
 
-      [[gnu::always_inline]] inline void operator()(const throw_t& op) {
-         context.inc_pc();
-         // For a minimal EH implementation, throw traps unconditionally.
-         // A full implementation would search _eh_stack for matching handlers.
-         throw wasm_interpreter_exception{ "unhandled wasm exception" };
+      // v1 legacy: reached during normal flow — jump to end
+      [[gnu::always_inline]] inline void operator()(const catch_all_t& op) {
+         context.set_relative_pc(op.pc);
       }
 
+      // v1 legacy: delegate during normal flow — acts as end
+      [[gnu::always_inline]] inline void operator()(const delegate_t& op) {
+         context.inc_pc();
+      }
+
+      // v1 legacy: rethrow — re-throw from caught exception stack
       [[gnu::always_inline]] inline void operator()(const rethrow_t& op) {
          context.inc_pc();
+         // In v1, rethrow pops from _eh_exn_stack. For now, trap.
          throw wasm_interpreter_exception{ "unhandled wasm exception (rethrow)" };
       }
 
-      [[gnu::always_inline]] inline void operator()(const catch_all_t& op) {
-         // Reached during normal flow — jump to end
-         context.set_relative_pc(op.pc);
+      // ── throw: search _eh_stack for matching try_table handler ──
+      [[gnu::always_inline]] inline void operator()(const throw_t& op) {
+         // op.data = tag_index
+         // The tag's param types are already on the operand stack.
+         // Collect the payload values from the stack.
+         uint32_t tag_index = op.data;
+         const auto& mod = context.get_module();
+         const auto& tag_ft = mod.types[mod.tags[tag_index].type_index];
+         uint32_t payload_count = static_cast<uint32_t>(tag_ft.param_types.size());
+
+         // Pop payload values (they're on top of the operand stack)
+         std::vector<uint64_t> payload(payload_count);
+         for (int i = static_cast<int>(payload_count) - 1; i >= 0; --i)
+            payload[i] = context.pop_operand().to_ui64();
+
+         dispatch_exception(tag_index, std::move(payload));
       }
 
-      [[gnu::always_inline]] inline void operator()(const delegate_t& op) {
-         // Reached during normal flow — acts as end of try block
+      // ── throw_ref: pop exnref and re-throw ──
+      [[gnu::always_inline]] inline void operator()(const throw_ref_t& op) {
+         // Pop exnref from operand stack. In our representation, exnref is an index
+         // into the caught exception stack. UINT64_MAX means null exnref → trap.
+         uint64_t exn_idx = context.pop_operand().to_ui64();
+         if (exn_idx == UINT64_MAX)
+            throw wasm_interpreter_exception{ "null exception reference" };
+         auto& exn = context.get_caught_exception(static_cast<uint32_t>(exn_idx));
+         dispatch_exception(exn.tag_index, std::vector<uint64_t>(exn.values));
+      }
+
+      // ── try_table: register catch handlers ──
+      [[gnu::always_inline]] inline void operator()(const try_table_t& op) {
+         // op.data = number of catch clauses
+         // Subsequent try_table_t instructions in the bitcode stream carry the clause descriptors
+         uint32_t num_clauses = op.data;
+
+         // Push an eh_frame
+         context.push_eh_frame({
+            context.call_depth(),  // call_depth
+            num_clauses,
+            context.eh_catches_size()  // first_catch
+         });
+
+         // Read the inline clause descriptors (they follow as try_table_t instructions)
          context.inc_pc();
+         for (uint32_t i = 0; i < num_clauses; ++i) {
+            auto* clause_op = context.get_pc();
+            auto& clause_data = clause_op->template get<try_table_t>();
+            uint8_t  kind      = static_cast<uint8_t>(clause_data.data >> 24);
+            uint32_t tag_idx   = clause_data.data & 0x00FFFFFF;
+            uint32_t label_pc  = clause_data.pc;
+
+            context.push_eh_catch({
+               kind,
+               tag_idx,
+               label_pc,
+               context.current_operand_depth()
+            });
+            context.inc_pc();
+         }
+         // PC now points to the first instruction of the try body — don't inc again
+      }
+
+   private:
+      void dispatch_exception(uint32_t tag_index, std::vector<uint64_t> payload) {
+         // Walk eh_stack backwards to find a matching handler
+         while (context.has_eh_frames()) {
+            auto& frame = context.current_eh_frame();
+
+            for (uint32_t i = 0; i < frame.catch_count; ++i) {
+               auto& entry = context.get_eh_catch(frame.first_catch + i);
+               bool matches = false;
+
+               switch (entry.kind) {
+                  case catch_kind::catch_tag:
+                  case catch_kind::catch_tag_ref:
+                     matches = (entry.tag_index == tag_index);
+                     break;
+                  case catch_kind::catch_all_:
+                  case catch_kind::catch_all_ref:
+                     matches = true;
+                     break;
+               }
+
+               if (matches) {
+                  // Unwind call stack to the try_table's call depth
+                  context.unwind_call_stack_to(frame.call_depth);
+
+                  // Restore operand stack depth
+                  context.eat_operands(entry.operand_depth);
+
+                  // Push payload values for catch/catch_ref
+                  if (entry.kind == catch_kind::catch_tag || entry.kind == catch_kind::catch_tag_ref) {
+                     for (auto v : payload)
+                        context.push_operand({i64_const_t{static_cast<int64_t>(v)}});
+                  }
+
+                  // Push exnref for catch_ref/catch_all_ref
+                  if (entry.kind == catch_kind::catch_tag_ref || entry.kind == catch_kind::catch_all_ref) {
+                     uint32_t exn_idx = context.push_caught_exception(tag_index, payload);
+                     context.push_operand({i64_const_t{static_cast<int64_t>(exn_idx)}});
+                  }
+
+                  // Pop the eh_frame and trim catch entries
+                  uint32_t trim_catches = frame.first_catch;
+                  context.pop_eh_frame();
+                  context.trim_eh_catches(trim_catches);
+
+                  // Jump to the handler
+                  context.set_relative_pc(entry.handler_pc);
+                  return;
+               }
+            }
+
+            // No match in this frame — pop it and try outer
+            uint32_t trim_catches = frame.first_catch;
+            context.pop_eh_frame();
+            context.trim_eh_catches(trim_catches);
+
+            // Unwind call stack to this frame's depth
+            context.unwind_call_stack_to(frame.call_depth);
+         }
+
+         // No handler found — trap
+         throw wasm_interpreter_exception{ "unhandled wasm exception" };
       }
    };
 

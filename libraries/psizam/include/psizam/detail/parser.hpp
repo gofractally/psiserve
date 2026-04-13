@@ -907,7 +907,7 @@ namespace psizam::detail {
             auto count = parse_varuint32(code);
             auto type = *code++;
             PSIZAM_ASSERT(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 ||
-                          type == types::funcref || type == types::externref ||
+                          type == types::funcref || type == types::externref || type == types::exnref ||
                           (type == types::v128 && get_enable_simd(_options)),
                           wasm_parse_exception, "invalid local type");
             local_checker.on_local(_options, type, count);
@@ -1431,6 +1431,12 @@ namespace psizam::detail {
                   code_writer.emit_rethrow(depth_change, rt, label, rc);
                   op_stack.start_unreachable();
                } break;
+               case opcodes::throw_ref_: {
+                  check_in_bounds();
+                  op_stack.pop(types::exnref);
+                  code_writer.emit_throw_ref();
+                  op_stack.start_unreachable();
+               } break;
                case opcodes::catch_all_: {
                   check_in_bounds();
                   auto& old_index = pc_stack.back();
@@ -1560,6 +1566,80 @@ namespace psizam::detail {
                   PSIZAM_ASSERT(_mod->tables[table_idx].element_type == types::funcref, wasm_parse_exception, "return_call_indirect requires funcref table");
                   code_writer.emit_tail_call_indirect(target_ft, type_aliases[functypeidx], table_idx);
                   op_stack.start_unreachable();
+               } break;
+               case opcodes::try_table_: {
+                  check_in_bounds();
+                  // Parse block type (same as block/if/try)
+                  uint8_t first_byte = *code;
+                  uint8_t single_type = types::pseudo;
+                  std::vector<uint8_t> bp, br;
+
+                  if (first_byte == types::pseudo || first_byte == types::i32 || first_byte == types::i64 ||
+                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128) {
+                     code++;
+                     single_type = first_byte;
+                  } else if (first_byte == types::exnref || first_byte == types::funcref || first_byte == types::externref) {
+                     code++;
+                     single_type = first_byte;
+                  } else {
+                     int32_t type_idx = parse_varint32(code);
+                     PSIZAM_ASSERT(type_idx >= 0 && static_cast<uint32_t>(type_idx) < _mod->types.size(),
+                                   wasm_parse_exception, "invalid block type index");
+                     const func_type& ft = _mod->types[type_idx];
+                     bp.assign(ft.param_types.begin(), ft.param_types.end());
+                     br.assign(ft.return_types.begin(), ft.return_types.end());
+                     single_type = ft.return_count ? ft.return_type : types::pseudo;
+                  }
+
+                  // Parse catch clauses
+                  uint32_t num_catches = parse_varuint32(code);
+                  std::vector<catch_clause> clauses(num_catches);
+                  for (uint32_t i = 0; i < num_catches; ++i) {
+                     clauses[i].kind = *code++;
+                     PSIZAM_ASSERT(clauses[i].kind <= 3, wasm_parse_exception, "invalid catch kind");
+                     if (clauses[i].kind == catch_kind::catch_tag || clauses[i].kind == catch_kind::catch_tag_ref) {
+                        clauses[i].tag_index = parse_varuint32(code);
+                        PSIZAM_ASSERT(clauses[i].tag_index < _mod->tags.size(), wasm_parse_exception, "invalid tag index");
+                     }
+                     clauses[i].label = parse_varuint32(code);
+                     PSIZAM_ASSERT(clauses[i].label < pc_stack.size(), wasm_parse_exception, "invalid catch label");
+
+                     // Validate that the catch label's expected types match:
+                     // catch/catch_ref: label expects tag payload types (+ exnref for _ref)
+                     // catch_all: label expects nothing
+                     // catch_all_ref: label expects exnref
+                     // (Full type validation deferred to a later pass — just validate label is in range)
+                  }
+
+                  // Pop params from outer stack (for multi-value blocks)
+                  for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
+                     op_stack.pop(bp[i]);
+
+                  auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses);
+
+                  // Push try_table onto pc_stack BEFORE resolving catch clause labels,
+                  // because catch clause label depths are relative to inside the try_table
+                  // (depth 0 = try_table, depth 1 = enclosing block, etc.)
+                  pc_element_t elem{};
+                  elem.operand_depth = op_stack.depth();
+                  elem.expected_result = single_type;
+                  elem.label_result = single_type;
+                  elem.is_if = false;
+                  elem.relocations = std::vector<branch_t>{};
+                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
+                  elem.block_params = std::move(bp);
+                  pc_stack.push_back(std::move(elem));
+
+                  // Now register catch clause PCs for branch target relocation
+                  for (uint32_t i = 0; i < num_catches; ++i) {
+                     handle_branch_target(clauses[i].label, clause_pcs[i]);
+                  }
+
+                  op_stack.push_scope();
+                  // Push params back inside the try_table scope
+                  for (auto p : pc_stack.back().block_params)
+                     op_stack.push(p);
+                  nested_checker.on_control(_options);
                } break;
                case opcodes::drop: check_in_bounds(); code_writer.emit_drop(op_stack.pop()); break;
                case opcodes::select: {

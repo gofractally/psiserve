@@ -188,6 +188,7 @@ add_executable(psizam_compliance_tests main.cpp
    compliance/pzam_attestation_tests.cpp
    compliance/wit_tests.cpp
    compliance/memory64_tests.cpp
+   exception_handling_tests.cpp
 )
 target_link_libraries(psizam_compliance_tests psizam psizam-exec Catch2::Catch2)
 target_include_directories(psizam_compliance_tests PUBLIC

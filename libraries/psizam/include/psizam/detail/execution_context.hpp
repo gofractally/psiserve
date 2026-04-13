@@ -999,6 +999,26 @@ namespace psizam::detail {
       using base_type::get_interface;
       using base_type::_globals;
 
+      // Exception handler entry for WASM EH (v2 / try_table)
+      struct eh_catch_entry {
+         uint8_t  kind;           // catch_kind (0-3)
+         uint32_t tag_index;      // tag to catch (only for kind 0,1)
+         uint32_t handler_pc;     // bitcode PC of catch label target
+         uint32_t operand_depth;  // operand stack depth at label target
+      };
+
+      struct eh_frame {
+         uint32_t call_depth;     // call stack depth at try_table entry
+         uint32_t catch_count;    // number of catch entries for this frame
+         uint32_t first_catch;    // index into _eh_catches of first entry
+      };
+
+      // WASM exception payload
+      struct wasm_exception_t {
+         uint32_t tag_index = UINT32_MAX;
+         std::vector<uint64_t> values;  // payload values
+      };
+
       execution_context()
        : base_type(), _halt(exit_t{}) {}
 
@@ -1152,6 +1172,7 @@ namespace psizam::detail {
       inline void           push_operand(operand_stack_elem el) { get_operand_stack().push(std::move(el)); }
       inline operand_stack_elem get_operand(uint32_t index) const { return get_operand_stack().get(_last_op_index + index); }
       inline void           eat_operands(uint32_t index) { get_operand_stack().eat(index); }
+      inline uint32_t       current_operand_depth() const { return get_operand_stack().size(); }
       inline void           compact_operand(uint32_t index) { get_operand_stack().compact(index); }
       inline void           compact_operand_n(uint32_t index, uint32_t n) { get_operand_stack().compact_n(index, n); }
       inline void           set_operand(uint32_t index, const operand_stack_elem& el) { get_operand_stack().set(_last_op_index + index, el); }
@@ -1159,6 +1180,29 @@ namespace psizam::detail {
       inline void           push_call(activation_frame&& el) { _as.push(std::move(el)); }
       inline activation_frame pop_call() { return _as.pop(); }
       inline uint32_t       call_depth()const { return _as.size(); }
+
+      // EH (v2 / try_table) public interface
+      inline void push_eh_frame(eh_frame f) { _eh_stack.push_back(f); }
+      inline bool has_eh_frames() const { return !_eh_stack.empty(); }
+      inline eh_frame& current_eh_frame() { return _eh_stack.back(); }
+      inline void pop_eh_frame() { _eh_stack.pop_back(); }
+      inline void push_eh_catch(eh_catch_entry e) { _eh_catches.push_back(e); }
+      inline eh_catch_entry& get_eh_catch(uint32_t idx) { return _eh_catches[idx]; }
+      inline uint32_t eh_catches_size() const { return static_cast<uint32_t>(_eh_catches.size()); }
+      inline void trim_eh_catches(uint32_t sz) { _eh_catches.resize(sz); }
+      inline uint32_t push_caught_exception(uint32_t tag_index, std::vector<uint64_t> values) {
+         uint32_t idx = static_cast<uint32_t>(_eh_exn_stack.size());
+         _eh_exn_stack.push_back({tag_index, std::move(values)});
+         return idx;
+      }
+      inline const wasm_exception_t& get_caught_exception(uint32_t idx) const { return _eh_exn_stack.at(idx); }
+      inline void unwind_call_stack_to(uint32_t depth) {
+         while (_as.size() > depth) {
+            const auto& af = _as.pop();
+            _remaining_call_depth += af.frame_size;
+         }
+      }
+
       template <bool Should_Exit=false>
       inline void           push_call(uint32_t index) {
          opcode* return_pc = static_cast<opcode*>(&_halt);
@@ -1547,27 +1591,14 @@ namespace psizam::detail {
          bool     exiting          = false;
       };
 
-      // Exception handler entry for WASM EH
-      struct eh_handler {
-         uint32_t tag_index;      // tag to catch (UINT32_MAX = catch_all)
-         uint32_t catch_pc;       // bitcode PC of catch handler
-         uint32_t operand_depth;  // operand stack depth to restore
-         uint32_t call_depth;     // call stack depth at try entry
-      };
-
-      // WASM exception payload
-      struct wasm_exception_t {
-         uint32_t tag_index = UINT32_MAX;
-         std::vector<uint64_t> values;  // payload values
-      };
-
       execution_state _state;
       uint32_t                        _last_op_index    = 0;
       call_stack                      _as;
       opcode                          _halt;
       void*                           _host = nullptr;
       uint32_t                        _remaining_call_depth;
-      std::vector<eh_handler>         _eh_stack;       // exception handler stack
+      std::vector<eh_frame>           _eh_stack;       // try_table frame stack
+      std::vector<eh_catch_entry>     _eh_catches;     // flat catch clause storage
       std::vector<wasm_exception_t>   _eh_exn_stack;   // caught exception stack (for rethrow)
    };
 } // namespace psizam::detail

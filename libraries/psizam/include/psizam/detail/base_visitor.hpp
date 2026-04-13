@@ -24,6 +24,8 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const rethrow_t& ) {}
       [[gnu::always_inline]] inline void operator()(const catch_all_t& ) {}
       [[gnu::always_inline]] inline void operator()(const delegate_t& ) {}
+      [[gnu::always_inline]] inline void operator()(const throw_ref_t& ) {}
+      [[gnu::always_inline]] inline void operator()(const try_table_t& ) {}
       [[gnu::always_inline]] inline void operator()(const call_t& ) {}
       [[gnu::always_inline]] inline void operator()(const call_indirect_t& ) {}
       [[gnu::always_inline]] inline void operator()(const drop_t& ) {}

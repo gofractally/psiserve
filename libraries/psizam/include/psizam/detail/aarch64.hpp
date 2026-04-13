@@ -1333,6 +1333,11 @@ namespace psizam::detail {
          emit32(0xD61F0200); // BR X16
       }
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {}
+      std::vector<void*> emit_try_table(uint8_t, uint32_t, const std::vector<catch_clause>&) { return {}; }
+      void emit_throw_ref() {
+         emit_mov_imm64(X16, reinterpret_cast<uint64_t>(&on_unreachable));
+         emit32(0xD61F0200); // BR X16
+      }
 
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
          // Pop n, s, d from WASM stack

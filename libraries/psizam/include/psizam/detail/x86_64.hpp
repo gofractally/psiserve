@@ -1136,6 +1136,16 @@ namespace psizam::detail {
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
          // delegate acts as end of try — structural no-op in JIT
       }
+      std::vector<void*> emit_try_table(uint8_t, uint32_t, const std::vector<catch_clause>&) {
+         // try_table is structurally like block — catch clauses ignored in JIT1
+         // (throw traps, so handlers are never reached)
+         return {};
+      }
+      void emit_throw_ref() {
+         COUNT_INSTR();
+         auto icount = fixed_size_instr(16);
+         emit_error_handler(&on_unreachable);
+      }
 
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
          COUNT_INSTR();

@@ -81,6 +81,24 @@ namespace psizam::detail {
          auto& instr = append_instr(delegate_t{});
          instr.data = label;
       }
+      // WASM 3.0 EH — returns pointers to each catch clause's PC field for branch relocation
+      std::vector<uint32_t*> emit_try_table(uint8_t result_type, uint32_t result_count, const std::vector<catch_clause>& clauses) {
+         auto& instr = append_instr(try_table_t{});
+         instr.data = static_cast<uint32_t>(clauses.size());
+         std::vector<uint32_t*> clause_pcs;
+         clause_pcs.reserve(clauses.size());
+         for (auto& c : clauses) {
+            auto& ci = append_instr(try_table_t{});
+            ci.data = (static_cast<uint32_t>(c.kind) << 24) | (c.tag_index & 0x00FFFFFF);
+            ci.pc = 0; // will be filled by fix_branch
+            clause_pcs.push_back(&ci.pc);
+         }
+         return clause_pcs;
+      }
+      void emit_throw_ref() {
+         auto& instr = append_instr(throw_ref_t{});
+         instr.data = 0;
+      }
 
       struct br_table_parser;
       friend struct br_table_parser;

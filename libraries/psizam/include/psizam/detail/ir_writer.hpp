@@ -2357,6 +2357,21 @@ namespace psizam::detail {
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
          // Structural no-op — the parser will call exit_scope() after this
       }
+      std::vector<branch_t> emit_try_table(uint8_t result_type, uint32_t result_count, const std::vector<catch_clause>& clauses) {
+         // For JIT2, try_table is structurally like block. Exception dispatch will
+         // be handled via C++ exception propagation (throw calls a C function that
+         // throws a C++ exception, caught at the WASM entry boundary).
+         // TODO: Wire up proper try_table codegen for JIT2
+         emit_block(result_type, result_count);
+         return {};
+      }
+      void emit_throw_ref() {
+         // Emit unreachable (trap) — same as throw for now in JIT2
+         ir_inst inst{};
+         inst.opcode = ir_op::unreachable;
+         inst.flags = IR_SIDE_EFFECT;
+         _func->emit(inst);
+      }
 
       // ──── Branch fixup ────
       // Patch a br/br_if IR instruction's target to the resolved block index.

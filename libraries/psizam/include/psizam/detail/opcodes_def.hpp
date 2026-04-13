@@ -15,10 +15,11 @@
    opcode_macro(catch_, 0x07)                   \
    opcode_macro(throw_, 0x08)                   \
    opcode_macro(rethrow_, 0x09)                 \
-   opcode_macro(padding_cf_4, 0x0A)             \
+   opcode_macro(throw_ref_, 0x0A)               \
    opcode_macro(end, 0x0B)                      \
    opcode_macro(br, 0x0C)                       \
-   opcode_macro(br_if, 0x0D)
+   opcode_macro(br_if, 0x0D)                    \
+   opcode_macro(try_table_, 0x1F)
 #define PSIZAM_BR_TABLE_OP(opcode_macro)        \
    opcode_macro(br_table, 0x0E)
 #define PSIZAM_RETURN_OP(opcode_macro)          \
@@ -41,8 +42,7 @@
    opcode_macro(select, 0x1B)                   \
    opcode_macro(padding_param_0, 0x1C)          \
    opcode_macro(padding_param_1, 0x1D)          \
-   opcode_macro(padding_param_2, 0x1E)          \
-   opcode_macro(padding_param_3, 0x1F)
+   opcode_macro(padding_param_2, 0x1E)
 #define PSIZAM_VARIABLE_ACCESS_OPS(opcode_macro)\
    opcode_macro(get_local, 0x20)                \
    opcode_macro(set_local, 0x21)                \
@@ -589,6 +589,8 @@
 #define PSIZAM_OPCODE_NAME_rethrow_
 #define PSIZAM_OPCODE_NAME_catch_all_
 #define PSIZAM_OPCODE_NAME_delegate_
+#define PSIZAM_OPCODE_NAME_throw_ref_
+#define PSIZAM_OPCODE_NAME_try_table_
 
 #define PSIZAM_OPCODE_NAME_TEST() 1
 #define PSIZAM_OPCODE_NAME_TEST_PSIZAM_OPCODE_NAME_TEST 0,
