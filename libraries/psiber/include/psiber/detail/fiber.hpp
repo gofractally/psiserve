@@ -74,10 +74,19 @@ namespace psiber
 
          void runEntry()
          {
-            entry_run(entry_buf);
-            entry_dtor(entry_buf);
+            if (!entry_run)
+               return;  // no entry (already cleaned up after exception)
+
+            // Clear pointers before invoking — prevents double-execution
+            // if the fiber is erroneously re-activated after an exception.
+            auto run  = entry_run;
+            auto dtor = entry_dtor;
             entry_run  = nullptr;
             entry_dtor = nullptr;
+
+            try        { run(entry_buf); }
+            catch (...) { dtor(entry_buf); throw; }
+            dtor(entry_buf);
          }
 
          // ── Native stack ────────────────────────────────────────────────

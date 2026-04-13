@@ -162,16 +162,15 @@ namespace psiber
 
       // Promise lives on caller's fiber stack (stable while parked).
       fiber_promise<R> promise;
-      promise.waiting_fiber = caller_fiber;
 
       // Capture pointers to stack-locals and post to drain fiber.
       // The post() callable is noexcept — it catches exceptions from
-      // func and stores them in the promise.
+      // func and stores them in the promise.  The promise handles wake
+      // coordination via CAS protocol.
       F* func_ptr = &func;
       fiber_promise<R>* promise_ptr = &promise;
-      Fiber* caller_ptr = caller_fiber;
 
-      _sched->post([func_ptr, promise_ptr, caller_ptr]() noexcept {
+      _sched->post([func_ptr, promise_ptr]() noexcept {
          try
          {
             if constexpr (std::is_void_v<R>)
@@ -188,10 +187,10 @@ namespace psiber
          {
             promise_ptr->set_exception(std::current_exception());
          }
-         Scheduler::wake(caller_ptr);
       });
 
-      caller_sched->parkCurrentFiber();
+      if (promise.try_register_waiter(caller_fiber))
+         caller_sched->parkCurrentFiber();
 
       if constexpr (std::is_void_v<R>)
          promise.get();
@@ -210,7 +209,7 @@ namespace psiber
       auto promise = std::make_shared<fiber_promise<R>>();
 
       // Spawn a fiber on the target thread to run the callable.
-      // The fiber fulfills the promise and wakes the waiting fiber.
+      // The promise handles wake coordination internally via CAS protocol.
       spawn([promise, f = std::forward<F>(func)]() mutable {
          try
          {
@@ -228,8 +227,6 @@ namespace psiber
          {
             promise->set_exception(std::current_exception());
          }
-         if (promise->waiting_fiber)
-            Scheduler::wake(promise->waiting_fiber);
       });
 
       return fiber_future<R>(std::move(promise));
@@ -255,23 +252,22 @@ namespace psiber
       {
          F*                   func;
          fiber_promise<R>*    promise;
-         Fiber*               caller;
       };
 
       // Stack-allocated slot: header + payload, 16-byte aligned
       alignas(16) char buf[sizeof(TaskSlotHeader) + sizeof(CallPayload)];
 
       auto* slot    = new (buf) TaskSlotHeader{};
-      auto* payload = new (buf + sizeof(TaskSlotHeader)) CallPayload{&func, nullptr, caller_fiber};
+      auto* payload = new (buf + sizeof(TaskSlotHeader)) CallPayload{&func, nullptr};
 
       fiber_promise<R> promise;
-      promise.waiting_fiber = caller_fiber;
-      payload->promise      = &promise;
+      payload->promise = &promise;
 
       slot->total_size = sizeof(buf);
       slot->next       = nullptr;
       slot->consumed.store(false, std::memory_order_relaxed);
 
+      // The promise handles wake coordination via CAS protocol.
       slot->run = [](void* p) {
          auto* pl = static_cast<CallPayload*>(p);
          try
@@ -290,20 +286,40 @@ namespace psiber
          {
             pl->promise->set_exception(std::current_exception());
          }
-         Scheduler::wake(pl->caller);
       };
       slot->destroy = nullptr;  // trivial payload, no destructor needed
 
       _sched->postTask(slot);
 
-      try
+      // Register waiter + park.  CAS ensures we only park if the
+      // producer hasn't fulfilled yet.
+      if (promise.try_register_waiter(caller_fiber))
       {
-         caller_sched->parkCurrentFiber();
+         try
+         {
+            caller_sched->parkCurrentFiber();
+         }
+         catch (...)
+         {
+            // Shutdown interrupted us — spin until the target thread finishes
+            // touching our stack-local slot before we unwind.
+            while (!slot->consumed.load(std::memory_order_acquire))
+            {
+#if defined(__x86_64__)
+               __builtin_ia32_pause();
+#elif defined(__aarch64__)
+               asm volatile("yield" ::: "memory");
+#endif
+            }
+            throw;  // re-throw shutdown_exception
+         }
       }
-      catch (...)
+      else
       {
-         // Shutdown interrupted us — spin until the target thread finishes
-         // touching our stack-local slot before we unwind.
+         // Fast path: producer already fulfilled.  But the slot and
+         // payload live on our stack — the worker's drainTaskList still
+         // needs to touch slot->consumed after slot->run returns.
+         // Spin until the worker is done with our stack data.
          while (!slot->consumed.load(std::memory_order_acquire))
          {
 #if defined(__x86_64__)
@@ -312,7 +328,6 @@ namespace psiber
             asm volatile("yield" ::: "memory");
 #endif
          }
-         throw;  // re-throw shutdown_exception
       }
 
       if constexpr (std::is_void_v<R>)

@@ -25,7 +25,7 @@ namespace psiber
       // Chain all pool items into the freelist
       for (uint32_t i = 0; i < work_pool_size; ++i)
          _work_pool[i].next = (i + 1 < work_pool_size) ? &_work_pool[i + 1] : nullptr;
-      _work_free.store(&_work_pool[0], std::memory_order_relaxed);
+      _work_free = &_work_pool[0];
    }
 
    template <typename Engine>
@@ -87,13 +87,11 @@ namespace psiber
                   reversed->run  = nullptr;
                   reversed->dtor = nullptr;
 
-                  // CAS-push back onto freelist
-                  WorkItem* old_free = _work_free.load(std::memory_order_relaxed);
-                  do
-                  {
-                     reversed->next = old_free;
-                  } while (!_work_free.compare_exchange_weak(
-                     old_free, reversed, std::memory_order_release, std::memory_order_relaxed));
+                  // Push back onto freelist (spin-locked)
+                  _work_free_lock.lock();
+                  reversed->next = _work_free;
+                  _work_free     = reversed;
+                  _work_free_lock.unlock();
 
                   reversed = next;
                }
@@ -356,6 +354,21 @@ namespace psiber
             [](const auto& f) { return f->state == FiberState::Done; });
       }
 
+      // ── Clean exit for all recyclable fibers ─────────────────────────
+      //
+      // Resume each recyclable fiber one last time so the callcc lambda
+      // returns normally (instead of relying on forced_unwind during
+      // ~Fiber, which triggers sporadic heap corruption on macOS with
+      // protected_fixedsize_stack).
+      for (auto& f : _fibers)
+      {
+         if (f->state == FiberState::Recyclable)
+         {
+            f->state = FiberState::Done;
+            f->cont  = f->cont.resume();
+         }
+      }
+
       t_current = nullptr;
    }
 
@@ -363,12 +376,7 @@ namespace psiber
    void basic_scheduler<Engine>::checkNotDrainFiber() const
    {
       if (_drain_executing) [[unlikely]]
-      {
-         std::fprintf(stderr,
-            "psiber: post()/invoke() callable attempted to yield (sleep/park/I/O). "
-            "Use spawn() or async() for work that may suspend.\n");
          throw drain_yield_error{};
-      }
    }
 
    template <typename Engine>
@@ -768,6 +776,13 @@ namespace psiber
 #endif
          }
       }
+   }
+
+   // ── wake_fiber (non-template, called from fiber_promise) ──────────────
+
+   void wake_fiber(Fiber* f)
+   {
+      Scheduler::wake(f);
    }
 
 }  // namespace psiber

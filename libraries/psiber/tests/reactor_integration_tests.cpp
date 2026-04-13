@@ -213,6 +213,13 @@ TEST_CASE("reactor integration: strand enqueue and release chain", "[reactor-int
 TEST_CASE("reactor integration: reactor-bound strand enqueue posts to pool", "[reactor-integration]")
 {
    reactor pool(2);
+   // Stop workers immediately — this test checks strand/reactor queue
+   // mechanics, not the worker pipeline.  Without this, a worker may
+   // pop the strand (which holds a bare Fiber with no continuation)
+   // before try_pop_strand() is called, causing a race + SIGABRT.
+   pool.stop();
+   pool.join();
+
    strand s(pool);
 
    detail::Fiber f;
@@ -225,14 +232,14 @@ TEST_CASE("reactor integration: reactor-bound strand enqueue posts to pool", "[r
    // The strand should be poppable from the reactor
    strand* popped = pool.try_pop_strand();
    REQUIRE(popped == &s);
-
-   pool.stop();
-   pool.join();
 }
 
 TEST_CASE("reactor integration: reactor-bound strand release returns next fiber", "[reactor-integration]")
 {
    reactor pool(2);
+   pool.stop();
+   pool.join();
+
    strand s(pool);
 
    detail::Fiber f1, f2;
@@ -254,9 +261,6 @@ TEST_CASE("reactor integration: reactor-bound strand release returns next fiber"
    // Reactor queue should be empty — release doesn't post
    popped = pool.try_pop_strand();
    REQUIRE(popped == nullptr);
-
-   pool.stop();
-   pool.join();
 }
 
 // ── Stress tests ─────────────────────────────────────────────────────────

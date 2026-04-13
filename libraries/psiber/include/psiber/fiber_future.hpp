@@ -33,8 +33,10 @@ namespace psiber
          {
             Scheduler* sched = Scheduler::current();
             assert(sched && sched->currentFiber());
-            _promise->waiting_fiber = sched->currentFiber();
-            sched->parkCurrentFiber();
+            // CAS(nullptr → fiber): if we win, park and wait for wake.
+            // If CAS fails (kFulfilled), producer already completed — skip park.
+            if (_promise->try_register_waiter(sched->currentFiber()))
+               sched->parkCurrentFiber();
          }
          if constexpr (std::is_void_v<T>)
             _promise->get();

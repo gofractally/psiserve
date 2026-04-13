@@ -126,6 +126,11 @@ TEST_CASE("Multiple cross-thread wakes batch correctly", "[wake]")
 
 TEST_CASE("Wake preserves FIFO order", "[wake]")
 {
+   // Same-thread wakes batch atomically: all 4 pushes happen before
+   // the scheduler drains the wake list, so FIFO after MPSC reversal
+   // is guaranteed.  Cross-thread wakes can be drained mid-push
+   // (the scheduler wakes from poll after the first kevent trigger),
+   // making strict FIFO inherently racy.
    auto sched = scheduler_access::make(5);
 
    constexpr int    num_fibers = 4;
@@ -137,22 +142,23 @@ TEST_CASE("Wake preserves FIFO order", "[wake]")
    {
       sched.spawnFiber([&, i]() {
          fiber_ptrs[i] = sched.currentFiber();
-         parked_count.fetch_add(1, std::memory_order_release);
+         parked_count.fetch_add(1, std::memory_order_relaxed);
          sched.parkCurrentFiber();
          wake_order.push_back(i);
       });
    }
 
-   std::thread waker([&]() {
-      while (parked_count.load(std::memory_order_acquire) != num_fibers)
-         ;
-      // Wake in order 0, 1, 2, 3
+   // Control fiber: wakes all parked fibers on the same scheduler
+   // thread.  Same-thread wakes skip notifyIfPolling(), so the
+   // scheduler doesn't drain between pushes — the batch is intact.
+   sched.spawnFiber([&]() {
+      while (parked_count.load(std::memory_order_relaxed) != num_fibers)
+         sched.sleep(std::chrono::milliseconds{1});
       for (int i = 0; i < num_fibers; ++i)
          Scheduler::wake(fiber_ptrs[i]);
    });
 
    sched.run();
-   waker.join();
 
    // Should have woken in the order they were pushed (FIFO after reversal)
    REQUIRE(wake_order.size() == num_fibers);

@@ -151,15 +151,13 @@ TEST_CASE("fiber_promise same-thread", "[promise]")
    int                result = 0;
 
    sched.spawnFiber([&]() {
-      promise.waiting_fiber = sched.currentFiber();
-
       // Spawn a fiber that will fulfill the promise
       sched.spawnFiber([&]() {
          promise.set_value(42);
-         Scheduler::wake(promise.waiting_fiber);
       });
 
-      sched.parkCurrentFiber();
+      if (promise.try_register_waiter(sched.currentFiber()))
+         sched.parkCurrentFiber();
       result = promise.get();
    });
 
@@ -175,14 +173,12 @@ TEST_CASE("fiber_promise<void>", "[promise]")
    bool                signaled = false;
 
    sched.spawnFiber([&]() {
-      promise.waiting_fiber = sched.currentFiber();
-
       sched.spawnFiber([&]() {
          promise.set_value();
-         Scheduler::wake(promise.waiting_fiber);
       });
 
-      sched.parkCurrentFiber();
+      if (promise.try_register_waiter(sched.currentFiber()))
+         sched.parkCurrentFiber();
       promise.get();
       signaled = true;
    });
@@ -199,15 +195,13 @@ TEST_CASE("fiber_promise cross-thread", "[promise]")
    int                result = 0;
 
    sched.spawnFiber([&]() {
-      promise.waiting_fiber = sched.currentFiber();
-
       std::thread fulfiller([&]() {
          promise.set_value(99);
-         Scheduler::wake(promise.waiting_fiber);
       });
       fulfiller.detach();
 
-      sched.parkCurrentFiber();
+      if (promise.try_register_waiter(sched.currentFiber()))
+         sched.parkCurrentFiber();
       result = promise.get();
    });
 

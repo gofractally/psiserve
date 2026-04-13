@@ -6,7 +6,8 @@
 
 namespace psiber
 {
-   using Fiber = detail::Fiber;
+   using Fiber      = detail::Fiber;
+   using FiberState = detail::FiberState;
 
    strand::strand(uint32_t arena_bytes)
       : _capacity(arena_bytes)
@@ -153,12 +154,14 @@ namespace psiber
       }
       else
       {
-         // Append to wait queue (FIFO)
-         fiber->next_wake = nullptr;
+         // Append to wait queue (FIFO).
+         // Uses next_blocked (not next_wake) so the strand wait queue
+         // doesn't collide with the scheduler's cross-thread wake list.
+         fiber->next_blocked = nullptr;
          if (_wait_tail)
          {
-            _wait_tail->next_wake = fiber;
-            _wait_tail            = fiber;
+            _wait_tail->next_blocked = fiber;
+            _wait_tail               = fiber;
          }
          else
          {
@@ -189,22 +192,29 @@ namespace psiber
 
       _active.store(nullptr, std::memory_order_release);
 
-      if (_wait_head)
+      // Pop waiters, skipping any that already finished (e.g.
+      // during shutdown the scheduler independently resumes all
+      // Parked fibers — they run, throw shutdown_exception, and
+      // become Recyclable before release() pops them here).
+      while (_wait_head)
       {
-         next       = _wait_head;
-         _wait_head = next->next_wake;
+         Fiber* candidate = _wait_head;
+         _wait_head       = candidate->next_blocked;
          if (!_wait_head)
             _wait_tail = nullptr;
-         next->next_wake = nullptr;
+         candidate->next_blocked = nullptr;
 
-         _active.store(next, std::memory_order_release);
+         if (candidate->state != FiberState::Recyclable &&
+             candidate->state != FiberState::Done)
+         {
+            _active.store(candidate, std::memory_order_release);
+            next = candidate;
+            break;
+         }
+         // else: already finished — skip
       }
 
       _queue_lock.unlock();
-
-      // No maybe_post() here — the caller (run loop) handles the
-      // returned fiber directly by adding it to the local ready queue.
-      // Posting to the reactor would cause a double-enqueue race.
 
       return next;
    }
@@ -223,11 +233,11 @@ namespace psiber
       }
 
       // Queue behind the active fiber (FIFO)
-      fiber->next_wake = nullptr;
+      fiber->next_blocked = nullptr;
       if (_wait_tail)
       {
-         _wait_tail->next_wake = fiber;
-         _wait_tail            = fiber;
+         _wait_tail->next_blocked = fiber;
+         _wait_tail               = fiber;
       }
       else
       {

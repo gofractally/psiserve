@@ -201,14 +201,12 @@ TEST_CASE("fiber_promise: cross-thread with string value", "[edge][promise]")
 
    sched.spawnFiber([&]() {
       fiber_promise<std::string> promise;
-      promise.waiting_fiber = sched.currentFiber();
-
       std::thread fulfiller([&]() {
          promise.set_value("hello from another thread");
-         Scheduler::wake(promise.waiting_fiber);
       });
 
-      sched.parkCurrentFiber();
+      if (promise.try_register_waiter(sched.currentFiber()))
+         sched.parkCurrentFiber();
       result = promise.get();
       fulfiller.join();
    });

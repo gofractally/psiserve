@@ -47,18 +47,17 @@ TEST_CASE("integration: cross-thread task dispatch with promise return", "[integ
    // Scheduler A: dispatch work to B and wait for the result
    sched_a.spawnFiber([&]() {
       fiber_promise<int> promise;
-      promise.waiting_fiber = sched_a.currentFiber();
 
       auto* slot = sq.emplace([&promise]() {
          // This runs on scheduler B's thread
          int computed = 17 * 3;  // 51
          promise.set_value(computed);
-         Scheduler::wake(promise.waiting_fiber);
       });
       REQUIRE(slot != nullptr);
 
       sched_b.postTask(slot);
-      sched_a.parkCurrentFiber();
+      if (promise.try_register_waiter(sched_a.currentFiber()))
+         sched_a.parkCurrentFiber();
 
       result = promise.get();
    });
@@ -98,16 +97,15 @@ TEST_CASE("integration: sequential cross-thread dispatches", "[integration]")
       for (int i = 1; i <= 5; ++i)
       {
          fiber_promise<int> promise;
-         promise.waiting_fiber = sched_a.currentFiber();
 
          auto* slot = sq.emplace([&promise, i]() {
             promise.set_value(i * 10);
-            Scheduler::wake(promise.waiting_fiber);
          });
          REQUIRE(slot != nullptr);
 
          sched_b.postTask(slot);
-         sched_a.parkCurrentFiber();
+         if (promise.try_register_waiter(sched_a.currentFiber()))
+            sched_a.parkCurrentFiber();
 
          sum += promise.get();
          sq.reclaim();
@@ -154,16 +152,15 @@ TEST_CASE("integration: multiple fibers dispatch to same remote scheduler", "[in
    {
       sched_a.spawnFiber([&, f]() {
          fiber_promise<int> promise;
-         promise.waiting_fiber = sched_a.currentFiber();
 
          auto* slot = queues[f]->emplace([&promise, f]() {
             promise.set_value((f + 1) * 100);
-            Scheduler::wake(promise.waiting_fiber);
          });
          REQUIRE(slot != nullptr);
 
          sched_b.postTask(slot);
-         sched_a.parkCurrentFiber();
+         if (promise.try_register_waiter(sched_a.currentFiber()))
+            sched_a.parkCurrentFiber();
 
          total.fetch_add(promise.get(), std::memory_order_relaxed);
       });
@@ -274,16 +271,15 @@ TEST_CASE("integration: fiber_promise propagates exception", "[integration][exce
 
    sched.spawnFiber([&]() {
       fiber_promise<int> promise;
-      promise.waiting_fiber = sched.currentFiber();
 
       // Simulate: another fiber fulfills with an exception
       sched.spawnFiber([&]() {
          promise.set_exception(
             std::make_exception_ptr(std::runtime_error("async boom")));
-         Scheduler::wake(promise.waiting_fiber);
       });
 
-      sched.parkCurrentFiber();
+      if (promise.try_register_waiter(sched.currentFiber()))
+         sched.parkCurrentFiber();
 
       try
       {

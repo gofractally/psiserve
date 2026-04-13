@@ -14,7 +14,7 @@
 
 #include <boost/context/continuation.hpp>
 #include <boost/context/detail/exception.hpp>
-#include <boost/context/protected_fixedsize_stack.hpp>
+#include <boost/context/fixedsize_stack.hpp>
 
 #include <cstdint>
 #include <deque>
@@ -257,7 +257,12 @@ namespace psiber
       };
 
       alignas(cache_line_size) std::atomic<WorkItem*> _work_head{nullptr};
-      alignas(cache_line_size) std::atomic<WorkItem*> _work_free{nullptr};
+
+      // Freelist protected by spin lock — CAS-only pop has an ABA problem
+      // when multiple producer threads race (item recycled by drain fiber
+      // between load and CAS, stale next pointer corrupts the list).
+      spin_lock  _work_free_lock;
+      WorkItem*  _work_free = nullptr;
 
       // Pool storage (constructed in constructor)
       std::unique_ptr<WorkItem[]> _work_pool;
@@ -359,7 +364,12 @@ namespace psiber
 
       fp->cont = ctx::callcc(
          std::allocator_arg,
-         ctx::protected_fixedsize_stack(stack_size),
+         // fixedsize_stack (malloc-based) instead of protected_fixedsize_stack
+         // (mmap + guard page): protected_fixedsize_stack triggers sporadic heap
+         // corruption on macOS ARM64 during stack deallocation — affects both
+         // forced_unwind and clean callcc returns.  Guard pages are a debugging
+         // aid; production stack sizes will be computed from the WASM call graph.
+         ctx::fixedsize_stack(stack_size),
          [this, fp](ctx::continuation&& sched) mutable
          {
             fp->sched_cont = &sched;
@@ -387,6 +397,12 @@ namespace psiber
                fp->state = FiberState::Recyclable;
                sched = sched.resume();
 
+               // Exit cleanly if the scheduler has marked us Done.
+               // This avoids relying on forced_unwind during ~Fiber,
+               // which is safe with fixedsize_stack but adds overhead.
+               if (fp->state == FiberState::Done)
+                  return std::move(sched);
+
                // Woken with a new entry — loop back
             }
 
@@ -410,18 +426,19 @@ namespace psiber
       static_assert(std::is_nothrow_invocable_v<Decay>,
                     "post() callables must be noexcept — fire-and-forget has no error channel");
 
-      // CAS-pop a WorkItem from the freelist (lock-free, zero alloc)
+      // Pop a WorkItem from the freelist (spin-locked, zero alloc)
       WorkItem* item;
       while (true)
       {
-         item = _work_free.load(std::memory_order_acquire);
+         _work_free_lock.lock();
+         item = _work_free;
          if (item)
          {
-            if (_work_free.compare_exchange_weak(
-                   item, item->next, std::memory_order_acquire, std::memory_order_relaxed))
-               break;
-            continue;
+            _work_free = item->next;
+            _work_free_lock.unlock();
+            break;
          }
+         _work_free_lock.unlock();
 
          // Pool exhausted — fiber-aware wait if possible
          basic_scheduler* caller = basic_scheduler::current();
@@ -430,13 +447,16 @@ namespace psiber
             Fiber* me = caller->currentFiber();
             _work_space_lock.lock();
             // Double-check under lock (items may have been returned)
-            item = _work_free.load(std::memory_order_acquire);
-            if (item && _work_free.compare_exchange_strong(
-                   item, item->next, std::memory_order_acquire, std::memory_order_relaxed))
+            _work_free_lock.lock();
+            item = _work_free;
+            if (item)
             {
+               _work_free = item->next;
+               _work_free_lock.unlock();
                _work_space_lock.unlock();
                break;
             }
+            _work_free_lock.unlock();
             // Enqueue and park
             me->next_wake = _work_space_wait_head;
             _work_space_wait_head = me;

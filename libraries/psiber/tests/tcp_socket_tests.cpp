@@ -206,7 +206,6 @@ TEST_CASE("tcp_socket: cross-thread client and server", "[tcp][socket]")
          auto listener = tcp_listener::bind(0);
          uint16_t port = listener.port();
          port_promise.set_value(port);
-         Scheduler::wake(port_promise.waiting_fiber);
 
          auto conn = listener.accept(sched);
          char buf[64];
@@ -225,8 +224,8 @@ TEST_CASE("tcp_socket: cross-thread client and server", "[tcp][socket]")
    auto sched = scheduler_access::make(611);
 
       sched.spawnFiber([&]() {
-         port_promise.waiting_fiber = sched.currentFiber();
-         sched.parkCurrentFiber();
+         if (port_promise.try_register_waiter(sched.currentFiber()))
+            sched.parkCurrentFiber();
 
          uint16_t port = port_promise.get();
          auto     sock = tcp_socket::connect(sched, "127.0.0.1", port);

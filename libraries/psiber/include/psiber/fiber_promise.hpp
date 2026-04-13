@@ -12,25 +12,28 @@
 namespace psiber
 {
 
+   /// Wake a fiber via the scheduler.  Defined in scheduler.hpp (which
+   /// is included after this header), so we declare it here and rely on
+   /// the linker.  This avoids a circular include.
+   void wake_fiber(Fiber* f);
+
    /// Zero-allocation return value for cross-thread fiber communication.
    ///
-   /// Typically lives on the sender's stack (which is stable because
-   /// the sender is parked).  The receiver writes the value directly
-   /// into the promise and wakes the sender via the intrusive wake list.
+   /// Uses a CAS-based coordination protocol between consumer (get())
+   /// and producer (set_value / set_exception) to avoid the classic race
+   /// where a wake is sent to a fiber that hasn't parked yet, or a park
+   /// happens after the value is ready but before the wake fires.
    ///
-   /// If the fulfilling side throws, the exception is captured and
-   /// rethrown on get() — same semantics as std::promise/std::future.
+   /// Protocol:
+   ///   _waiter is initially nullptr.
+   ///   Consumer: CAS(nullptr → fiber_ptr).  If CAS fails (kFulfilled),
+   ///             value is already ready — skip park.
+   ///   Producer: CAS(nullptr → kFulfilled).  If CAS fails (fiber_ptr),
+   ///             a waiter is present — call wake.
    ///
-   /// Debug safety:
-   /// - Destructor asserts if an exception was stored but never retrieved
-   /// - Destructor warns if the promise was never fulfilled (abandoned)
-   ///
-   /// Usage:
-   ///   fiber_promise<int> promise;
-   ///   promise.waiting_fiber = sched.currentFiber();
-   ///   // ... dispatch work to another thread ...
-   ///   sched.parkCurrentFiber();
-   ///   int result = promise.get();  // rethrows if remote side threw
+   /// This ensures exactly one side "wins" the nullptr slot:
+   ///   - Consumer wins → parks, producer wakes
+   ///   - Producer wins → consumer sees kFulfilled, skips park
    template <typename T>
    class fiber_promise
    {
@@ -39,9 +42,8 @@ namespace psiber
       {
          if (_exception && !_retrieved)
             std::fprintf(stderr,
-               "psiber: fiber_promise<%s> destroyed with unchecked exception "
-               "(fiber %u)\n", typeid(T).name(),
-               waiting_fiber ? waiting_fiber->id : 0);
+               "psiber: fiber_promise<%s> destroyed with unchecked exception\n",
+               typeid(T).name());
          assert(!(_exception && !_retrieved) &&
                 "fiber_promise destroyed with unchecked exception");
       }
@@ -50,18 +52,21 @@ namespace psiber
       fiber_promise(const fiber_promise&) = delete;
       fiber_promise& operator=(const fiber_promise&) = delete;
 
-      /// Set the value (called by the fulfilling side, possibly another thread).
+      /// Set the value and notify any waiting fiber.
+      /// Called by the fulfilling side, possibly from another thread.
       void set_value(T value)
       {
          _storage.emplace(static_cast<T&&>(value));
          _ready.store(true, std::memory_order_release);
+         fulfill_and_notify();
       }
 
-      /// Capture an exception to be rethrown on get().
+      /// Capture an exception and notify any waiting fiber.
       void set_exception(std::exception_ptr eptr)
       {
          _exception = eptr;
          _ready.store(true, std::memory_order_release);
+         fulfill_and_notify();
       }
 
       /// Get the value (called by the waiting side after being woken).
@@ -76,14 +81,41 @@ namespace psiber
 
       bool is_ready() const { return _ready.load(std::memory_order_acquire); }
 
-      /// The fiber waiting for this promise.  Set before parking.
-      Fiber* waiting_fiber = nullptr;
+      /// Try to register a waiter.  Returns true if the fiber should
+      /// park (producer hasn't fulfilled yet).  Returns false if the
+      /// value is already ready (producer won the race).
+      bool try_register_waiter(Fiber* fiber)
+      {
+         Fiber* expected = nullptr;
+         return _waiter.compare_exchange_strong(
+            expected, fiber,
+            std::memory_order_acq_rel, std::memory_order_acquire);
+      }
 
      private:
-      std::optional<T>      _storage;
-      std::exception_ptr    _exception;
-      std::atomic<bool>     _ready{false};
-      bool                  _retrieved{false};
+      void fulfill_and_notify()
+      {
+         // Try to claim the slot with kFulfilled sentinel.
+         // If CAS succeeds: no waiter registered yet — done.
+         // If CAS fails: a real fiber pointer is there — wake it.
+         Fiber* expected = nullptr;
+         if (!_waiter.compare_exchange_strong(
+               expected, kFulfilled,
+               std::memory_order_acq_rel, std::memory_order_acquire))
+         {
+            // expected now holds the waiter's fiber pointer
+            wake_fiber(expected);
+         }
+      }
+
+      static inline Fiber* kFulfilled =
+         reinterpret_cast<Fiber*>(static_cast<uintptr_t>(1));
+
+      std::optional<T>        _storage;
+      std::exception_ptr      _exception;
+      std::atomic<bool>       _ready{false};
+      std::atomic<Fiber*>     _waiter{nullptr};
+      bool                    _retrieved{false};
    };
 
    /// Specialization for void — signal-only, no value storage.
@@ -95,9 +127,7 @@ namespace psiber
       {
          if (_exception && !_retrieved)
             std::fprintf(stderr,
-               "psiber: fiber_promise<void> destroyed with unchecked exception "
-               "(fiber %u)\n",
-               waiting_fiber ? waiting_fiber->id : 0);
+               "psiber: fiber_promise<void> destroyed with unchecked exception\n");
          assert(!(_exception && !_retrieved) &&
                 "fiber_promise destroyed with unchecked exception");
       }
@@ -109,12 +139,14 @@ namespace psiber
       void set_value()
       {
          _ready.store(true, std::memory_order_release);
+         fulfill_and_notify();
       }
 
       void set_exception(std::exception_ptr eptr)
       {
          _exception = eptr;
          _ready.store(true, std::memory_order_release);
+         fulfill_and_notify();
       }
 
       void get()
@@ -126,12 +158,33 @@ namespace psiber
 
       bool is_ready() const { return _ready.load(std::memory_order_acquire); }
 
-      Fiber* waiting_fiber = nullptr;
+      bool try_register_waiter(Fiber* fiber)
+      {
+         Fiber* expected = nullptr;
+         return _waiter.compare_exchange_strong(
+            expected, fiber,
+            std::memory_order_acq_rel, std::memory_order_acquire);
+      }
 
      private:
-      std::exception_ptr _exception;
-      std::atomic<bool>  _ready{false};
-      bool               _retrieved{false};
+      void fulfill_and_notify()
+      {
+         Fiber* expected = nullptr;
+         if (!_waiter.compare_exchange_strong(
+               expected, kFulfilled,
+               std::memory_order_acq_rel, std::memory_order_acquire))
+         {
+            wake_fiber(expected);
+         }
+      }
+
+      static inline Fiber* kFulfilled =
+         reinterpret_cast<Fiber*>(static_cast<uintptr_t>(1));
+
+      std::exception_ptr    _exception;
+      std::atomic<bool>     _ready{false};
+      std::atomic<Fiber*>   _waiter{nullptr};
+      bool                  _retrieved{false};
    };
 
 }  // namespace psiber
