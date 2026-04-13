@@ -2,7 +2,6 @@
 
 add_library(psiber
    src/scheduler.cpp
-   src/io_engine_kqueue.cpp
    src/send_queue.cpp
    src/fiber_mutex.cpp
    src/strand.cpp
@@ -10,6 +9,14 @@ add_library(psiber
    src/tcp_socket.cpp
    src/thread.cpp
 )
+
+if(APPLE OR CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+   target_sources(psiber PRIVATE src/io_engine_kqueue.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   target_sources(psiber PRIVATE src/io_engine_epoll.cpp)
+else()
+   message(FATAL_ERROR "No I/O engine for this platform")
+endif()
 
 target_include_directories(psiber PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}/include

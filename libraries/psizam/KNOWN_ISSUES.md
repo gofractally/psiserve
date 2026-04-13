@@ -1,51 +1,60 @@
 # psizam Known Issues
 
-## Test Summary: 87 failures / 16649 tests (99.5% pass rate)
+## Test Summary
 
-### Pre-existing failures (12)
+| Platform | Failures | Total | Pass Rate |
+|----------|----------|-------|-----------|
+| macOS aarch64 | 104 | 13,258 | 99.2% |
+| Linux x86_64 | 137 | 13,186 | 99.0% |
 
-## Multi-module spec tests (12 failures: elem_59, elem_60, elem_68)
+The difference is entirely jit2 backend bugs (x86_64 vs aarch64 codegen).
 
-Three spec tests were generated from multi-module `.wast` files but the test
-generator produced standalone single-module tests, which cannot work:
+### Multi-module (96–98 failures, all platforms)
 
-- **elem_59, elem_60**: Import a shared table from "module1" but the test calls
-  exported functions (`call-7`, `call-8`, `call-9`) that only exist in module1.
-  The generated `.wasm` has no export section.
-- **elem_68**: Imports a funcref table from "module4" containing function `f`.
-  Without module4, `call_indirect` hits uninitialized table entries (stack overflow).
+These tests require multi-module linking support which is not yet implemented.
+Each test is counted across all 3 backends (interpreter, jit, jit2).
 
-Fix: requires multi-module linking support or regenerating tests with
-multi-module test infrastructure.
+- **table_copy_1..18** (54): Import functions from a host module
+- **table_init_1..6** (18): Import functions from a host module
+- **elem_18..21** (12): Element segment indices from missing linked modules
+- **elem_59, elem_60** (6): Import shared table from "module1"
+- **elem_68** (3): Imports funcref table from "module4"
+- **data_25, data_26** (6): Data segment out of range (depends on linked module memory)
 
-### New failures from official spec tests (75)
+### global_0 (3 failures, all backends, all platforms)
 
-## Multi-value return (8 failures: call_0, return_call_0, return_call_indirect_0)
+Imports `spectest.global_i32` and `spectest.global_i64` which should be 666,
+but the test harness uses `standalone_function_t` so imported globals default
+to 0. Also uses `externref` globals which crash the jit backend.
 
-The official spec tests for `call`, `return_call`, and `return_call_indirect`
-include multi-value return tests (functions returning `(i32, f32)` etc.). Our
-engine only returns the first value from `call_with_return`. Also,
-`tailprint_i32_f32` and `call_tailprint` import print functions we don't provide.
+### Stale test code (9 failures, all backends)
 
-## Tail call validation (20 failures: return_call_1/2/11, return_call_indirect_25/26)
+Pre-generated `_tests.cpp` files reference `.wasm` numbers that no longer
+exist in the current tail-call proposal `.wast`:
 
-The parser does not validate type compatibility for `return_call` and
-`return_call_indirect` instructions. Malformed modules that should be rejected
-at parse time (e.g., `return_call` targeting a function with incompatible
-return type) are accepted without error.
+- `return_call.13.wasm`, `return_call_indirect.28.wasm`, `return_call_indirect.29.wasm`
 
-## Table operation spec tests (44 failures: table_get/set/grow/size/fill)
+Fix: regenerate from current `.wast` with `wast2json --enable-tail-call`.
 
-The official spec table operation tests expose gaps in our table implementation:
-- **table_get_0**: `is_null-funcref(2)` returns 1 (null) instead of 0 — funcref
-  table initialization from elem segments not fully working
-- **table_set_0**: Similar funcref initialization issues
-- **table_grow_0..7**: Various failures in table grow with funcref/externref
-  initialization, bounds checking, and size reporting
-- **table_size_0**: Incorrect size after grow operations
-- **table_fill_0**: Fill operation failures
+### jit2 backend bugs (x86_64: 30, aarch64: 5)
 
-## aarch64 JIT: SIMD float operations (~60 failures)
+All pass on interpreter and jit. jit2 is experimental.
 
-The aarch64 JIT backends (jit, jit2, jit_llvm) do not fully implement SIMD
-floating-point operations with softfloat. The interpreter passes all of these.
+**Both platforms:**
+- **block_0, if_0**: IR virtual stack underflow
+- **func_0**: Wrong return value on break-i32-f64
+- **global_0**: Imported global init (counted above)
+
+**x86_64 only:**
+- **table.grow** (7): Returns 0 instead of -1 for invalid operations
+- **table.size** (1): Always returns 0
+- **host function results** (1): Memory out-of-bounds on reference-typed returns
+- **simd_const_385, simd_const_387** (2): Segfault in SIMD code
+- **conversions_0, traps_2** (2): Segfault
+- **Host function / call depth / reentry** (5): Various segfaults
+- **relaxed_madd_nmadd** (2), **relaxed_dot_product** (1): Wrong results
+
+### aarch64 notes
+
+The aarch64 JIT backends do not fully implement SIMD floating-point operations
+with softfloat. These failures only appear on ARM64, not on x86_64.
