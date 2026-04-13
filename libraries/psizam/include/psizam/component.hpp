@@ -207,10 +207,9 @@ namespace psizam {
    // ── WIT section generation ────────────────────────────────────────────────
 
    // Generate WIT text for embedding in a custom section.
-   // Not constexpr yet (uses std::string at runtime), but produces the right output.
    template <typename T>
-   std::string generate_component_wit() {
-      return psio::generate_wit_text<T>();
+   std::string generate_component_wit(const std::string& package) {
+      return psio::generate_wit_text<T>(package);
    }
 
 } // namespace psizam

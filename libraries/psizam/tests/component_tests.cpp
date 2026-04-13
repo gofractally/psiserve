@@ -209,12 +209,16 @@ TEST_CASE("ComponentProxy — float return", "[component]") {
 // ── WIT generation tests ─────────────────────────────────────────────────────
 
 TEST_CASE("generate_component_wit — scalar calculator", "[component]") {
-   auto wit = psizam::generate_component_wit<Calculator>();
-   CHECK(wit.find("add") != std::string::npos);
-   CHECK(wit.find("mul") != std::string::npos);
-   CHECK(wit.find("divide") != std::string::npos);
+   auto wit = psizam::generate_component_wit<Calculator>("test:calc@1.0.0");
+   CHECK(wit.find("package test:calc@1.0.0;") != std::string::npos);
+   CHECK(wit.find("interface calculator") != std::string::npos);
+   CHECK(wit.find("add: func") != std::string::npos);
+   CHECK(wit.find("mul: func") != std::string::npos);
+   CHECK(wit.find("divide: func") != std::string::npos);
    CHECK(wit.find("s32") != std::string::npos);
    CHECK(wit.find("f64") != std::string::npos);
+   CHECK(wit.find("world calculator-world") != std::string::npos);
+   CHECK(wit.find("export calculator;") != std::string::npos);
 }
 
 // ── PZAM_COMPONENT macro test ────────────────────────────────────────────────
