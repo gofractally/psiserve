@@ -1,5 +1,4 @@
 #include <psiber/scheduler.hpp>
-#include <psiber/detail/io_engine_kqueue.hpp>
 #include <psiber/reactor.hpp>
 #include <psiber/spin_lock.hpp>
 

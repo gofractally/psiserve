@@ -1,51 +1,72 @@
 # psizam Known Issues
 
-## Test Summary: 87 failures / 16649 tests (99.5% pass rate)
+## Test Summary: 158 failures / 13186 tests (98.8% pass rate, x86_64)
 
-### Pre-existing failures (12)
+### Multi-module (98 failures)
 
-## Multi-module spec tests (12 failures: elem_59, elem_60, elem_68)
+These tests require multi-module linking support which is not yet implemented.
+Each test is counted across all 3 backends (interpreter, jit, jit2).
 
-Three spec tests were generated from multi-module `.wast` files but the test
-generator produced standalone single-module tests, which cannot work:
+- **table_copy_1..18** (54): Import functions from a host module
+- **table_init_1..6** (18): Import functions from a host module
+- **elem_18..21** (12): Element segment references out-of-bounds indices from missing linked modules
+- **elem_59, elem_60** (6): Import shared table from "module1"; exported functions only exist in module1
+- **elem_68** (3): Imports funcref table from "module4"; `call_indirect` hits uninitialized entries
+- **data_25, data_26** (6): Data segment out of range (depends on linked module memory)
+- **global_0** (partially, 2): Imports `spectest.global_i32`/`global_i64` which default to 0 instead of 666;
+  also uses `externref` globals not fully supported in JIT
 
-- **elem_59, elem_60**: Import a shared table from "module1" but the test calls
-  exported functions (`call-7`, `call-8`, `call-9`) that only exist in module1.
-  The generated `.wasm` has no export section.
-- **elem_68**: Imports a funcref table from "module4" containing function `f`.
-  Without module4, `call_indirect` hits uninitialized table entries (stack overflow).
+### Missing proposal .wast files (21 failures)
 
-Fix: requires multi-module linking support or regenerating tests with
-multi-module test infrastructure.
+Relaxed SIMD tests reference `.wasm` files from the relaxed-simd proposal,
+which is not included in the main WebAssembly testsuite submodule:
 
-### New failures from official spec tests (75)
+- `i16x8_relaxed_q15mulr_s_0`, `i32x4_relaxed_trunc_0`, `i8x16_relaxed_swizzle_0`
+- `relaxed_dot_product_0`, `relaxed_laneselect_0`, `relaxed_madd_nmadd_0/1`, `relaxed_min_max_0`
 
-## Multi-value return (8 failures: call_0, return_call_0, return_call_indirect_0)
+Each × 3 backends = 21. Fix: add relaxed-simd proposal `.wast` sources or
+check in the pre-built `.wasm` files.
 
-The official spec tests for `call`, `return_call`, and `return_call_indirect`
-include multi-value return tests (functions returning `(i32, f32)` etc.). Our
-engine only returns the first value from `call_with_return`. Also,
-`tailprint_i32_f32` and `call_tailprint` import print functions we don't provide.
+### Stale test code (9 failures)
 
-## Tail call validation (20 failures: return_call_1/2/11, return_call_indirect_25/26)
+Pre-generated `_tests.cpp` files reference `.wasm` numbers that no longer
+exist in the current tail-call proposal `.wast`:
 
-The parser does not validate type compatibility for `return_call` and
-`return_call_indirect` instructions. Malformed modules that should be rejected
-at parse time (e.g., `return_call` targeting a function with incompatible
-return type) are accepted without error.
+- `return_call.13.wasm` (3)
+- `return_call_indirect.28.wasm` (3)
+- `return_call_indirect.29.wasm` (3)
 
-## Table operation spec tests (44 failures: table_get/set/grow/size/fill)
+Fix: regenerate `return_call_tests.cpp` and `return_call_indirect_tests.cpp`
+from the current `.wast` with `wast2json --enable-tail-call`.
 
-The official spec table operation tests expose gaps in our table implementation:
-- **table_get_0**: `is_null-funcref(2)` returns 1 (null) instead of 0 — funcref
-  table initialization from elem segments not fully working
-- **table_set_0**: Similar funcref initialization issues
-- **table_grow_0..7**: Various failures in table grow with funcref/externref
-  initialization, bounds checking, and size reporting
-- **table_size_0**: Incorrect size after grow operations
-- **table_fill_0**: Fill operation failures
+### jit2 backend bugs (18 failures, x86_64 only)
 
-## aarch64 JIT: SIMD float operations (~60 failures)
+All pass on interpreter and jit. jit2 is experimental.
 
-The aarch64 JIT backends (jit, jit2, jit_llvm) do not fully implement SIMD
-floating-point operations with softfloat. The interpreter passes all of these.
+- **table.grow** (7): Returns 0 (success) instead of -1 for invalid grow operations
+- **table.size** (1): Always returns 0 regardless of actual table size
+- **host function results** (1): Memory out-of-bounds on reference-typed host function returns
+- **simd_const_385, simd_const_387** (2): Segfault in JIT-generated SIMD code
+- **conversions_0** (1): Segfault during float conversion
+- **traps_2** (1): Segfault during trap handling
+- **Host function / call depth / reentry tests** (5): Various segfaults in
+  host function binding, deep recursion, and module re-entry
+
+### Multi-value returns (5 failures, all backends)
+
+The engine parses multi-value block types but `call_with_return` only extracts
+the first value. The updated testsuite `.wasm` files now contain multi-value
+block types that trigger "wrong type" during parsing:
+
+- `block_0`, `br_0`, `func_0`, `if_0`, `loop_0` — each fails on all 3 backends
+  but only jit2 is counted (interpreter/jit pass because the multi-value blocks
+  are in functions not exercised by the single-value CHECK assertions).
+
+Note: The 5 jit2 failures for these are included in the jit2 count above.
+Interpreter and jit pass these tests because they only check single-value
+assertions that happen to work.
+
+### aarch64 notes
+
+The aarch64 JIT backends do not fully implement SIMD floating-point operations
+with softfloat. These failures only appear on ARM64, not on x86_64.

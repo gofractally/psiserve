@@ -40,7 +40,7 @@
 #define PSIZAM_PARAMETRIC_OPS(opcode_macro)     \
    opcode_macro(drop, 0x1A)                     \
    opcode_macro(select, 0x1B)                   \
-   opcode_macro(padding_param_0, 0x1C)          \
+   opcode_macro(typed_select, 0x1C)               \
    opcode_macro(padding_param_1, 0x1D)          \
    opcode_macro(padding_param_2, 0x1E)
 #define PSIZAM_VARIABLE_ACCESS_OPS(opcode_macro)\

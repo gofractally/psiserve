@@ -56,10 +56,24 @@ foreach(testcase address align binary binary-leb128 block br br_if br_table call
 endforeach()
 
 
-# Tests not yet in the pinned testsuite snapshot — use pre-generated files + existing wasms
+# Tail-call tests — pre-generated .cpp, generate .wasm from proposals/tail-call/
+set(TAIL_CALL_WAST_DIR ${WASM_TESTSUITE_DIR}/proposals/tail-call)
 foreach(testcase return_call return_call_indirect)
    list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${testcase}_tests.cpp)
+   if(EXISTS ${TAIL_CALL_WAST_DIR}/${testcase}.wast)
+      add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
+         COMMAND ${WAST2JSON} --enable-tail-call --no-check ${TAIL_CALL_WAST_DIR}/${testcase}.wast -o ${testcase}.json
+         COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
+         DEPENDS ${TAIL_CALL_WAST_DIR}/${testcase}.wast
+         COMMENT "Generating tail-call wasms: ${testcase}"
+      )
+      list(APPEND TAIL_CALL_WASM_MARKERS ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker)
+   endif()
 endforeach()
+if(TAIL_CALL_WASM_MARKERS)
+   add_custom_target(tail_call_test_wasms DEPENDS ${TAIL_CALL_WASM_MARKERS})
+endif()
 
 add_spec_test_impl(e_block ${CMAKE_CURRENT_SOURCE_DIR}/spec/extra/block.wast)
 add_spec_test_impl(e_function ${CMAKE_CURRENT_SOURCE_DIR}/spec/extra/function.wast)
@@ -79,6 +93,9 @@ target_include_directories(psizam_spec_tests PUBLIC
 target_compile_definitions(psizam_spec_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
 if(PSIZAM_ENABLE_LLVM)
    target_link_libraries(psizam_spec_tests psizam-llvm)
+endif()
+if(TARGET tail_call_test_wasms)
+   add_dependencies(psizam_spec_tests tail_call_test_wasms)
 endif()
 catch_discover_tests(psizam_spec_tests)
 
@@ -104,11 +121,25 @@ set(SIMD_TESTS
     i16x8_relaxed_q15mulr_s i32x4_relaxed_trunc i8x16_relaxed_swizzle
     relaxed_dot_product relaxed_laneselect relaxed_madd_nmadd relaxed_min_max
 )
-# SIMD tests — not in w3c-1.0 spec, always use pre-generated files
+# SIMD tests — use pre-generated _tests.cpp but generate .wasm files from testsuite
 foreach(testcase ${SIMD_TESTS})
    list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${testcase}_tests.cpp)
-   message("Using existing: ${testcase}_tests.cpp")
+   # Generate .wasm files via wast2json if the .wast exists in testsuite
+   if(EXISTS ${WASM_TESTSUITE_DIR}/${testcase}.wast)
+      add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
+         COMMAND ${WAST2JSON} --no-check ${WASM_TESTSUITE_DIR}/${testcase}.wast -o ${testcase}.json
+         COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
+         DEPENDS ${WASM_TESTSUITE_DIR}/${testcase}.wast
+         COMMENT "Generating SIMD wasms: ${testcase}"
+      )
+      list(APPEND SIMD_WASM_MARKERS ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker)
+   endif()
 endforeach()
+
+if(SIMD_WASM_MARKERS)
+   add_custom_target(simd_test_wasms DEPENDS ${SIMD_WASM_MARKERS})
+endif()
 
 add_executable(psizam_simd_tests main.cpp ${SPEC_TESTS})
 target_link_libraries(psizam_simd_tests psizam psizam-exec Catch2::Catch2)
@@ -121,6 +152,9 @@ target_include_directories(psizam_simd_tests PUBLIC
    ${CMAKE_CURRENT_BINARY_DIR}/spec
 )
 target_compile_definitions(psizam_simd_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
+if(TARGET simd_test_wasms)
+   add_dependencies(psizam_simd_tests simd_test_wasms)
+endif()
 catch_discover_tests(psizam_simd_tests)
 
 endif(PSIZAM_ENABLE_SPEC_TESTS)

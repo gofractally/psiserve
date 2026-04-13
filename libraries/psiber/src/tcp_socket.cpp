@@ -11,6 +11,8 @@
 
 #ifdef __APPLE__
 #include <sys/types.h>
+#else
+#include <sys/sendfile.h>
 #endif
 
 #include <cerrno>

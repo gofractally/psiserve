@@ -412,6 +412,9 @@ namespace psizam::detail {
             }
          }
          PSIZAM_ASSERT(_mod->code.size() == _mod->functions.size(), wasm_parse_exception, "code section must have the same size as the function section" );
+         if (_datacount) {
+            PSIZAM_ASSERT(*_datacount == _mod->data.size(), wasm_parse_exception, "data count and data section have inconsistent lengths");
+         }
 
          _mod->stack_limit_is_bytes = has_max_stack_bytes<Options>;
          debug.set(std::move(imap));
@@ -849,7 +852,7 @@ namespace psizam::detail {
                   PSIZAM_ASSERT(type == types::i64, wasm_parse_exception, "expected i64 initializer");
                   break;
                case opcodes::get_global:
-                  // global.get type is validated elsewhere (the referenced global's type must match)
+                  PSIZAM_ASSERT(_mod->globals[ie.value.i32].type.content_type == type, wasm_parse_exception, "type mismatch");
                   break;
                default:
                   // f32_const, f64_const, v128_const, ref_null, ref_func — already validated above
@@ -1117,9 +1120,11 @@ namespace psizam::detail {
             auto result = op_stack.depth() - branch_target.operand_depth;
             uint32_t result_count;
             if (!branch_target.label_results.empty()) {
-               // Multi-value: validate all label results on the stack (top-down)
+               // Multi-value: pop all expected results (top-down), then push them back
                for (int i = static_cast<int>(branch_target.label_results.size()) - 1; i >= 0; --i)
-                  op_stack.top(branch_target.label_results[i]);
+                  op_stack.pop(branch_target.label_results[i]);
+               for (auto rt : branch_target.label_results)
+                  op_stack.push(rt);
                result_count = static_cast<uint32_t>(branch_target.label_results.size());
             } else if(branch_target.label_result != types::pseudo) {
                op_stack.top(branch_target.label_result);
@@ -1540,6 +1545,7 @@ namespace psizam::detail {
                      op_stack.push(rt);
                   uint32_t table_idx = parse_varuint32(code);
                   PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "call_indirect table index out of range");
+                  PSIZAM_ASSERT(_mod->tables[table_idx].element_type == types::funcref, wasm_parse_exception, "call_indirect requires funcref table");
                   code_writer.emit_call_indirect(ft, type_aliases[functypeidx], table_idx);
                   break;
                }
@@ -1658,8 +1664,25 @@ namespace psizam::detail {
                   uint8_t t0 = op_stack.pop();
                   uint8_t t1 = op_stack.pop();
                   PSIZAM_ASSERT(t0 == t1 || t0 == any_type || t1 == any_type, wasm_parse_exception, "incorrect types for select");
-                  op_stack.push(t0 != any_type? t0 : t1);
+                  // Basic select (0x1B) only allows numeric types; reference types require typed select (0x1C)
+                  uint8_t resolved = (t0 != any_type) ? t0 : t1;
+                  PSIZAM_ASSERT(resolved == any_type || resolved == types::i32 || resolved == types::i64 ||
+                                resolved == types::f32 || resolved == types::f64 || resolved == types::v128,
+                                wasm_parse_exception, "type mismatch");
+                  op_stack.push(resolved);
                   code_writer.emit_select(t0);
+               } break;
+               case opcodes::typed_select: {
+                  // Typed select (0x1C): select t* — allows all types including reference types
+                  check_in_bounds();
+                  uint32_t vec_len = parse_varuint32(code);
+                  PSIZAM_ASSERT(vec_len == 1, wasm_parse_exception, "select t* must have exactly one type");
+                  uint8_t valtype = *code++;
+                  op_stack.pop(types::i32);
+                  op_stack.pop(valtype);
+                  op_stack.pop(valtype);
+                  op_stack.push(valtype);
+                  code_writer.emit_select(valtype);
                } break;
                case opcodes::get_local: {
                   uint32_t local_idx = parse_varuint32(code);
