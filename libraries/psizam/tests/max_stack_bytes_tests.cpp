@@ -69,7 +69,9 @@ wasm_code max_stack_bytes_wasm_code = {
 
 }
 
-BACKEND_TEST_CASE( "Test max stack bytes", "[max_stack_bytes]") {
+// Only interpreter and jit1 enforce max_stack_bytes at runtime.
+// jit2 and jit_llvm use native call stacks without byte-level tracking.
+TEMPLATE_TEST_CASE( "Test max stack bytes", "[max_stack_bytes]", psizam::interpreter, psizam::jit) {
    wasm_allocator wa;
    using rhf_t     = psizam::registered_host_functions<standalone_function_t>;
    using backend_t = psizam::backend<rhf_t, TestType, dynamic_options>;
