@@ -32,6 +32,7 @@ namespace psizam::detail {
        case types::f64:
        case types::funcref:
        case types::externref:
+       case types::exnref:
           return 8;
        case types::v128:
           return 16;
@@ -672,7 +673,7 @@ namespace psizam::detail {
             uint8_t rt = *code++;
             ft.return_types[i] = rt;
             PSIZAM_ASSERT(rt == types::i32 || rt == types::i64 || rt == types::f32 || rt == types::f64 ||
-                          rt == types::funcref || rt == types::externref ||
+                          rt == types::funcref || rt == types::externref || rt == types::exnref ||
                           (rt == types::v128 && get_enable_simd(_options)),
                           wasm_parse_exception, "invalid function return type");
          }
@@ -962,7 +963,7 @@ namespace psizam::detail {
          const Options& options;
          void push(uint8_t type) {
             assert(type != unreachable_tag && type != scope_tag);
-            assert(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 || type == types::funcref || type == types::externref || type == any_type || (type == types::v128 && get_enable_simd(options)));
+            assert(type == types::i32 || type == types::i64 || type == types::f32 || type == types::f64 || type == types::funcref || type == types::externref || type == types::exnref || type == any_type || (type == types::v128 && get_enable_simd(options)));
             PSIZAM_ASSERT(operand_depth < std::numeric_limits<uint32_t>::max(), wasm_parse_exception, "integer overflow in operand depth");
             operand_depth += Writer::get_depth_for_type(type);
             maximum_operand_depth = std::max(operand_depth, maximum_operand_depth);
@@ -1198,11 +1199,14 @@ namespace psizam::detail {
                   std::vector<uint8_t> bp, br;
 
                   if (first_byte == types::pseudo || first_byte == types::i32 || first_byte == types::i64 ||
-                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128) {
+                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128 ||
+                      first_byte == types::funcref || first_byte == types::externref || first_byte == types::exnref) {
                      code++;
                      PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
                                    first_byte == types::f32 || first_byte == types::f64 ||
                                    (first_byte == types::v128 && get_enable_simd(_options)) ||
+                                   first_byte == types::funcref || first_byte == types::externref ||
+                                   first_byte == types::exnref ||
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in block");
                      single_type = first_byte;
@@ -1243,11 +1247,14 @@ namespace psizam::detail {
                   std::vector<uint8_t> bp, br;
 
                   if (first_byte == types::pseudo || first_byte == types::i32 || first_byte == types::i64 ||
-                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128) {
+                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128 ||
+                      first_byte == types::funcref || first_byte == types::externref || first_byte == types::exnref) {
                      code++;
                      PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
                                    first_byte == types::f32 || first_byte == types::f64 ||
                                    (first_byte == types::v128 && get_enable_simd(_options)) ||
+                                   first_byte == types::funcref || first_byte == types::externref ||
+                                   first_byte == types::exnref ||
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in loop");
                      single_type = first_byte;
@@ -1289,11 +1296,14 @@ namespace psizam::detail {
                   std::vector<uint8_t> bp, br;
 
                   if (first_byte == types::pseudo || first_byte == types::i32 || first_byte == types::i64 ||
-                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128) {
+                      first_byte == types::f32 || first_byte == types::f64 || first_byte == types::v128 ||
+                      first_byte == types::funcref || first_byte == types::externref || first_byte == types::exnref) {
                      code++;
                      PSIZAM_ASSERT(first_byte == types::i32 || first_byte == types::i64 ||
                                    first_byte == types::f32 || first_byte == types::f64 ||
                                    (first_byte == types::v128 && get_enable_simd(_options)) ||
+                                   first_byte == types::funcref || first_byte == types::externref ||
+                                   first_byte == types::exnref ||
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in if");
                      single_type = first_byte;
