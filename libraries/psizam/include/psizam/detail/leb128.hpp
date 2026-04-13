@@ -23,11 +23,12 @@ namespace psizam::detail {
    template <size_t N>
    class varuint {
       public:
-         static_assert(N == 1  || N == 7 || N == 32, "N not valid");
+         static_assert(N == 1  || N == 7 || N == 32 || N == 64, "N not valid");
 
          inline constexpr explicit varuint(bool v) { from(v); }
          inline constexpr explicit varuint(uint8_t v) { from(v); }
          inline constexpr explicit varuint(uint32_t v) { from(v); }
+         inline constexpr explicit varuint(uint64_t v) { from(v); }
          inline constexpr varuint( guarded_ptr<uint8_t>& code ) { from(code); }
 
          inline constexpr void from(bool v) { storage[0] = v; }
@@ -51,6 +52,23 @@ namespace psizam::detail {
                break;
             }
             bytes_used++;
+         }
+         inline constexpr void from(uint64_t v) {
+            static_assert(N >= 64 || N <= 32, "from(uint64_t) only for N == 64 or N <= 32");
+            if constexpr (N <= 32) {
+               from(static_cast<uint32_t>(v));
+            } else {
+               bytes_used = 0;
+               for (; bytes_used < bytes_needed<N>(); bytes_used++) {
+                  storage[bytes_used] = v & 0x7f;
+                  v >>= 7;
+                  if (v != 0)
+                     storage[bytes_used] |= 0x80;
+                  else
+                     break;
+               }
+               bytes_used++;
+            }
          }
 
          inline constexpr void from( guarded_ptr<uint8_t>& code ) {
@@ -88,6 +106,16 @@ namespace psizam::detail {
 #elif defined(__GNUC__)
 #pragma GCC unroll 5
 #endif
+            for (int i=bytes_used-1; i >= 0; i--) {
+               ret <<= 7;
+               ret |= storage[i] & 0x7f;
+            }
+            return ret;
+         }
+
+         template <size_t M=N, typename = typename std::enable_if_t<M == 64, int>>
+         inline constexpr uint64_t to() {
+            uint64_t ret = 0;
             for (int i=bytes_used-1; i >= 0; i--) {
                ret <<= 7;
                ret |= storage[i] & 0x7f;

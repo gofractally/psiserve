@@ -171,6 +171,7 @@ namespace psizam::detail {
       }
 
       inline int32_t current_linear_memory() const { return _wasm_alloc->get_current_page(); }
+      inline bool    is_memory64() const { return _mod && !_mod->memories.empty() && _mod->memories[0].is_memory64; }
       inline void    exit(std::error_code err = std::error_code()) {
          // FIXME: system_error?
          _error_code = err;
@@ -589,6 +590,108 @@ namespace psizam::detail {
       {
          stack_allocator alt_stack(get_maximum_stack_size());
          return execute<TC>(alt_stack, host, vis, func_index, std::forward<Args>(args)...);
+      }
+
+      /// Dynamic dispatch — call a function with pre-built native_value arguments.
+      /// No compile-time type checking; the caller is responsible for type correctness.
+      inline std::optional<operand_stack_elem> execute_dynamic(void* host, uint32_t func_index,
+                                                               native_value* args_raw, size_t args_count)
+      {
+         stack_allocator alt_stack(get_maximum_stack_size());
+         return execute_dynamic(alt_stack, host, func_index, args_raw, args_count);
+      }
+
+      inline std::optional<operand_stack_elem> execute_dynamic(stack_allocator& alt_stack, void* host,
+                                                               uint32_t func_index,
+                                                               native_value* args_raw, size_t args_count)
+      {
+         auto saved_host = _host;
+         auto saved_os_size = get_operand_stack().size();
+         auto g = scope_guard([&](){ _host = saved_host; get_operand_stack().eat(saved_os_size); });
+
+         _host = host;
+
+         const auto& ft = _mod->get_function_type(func_index);
+         native_value_extended result;
+
+         try {
+            if (func_index < _mod->get_imported_functions_size()) {
+               std::reverse(args_raw + 0, args_raw + args_count);
+               result.scalar = call_host_function(args_raw, func_index);
+            } else if (_mod->allocator._code_base == nullptr) {
+               using llvm_entry_fn_t = int64_t(*)(void*, void*, native_value*);
+               auto entry = reinterpret_cast<llvm_entry_fn_t>(
+                  _mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset);
+               auto saved_call_depth = this->_remaining_call_depth;
+               auto depth_guard = scope_guard([&](){ this->_remaining_call_depth = saved_call_depth; });
+
+               if (alt_stack.guard_base()) {
+                  stack_guard_range = std::span<std::byte>(
+                     static_cast<std::byte*>(alt_stack.guard_base()), alt_stack.guard_size());
+               }
+
+               invoke_with_signal_handler([&]() {
+                  if (alt_stack.top()) {
+                     std::exception_ptr exc;
+                     using stack_fn_t = int64_t(*)(void*, void*, void*);
+                     result.scalar.i64 = call_on_stack(
+                        alt_stack.top(), reinterpret_cast<stack_fn_t>(entry),
+                        this, base_type::linear_memory(), args_raw, &exc);
+                     if (exc) std::rethrow_exception(exc);
+                  } else {
+                     result.scalar.i64 = entry(this, base_type::linear_memory(), args_raw);
+                  }
+                  if (ft.return_type == types::v128) {
+                     result.vector.low  = args_raw[0].i64;
+                     result.vector.high = args_raw[1].i64;
+                  }
+               }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
+            } else {
+               void* stack = alt_stack.top();
+#ifdef __x86_64__
+               if(stack) {
+                  stack = static_cast<char*>(stack) - 24;
+               }
+#endif
+               auto fn = reinterpret_cast<native_value (*)(void*, void*)>(
+                  _mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset
+                  + _mod->allocator._code_base);
+
+               if (alt_stack.guard_base()) {
+                  stack_guard_range = std::span<std::byte>(
+                     static_cast<std::byte*>(alt_stack.guard_base()), alt_stack.guard_size());
+               }
+
+               invoke_with_signal_handler([&]() {
+                  result = get_execute()(this, base_type::linear_memory(), args_raw, fn, stack,
+                                        static_cast<uint64_t>(args_count), ft.return_type == types::v128);
+               }, &handle_signal, _mod->allocator, base_type::get_wasm_allocator());
+            }
+         } catch(wasm_exit_exception&) {
+            return {};
+         }
+
+         if(!ft.return_count)
+            return {};
+         else if (ft.return_count > 1) {
+            auto& val = this->_multi_return[0];
+            switch (ft.return_type) {
+               case i32: return {i32_const_t{val.i32}};
+               case i64: return {i64_const_t{val.i64}};
+               case f32: return {f32_const_t{val.f32}};
+               case f64: return {f64_const_t{val.f64}};
+               default: assert(!"Unexpected multi-value return type");
+            }
+         }
+         else switch (ft.return_type) {
+            case i32: return {i32_const_t{result.scalar.i32}};
+            case i64: return {i64_const_t{result.scalar.i64}};
+            case f32: return {f32_const_t{result.scalar.f32}};
+            case f64: return {f64_const_t{result.scalar.f64}};
+            case v128: return {v128_const_t{result.vector}};
+            default: assert(!"Unexpected function return type");
+         }
+         __builtin_unreachable();
       }
       template <typename TC = psizam::type_converter<standalone_function_t>, typename... Args>
       inline std::optional<operand_stack_elem> execute(stack_manager& alloc, void* host, jit_visitor vis, uint32_t func_index, Args&&... args)

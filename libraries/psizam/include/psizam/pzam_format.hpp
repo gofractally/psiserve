@@ -10,11 +10,13 @@
 // Load path: mmap → fracpack_validate → view<pzam_file> → pick code section → execute.
 
 #include <psizam/detail/jit_reloc.hpp>
+#include <psizam/wit_types.hpp>
 
 #include <psio/fracpack.hpp>
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -182,12 +184,14 @@ namespace psizam {
       uint32_t num_imported_tables    = 0;
       uint32_t num_imported_memories  = 0;
       uint32_t num_imported_globals   = 0;
+      // WIT (Component Model interface types) — optional, fracpack-compatible
+      std::optional<pzam_wit_world>   wit;
    };
    PSIO_REFLECT(pzam_module_metadata,
       types, imports, functions, tables, memories, globals,
       exports, elements, data, tags, start_function, features_required,
       num_imported_functions, num_imported_tables,
-      num_imported_memories, num_imported_globals)
+      num_imported_memories, num_imported_globals, wit)
 
    // ===========================================================================
    // Code sections — N per file (arch × tier × instrumentation)

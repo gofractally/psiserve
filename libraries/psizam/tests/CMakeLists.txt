@@ -186,6 +186,8 @@ add_executable(psizam_compliance_tests main.cpp
    compliance/pzam_metadata_tests.cpp
    compliance/pzam_typed_tests.cpp
    compliance/pzam_attestation_tests.cpp
+   compliance/wit_tests.cpp
+   compliance/memory64_tests.cpp
 )
 target_link_libraries(psizam_compliance_tests psizam psizam-exec Catch2::Catch2)
 target_include_directories(psizam_compliance_tests PUBLIC
@@ -194,3 +196,10 @@ target_include_directories(psizam_compliance_tests PUBLIC
 )
 target_compile_definitions(psizam_compliance_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
 catch_discover_tests(psizam_compliance_tests)
+
+add_executable(mem64_debug compliance/mem64_debug.cpp)
+target_link_libraries(mem64_debug psizam psizam-exec)
+target_include_directories(mem64_debug PUBLIC
+   ${CMAKE_CURRENT_SOURCE_DIR}
+   ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)

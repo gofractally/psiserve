@@ -1094,7 +1094,10 @@ namespace psizam::detail {
          emit_save_context();
          // MOV X0, X19 (context)
          emit32(0xAA1303E0);
-         emit_call_c_function(&current_memory);
+         if (is_memory64())
+            emit_call_c_function(&current_memory64);
+         else
+            emit_call_c_function(&current_memory);
          emit_restore_context();
          emit_push_x(X0);
       }
@@ -1104,8 +1107,10 @@ namespace psizam::detail {
          emit_save_context();
          // MOV X0, X19 (context)
          emit32(0xAA1303E0);
-         // MOV W1, W1 already set
-         emit_call_c_function(&grow_memory);
+         if (is_memory64())
+            emit_call_c_function(&grow_memory64);
+         else
+            emit_call_c_function(&grow_memory);
          emit_restore_context();
          // Reload linear memory base (may have changed)
          // The caller should handle this, but we update X20 for safety
@@ -4275,8 +4280,16 @@ namespace psizam::detail {
 
       // Pop a WASM i32 address, add offset, compute native address
       // Result in the specified register
+      bool is_memory64() const { return !_mod.memories.empty() && _mod.memories[0].is_memory64; }
+
       void emit_pop_address(uint32_t rd, uint32_t offset) {
          emit_pop_x(X0);
+         if (is_memory64()) {
+            // Memory64: check upper 32 bits for OOB before truncating
+            emit32(0xD360FC00 | (X0 << 5) | X17); // LSR X17, X0, #32
+            emit32(0xEA11023F);                    // TST X17, X17
+            emit_branch_to_handler(COND_NE, memory_handler);
+         }
          // ADD Xrd, X20, W0, UXTW  (zero-extend W0 to 64-bit and add to memory base)
          emit32(0x8B204000 | (X0 << 16) | (X20 << 5) | rd);
          if (offset != 0) {
@@ -5135,10 +5148,19 @@ namespace psizam::detail {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->current_linear_memory();
       }
+      static int64_t current_memory64(void* ctx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         return static_cast<int64_t>(context->current_linear_memory());
+      }
 
       static int32_t grow_memory(void* ctx, int32_t pages) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->grow_linear_memory(pages);
+      }
+      static int64_t grow_memory64(void* ctx, int64_t pages) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         int32_t result = context->grow_linear_memory(static_cast<int32_t>(pages));
+         return (result == -1) ? int64_t(-1) : static_cast<int64_t>(result);
       }
 
       static void init_memory(void* ctx, uint32_t x, uint32_t d, uint32_t s, uint32_t n) {

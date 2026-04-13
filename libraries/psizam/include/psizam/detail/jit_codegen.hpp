@@ -938,8 +938,13 @@ namespace psizam::detail {
             this->emit_push_raw(rdi);
             this->emit_push_raw(rsi);
             this->emit_bytes(0x48, 0xb8);
-            emit_reloc(reloc_symbol::current_memory);
-            this->emit_operand_ptr(&current_memory);
+            if (is_memory64()) {
+               emit_reloc(reloc_symbol::current_memory);
+               this->emit_operand_ptr(&current_memory64);
+            } else {
+               emit_reloc(reloc_symbol::current_memory);
+               this->emit_operand_ptr(&current_memory);
+            }
             this->emit(base::CALL, rax);
             this->emit_pop_raw(rsi);
             this->emit_pop_raw(rdi);
@@ -950,10 +955,18 @@ namespace psizam::detail {
             this->emit_pop_raw(rax);  // pages
             this->emit_push_raw(rdi);
             this->emit_push_raw(rsi);
-            this->emit_mov(eax, esi); // pages arg in esi
+            if (is_memory64())
+               this->emit_mov(rax, rsi); // 64-bit arg
+            else
+               this->emit_mov(eax, esi); // 32-bit arg
             this->emit_bytes(0x48, 0xb8);
-            emit_reloc(reloc_symbol::grow_memory);
-            this->emit_operand_ptr(&grow_memory);
+            if (is_memory64()) {
+               emit_reloc(reloc_symbol::grow_memory);
+               this->emit_operand_ptr(&grow_memory64);
+            } else {
+               emit_reloc(reloc_symbol::grow_memory);
+               this->emit_operand_ptr(&grow_memory);
+            }
             this->emit(base::CALL, rax);
             this->emit_pop_raw(rsi);
             this->emit_pop_raw(rdi);
@@ -2851,8 +2864,13 @@ namespace psizam::detail {
             this->emit_push_raw(rdi);
             this->emit_push_raw(rsi);
             this->emit_bytes(0x48, 0xb8);
-            emit_reloc(reloc_symbol::current_memory);
-            this->emit_operand_ptr(&current_memory);
+            if (is_memory64()) {
+               emit_reloc(reloc_symbol::current_memory);
+               this->emit_operand_ptr(&current_memory64);
+            } else {
+               emit_reloc(reloc_symbol::current_memory);
+               this->emit_operand_ptr(&current_memory);
+            }
             this->emit(base::CALL, rax);
             this->emit_pop_raw(rsi);
             this->emit_pop_raw(rdi);
@@ -2862,10 +2880,18 @@ namespace psizam::detail {
             load_vreg_rax(inst.rr.src1);
             this->emit_push_raw(rdi);
             this->emit_push_raw(rsi);
-            this->emit_mov(eax, esi); // pages arg in esi
+            if (is_memory64())
+               this->emit_mov(rax, rsi);
+            else
+               this->emit_mov(eax, esi);
             this->emit_bytes(0x48, 0xb8);
-            emit_reloc(reloc_symbol::grow_memory);
-            this->emit_operand_ptr(&grow_memory);
+            if (is_memory64()) {
+               emit_reloc(reloc_symbol::grow_memory);
+               this->emit_operand_ptr(&grow_memory64);
+            } else {
+               emit_reloc(reloc_symbol::grow_memory);
+               this->emit_operand_ptr(&grow_memory);
+            }
             this->emit(base::CALL, rax);
             this->emit_pop_raw(rsi);
             this->emit_pop_raw(rdi);
@@ -3476,9 +3502,11 @@ namespace psizam::detail {
          // Load WASM address and zero-extend from i32 to 64-bit.
          // i32 vregs may have garbage upper bits from register reuse.
          if (pr_addr >= 0) {
+            if (is_memory64()) emit_mem64_check(phys_to_reg64(pr_addr), edx);
             this->emit_mov(phys_to_reg32(pr_addr), ecx); // mov r32→ecx zero-extends
          } else {
             load_vreg_rax(addr_vreg);
+            if (is_memory64()) emit_mem64_check(rax, edx);
             this->emit_mov(eax, ecx); // zero-extend
          }
 
@@ -3509,9 +3537,20 @@ namespace psizam::detail {
          // Load value to rax and address to rdx (zero-extended from i32)
          load_vreg_rax(inst.dest);  // value to rax
          if (pr_addr >= 0) {
+            if (is_memory64()) {
+               // Must check before zero-extending. Save rax, use rcx as temp.
+               this->emit_push_raw(rax);
+               emit_mem64_check(phys_to_reg64(pr_addr), ecx);
+               this->emit_pop_raw(rax);
+            }
             this->emit_mov(phys_to_reg32(pr_addr), edx); // zero-extend i32 addr
          } else {
             load_vreg_rcx(addr_vreg);
+            if (is_memory64()) {
+               this->emit_push_raw(rax);
+               emit_mem64_check(rcx, edx);
+               this->emit_pop_raw(rax);
+            }
             this->emit_mov(ecx, edx); // zero-extend i32 addr
          }
 
@@ -4996,11 +5035,24 @@ namespace psizam::detail {
          }
       }
 
+      bool is_memory64() const { return !_mod.memories.empty() && _mod.memories[0].is_memory64; }
+
+      // Memory64 bounds check on a 64-bit register: trap if upper 32 bits are non-zero.
+      // After this check, it's safe to zero-extend the address to 64 bits via MOV r32, r32.
+      void emit_mem64_check(general_register64 reg, general_register32 tmp32) {
+         auto tmp64 = static_cast<general_register64>(tmp32);
+         this->emit(base::MOV_A, reg, tmp64);
+         this->emit(base::SHR_imm8, static_cast<imm8>(32), tmp64);
+         this->emit(base::TEST, tmp32, tmp32);
+         fix_branch(this->emit_branchcc32(base::JNZ), memory_handler);
+      }
+
       // ──────── Memory access helpers ────────
       template<class I, class R>
       void emit_load(int32_t offset, I instr, R reg) {
          uint32_t uoffset = static_cast<uint32_t>(offset);
-         this->emit_pop_raw(rax);  // WASM address (i32, may have garbage upper bits)
+         this->emit_pop_raw(rax);  // WASM address (i32/i64)
+         if (is_memory64()) emit_mem64_check(rax, ecx);
          this->emit_mov(eax, eax); // zero-extend i32 address to 64-bit
          if (uoffset != 0) {
             emit_addr_offset_add(rax, uoffset);
@@ -5013,7 +5065,8 @@ namespace psizam::detail {
       void emit_store(int32_t offset, I instr, R reg) {
          uint32_t uoffset = static_cast<uint32_t>(offset);
          this->emit_pop_raw(rax);  // value
-         this->emit_pop_raw(rcx);  // WASM address (i32, may have garbage upper bits)
+         this->emit_pop_raw(rcx);  // WASM address (i32/i64)
+         if (is_memory64()) emit_mem64_check(rcx, edx);
          this->emit_mov(ecx, ecx); // zero-extend i32 address to 64-bit
          if (uoffset != 0) {
             emit_addr_offset_add(rcx, uoffset);
@@ -5027,12 +5080,12 @@ namespace psizam::detail {
       // Uses ecx as temp for large offsets.
       void simd_load_address(uint32_t offset, uint32_t addr_vreg) {
          if (addr_vreg != ir_vreg_none) {
-            int8_t pr = get_phys(addr_vreg);
-            int16_t sp = (_spill_map && addr_vreg < _num_vregs) ? _spill_map[addr_vreg] : -1;
             load_vreg_rax(addr_vreg);  // load from GPR register/spill
          } else {
             this->emit_pop_raw(rax);   // fallback: pop from stack
          }
+         if (is_memory64()) emit_mem64_check(rax, ecx);
+         this->emit_mov(eax, eax); // zero-extend i32 address to 64-bit
          if (offset != 0) {
             emit_addr_offset_add(rax, static_cast<uint32_t>(offset));
          }
@@ -6430,9 +6483,18 @@ namespace psizam::detail {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->current_linear_memory();
       }
+      static int64_t current_memory64(void* ctx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         return static_cast<int64_t>(context->current_linear_memory());
+      }
       static int32_t grow_memory(void* ctx, int32_t pages) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->grow_linear_memory(pages);
+      }
+      static int64_t grow_memory64(void* ctx, int64_t pages) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         int32_t result = context->grow_linear_memory(static_cast<int32_t>(pages));
+         return (result == -1) ? int64_t(-1) : static_cast<int64_t>(result);
       }
       static void on_memory_error() { signal_throw<wasm_memory_exception>("wasm memory out-of-bounds"); }
 

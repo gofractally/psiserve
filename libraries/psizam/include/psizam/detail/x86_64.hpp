@@ -850,7 +850,10 @@ namespace psizam::detail {
          emit_setup_backtrace();
          emit_push(rdi);
          emit_push(rsi);
-         emit_mov(&current_memory, rax);
+         if (is_memory64())
+            emit_mov(&current_memory64, rax);
+         else
+            emit_mov(&current_memory, rax);
          emit(CALL, rax);
          emit_pop(rsi);
          emit_pop(rdi);
@@ -864,8 +867,13 @@ namespace psizam::detail {
          emit_setup_backtrace();
          emit_push(rdi);
          emit_push(rsi);
-         emit_mov(eax, esi);
-         emit_mov(&grow_memory, rax);
+         if (is_memory64()) {
+            emit_mov(rax, rsi);  // 64-bit arg
+            emit_mov(&grow_memory64, rax);
+         } else {
+            emit_mov(eax, esi);  // 32-bit arg
+            emit_mov(&grow_memory, rax);
+         }
          emit(CALL, rax);
          emit_pop(rsi);
          emit_pop(rdi);
@@ -5807,6 +5815,8 @@ namespace psizam::detail {
          }
       }
 
+      bool is_memory64() const { return !_mod.memories.empty() && _mod.memories[0].is_memory64; }
+
       module& _mod;
       growable_allocator& _allocator;
       void * _code_segment_base;
@@ -6097,6 +6107,15 @@ namespace psizam::detail {
 
       sib_memory_ref emit_pop_address(uint32_t offset, general_register64 out, general_register32 tmpreg) {
          emit_pop(out);
+         if (is_memory64()) {
+            // Memory64 bounds check: verify address fits in 32 bits.
+            // Copy addr, shift right 32, if non-zero → trap (address > 4GB)
+            auto tmp64 = static_cast<general_register64>(tmpreg);
+            emit(MOV_A, out, tmp64);
+            emit(SHR_imm8, static_cast<imm8>(32), tmp64);
+            emit(TEST, tmpreg, tmpreg);
+            fix_branch(emit_branchcc32(JNZ), memory_handler);
+         }
          if (offset & 0x80000000u) {
             emit_mov(offset, tmpreg);
             emit_add(static_cast<general_register64>(tmpreg), out);
@@ -6122,12 +6141,19 @@ namespace psizam::detail {
          emit(instr, addr, reg);
       }
 
-      // pops an i32 wasm address off the stack
+      // pops a wasm address off the stack (i32 or i64 for memory64)
       // adds offset and converts the result to
       // a native address.  The result is in %rax.
       void emit_pop_address(uint32_t offset) {
          // pop %rax
          emit_bytes(0x58);
+         if (is_memory64()) {
+            // Memory64 bounds check: shr rax copy by 32, trap if nonzero
+            emit(MOV_A, rax, rcx);
+            emit(SHR_imm8, static_cast<imm8>(32), rcx);
+            emit(TEST, ecx, ecx);
+            fix_branch(emit_branchcc32(JNZ), memory_handler);
+         }
          if (offset & 0x80000000) {
             // mov $offset, %ecx
             emit_bytes(0xb9);
@@ -6866,9 +6892,20 @@ namespace psizam::detail {
          return context->current_linear_memory();
       }
 
+      static int64_t current_memory64(void* ctx /*rdi*/) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         return static_cast<int64_t>(context->current_linear_memory());
+      }
+
       static int32_t grow_memory(void* ctx /*rdi*/, int32_t pages) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->grow_linear_memory(pages);
+      }
+
+      static int64_t grow_memory64(void* ctx /*rdi*/, int64_t pages) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         int32_t result = context->grow_linear_memory(static_cast<int32_t>(pages));
+         return (result == -1) ? int64_t(-1) : static_cast<int64_t>(result);
       }
 
       static void init_memory(void* ctx /*rdi*/, uint32_t x /*esi*/, uint32_t d /*edx*/, uint32_t s /*ecx*/, uint32_t n /*r8d*/) {

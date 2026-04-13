@@ -953,6 +953,15 @@ namespace psizam::detail {
       // Compute native address: X0 = X20 + wasm_addr + offset
       // wasm_addr in rd, static offset added
       void emit_effective_addr(uint32_t rd, uint32_t addr_reg, uint32_t uoffset) {
+         if (is_memory64()) {
+            // Memory64: check upper 32 bits for OOB, then truncate to 32 bits.
+            // max_useable_memory is 4GB, so any address with upper bits set is OOB.
+            emit32(0xD360FC00 | (addr_reg << 5) | X17); // LSR X17, Xaddr, #32
+            emit32(0xEA11023F);                          // TST X17, X17
+            emit_branch_to_handler(COND_NE, memory_handler);
+            // Truncate to 32 bits for guard-page-based OOB detection
+            emit_mov_reg32(addr_reg, addr_reg);
+         }
          if (uoffset & 0x80000000u) {
             emit_mov_imm32(X16, uoffset);
             emit32(0x8B100000 | (addr_reg << 5) | rd); // ADD Xd, addr, X16
@@ -2064,8 +2073,12 @@ namespace psizam::detail {
          case ir_op::memory_size:
             emit_push(X19); emit_push(X20);
             emit_mov_reg(X0, X19);
-            emit_reloc_mov_imm64(X8, reloc_symbol::current_memory,
-               reinterpret_cast<uint64_t>(&current_memory));
+            if (is_memory64())
+               emit_reloc_mov_imm64(X8, reloc_symbol::current_memory,
+                  reinterpret_cast<uint64_t>(&current_memory64));
+            else
+               emit_reloc_mov_imm64(X8, reloc_symbol::current_memory,
+                  reinterpret_cast<uint64_t>(&current_memory));
             emit32(0xD63F0100); // BLR X8
             emit_pop(X20); emit_pop(X19);
             store_x0_vreg(inst.dest);
@@ -2075,8 +2088,12 @@ namespace psizam::detail {
             emit_push(X19); emit_push(X20);
             emit_mov_reg(X1, X0); // pages
             emit_mov_reg(X0, X19); // context
-            emit_reloc_mov_imm64(X8, reloc_symbol::grow_memory,
-               reinterpret_cast<uint64_t>(&grow_memory));
+            if (is_memory64())
+               emit_reloc_mov_imm64(X8, reloc_symbol::grow_memory,
+                  reinterpret_cast<uint64_t>(&grow_memory64));
+            else
+               emit_reloc_mov_imm64(X8, reloc_symbol::grow_memory,
+                  reinterpret_cast<uint64_t>(&grow_memory));
             emit32(0xD63F0100);
             emit_pop(X20); emit_pop(X19);
             store_x0_vreg(inst.dest);
@@ -3728,9 +3745,18 @@ namespace psizam::detail {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->current_linear_memory();
       }
+      static int64_t current_memory64(void* ctx) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         return static_cast<int64_t>(context->current_linear_memory());
+      }
       static int32_t grow_memory(void* ctx, int32_t pages) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          return context->grow_linear_memory(pages);
+      }
+      static int64_t grow_memory64(void* ctx, int64_t pages) {
+         auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         int32_t result = context->grow_linear_memory(static_cast<int32_t>(pages));
+         return (result == -1) ? int64_t(-1) : static_cast<int64_t>(result);
       }
       static void on_memory_error() { signal_throw<wasm_memory_exception>("wasm memory out-of-bounds"); }
       static void on_unreachable() { signal_throw<wasm_interpreter_exception>("unreachable"); }
@@ -3801,6 +3827,8 @@ namespace psizam::detail {
       }
 
       // ──────── State ────────
+
+      bool is_memory64() const { return !_mod.memories.empty() && _mod.memories[0].is_memory64; }
 
       unsigned char* code = nullptr;
       growable_allocator& _allocator;

@@ -321,6 +321,23 @@ namespace psizam::detail {
          return type == types::pseudo ? 0 : 1;
       }
 
+      // ──── Branch hinting ────
+
+      void set_wasm_pc(const uint8_t* pc) { _wasm_pc = pc; }
+
+      uint8_t lookup_branch_hint() const {
+         if (!_wasm_pc || !_func) return 0xFF;
+         auto& fb = _mod.code[_func->func_index];
+         if (fb.branch_hints.empty() || !fb.body_start) return 0xFF;
+         uint32_t offset = static_cast<uint32_t>(_wasm_pc - fb.body_start);
+         // Binary search for the offset in sorted hints
+         for (const auto& h : fb.branch_hints) {
+            if (h.offset == offset) return h.value;
+            if (h.offset > offset) break;
+         }
+         return 0xFF;
+      }
+
       // ──── Prologue / epilogue ────
 
       void emit_prologue(const func_type& ft, const std::vector<local_entry>& locals, uint32_t funcnum) {
@@ -645,6 +662,9 @@ namespace psizam::detail {
             inst.opcode = ir_op::if_;
             inst.type = types::pseudo;
             inst.flags = IR_SIDE_EFFECT;
+            uint8_t hint = lookup_branch_hint();
+            if (hint == 0) inst.flags |= IR_BRANCH_UNLIKELY;
+            else if (hint == 1) inst.flags |= IR_BRANCH_LIKELY;
             inst.dest = ir_vreg_none;
             inst.br.src1 = cond;
             inst.br.target = entry.block_idx;  // default target (patched by fix_branch)
@@ -849,6 +869,10 @@ namespace psizam::detail {
             inst.opcode = ir_op::br_if;
             inst.type = rt;
             inst.flags = IR_SIDE_EFFECT;
+            { uint8_t hint = lookup_branch_hint();
+              if (hint == 0) inst.flags |= IR_BRANCH_UNLIKELY;
+              else if (hint == 1) inst.flags |= IR_BRANCH_LIKELY;
+            }
             inst.dest = dc; // depth change for multipop
             inst.br.target = UINT32_MAX; // patched by fix_branch
             inst.br.src1 = cond;
@@ -1409,12 +1433,15 @@ namespace psizam::detail {
       void emit_i64_store32(uint32_t /*a*/, uint32_t o) { ir_store(ir_op::i64_store32, types::i64, o); }
 
       // ──── Memory management ────
+      bool is_memory64() const { return !_mod.memories.empty() && _mod.memories[0].is_memory64; }
+
       void emit_current_memory() {
          if (!_unreachable) {
-            uint32_t dest = _func->alloc_vreg(types::i32);
+            uint8_t rtype = is_memory64() ? types::i64 : types::i32;
+            uint32_t dest = _func->alloc_vreg(rtype);
             ir_inst inst{};
             inst.opcode = ir_op::memory_size;
-            inst.type = types::i32;
+            inst.type = rtype;
             inst.flags = IR_SIDE_EFFECT;
             inst.dest = dest;
             inst.rr.src1 = ir_vreg_none;
@@ -1426,10 +1453,11 @@ namespace psizam::detail {
       void emit_grow_memory() {
          if (!_unreachable) {
             uint32_t src = _func->vpop();
-            uint32_t dest = _func->alloc_vreg(types::i32);
+            uint8_t rtype = is_memory64() ? types::i64 : types::i32;
+            uint32_t dest = _func->alloc_vreg(rtype);
             ir_inst inst{};
             inst.opcode = ir_op::memory_grow;
-            inst.type = types::i32;
+            inst.type = rtype;
             inst.flags = IR_SIDE_EFFECT;
             inst.dest = dest;
             inst.rr.src1 = src;
@@ -2607,6 +2635,7 @@ namespace psizam::detail {
       // ──── State ────
       std::size_t _source_bytes;
       bool _unreachable = false;
+      const uint8_t* _wasm_pc = nullptr;
     protected:
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;

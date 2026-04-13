@@ -208,6 +208,7 @@ namespace psizam {
 
    struct memory_type {
       resizable_limits limits;
+      bool is_memory64 = false;  // memory64 proposal: i64 addressing
    };
 
    struct tag_type {
@@ -268,6 +269,11 @@ namespace psizam {
       v128_t vector;
    };
 
+   struct branch_hint {
+      uint32_t offset;   // byte offset within function body (from local_count byte)
+      uint8_t  value;    // 0 = unlikely, 1 = likely
+   };
+
    struct function_body {
       uint32_t                    size;
       std::vector<local_entry>    locals;
@@ -275,6 +281,8 @@ namespace psizam {
       std::size_t                 jit_code_offset;
       std::uint32_t               jit_code_size = 0;
       std::uint32_t               stack_size = 0;
+      const uint8_t*              body_start = nullptr;  // pointer to local_count byte in WASM binary
+      std::vector<branch_hint>    branch_hints;          // sorted by offset
    };
 
    struct data_segment {

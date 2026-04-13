@@ -309,11 +309,13 @@ namespace psizam::detail {
    }
 
    enum ir_flags : uint8_t {
-      IR_NONE         = 0,
-      IR_SIDE_EFFECT  = 1 << 0,
-      IR_COMMUTATIVE  = 1 << 1,
-      IR_DEAD         = 1 << 2,
-      IR_FUSE_NEXT    = 1 << 3,  // Comparison: skip setcc, fuse with next if_/br_if
+      IR_NONE             = 0,
+      IR_SIDE_EFFECT      = 1 << 0,
+      IR_COMMUTATIVE      = 1 << 1,
+      IR_DEAD             = 1 << 2,
+      IR_FUSE_NEXT        = 1 << 3,  // Comparison: skip setcc, fuse with next if_/br_if
+      IR_BRANCH_LIKELY    = 1 << 4,  // Branch hint: branch is likely taken
+      IR_BRANCH_UNLIKELY  = 1 << 5,  // Branch hint: branch is unlikely taken
    };
 
    // IR instruction. POD type — no constructor/destructor.

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -255,6 +256,8 @@ namespace psizam::detail {
 
       static inline uint32_t parse_varuint32(wasm_code_ptr& code) { return varuint<32>(code).to(); }
 
+      static inline uint64_t parse_varuint64(wasm_code_ptr& code) { return varuint<64>(code).to(); }
+
       static inline int8_t parse_varint7(wasm_code_ptr& code) { return varint<7>(code).to(); }
 
       static inline int32_t parse_varint32(wasm_code_ptr& code) { return varint<32>(code).to(); }
@@ -427,9 +430,13 @@ namespace psizam::detail {
 
       inline void parse_custom(wasm_code_ptr& code) {
          auto section_name = parse_utf8_string(code, 0xFFFFFFFFu); // ignored, but needs to be validated
+         constexpr const char hint_name[] = "metadata.code.branch_hint";
          if(get_parse_custom_section_name(_options) &&
             section_name.size() == 4 && std::memcmp(section_name.data(), "name", 4) == 0) {
             parse_name_section(code);
+         } else if(section_name.size() == sizeof(hint_name) - 1 &&
+                   std::memcmp(section_name.data(), hint_name, sizeof(hint_name) - 1) == 0) {
+            parse_branch_hints_section(code);
          } else {
             // skip to the end of the section
             code += code.bounds() - code.offset();
@@ -475,6 +482,25 @@ namespace psizam::detail {
          }
          if(code.bounds() == code.offset()) return;
          PSIZAM_ASSERT(false, wasm_parse_exception, "Invalid subsection Id");
+      }
+
+      inline void parse_branch_hints_section(wasm_code_ptr& code) {
+         // Format: vec(func_hints)
+         //   func_hints := func_idx:u32, vec(hint)
+         //     hint := func_offset:u32, hint_value:u8
+         // The section may appear before the code section, so buffer into _branch_hints_temp.
+         // Applied to _mod->code[] in the code section parser.
+         uint32_t num_funcs = parse_varuint32(code);
+         for (uint32_t i = 0; i < num_funcs; ++i) {
+            uint32_t func_idx = parse_varuint32(code);
+            uint32_t num_hints = parse_varuint32(code);
+            auto& hints = _branch_hints_temp[func_idx];
+            for (uint32_t j = 0; j < num_hints; ++j) {
+               uint32_t offset = parse_varuint32(code);
+               uint8_t  value  = *code++;
+               hints.push_back({offset, value});
+            }
+         }
       }
 
       void parse_import_entry(wasm_code_ptr& code, import_entry& entry) {
@@ -563,20 +589,50 @@ namespace psizam::detail {
       }
 
       void parse_memory_type(wasm_code_ptr& code, memory_type& mt) {
-         mt.limits.flags   = parse_flags(code);
-         mt.limits.initial = parse_varuint32(code);
+         uint8_t raw_flags = *code++;
+         PSIZAM_ASSERT(raw_flags <= 0x07, wasm_parse_exception, "invalid memory flags");
+         mt.is_memory64    = (raw_flags & 0x04) != 0;
+         mt.limits.flags   = (raw_flags & 0x01) != 0;  // has_maximum
+         if (mt.is_memory64) {
+            uint64_t initial64 = parse_varuint64(code);
+            PSIZAM_ASSERT(initial64 <= 65536u, wasm_parse_exception, "initial memory out of range");
+            mt.limits.initial = static_cast<uint32_t>(initial64);
+         } else {
+            mt.limits.initial = parse_varuint32(code);
+         }
          // Implementation limits
          PSIZAM_ASSERT(mt.limits.initial <= get_max_pages(_options), wasm_parse_exception, "initial memory out of range");
          // WASM specification
          PSIZAM_ASSERT(mt.limits.initial <= 65536u, wasm_parse_exception, "initial memory out of range");
          // Shared memory (bit 1) requires has_max (bit 0)
-         if (mt.limits.flags & 0x02)
-            PSIZAM_ASSERT(mt.limits.flags & 0x01, wasm_parse_exception, "shared memory requires maximum");
-         if (mt.limits.flags & 0x01) {
-            mt.limits.maximum = parse_varuint32(code);
+         if (raw_flags & 0x02)
+            PSIZAM_ASSERT(raw_flags & 0x01, wasm_parse_exception, "shared memory requires maximum");
+         if (mt.limits.flags) {
+            if (mt.is_memory64) {
+               uint64_t max64 = parse_varuint64(code);
+               PSIZAM_ASSERT(max64 <= 65536u, wasm_parse_exception, "maximum memory out of range");
+               mt.limits.maximum = static_cast<uint32_t>(max64);
+            } else {
+               mt.limits.maximum = parse_varuint32(code);
+            }
             PSIZAM_ASSERT(mt.limits.maximum >= mt.limits.initial, wasm_parse_exception, "maximum must be at least minimum");
             PSIZAM_ASSERT(mt.limits.maximum <= 65536u, wasm_parse_exception, "maximum memory out of range");
          }
+      }
+
+      // Returns the address type for memory 0: i64 for memory64, i32 for memory32
+      uint8_t mem_addr_type() const {
+         return (!_mod->memories.empty() && _mod->memories[0].is_memory64) ? types::i64 : types::i32;
+      }
+
+      // Parse memarg offset: varuint64 for memory64, varuint32 for memory32
+      uint32_t parse_memarg_offset(wasm_code_ptr& code) {
+         if (mem_addr_type() == types::i64) {
+            uint64_t off64 = parse_varuint64(code);
+            PSIZAM_ASSERT(off64 <= UINT32_MAX, wasm_parse_exception, "memory64 offset exceeds implementation limit");
+            return static_cast<uint32_t>(off64);
+         }
+         return parse_varuint32(code);
       }
 
       void parse_export_entry(wasm_code_ptr& code, export_entry& entry) {
@@ -837,6 +893,7 @@ namespace psizam::detail {
       void parse_function_body(wasm_code_ptr& code, function_body& fb, std::size_t idx) {
          fb.size   = parse_varuint32(code);
          PSIZAM_ASSERT(fb.size <= get_max_code_bytes(_options), wasm_parse_exception, "Function body too large");
+         fb.body_start = code.raw();  // points to local_count byte — branch hint offsets are relative to this
          const auto&         before    = code.offset();
          const auto&         local_cnt = parse_varuint32(code);
          _current_function_index++;
@@ -1113,6 +1170,8 @@ namespace psizam::detail {
                           "nested structures validation failure");
 
             imap_ref.on_instr_start(code_writer.get_addr(), code.raw());
+            if constexpr (requires { code_writer.set_wasm_pc(code.raw()); })
+               code_writer.set_wasm_pc(code.raw());
 
             switch (*code++) {
                case opcodes::unreachable: check_in_bounds(); code_writer.emit_unreachable(); op_stack.start_unreachable(); break;
@@ -1589,10 +1648,17 @@ namespace psizam::detail {
                   check_in_bounds();                                 \
                   PSIZAM_ASSERT(_mod->memories.size() > 0, wasm_parse_exception, "load requires memory"); \
                   uint32_t alignment = parse_varuint32(code);        \
-                  uint32_t offset = parse_varuint32(code);           \
+                  uint32_t offset;                                   \
+                  if (mem_addr_type() == types::i64) {               \
+                     uint64_t off64 = parse_varuint64(code);         \
+                     PSIZAM_ASSERT(off64 <= UINT32_MAX, wasm_parse_exception, "memory64 offset exceeds implementation limit"); \
+                     offset = static_cast<uint32_t>(off64);          \
+                  } else {                                           \
+                     offset = parse_varuint32(code);                 \
+                  }                                                  \
                   PSIZAM_ASSERT(alignment <= uint32_t(max_align), wasm_parse_exception, "alignment cannot be greater than size."); \
                   PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
-                  op_stack.pop(types::i32);                          \
+                  op_stack.pop(mem_addr_type());                     \
                   op_stack.push(types::type);                        \
                   code_writer.emit_ ## op_name( alignment, offset ); \
                } break;
@@ -1617,11 +1683,18 @@ namespace psizam::detail {
                   check_in_bounds();                                 \
                   PSIZAM_ASSERT(_mod->memories.size() > 0, wasm_parse_exception, "store requires memory"); \
                   uint32_t alignment = parse_varuint32(code);        \
-                  uint32_t offset = parse_varuint32(code);           \
+                  uint32_t offset;                                   \
+                  if (mem_addr_type() == types::i64) {               \
+                     uint64_t off64 = parse_varuint64(code);         \
+                     PSIZAM_ASSERT(off64 <= UINT32_MAX, wasm_parse_exception, "memory64 offset exceeds implementation limit"); \
+                     offset = static_cast<uint32_t>(off64);          \
+                  } else {                                           \
+                     offset = parse_varuint32(code);                 \
+                  }                                                  \
                   PSIZAM_ASSERT(alignment <= uint32_t(max_align), wasm_parse_exception, "alignment cannot be greater than size."); \
                   PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "store offset too large."); \
                   op_stack.pop(types::type);                         \
-                  op_stack.pop(types::i32);                          \
+                  op_stack.pop(mem_addr_type());                     \
                   code_writer.emit_ ## op_name( alignment, offset ); \
                } break;
 
@@ -1637,7 +1710,7 @@ namespace psizam::detail {
 
                case opcodes::current_memory:
                   PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "memory.size requires memory");
-                  op_stack.push(types::i32);
+                  op_stack.push(mem_addr_type());
                   PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "memory.size must end with 0x00");
                   code++;
                   code_writer.emit_current_memory();
@@ -1645,8 +1718,8 @@ namespace psizam::detail {
                case opcodes::grow_memory:
                   check_in_bounds();
                   PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "memory.grow requires memory");
-                  op_stack.pop(types::i32);
-                  op_stack.push(types::i32);
+                  op_stack.pop(mem_addr_type());
+                  op_stack.push(mem_addr_type());
                   PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "memory.grow must end with 0x00");
                   code++;
                   code_writer.emit_grow_memory();
@@ -1862,13 +1935,20 @@ namespace psizam::detail {
                         check_in_bounds();                              \
                         PSIZAM_ASSERT(_mod->memories.size() > 0, wasm_parse_exception, "load requires memory"); \
                         uint32_t alignment = parse_varuint32(code);     \
-                        uint32_t offset = parse_varuint32(code);        \
+                        uint32_t offset;                                \
+                        if (mem_addr_type() == types::i64) {            \
+                           uint64_t off64 = parse_varuint64(code);      \
+                           PSIZAM_ASSERT(off64 <= UINT32_MAX, wasm_parse_exception, "memory64 offset exceeds implementation limit"); \
+                           offset = static_cast<uint32_t>(off64);       \
+                        } else {                                        \
+                           offset = parse_varuint32(code);              \
+                        }                                               \
                         uint8_t lane = *code++;                         \
                         PSIZAM_ASSERT(alignment <= uint32_t(max_align), wasm_parse_exception, "alignment cannot be greater than size."); \
                         PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
                         PSIZAM_ASSERT(lane < (1 << (4-max_align)), wasm_parse_exception, "laneidx out of bounds"); \
                         op_stack.pop(types::type);                      \
-                        op_stack.pop(types::i32);                       \
+                        op_stack.pop(mem_addr_type());                  \
                         op_stack.push(types::type);                     \
                         code_writer.emit_ ## op_name( alignment, offset, lane ); \
                      } break;
@@ -1883,15 +1963,22 @@ namespace psizam::detail {
 #define STORELANE_OP(op_name, max_align, type)                          \
                      case vec_opcodes::op_name: {                       \
                         check_in_bounds();                              \
-                        PSIZAM_ASSERT(_mod->memories.size() > 0, wasm_parse_exception, "load requires memory"); \
+                        PSIZAM_ASSERT(_mod->memories.size() > 0, wasm_parse_exception, "store requires memory"); \
                         uint32_t alignment = parse_varuint32(code);     \
-                        uint32_t offset = parse_varuint32(code);        \
+                        uint32_t offset;                                \
+                        if (mem_addr_type() == types::i64) {            \
+                           uint64_t off64 = parse_varuint64(code);      \
+                           PSIZAM_ASSERT(off64 <= UINT32_MAX, wasm_parse_exception, "memory64 offset exceeds implementation limit"); \
+                           offset = static_cast<uint32_t>(off64);       \
+                        } else {                                        \
+                           offset = parse_varuint32(code);              \
+                        }                                               \
                         uint8_t lane = *code++;                         \
                         PSIZAM_ASSERT(alignment <= uint32_t(max_align), wasm_parse_exception, "alignment cannot be greater than size."); \
-                        PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "load offset too large."); \
+                        PSIZAM_ASSERT(offset <= get_max_memory_offset(_options), wasm_parse_exception, "store offset too large."); \
                         PSIZAM_ASSERT(lane < (1 << (4-max_align)), wasm_parse_exception, "laneidx out of bounds"); \
                         op_stack.pop(types::type);                      \
-                        op_stack.pop(types::i32);                       \
+                        op_stack.pop(mem_addr_type());                  \
                         code_writer.emit_ ## op_name( alignment, offset, lane ); \
                      } break;
 
@@ -2361,9 +2448,10 @@ namespace psizam::detail {
                         check_in_bounds();
                         PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "memory.init requires memory");
-                        op_stack.pop(types::i32);
-                        op_stack.pop(types::i32);
-                        op_stack.pop(types::i32);
+                        // memory.init(dst: addr_type, src: i32, len: i32)
+                        op_stack.pop(types::i32);  // len (always i32 for memory.init)
+                        op_stack.pop(types::i32);  // src offset in data segment
+                        op_stack.pop(mem_addr_type());  // dst in linear memory
                         auto x = parse_varuint32(code);
                         PSIZAM_ASSERT(!!_datacount, wasm_parse_exception, "memory.init requires datacount section");
                         PSIZAM_ASSERT(x < *_datacount, wasm_parse_exception, "data segment does not exist");
@@ -2383,9 +2471,10 @@ namespace psizam::detail {
                         check_in_bounds();
                         PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "memory.copy requires memory");
-                        op_stack.pop(types::i32);
-                        op_stack.pop(types::i32);
-                        op_stack.pop(types::i32);
+                        // memory.copy(dst: addr_type, src: addr_type, len: addr_type)
+                        op_stack.pop(mem_addr_type());
+                        op_stack.pop(mem_addr_type());
+                        op_stack.pop(mem_addr_type());
                         PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "memory.copy must end with 0x00 0x00");
                         code++;
                         PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "memory.copy must end with 0x00 0x00");
@@ -2396,9 +2485,10 @@ namespace psizam::detail {
                         check_in_bounds();
                         PSIZAM_ASSERT(get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
                         PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "memory.fill requires memory");
-                        op_stack.pop(types::i32);
-                        op_stack.pop(types::i32);
-                        op_stack.pop(types::i32);
+                        // memory.fill(dst: addr_type, val: i32, len: addr_type)
+                        op_stack.pop(mem_addr_type());  // len
+                        op_stack.pop(types::i32);       // val (always i32)
+                        op_stack.pop(mem_addr_type());  // dst
                         PSIZAM_ASSERT(*code == 0, wasm_parse_exception, "memory.fill must end with 0x00");
                         code++;
                         code_writer.emit_memory_fill();
@@ -2477,35 +2567,35 @@ namespace psizam::detail {
                   } else if (asub == atomic_sub::memory_atomic_notify) {
                      check_in_bounds();
                      auto align = parse_varuint32(code);
-                     auto offset = parse_varuint32(code);
+                     auto offset = parse_memarg_offset(code);
                      op_stack.pop(types::i32); // count
-                     op_stack.pop(types::i32); // addr
+                     op_stack.pop(mem_addr_type()); // addr
                      op_stack.push(types::i32); // result
                      code_writer.emit_atomic_op(asub, align, offset);
                   } else if (asub == atomic_sub::memory_atomic_wait32) {
                      check_in_bounds();
                      auto align = parse_varuint32(code);
-                     auto offset = parse_varuint32(code);
+                     auto offset = parse_memarg_offset(code);
                      op_stack.pop(types::i64); // timeout
                      op_stack.pop(types::i32); // expected
-                     op_stack.pop(types::i32); // addr
+                     op_stack.pop(mem_addr_type()); // addr
                      op_stack.push(types::i32); // result
                      code_writer.emit_atomic_op(asub, align, offset);
                   } else if (asub == atomic_sub::memory_atomic_wait64) {
                      check_in_bounds();
                      auto align = parse_varuint32(code);
-                     auto offset = parse_varuint32(code);
+                     auto offset = parse_memarg_offset(code);
                      op_stack.pop(types::i64); // timeout
                      op_stack.pop(types::i64); // expected
-                     op_stack.pop(types::i32); // addr
+                     op_stack.pop(mem_addr_type()); // addr
                      op_stack.push(types::i32); // result
                      code_writer.emit_atomic_op(asub, align, offset);
                   } else if (sub >= 0x10 && sub <= 0x16) {
                      // Atomic loads
                      check_in_bounds();
                      auto align = parse_varuint32(code);
-                     auto offset = parse_varuint32(code);
-                     op_stack.pop(types::i32); // addr
+                     auto offset = parse_memarg_offset(code);
+                     op_stack.pop(mem_addr_type()); // addr
                      if (sub <= 0x13) // i32 loads
                         op_stack.push(types::i32);
                      else // i64 loads
@@ -2515,19 +2605,19 @@ namespace psizam::detail {
                      // Atomic stores
                      check_in_bounds();
                      auto align = parse_varuint32(code);
-                     auto offset = parse_varuint32(code);
+                     auto offset = parse_memarg_offset(code);
                      if (sub <= 0x1A) { // i32 stores
                         op_stack.pop(types::i32); // value
                      } else { // i64 stores
                         op_stack.pop(types::i64); // value
                      }
-                     op_stack.pop(types::i32); // addr
+                     op_stack.pop(mem_addr_type()); // addr
                      code_writer.emit_atomic_op(asub, align, offset);
                   } else if (sub >= 0x1E && sub <= 0x4E) {
                      // Atomic RMW + cmpxchg
                      check_in_bounds();
                      auto align = parse_varuint32(code);
-                     auto offset = parse_varuint32(code);
+                     auto offset = parse_memarg_offset(code);
                      // Determine if i32 or i64 op by sub-opcode pattern
                      bool is_cmpxchg = (sub >= 0x48);
                      bool is_i64 = false;
@@ -2550,7 +2640,7 @@ namespace psizam::detail {
                      } else {
                         op_stack.pop(is_i64 ? types::i64 : types::i32); // value
                      }
-                     op_stack.pop(types::i32); // addr
+                     op_stack.pop(mem_addr_type()); // addr
                      op_stack.push(is_i64 ? types::i64 : types::i32); // old value
                      code_writer.emit_atomic_op(asub, align, offset);
                   } else {
@@ -2701,6 +2791,17 @@ namespace psizam::detail {
                             [&](wasm_code_ptr& code, function_body& fb, std::size_t idx) { parse_function_body(code, fb, idx); });
          PSIZAM_ASSERT( elems.size() == _mod->functions.size(), wasm_parse_exception, "code section must have the same size as the function section" );
 
+         // Apply buffered branch hints from metadata.code.branch_hint custom section
+         if (!_branch_hints_temp.empty()) {
+            uint32_t num_imports = static_cast<uint32_t>(_mod->import_functions.size());
+            for (auto& [func_idx, hints] : _branch_hints_temp) {
+               if (func_idx >= num_imports && (func_idx - num_imports) < elems.size()) {
+                  elems[func_idx - num_imports].branch_hints = std::move(hints);
+               }
+            }
+            _branch_hints_temp.clear();
+         }
+
          write_code_out(_allocator, code, code_start);
       }
 
@@ -2829,5 +2930,6 @@ namespace psizam::detail {
       typename DebugInfo::builder imap;
       std::vector<uint32_t> type_aliases;
       std::vector<uint32_t> fast_functions;
+      std::unordered_map<uint32_t, std::vector<branch_hint>> _branch_hints_temp;
    };
 } // namespace psizam::detail

@@ -137,7 +137,15 @@ namespace psizam::detail {
       }
       template<typename Op>
       inline void * pop_memop_addr(const Op& op) {
-         const auto& ptr  = context.pop_operand();
+         const auto& ptr = context.pop_operand();
+         if (context.is_memory64()) {
+            uint64_t addr = ptr.to_ui64();
+            uint64_t effective = static_cast<uint64_t>(op.offset) + addr;
+            // Bounds check: ensure address stays within guard page region
+            PSIZAM_ASSERT(effective < max_memory && effective >= addr,
+                          wasm_memory_exception, "memory address out of range");
+            return context.linear_memory() + effective;
+         }
          return context.linear_memory() + op.offset + ptr.to_ui32();
       }
       [[gnu::always_inline]] inline void operator()(const i32_load_t& op) {
@@ -266,12 +274,23 @@ namespace psizam::detail {
       }
       [[gnu::always_inline]] inline void operator()(const current_memory_t& op) {
          context.inc_pc();
-         context.push_operand(i32_const_t{ context.current_linear_memory() });
+         if (context.is_memory64()) {
+            context.push_operand(i64_const_t{ static_cast<uint64_t>(context.current_linear_memory()) });
+         } else {
+            context.push_operand(i32_const_t{ context.current_linear_memory() });
+         }
       }
       [[gnu::always_inline]] inline void operator()(const grow_memory_t& op) {
          context.inc_pc();
-         auto& oper = context.peek_operand().to_ui32();
-         oper       = context.grow_linear_memory(oper);
+         if (context.is_memory64()) {
+            auto& oper = context.peek_operand().to_ui64();
+            // Truncate to 32-bit for our implementation (max pages fits in i32)
+            int32_t result = context.grow_linear_memory(static_cast<int32_t>(oper));
+            oper = (result == -1) ? UINT64_MAX : static_cast<uint64_t>(result);
+         } else {
+            auto& oper = context.peek_operand().to_ui32();
+            oper       = context.grow_linear_memory(oper);
+         }
       }
       [[gnu::always_inline]] inline void operator()(const i32_const_t& op) {
          context.inc_pc();
