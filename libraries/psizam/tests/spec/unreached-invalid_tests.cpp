@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_0_wasm>", "[unreached-invalid_0_wasm_tests]" ) {
@@ -104,6 +102,48 @@ BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_11_wasm>", "[unreached-inval
 BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_110_wasm>", "[unreached-invalid_110_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "unreached-invalid.110.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_111_wasm>", "[unreached-invalid_111_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "unreached-invalid.111.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_112_wasm>", "[unreached-invalid_112_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "unreached-invalid.112.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_113_wasm>", "[unreached-invalid_113_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "unreached-invalid.113.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_114_wasm>", "[unreached-invalid_114_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "unreached-invalid.114.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_115_wasm>", "[unreached-invalid_115_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "unreached-invalid.115.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_116_wasm>", "[unreached-invalid_116_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "unreached-invalid.116.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <unreached-invalid_117_wasm>", "[unreached-invalid_117_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "unreached-invalid.117.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 

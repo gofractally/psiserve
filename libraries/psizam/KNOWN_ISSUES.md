@@ -1,8 +1,8 @@
 # psizam Known Issues
 
-## Test Summary: 93 failures / 16649 tests (99.4% pass rate)
+## Test Summary: 87 failures / 16649 tests (99.5% pass rate)
 
-### Pre-existing failures (18)
+### Pre-existing failures (12)
 
 ## Multi-module spec tests (12 failures: elem_59, elem_60, elem_68)
 
@@ -12,25 +12,11 @@ generator produced standalone single-module tests, which cannot work:
 - **elem_59, elem_60**: Import a shared table from "module1" but the test calls
   exported functions (`call-7`, `call-8`, `call-9`) that only exist in module1.
   The generated `.wasm` has no export section.
-- **elem_68**: Imports a funcref global from "module4" that should reference a
-  function returning 42. Without module4, the global is uninitialized.
+- **elem_68**: Imports a funcref table from "module4" containing function `f`.
+  Without module4, `call_indirect` hits uninitialized table entries (stack overflow).
 
-Fix: regenerate these tests with multi-module support or build multi-module
-test infrastructure.
-
-## max_stack_bytes (2 failures: jit2, jit_llvm)
-
-The `max_stack_bytes` option (byte-level stack accounting) is not fully
-implemented for jit2 and jit_llvm backends. These backends don't emit the
-per-function stack usage checks that the `stack_limit_is_bytes` mode requires.
-Calls that should throw "stack overflow" succeed instead, and vice versa.
-
-## call_return_stack_bytes (4 failures: all backends)
-
-`test_double_deref` returns 0 instead of 42. The test uses `stack_limit_is_bytes`
-mode which changes how the operand stack is laid out. The `i32.load` at the
-double-deref level appears to get a stale or zero value. Likely a stack
-accounting bug in the byte-counting mode, not related to normal execution.
+Fix: requires multi-module linking support or regenerating tests with
+multi-module test infrastructure.
 
 ### New failures from official spec tests (75)
 

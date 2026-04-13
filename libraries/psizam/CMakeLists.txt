@@ -228,21 +228,8 @@ if(PSIZAM_ENABLE_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/external/Catch2)
    include(external/Catch2/contrib/Catch.cmake)
    add_subdirectory(tests)
-   if(PSIZAM_ENABLE_SPEC_TESTS AND NOT EXISTS ${CMAKE_BINARY_DIR}/wasms)
-      include(ExternalProject)
-      ExternalProject_Add(
-         psizam_test_wasms
-         GIT_REPOSITORY "https://github.com/gofractally/eos-vm-test-wasms.git"
-         SOURCE_DIR ${CMAKE_BINARY_DIR}/wasms
-         BINARY_DIR ${CMAKE_BINARY_DIR}/wasms
-         BUILD_ALWAYS 0
-         BUILD_COMMAND ""
-         TEST_COMMAND ""
-         INSTALL_COMMAND ""
-         UPDATE_COMMAND ""
-         PATCH_COMMAND ""
-         CONFIGURE_COMMAND ""
-      )
+   if(PSIZAM_ENABLE_SPEC_TESTS)
+      file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/wasms)
    endif()
 endif()
 

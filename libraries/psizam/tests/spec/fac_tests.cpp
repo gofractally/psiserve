@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <fac_0_wasm>", "[fac_0_wasm_tests]" ) {
@@ -27,5 +25,6 @@ BACKEND_TEST_CASE( "Testing wasm <fac_0_wasm>", "[fac_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "fac-rec-named", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
    CHECK(bkend.call_with_return("env", "fac-iter-named", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
    CHECK(bkend.call_with_return("env", "fac-opt", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
+   CHECK(bkend.call_with_return("env", "fac-ssa", UINT64_C(25))->to_ui64() == UINT64_C(7034535277573963776));
 }
 

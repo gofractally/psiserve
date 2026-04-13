@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <func_0_wasm>", "[func_0_wasm_tests]" ) {
@@ -53,24 +51,35 @@ BACKEND_TEST_CASE( "Testing wasm <func_0_wasm>", "[func_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "value-i64")->to_ui64() == UINT64_C(7777));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "value-f32")->to_f32()) == UINT32_C(1117480550));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "value-f64")->to_f64()) == UINT64_C(4635172994171566817));
+   CHECK(bkend.call_with_return("env", "value-i32-f64")->to_ui32() == UINT32_C(77));
+   CHECK(bkend.call_with_return("env", "value-i32-i32-i32")->to_ui32() == UINT32_C(1));
    CHECK(!bkend.call_with_return("env", "value-block-void"));
    CHECK(bkend.call_with_return("env", "value-block-i32")->to_ui32() == UINT32_C(77));
+   CHECK(bkend.call_with_return("env", "value-block-i32-i64")->to_ui32() == UINT32_C(1));
    CHECK(!bkend.call_with_return("env", "return-empty"));
    CHECK(bkend.call_with_return("env", "return-i32")->to_ui32() == UINT32_C(78));
    CHECK(bkend.call_with_return("env", "return-i64")->to_ui64() == UINT64_C(7878));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "return-f32")->to_f32()) == UINT32_C(1117611622));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "return-f64")->to_f64()) == UINT64_C(4635244066603186258));
+   CHECK(bkend.call_with_return("env", "return-i32-f64")->to_ui32() == UINT32_C(78));
+   CHECK(bkend.call_with_return("env", "return-i32-i32-i32")->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "return-block-i32")->to_ui32() == UINT32_C(77));
+   CHECK(bkend.call_with_return("env", "return-block-i32-i64")->to_ui32() == UINT32_C(1));
    CHECK(!bkend.call_with_return("env", "break-empty"));
    CHECK(bkend.call_with_return("env", "break-i32")->to_ui32() == UINT32_C(79));
    CHECK(bkend.call_with_return("env", "break-i64")->to_ui64() == UINT64_C(7979));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "break-f32")->to_f32()) == UINT32_C(1117768909));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "break-f64")->to_f64()) == UINT64_C(4635315139034805699));
+   CHECK(bkend.call_with_return("env", "break-i32-f64")->to_ui32() == UINT32_C(79));
+   CHECK(bkend.call_with_return("env", "break-i32-i32-i32")->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "break-block-i32")->to_ui32() == UINT32_C(77));
+   CHECK(bkend.call_with_return("env", "break-block-i32-i64")->to_ui32() == UINT32_C(1));
    CHECK(!bkend.call_with_return("env", "break-br_if-empty", UINT32_C(0)));
    CHECK(!bkend.call_with_return("env", "break-br_if-empty", UINT32_C(2)));
    CHECK(bkend.call_with_return("env", "break-br_if-num", UINT32_C(0))->to_ui32() == UINT32_C(51));
    CHECK(bkend.call_with_return("env", "break-br_if-num", UINT32_C(1))->to_ui32() == UINT32_C(50));
+   CHECK(bkend.call_with_return("env", "break-br_if-num-num", UINT32_C(0))->to_ui32() == UINT32_C(51));
+   CHECK(bkend.call_with_return("env", "break-br_if-num-num", UINT32_C(1))->to_ui32() == UINT32_C(50));
    CHECK(!bkend.call_with_return("env", "break-br_table-empty", UINT32_C(0)));
    CHECK(!bkend.call_with_return("env", "break-br_table-empty", UINT32_C(1)));
    CHECK(!bkend.call_with_return("env", "break-br_table-empty", UINT32_C(5)));
@@ -79,6 +88,10 @@ BACKEND_TEST_CASE( "Testing wasm <func_0_wasm>", "[func_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "break-br_table-num", UINT32_C(1))->to_ui32() == UINT32_C(50));
    CHECK(bkend.call_with_return("env", "break-br_table-num", UINT32_C(10))->to_ui32() == UINT32_C(50));
    CHECK(bkend.call_with_return("env", "break-br_table-num", UINT32_C(4294967196))->to_ui32() == UINT32_C(50));
+   CHECK(bkend.call_with_return("env", "break-br_table-num-num", UINT32_C(0))->to_ui32() == UINT32_C(50));
+   CHECK(bkend.call_with_return("env", "break-br_table-num-num", UINT32_C(1))->to_ui32() == UINT32_C(50));
+   CHECK(bkend.call_with_return("env", "break-br_table-num-num", UINT32_C(10))->to_ui32() == UINT32_C(50));
+   CHECK(bkend.call_with_return("env", "break-br_table-num-num", UINT32_C(4294967196))->to_ui32() == UINT32_C(50));
    CHECK(!bkend.call_with_return("env", "break-br_table-nested-empty", UINT32_C(0)));
    CHECK(!bkend.call_with_return("env", "break-br_table-nested-empty", UINT32_C(1)));
    CHECK(!bkend.call_with_return("env", "break-br_table-nested-empty", UINT32_C(3)));
@@ -87,6 +100,11 @@ BACKEND_TEST_CASE( "Testing wasm <func_0_wasm>", "[func_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "break-br_table-nested-num", UINT32_C(1))->to_ui32() == UINT32_C(50));
    CHECK(bkend.call_with_return("env", "break-br_table-nested-num", UINT32_C(2))->to_ui32() == UINT32_C(52));
    CHECK(bkend.call_with_return("env", "break-br_table-nested-num", UINT32_C(4294967293))->to_ui32() == UINT32_C(52));
+   CHECK(bkend.call_with_return("env", "break-br_table-nested-num-num", UINT32_C(0))->to_ui32() == UINT32_C(101));
+   CHECK(bkend.call_with_return("env", "break-br_table-nested-num-num", UINT32_C(1))->to_ui32() == UINT32_C(50));
+   CHECK(bkend.call_with_return("env", "break-br_table-nested-num-num", UINT32_C(2))->to_ui32() == UINT32_C(101));
+   CHECK(bkend.call_with_return("env", "break-br_table-nested-num-num", UINT32_C(4294967293))->to_ui32() == UINT32_C(101));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "large-sig", UINT32_C(0), UINT64_C(1), bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(1077936128)), UINT32_C(4), bit_cast<double>(UINT64_C(4617315517961601024)), bit_cast<float>(UINT32_C(1086324736)), UINT32_C(7), UINT32_C(8), UINT32_C(9), bit_cast<float>(UINT32_C(1092616192)), bit_cast<double>(UINT64_C(4622382067542392832)), bit_cast<double>(UINT64_C(4622945017495814144)), bit_cast<double>(UINT64_C(4623507967449235456)), UINT32_C(14), UINT32_C(15), bit_cast<float>(UINT32_C(1098907648)))->to_f64()) == UINT64_C(4617315517961601024));
    CHECK(bkend.call_with_return("env", "init-local-i32")->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "init-local-i64")->to_ui64() == UINT64_C(0));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "init-local-f32")->to_f32()) == UINT32_C(0));
@@ -98,18 +116,6 @@ BACKEND_TEST_CASE( "Testing wasm <func_1_wasm>", "[func_1_wasm_tests]" ) {
    auto code = read_wasm( std::string(wasm_directory) + "func.1.wasm");
    backend_t bkend( code, &wa );
 
-}
-
-BACKEND_TEST_CASE( "Testing wasm <func_14_wasm>", "[func_14_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "func.14.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <func_15_wasm>", "[func_15_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "func.15.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_16_wasm>", "[func_16_wasm_tests]" ) {
@@ -143,17 +149,15 @@ BACKEND_TEST_CASE( "Testing wasm <func_2_wasm>", "[func_2_wasm_tests]" ) {
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_20_wasm>", "[func_20_wasm_tests]" ) {
-   // Multi-value return type (i32, i32) with unreachable body — valid per multi-value proposal
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "func.20.wasm");
-   CHECK_NOTHROW(backend_t(code, nullptr));
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_21_wasm>", "[func_21_wasm_tests]" ) {
-   // Multi-value return type (i32, i32) with unreachable body — valid per multi-value proposal
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "func.21.wasm");
-   CHECK_NOTHROW(backend_t(code, nullptr));
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_22_wasm>", "[func_22_wasm_tests]" ) {
@@ -202,17 +206,6 @@ BACKEND_TEST_CASE( "Testing wasm <func_29_wasm>", "[func_29_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "func.29.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <func_3_wasm>", "[func_3_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "func.3.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(!bkend.call_with_return("env", "signature-explicit-reused"));
-   CHECK(!bkend.call_with_return("env", "signature-implicit-reused"));
-   CHECK(!bkend.call_with_return("env", "signature-explicit-duplicate"));
-   CHECK(!bkend.call_with_return("env", "signature-implicit-duplicate"));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_30_wasm>", "[func_30_wasm_tests]" ) {
@@ -275,6 +268,16 @@ BACKEND_TEST_CASE( "Testing wasm <func_39_wasm>", "[func_39_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <func_4_wasm>", "[func_4_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.4.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK(bkend.call_with_return("env", "f", UINT32_C(42))->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "g", UINT32_C(42))->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "p")->to_ui32() == UINT32_C(42));
+}
+
 BACKEND_TEST_CASE( "Testing wasm <func_40_wasm>", "[func_40_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "func.40.wasm");
@@ -296,6 +299,137 @@ BACKEND_TEST_CASE( "Testing wasm <func_42_wasm>", "[func_42_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <func_43_wasm>", "[func_43_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "func.43.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_44_wasm>", "[func_44_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.44.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_45_wasm>", "[func_45_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.45.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_46_wasm>", "[func_46_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.46.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_47_wasm>", "[func_47_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.47.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_48_wasm>", "[func_48_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.48.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_49_wasm>", "[func_49_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.49.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_5_wasm>", "[func_5_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.5.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK(!bkend.call_with_return("env", "signature-explicit-reused"));
+   CHECK(!bkend.call_with_return("env", "signature-implicit-reused"));
+   CHECK(!bkend.call_with_return("env", "signature-explicit-duplicate"));
+   CHECK(!bkend.call_with_return("env", "signature-implicit-duplicate"));
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_50_wasm>", "[func_50_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.50.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_51_wasm>", "[func_51_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.51.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_52_wasm>", "[func_52_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.52.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_53_wasm>", "[func_53_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.53.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_54_wasm>", "[func_54_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.54.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_55_wasm>", "[func_55_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.55.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_56_wasm>", "[func_56_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.56.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_57_wasm>", "[func_57_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.57.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_58_wasm>", "[func_58_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.58.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_59_wasm>", "[func_59_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.59.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_60_wasm>", "[func_60_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.60.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_61_wasm>", "[func_61_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.61.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_62_wasm>", "[func_62_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.62.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <func_63_wasm>", "[func_63_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "func.63.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 

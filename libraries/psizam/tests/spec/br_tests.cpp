@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <br_0_wasm>", "[br_0_wasm_tests]" ) {
@@ -26,10 +24,15 @@ BACKEND_TEST_CASE( "Testing wasm <br_0_wasm>", "[br_0_wasm_tests]" ) {
    CHECK(!bkend.call_with_return("env", "type-i64"));
    CHECK(!bkend.call_with_return("env", "type-f32"));
    CHECK(!bkend.call_with_return("env", "type-f64"));
+   CHECK(!bkend.call_with_return("env", "type-i32-i32"));
+   CHECK(!bkend.call_with_return("env", "type-i64-i64"));
+   CHECK(!bkend.call_with_return("env", "type-f32-f32"));
+   CHECK(!bkend.call_with_return("env", "type-f64-f64"));
    CHECK(bkend.call_with_return("env", "type-i32-value")->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "type-i64-value")->to_ui64() == UINT64_C(2));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-f32-value")->to_f32()) == UINT32_C(1077936128));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-f64-value")->to_f64()) == UINT64_C(4616189618054758400));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-f64-f64-value")->to_f64()) == UINT64_C(4616189618054758400));
    CHECK(!bkend.call_with_return("env", "as-block-first"));
    CHECK(!bkend.call_with_return("env", "as-block-mid"));
    CHECK(!bkend.call_with_return("env", "as-block-last"));
@@ -45,6 +48,7 @@ BACKEND_TEST_CASE( "Testing wasm <br_0_wasm>", "[br_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "as-br_table-value")->to_ui32() == UINT32_C(10));
    CHECK(bkend.call_with_return("env", "as-br_table-value-index")->to_ui32() == UINT32_C(11));
    CHECK(bkend.call_with_return("env", "as-return-value")->to_ui64() == UINT64_C(7));
+   CHECK(bkend.call_with_return("env", "as-return-values")->to_ui32() == UINT32_C(2));
    CHECK(bkend.call_with_return("env", "as-if-cond")->to_ui32() == UINT32_C(2));
    CHECK(bkend.call_with_return("env", "as-if-then", UINT32_C(1), UINT32_C(6))->to_ui32() == UINT32_C(3));
    CHECK(bkend.call_with_return("env", "as-if-then", UINT32_C(0), UINT32_C(6))->to_ui32() == UINT32_C(6));
@@ -55,13 +59,16 @@ BACKEND_TEST_CASE( "Testing wasm <br_0_wasm>", "[br_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "as-select-second", UINT32_C(0), UINT32_C(6))->to_ui32() == UINT32_C(6));
    CHECK(bkend.call_with_return("env", "as-select-second", UINT32_C(1), UINT32_C(6))->to_ui32() == UINT32_C(6));
    CHECK(bkend.call_with_return("env", "as-select-cond")->to_ui32() == UINT32_C(7));
+   CHECK(bkend.call_with_return("env", "as-select-all")->to_ui32() == UINT32_C(8));
    CHECK(bkend.call_with_return("env", "as-call-first")->to_ui32() == UINT32_C(12));
    CHECK(bkend.call_with_return("env", "as-call-mid")->to_ui32() == UINT32_C(13));
    CHECK(bkend.call_with_return("env", "as-call-last")->to_ui32() == UINT32_C(14));
+   CHECK(bkend.call_with_return("env", "as-call-all")->to_ui32() == UINT32_C(15));
    CHECK(bkend.call_with_return("env", "as-call_indirect-func")->to_ui32() == UINT32_C(20));
    CHECK(bkend.call_with_return("env", "as-call_indirect-first")->to_ui32() == UINT32_C(21));
    CHECK(bkend.call_with_return("env", "as-call_indirect-mid")->to_ui32() == UINT32_C(22));
    CHECK(bkend.call_with_return("env", "as-call_indirect-last")->to_ui32() == UINT32_C(23));
+   CHECK(bkend.call_with_return("env", "as-call_indirect-all")->to_ui32() == UINT32_C(24));
    CHECK(bkend.call_with_return("env", "as-local.set-value")->to_ui32() == UINT32_C(17));
    CHECK(bkend.call_with_return("env", "as-local.tee-value")->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "as-global.set-value")->to_ui32() == UINT32_C(1));
@@ -69,14 +76,18 @@ BACKEND_TEST_CASE( "Testing wasm <br_0_wasm>", "[br_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "as-loadN-address")->to_ui64() == UINT64_C(30));
    CHECK(bkend.call_with_return("env", "as-store-address")->to_ui32() == UINT32_C(30));
    CHECK(bkend.call_with_return("env", "as-store-value")->to_ui32() == UINT32_C(31));
+   CHECK(bkend.call_with_return("env", "as-store-both")->to_ui32() == UINT32_C(32));
    CHECK(bkend.call_with_return("env", "as-storeN-address")->to_ui32() == UINT32_C(32));
    CHECK(bkend.call_with_return("env", "as-storeN-value")->to_ui32() == UINT32_C(33));
+   CHECK(bkend.call_with_return("env", "as-storeN-both")->to_ui32() == UINT32_C(34));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "as-unary-operand")->to_f32()) == UINT32_C(1079613850));
    CHECK(bkend.call_with_return("env", "as-binary-left")->to_ui32() == UINT32_C(3));
    CHECK(bkend.call_with_return("env", "as-binary-right")->to_ui64() == UINT64_C(45));
+   CHECK(bkend.call_with_return("env", "as-binary-both")->to_ui32() == UINT32_C(46));
    CHECK(bkend.call_with_return("env", "as-test-operand")->to_ui32() == UINT32_C(44));
    CHECK(bkend.call_with_return("env", "as-compare-left")->to_ui32() == UINT32_C(43));
    CHECK(bkend.call_with_return("env", "as-compare-right")->to_ui32() == UINT32_C(42));
+   CHECK(bkend.call_with_return("env", "as-compare-both")->to_ui32() == UINT32_C(44));
    CHECK(bkend.call_with_return("env", "as-convert-operand")->to_ui32() == UINT32_C(41));
    CHECK(bkend.call_with_return("env", "as-memory.grow-size")->to_ui32() == UINT32_C(40));
    CHECK(bkend.call_with_return("env", "nested-block-value")->to_ui32() == UINT32_C(9));

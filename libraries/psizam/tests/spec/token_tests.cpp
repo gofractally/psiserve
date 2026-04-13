@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <token_10_wasm>", "[token_10_wasm_tests]" ) {
@@ -87,9 +85,16 @@ BACKEND_TEST_CASE( "Testing wasm <token_2_wasm>", "[token_2_wasm_tests]" ) {
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_21_wasm>", "[token_21_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_20_wasm>", "[token_20_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.21.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.20.wasm");
+   backend_t bkend( code, &wa );
+
+}
+
+BACKEND_TEST_CASE( "Testing wasm <token_22_wasm>", "[token_22_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "token.22.wasm");
    backend_t bkend( code, &wa );
 
 }
@@ -101,9 +106,16 @@ BACKEND_TEST_CASE( "Testing wasm <token_24_wasm>", "[token_24_wasm_tests]" ) {
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_27_wasm>", "[token_27_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_25_wasm>", "[token_25_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.27.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.25.wasm");
+   backend_t bkend( code, &wa );
+
+}
+
+BACKEND_TEST_CASE( "Testing wasm <token_26_wasm>", "[token_26_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "token.26.wasm");
    backend_t bkend( code, &wa );
 
 }
@@ -115,13 +127,6 @@ BACKEND_TEST_CASE( "Testing wasm <token_28_wasm>", "[token_28_wasm_tests]" ) {
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_29_wasm>", "[token_29_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.29.wasm");
-   backend_t bkend( code, &wa );
-
-}
-
 BACKEND_TEST_CASE( "Testing wasm <token_3_wasm>", "[token_3_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "token.3.wasm");
@@ -129,37 +134,37 @@ BACKEND_TEST_CASE( "Testing wasm <token_3_wasm>", "[token_3_wasm_tests]" ) {
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_31_wasm>", "[token_31_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_30_wasm>", "[token_30_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.31.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.30.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_33_wasm>", "[token_33_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_32_wasm>", "[token_32_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.33.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.32.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_35_wasm>", "[token_35_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_34_wasm>", "[token_34_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.35.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.34.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_37_wasm>", "[token_37_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_36_wasm>", "[token_36_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.37.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.36.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_39_wasm>", "[token_39_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_38_wasm>", "[token_38_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.39.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.38.wasm");
    backend_t bkend( code, &wa );
 
 }
@@ -171,37 +176,37 @@ BACKEND_TEST_CASE( "Testing wasm <token_4_wasm>", "[token_4_wasm_tests]" ) {
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_41_wasm>", "[token_41_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_40_wasm>", "[token_40_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.41.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.40.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_43_wasm>", "[token_43_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_42_wasm>", "[token_42_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.43.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.42.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_45_wasm>", "[token_45_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_44_wasm>", "[token_44_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.45.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.44.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_47_wasm>", "[token_47_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_46_wasm>", "[token_46_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.47.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.46.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_49_wasm>", "[token_49_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_48_wasm>", "[token_48_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.49.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.48.wasm");
    backend_t bkend( code, &wa );
 
 }
@@ -213,23 +218,16 @@ BACKEND_TEST_CASE( "Testing wasm <token_5_wasm>", "[token_5_wasm_tests]" ) {
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_51_wasm>", "[token_51_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_50_wasm>", "[token_50_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.51.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.50.wasm");
    backend_t bkend( code, &wa );
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <token_53_wasm>", "[token_53_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <token_52_wasm>", "[token_52_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.53.wasm");
-   backend_t bkend( code, &wa );
-
-}
-
-BACKEND_TEST_CASE( "Testing wasm <token_55_wasm>", "[token_55_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "token.55.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "token.52.wasm");
    backend_t bkend( code, &wa );
 
 }

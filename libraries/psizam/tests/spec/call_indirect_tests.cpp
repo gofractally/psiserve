@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm_tests]" ) {
@@ -26,6 +24,7 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    CHECK(bkend.call_with_return("env", "type-i64")->to_ui64() == UINT64_C(356));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-f32")->to_f32()) == UINT32_C(1165172736));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-f64")->to_f64()) == UINT64_C(4660882566700597248));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-f64-i32")->to_f64()) == UINT64_C(4660882566700597248));
    CHECK(bkend.call_with_return("env", "type-index")->to_ui64() == UINT64_C(100));
    CHECK(bkend.call_with_return("env", "type-first-i32")->to_ui32() == UINT32_C(32));
    CHECK(bkend.call_with_return("env", "type-first-i64")->to_ui64() == UINT64_C(64));
@@ -35,6 +34,9 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    CHECK(bkend.call_with_return("env", "type-second-i64")->to_ui64() == UINT64_C(64));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "type-second-f32")->to_f32()) == UINT32_C(1107296256));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-second-f64")->to_f64()) == UINT64_C(4634211053438658150));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "type-all-f64-i32")->to_f64()) == UINT64_C(4660882566700597248));
+   CHECK(bkend.call_with_return("env", "type-all-i32-f64")->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "type-all-i32-i64")->to_ui64() == UINT64_C(2));
    CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(5), UINT64_C(2))->to_ui64() == UINT64_C(2));
    CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(5), UINT64_C(5))->to_ui64() == UINT64_C(5));
    CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(12), UINT64_C(5))->to_ui64() == UINT64_C(120));
@@ -42,7 +44,7 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    CHECK(bkend.call_with_return("env", "dispatch", UINT32_C(20), UINT64_C(2))->to_ui64() == UINT64_C(2));
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(0), UINT64_C(2)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(15), UINT64_C(2)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(29), UINT64_C(2)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(32), UINT64_C(2)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(4294967295), UINT64_C(2)), std::exception);
    CHECK_THROWS_AS(bkend("env", "dispatch", UINT32_C(1213432423), UINT64_C(2)), std::exception);
    CHECK(bkend.call_with_return("env", "dispatch-structural-i64", UINT32_C(5))->to_ui64() == UINT64_C(9));
@@ -140,10 +142,23 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_0_wasm>", "[call_indirect_0_wasm
    CHECK(bkend.call_with_return("env", "as-convert-operand")->to_ui64() == UINT64_C(1));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <call_indirect_12_wasm>", "[call_indirect_12_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <call_indirect_1_wasm>", "[call_indirect_1_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "call_indirect.12.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   auto code = read_wasm( std::string(wasm_directory) + "call_indirect.1.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK(bkend.call_with_return("env", "call-1", UINT32_C(2), UINT32_C(3), UINT32_C(0))->to_ui32() == UINT32_C(5));
+   CHECK(bkend.call_with_return("env", "call-1", UINT32_C(2), UINT32_C(3), UINT32_C(1))->to_ui32() == UINT32_C(4294967295));
+   CHECK_THROWS_AS(bkend("env", "call-1", UINT32_C(2), UINT32_C(3), UINT32_C(2)), std::exception);
+   CHECK(bkend.call_with_return("env", "call-2", UINT32_C(2), UINT32_C(3), UINT32_C(0))->to_ui32() == UINT32_C(6));
+   CHECK(bkend.call_with_return("env", "call-2", UINT32_C(2), UINT32_C(3), UINT32_C(1))->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "call-2", UINT32_C(2), UINT32_C(3), UINT32_C(2))->to_ui32() == UINT32_C(2));
+   CHECK_THROWS_AS(bkend("env", "call-2", UINT32_C(2), UINT32_C(3), UINT32_C(3)), std::exception);
+   CHECK(bkend.call_with_return("env", "call-3", UINT32_C(2), UINT32_C(3), UINT32_C(0))->to_ui32() == UINT32_C(4294967295));
+   CHECK(bkend.call_with_return("env", "call-3", UINT32_C(2), UINT32_C(3), UINT32_C(1))->to_ui32() == UINT32_C(6));
+   CHECK_THROWS_AS(bkend("env", "call-3", UINT32_C(2), UINT32_C(3), UINT32_C(2)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "call-3", UINT32_C(2), UINT32_C(3), UINT32_C(3)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "call-3", UINT32_C(2), UINT32_C(3), UINT32_C(4)), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <call_indirect_13_wasm>", "[call_indirect_13_wasm_tests]" ) {
@@ -270,5 +285,30 @@ BACKEND_TEST_CASE( "Testing wasm <call_indirect_33_wasm>", "[call_indirect_33_wa
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "call_indirect.33.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <call_indirect_34_wasm>", "[call_indirect_34_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "call_indirect.34.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <call_indirect_35_wasm>", "[call_indirect_35_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "call_indirect.35.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <call_indirect_36_wasm>", "[call_indirect_36_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "call_indirect.36.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <call_indirect_37_wasm>", "[call_indirect_37_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "call_indirect.37.wasm");
+   backend_t bkend( code, &wa );
+
 }
 

@@ -11,47 +11,41 @@ enable_testing()
 
 # ── Spec tests ─────────────────────────────────────────────────────────────────
 
-set(WASM_SPEC_TESTS_LOCATION "" CACHE STRING "The location of the webassembly spec tests.")
+set(WASM_TESTSUITE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/spec/testsuite)
 find_program(WAST2JSON wast2json)
+
+if(PSIZAM_ENABLE_SPEC_TESTS AND NOT WAST2JSON)
+   message(FATAL_ERROR "wast2json not found. Install wabt: https://github.com/WebAssembly/wabt")
+endif()
 
 set(SPEC_TESTS)
 
 macro(add_spec_test_impl name source)
    list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp)
-   if(WAST2JSON)
-      add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
-         COMMAND ${WAST2JSON} --no-check ${source} -o ${name}.json && mv ${name}.json ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
-         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
-         DEPENDS ${source}
-      )
-      add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
-         COMMAND spec_test_generator ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json > ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
-         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json spec_test_generator)
-      message("Generating: ${name}_tests.cpp")
-   else()
-      message("Using existing: ${name}_tests.cpp")
-   endif()
+   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
+      COMMAND ${WAST2JSON} --no-check ${source} -o ${name}.json && mv ${name}.json ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
+      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
+      DEPENDS ${source}
+   )
+   add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
+      COMMAND spec_test_generator ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json > ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
+      DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json spec_test_generator)
 endmacro()
 
 macro(add_spec_test name)
-   if(WASM_SPEC_TESTS_LOCATION)
-      add_spec_test_impl(${name} ${WASM_SPEC_TESTS_LOCATION}/${name}.wast)
-   else()
-      list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp)
-      message("Using existing: ${name}_tests.cpp")
-   endif()
+   add_spec_test_impl(${name} ${WASM_TESTSUITE_DIR}/${name}.wast)
 endmacro()
 
 if(PSIZAM_ENABLE_SPEC_TESTS)
 
-foreach(testcase address align binary binary-leb128 block br br_if br_table break-drop call_indirect
+foreach(testcase address align binary binary-leb128 block br br_if br_table call_indirect
                  call comments const conversions custom data
+                 elem bulk memory_init memory_fill memory_copy table_init table_copy
                  endianness f32 f32_bitwise f32_cmp f64 f64_bitwise f64_cmp
                  fac float_exprs float_literals float_memory float_misc forward
                  func func_ptrs global i32 i64 if int_exprs int_literals labels left-to-right
                  load local_get local_set local_tee loop memory
                  memory_redundancy memory_grow memory_size memory_trap names nop return
-                 return_call return_call_indirect
                  select stack start store switch
                  table_get table_set table_grow table_size table_fill
                  token traps type
@@ -61,10 +55,10 @@ foreach(testcase address align binary binary-leb128 block br br_if br_table brea
    add_spec_test(${testcase})
 endforeach()
 
-# Tests not in w3c-1.0 spec or incompatible with wast2json — use pre-generated files
-foreach(testcase elem bulk memory_init memory_fill memory_copy table_init table_copy)
+
+# Tests not yet in the pinned testsuite snapshot — use pre-generated files + existing wasms
+foreach(testcase return_call return_call_indirect)
    list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${testcase}_tests.cpp)
-   message("Using existing: ${testcase}_tests.cpp")
 endforeach()
 
 add_spec_test_impl(e_block ${CMAKE_CURRENT_SOURCE_DIR}/spec/extra/block.wast)

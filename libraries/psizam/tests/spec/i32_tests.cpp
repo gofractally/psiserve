@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <i32_0_wasm>", "[i32_0_wasm_tests]" ) {
@@ -237,6 +235,20 @@ BACKEND_TEST_CASE( "Testing wasm <i32_0_wasm>", "[i32_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "popcnt", UINT32_C(2863311530))->to_ui32() == UINT32_C(16));
    CHECK(bkend.call_with_return("env", "popcnt", UINT32_C(1431655765))->to_ui32() == UINT32_C(16));
    CHECK(bkend.call_with_return("env", "popcnt", UINT32_C(3735928559))->to_ui32() == UINT32_C(24));
+   CHECK(bkend.call_with_return("env", "extend8_s", UINT32_C(0))->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "extend8_s", UINT32_C(127))->to_ui32() == UINT32_C(127));
+   CHECK(bkend.call_with_return("env", "extend8_s", UINT32_C(128))->to_ui32() == UINT32_C(4294967168));
+   CHECK(bkend.call_with_return("env", "extend8_s", UINT32_C(255))->to_ui32() == UINT32_C(4294967295));
+   CHECK(bkend.call_with_return("env", "extend8_s", UINT32_C(19088640))->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "extend8_s", UINT32_C(4275878528))->to_ui32() == UINT32_C(4294967168));
+   CHECK(bkend.call_with_return("env", "extend8_s", UINT32_C(4294967295))->to_ui32() == UINT32_C(4294967295));
+   CHECK(bkend.call_with_return("env", "extend16_s", UINT32_C(0))->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "extend16_s", UINT32_C(32767))->to_ui32() == UINT32_C(32767));
+   CHECK(bkend.call_with_return("env", "extend16_s", UINT32_C(32768))->to_ui32() == UINT32_C(4294934528));
+   CHECK(bkend.call_with_return("env", "extend16_s", UINT32_C(65535))->to_ui32() == UINT32_C(4294967295));
+   CHECK(bkend.call_with_return("env", "extend16_s", UINT32_C(19070976))->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "extend16_s", UINT32_C(4275863552))->to_ui32() == UINT32_C(4294934528));
+   CHECK(bkend.call_with_return("env", "extend16_s", UINT32_C(4294967295))->to_ui32() == UINT32_C(4294967295));
    CHECK(bkend.call_with_return("env", "eqz", UINT32_C(0))->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "eqz", UINT32_C(1))->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "eqz", UINT32_C(2147483648))->to_ui32() == UINT32_C(0));

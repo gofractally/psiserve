@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <data_0_wasm>", "[data_0_wasm_tests]" ) {
@@ -76,31 +74,15 @@ BACKEND_TEST_CASE( "Testing wasm <data_18_wasm>", "[data_18_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <data_25_wasm>", "[data_25_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "data.25.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <data_26_wasm>", "[data_26_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "data.26.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
-}
+   backend_t bkend( code, &wa );
 
-BACKEND_TEST_CASE( "Testing wasm <data_27_wasm>", "[data_27_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.27.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_28_wasm>", "[data_28_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.28.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_29_wasm>", "[data_29_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.29.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <data_3_wasm>", "[data_3_wasm_tests]" ) {
@@ -108,48 +90,6 @@ BACKEND_TEST_CASE( "Testing wasm <data_3_wasm>", "[data_3_wasm_tests]" ) {
    auto code = read_wasm( std::string(wasm_directory) + "data.3.wasm");
    backend_t bkend( code, &wa );
 
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_31_wasm>", "[data_31_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.31.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_33_wasm>", "[data_33_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.33.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_34_wasm>", "[data_34_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.34.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_35_wasm>", "[data_35_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.35.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_37_wasm>", "[data_37_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.37.wasm");
-   CHECK_THROWS_AS(backend_t(code, &wa), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_39_wasm>", "[data_39_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.39.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <data_40_wasm>", "[data_40_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "data.40.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <data_41_wasm>", "[data_41_wasm_tests]" ) {
@@ -176,10 +116,105 @@ BACKEND_TEST_CASE( "Testing wasm <data_44_wasm>", "[data_44_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <data_45_wasm>", "[data_45_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.45.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_46_wasm>", "[data_46_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.46.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_47_wasm>", "[data_47_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.47.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_48_wasm>", "[data_48_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.48.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_49_wasm>", "[data_49_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.49.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_50_wasm>", "[data_50_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.50.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_51_wasm>", "[data_51_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.51.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_52_wasm>", "[data_52_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.52.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_53_wasm>", "[data_53_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.53.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_54_wasm>", "[data_54_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.54.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_55_wasm>", "[data_55_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.55.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_56_wasm>", "[data_56_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.56.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_57_wasm>", "[data_57_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.57.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_58_wasm>", "[data_58_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.58.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_59_wasm>", "[data_59_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.59.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <data_60_wasm>", "[data_60_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "data.60.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
 BACKEND_TEST_CASE( "Testing wasm <data_9_wasm>", "[data_9_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "data.9.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 

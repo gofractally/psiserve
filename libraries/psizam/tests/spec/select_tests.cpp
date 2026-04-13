@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <select_0_wasm>", "[select_0_wasm_tests]" ) {
@@ -22,34 +20,54 @@ BACKEND_TEST_CASE( "Testing wasm <select_0_wasm>", "[select_0_wasm_tests]" ) {
    auto code = read_wasm( std::string(wasm_directory) + "select.0.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "select_i32", UINT32_C(1), UINT32_C(2), UINT32_C(1))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(1))->to_ui64() == UINT64_C(2));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(1065353216)), bit_cast<float>(UINT32_C(1073741824)), UINT32_C(1))->to_f32()) == UINT32_C(1065353216));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(4607182418800017408)), bit_cast<double>(UINT64_C(4611686018427387904)), UINT32_C(1))->to_f64()) == UINT64_C(4607182418800017408));
-   CHECK(bkend.call_with_return("env", "select_i32", UINT32_C(1), UINT32_C(2), UINT32_C(0))->to_ui32() == UINT32_C(2));
-   CHECK(bkend.call_with_return("env", "select_i32", UINT32_C(2), UINT32_C(1), UINT32_C(0))->to_ui32() == UINT32_C(1));
-   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(4294967295))->to_ui64() == UINT64_C(2));
-   CHECK(bkend.call_with_return("env", "select_i64", UINT64_C(2), UINT64_C(1), UINT32_C(4042322160))->to_ui64() == UINT64_C(2));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(2143289344)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(1))->to_f32()) == UINT32_C(2143289344));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(2139226884)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(1))->to_f32()) == UINT32_C(2139226884));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(2143289344)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(0))->to_f32()) == UINT32_C(1065353216));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(2139226884)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(0))->to_f32()) == UINT32_C(1065353216));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2143289344)), UINT32_C(1))->to_f32()) == UINT32_C(1073741824));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2139226884)), UINT32_C(1))->to_f32()) == UINT32_C(1073741824));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2143289344)), UINT32_C(0))->to_f32()) == UINT32_C(2143289344));
-   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select_f32", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2139226884)), UINT32_C(0))->to_f32()) == UINT32_C(2139226884));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(9221120237041090560)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(1))->to_f64()) == UINT64_C(9221120237041090560));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(9218868437227537156)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(1))->to_f64()) == UINT64_C(9218868437227537156));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(9221120237041090560)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(0))->to_f64()) == UINT64_C(4607182418800017408));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(9218868437227537156)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(0))->to_f64()) == UINT64_C(4607182418800017408));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9221120237041090560)), UINT32_C(1))->to_f64()) == UINT64_C(4611686018427387904));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9218868437227537156)), UINT32_C(1))->to_f64()) == UINT64_C(4611686018427387904));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9221120237041090560)), UINT32_C(0))->to_f64()) == UINT64_C(9221120237041090560));
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select_f64", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9218868437227537156)), UINT32_C(0))->to_f64()) == UINT64_C(9218868437227537156));
-   CHECK_THROWS_AS(bkend("env", "select_trap_l", UINT32_C(1)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "select_trap_l", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "select_trap_r", UINT32_C(1)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "select_trap_r", UINT32_C(0)), std::exception);
+   CHECK(bkend.call_with_return("env", "select-i32", UINT32_C(1), UINT32_C(2), UINT32_C(1))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "select-i64", UINT64_C(2), UINT64_C(1), UINT32_C(1))->to_ui64() == UINT64_C(2));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(1065353216)), bit_cast<float>(UINT32_C(1073741824)), UINT32_C(1))->to_f32()) == UINT32_C(1065353216));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(4607182418800017408)), bit_cast<double>(UINT64_C(4611686018427387904)), UINT32_C(1))->to_f64()) == UINT64_C(4607182418800017408));
+   CHECK(bkend.call_with_return("env", "select-i32", UINT32_C(1), UINT32_C(2), UINT32_C(0))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "select-i32", UINT32_C(2), UINT32_C(1), UINT32_C(0))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "select-i64", UINT64_C(2), UINT64_C(1), UINT32_C(4294967295))->to_ui64() == UINT64_C(2));
+   CHECK(bkend.call_with_return("env", "select-i64", UINT64_C(2), UINT64_C(1), UINT32_C(4042322160))->to_ui64() == UINT64_C(2));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(2143289344)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(1))->to_f32()) == UINT32_C(2143289344));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(2139226884)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(1))->to_f32()) == UINT32_C(2139226884));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(2143289344)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(0))->to_f32()) == UINT32_C(1065353216));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(2139226884)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(0))->to_f32()) == UINT32_C(1065353216));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2143289344)), UINT32_C(1))->to_f32()) == UINT32_C(1073741824));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2139226884)), UINT32_C(1))->to_f32()) == UINT32_C(1073741824));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2143289344)), UINT32_C(0))->to_f32()) == UINT32_C(2143289344));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2139226884)), UINT32_C(0))->to_f32()) == UINT32_C(2139226884));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(9221120237041090560)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(1))->to_f64()) == UINT64_C(9221120237041090560));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(9218868437227537156)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(1))->to_f64()) == UINT64_C(9218868437227537156));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(9221120237041090560)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(0))->to_f64()) == UINT64_C(4607182418800017408));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(9218868437227537156)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(0))->to_f64()) == UINT64_C(4607182418800017408));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9221120237041090560)), UINT32_C(1))->to_f64()) == UINT64_C(4611686018427387904));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9218868437227537156)), UINT32_C(1))->to_f64()) == UINT64_C(4611686018427387904));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9221120237041090560)), UINT32_C(0))->to_f64()) == UINT64_C(9221120237041090560));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9218868437227537156)), UINT32_C(0))->to_f64()) == UINT64_C(9218868437227537156));
+   CHECK(bkend.call_with_return("env", "select-i32-t", UINT32_C(1), UINT32_C(2), UINT32_C(1))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "select-i64-t", UINT64_C(2), UINT64_C(1), UINT32_C(1))->to_ui64() == UINT64_C(2));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(1065353216)), bit_cast<float>(UINT32_C(1073741824)), UINT32_C(1))->to_f32()) == UINT32_C(1065353216));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(4607182418800017408)), bit_cast<double>(UINT64_C(4611686018427387904)), UINT32_C(1))->to_f64()) == UINT64_C(4607182418800017408));
+   CHECK(bkend.call_with_return("env", "select-i32-t", UINT32_C(1), UINT32_C(2), UINT32_C(0))->to_ui32() == UINT32_C(2));
+   CHECK(bkend.call_with_return("env", "select-i32-t", UINT32_C(2), UINT32_C(1), UINT32_C(0))->to_ui32() == UINT32_C(1));
+   CHECK(bkend.call_with_return("env", "select-i64-t", UINT64_C(2), UINT64_C(1), UINT32_C(4294967295))->to_ui64() == UINT64_C(2));
+   CHECK(bkend.call_with_return("env", "select-i64-t", UINT64_C(2), UINT64_C(1), UINT32_C(4042322160))->to_ui64() == UINT64_C(2));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(2143289344)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(1))->to_f32()) == UINT32_C(2143289344));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(2139226884)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(1))->to_f32()) == UINT32_C(2139226884));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(2143289344)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(0))->to_f32()) == UINT32_C(1065353216));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(2139226884)), bit_cast<float>(UINT32_C(1065353216)), UINT32_C(0))->to_f32()) == UINT32_C(1065353216));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2143289344)), UINT32_C(1))->to_f32()) == UINT32_C(1073741824));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2139226884)), UINT32_C(1))->to_f32()) == UINT32_C(1073741824));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2143289344)), UINT32_C(0))->to_f32()) == UINT32_C(2143289344));
+   CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "select-f32-t", bit_cast<float>(UINT32_C(1073741824)), bit_cast<float>(UINT32_C(2139226884)), UINT32_C(0))->to_f32()) == UINT32_C(2139226884));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(9221120237041090560)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(1))->to_f64()) == UINT64_C(9221120237041090560));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(9218868437227537156)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(1))->to_f64()) == UINT64_C(9218868437227537156));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(9221120237041090560)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(0))->to_f64()) == UINT64_C(4607182418800017408));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(9218868437227537156)), bit_cast<double>(UINT64_C(4607182418800017408)), UINT32_C(0))->to_f64()) == UINT64_C(4607182418800017408));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9221120237041090560)), UINT32_C(1))->to_f64()) == UINT64_C(4611686018427387904));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9218868437227537156)), UINT32_C(1))->to_f64()) == UINT64_C(4611686018427387904));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9221120237041090560)), UINT32_C(0))->to_f64()) == UINT64_C(9221120237041090560));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9218868437227537156)), UINT32_C(0))->to_f64()) == UINT64_C(9218868437227537156));
    CHECK(bkend.call_with_return("env", "as-select-first", UINT32_C(0))->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "as-select-first", UINT32_C(1))->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "as-select-mid", UINT32_C(0))->to_ui32() == UINT32_C(2));
@@ -166,10 +184,89 @@ BACKEND_TEST_CASE( "Testing wasm <select_16_wasm>", "[select_16_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <select_17_wasm>", "[select_17_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.17.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_18_wasm>", "[select_18_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.18.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_19_wasm>", "[select_19_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.19.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
 BACKEND_TEST_CASE( "Testing wasm <select_2_wasm>", "[select_2_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "select.2.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_20_wasm>", "[select_20_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.20.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_21_wasm>", "[select_21_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.21.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_22_wasm>", "[select_22_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.22.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_23_wasm>", "[select_23_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.23.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_24_wasm>", "[select_24_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.24.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_25_wasm>", "[select_25_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.25.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_26_wasm>", "[select_26_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.26.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_27_wasm>", "[select_27_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.27.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_28_wasm>", "[select_28_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.28.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <select_29_wasm>", "[select_29_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "select.29.wasm");
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <select_3_wasm>", "[select_3_wasm_tests]" ) {

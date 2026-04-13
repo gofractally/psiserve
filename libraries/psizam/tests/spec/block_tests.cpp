@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <block_0_wasm>", "[block_0_wasm_tests]" ) {
@@ -58,23 +56,22 @@ BACKEND_TEST_CASE( "Testing wasm <block_0_wasm>", "[block_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "as-binary-operand")->to_ui32() == UINT32_C(12));
    CHECK(bkend.call_with_return("env", "as-test-operand")->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "as-compare-operand")->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "as-binary-operands")->to_ui32() == UINT32_C(12));
+   CHECK(bkend.call_with_return("env", "as-compare-operands")->to_ui32() == UINT32_C(0));
+   CHECK(bkend.call_with_return("env", "as-mixed-operands")->to_ui32() == UINT32_C(27));
    CHECK(bkend.call_with_return("env", "break-bare")->to_ui32() == UINT32_C(19));
    CHECK(bkend.call_with_return("env", "break-value")->to_ui32() == UINT32_C(18));
+   CHECK(bkend.call_with_return("env", "break-multi-value")->to_ui32() == UINT32_C(18));
    CHECK(bkend.call_with_return("env", "break-repeated")->to_ui32() == UINT32_C(18));
    CHECK(bkend.call_with_return("env", "break-inner")->to_ui32() == UINT32_C(15));
+   CHECK(bkend.call_with_return("env", "param")->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "params")->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "params-id")->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "param-break")->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "params-break")->to_ui32() == UINT32_C(3));
+   CHECK(bkend.call_with_return("env", "params-id-break")->to_ui32() == UINT32_C(3));
    CHECK(bkend.call_with_return("env", "effects")->to_ui32() == UINT32_C(1));
-}
-
-BACKEND_TEST_CASE( "Testing wasm <block_1_wasm>", "[block_1_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.1.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <block_10_wasm>", "[block_10_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.10.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   CHECK(!bkend.call_with_return("env", "type-use"));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <block_100_wasm>", "[block_100_wasm_tests]" ) {
@@ -134,12 +131,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_108_wasm>", "[block_108_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <block_109_wasm>", "[block_109_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.109.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <block_11_wasm>", "[block_11_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.11.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
@@ -257,9 +248,81 @@ BACKEND_TEST_CASE( "Testing wasm <block_127_wasm>", "[block_127_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <block_128_wasm>", "[block_128_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.128.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_129_wasm>", "[block_129_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.129.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
 BACKEND_TEST_CASE( "Testing wasm <block_13_wasm>", "[block_13_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.13.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_130_wasm>", "[block_130_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.130.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_131_wasm>", "[block_131_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.131.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_132_wasm>", "[block_132_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.132.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_133_wasm>", "[block_133_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.133.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_134_wasm>", "[block_134_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.134.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_135_wasm>", "[block_135_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.135.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_136_wasm>", "[block_136_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.136.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_137_wasm>", "[block_137_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.137.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_138_wasm>", "[block_138_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.138.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_139_wasm>", "[block_139_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.139.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
@@ -269,15 +332,177 @@ BACKEND_TEST_CASE( "Testing wasm <block_14_wasm>", "[block_14_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <block_140_wasm>", "[block_140_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.140.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_141_wasm>", "[block_141_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.141.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_142_wasm>", "[block_142_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.142.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_143_wasm>", "[block_143_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.143.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_144_wasm>", "[block_144_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.144.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_145_wasm>", "[block_145_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.145.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_146_wasm>", "[block_146_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.146.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_147_wasm>", "[block_147_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.147.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_148_wasm>", "[block_148_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.148.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_149_wasm>", "[block_149_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.149.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
 BACKEND_TEST_CASE( "Testing wasm <block_15_wasm>", "[block_15_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.15.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <block_150_wasm>", "[block_150_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.150.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_151_wasm>", "[block_151_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.151.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_152_wasm>", "[block_152_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.152.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_153_wasm>", "[block_153_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.153.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_154_wasm>", "[block_154_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.154.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_155_wasm>", "[block_155_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.155.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_156_wasm>", "[block_156_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.156.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_157_wasm>", "[block_157_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.157.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_158_wasm>", "[block_158_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.158.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_159_wasm>", "[block_159_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.159.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
 BACKEND_TEST_CASE( "Testing wasm <block_16_wasm>", "[block_16_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.16.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_160_wasm>", "[block_160_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.160.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_161_wasm>", "[block_161_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.161.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_162_wasm>", "[block_162_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.162.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_163_wasm>", "[block_163_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.163.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_164_wasm>", "[block_164_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.164.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_165_wasm>", "[block_165_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.165.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <block_166_wasm>", "[block_166_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "block.166.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
@@ -296,12 +521,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_18_wasm>", "[block_18_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <block_19_wasm>", "[block_19_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.19.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <block_2_wasm>", "[block_2_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.2.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
@@ -365,12 +584,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_29_wasm>", "[block_29_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <block_3_wasm>", "[block_3_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.3.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
 BACKEND_TEST_CASE( "Testing wasm <block_30_wasm>", "[block_30_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.30.wasm");
@@ -428,12 +641,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_38_wasm>", "[block_38_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <block_39_wasm>", "[block_39_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.39.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <block_4_wasm>", "[block_4_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.4.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
@@ -497,12 +704,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_49_wasm>", "[block_49_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <block_5_wasm>", "[block_5_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.5.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
 BACKEND_TEST_CASE( "Testing wasm <block_50_wasm>", "[block_50_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.50.wasm");
@@ -560,12 +761,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_58_wasm>", "[block_58_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <block_59_wasm>", "[block_59_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.59.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <block_6_wasm>", "[block_6_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.6.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
@@ -629,12 +824,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_69_wasm>", "[block_69_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <block_7_wasm>", "[block_7_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.7.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
 BACKEND_TEST_CASE( "Testing wasm <block_70_wasm>", "[block_70_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.70.wasm");
@@ -695,12 +884,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_79_wasm>", "[block_79_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <block_8_wasm>", "[block_8_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.8.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
 BACKEND_TEST_CASE( "Testing wasm <block_80_wasm>", "[block_80_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.80.wasm");
@@ -758,12 +941,6 @@ BACKEND_TEST_CASE( "Testing wasm <block_88_wasm>", "[block_88_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <block_89_wasm>", "[block_89_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "block.89.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <block_9_wasm>", "[block_9_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "block.9.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 

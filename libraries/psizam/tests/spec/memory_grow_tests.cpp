@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <memory_grow_0_wasm>", "[memory_grow_0_wasm_tests]" ) {
@@ -57,6 +55,36 @@ BACKEND_TEST_CASE( "Testing wasm <memory_grow_1_wasm>", "[memory_grow_1_wasm_tes
    CHECK(bkend.call_with_return("env", "grow", UINT32_C(65536))->to_ui32() == UINT32_C(4294967295));
    CHECK(bkend.call_with_return("env", "grow", UINT32_C(64736))->to_ui32() == UINT32_C(4294967295));
    CHECK(bkend.call_with_return("env", "grow", UINT32_C(1))->to_ui32() == UINT32_C(803));
+}
+
+BACKEND_TEST_CASE( "Testing wasm <memory_grow_10_wasm>", "[memory_grow_10_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "memory_grow.10.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <memory_grow_11_wasm>", "[memory_grow_11_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "memory_grow.11.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <memory_grow_12_wasm>", "[memory_grow_12_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "memory_grow.12.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <memory_grow_13_wasm>", "[memory_grow_13_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "memory_grow.13.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <memory_grow_14_wasm>", "[memory_grow_14_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "memory_grow.14.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <memory_grow_2_wasm>", "[memory_grow_2_wasm_tests]" ) {
@@ -139,19 +167,25 @@ BACKEND_TEST_CASE( "Testing wasm <memory_grow_4_wasm>", "[memory_grow_4_wasm_tes
 BACKEND_TEST_CASE( "Testing wasm <memory_grow_5_wasm>", "[memory_grow_5_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "memory_grow.5.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK(bkend.call_with_return("env", "grow")->to_ui32() == UINT32_C(1));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <memory_grow_6_wasm>", "[memory_grow_6_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "memory_grow.6.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK(bkend.call_with_return("env", "grow")->to_ui32() == UINT32_C(2));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <memory_grow_7_wasm>", "[memory_grow_7_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "memory_grow.7.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
+   CHECK(bkend.call_with_return("env", "size")->to_ui32() == UINT32_C(3));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <memory_grow_8_wasm>", "[memory_grow_8_wasm_tests]" ) {

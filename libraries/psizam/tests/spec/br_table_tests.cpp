@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <br_table_0_wasm>", "[br_table_0_wasm_tests]" ) {
@@ -251,6 +249,24 @@ BACKEND_TEST_CASE( "Testing wasm <br_table_20_wasm>", "[br_table_20_wasm_tests]"
 BACKEND_TEST_CASE( "Testing wasm <br_table_21_wasm>", "[br_table_21_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "br_table.21.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <br_table_22_wasm>", "[br_table_22_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "br_table.22.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <br_table_23_wasm>", "[br_table_23_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "br_table.23.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <br_table_24_wasm>", "[br_table_24_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "br_table.24.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 

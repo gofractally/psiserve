@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <address_0_wasm>", "[address_0_wasm_tests]" ) {
@@ -97,6 +95,12 @@ BACKEND_TEST_CASE( "Testing wasm <address_0_wasm>", "[address_0_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "32_good3", UINT32_C(65508))->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "32_good4", UINT32_C(65508))->to_ui32() == UINT32_C(0));
    CHECK_THROWS_AS(bkend("env", "32_good5", UINT32_C(65508)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "8u_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "8s_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "16u_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "16s_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "32_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "32_good3", UINT32_C(4294967295)), std::exception);
    CHECK_THROWS_AS(bkend("env", "8u_bad", UINT32_C(0)), std::exception);
    CHECK_THROWS_AS(bkend("env", "8s_bad", UINT32_C(0)), std::exception);
    CHECK_THROWS_AS(bkend("env", "16u_bad", UINT32_C(0)), std::exception);
@@ -219,6 +223,13 @@ BACKEND_TEST_CASE( "Testing wasm <address_2_wasm>", "[address_2_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "64_good3", UINT32_C(65504))->to_ui64() == UINT64_C(0));
    CHECK(bkend.call_with_return("env", "64_good4", UINT32_C(65504))->to_ui64() == UINT64_C(0));
    CHECK_THROWS_AS(bkend("env", "64_good5", UINT32_C(65504)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "8u_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "8s_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "16u_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "16s_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "32u_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "32s_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "64_good3", UINT32_C(4294967295)), std::exception);
    CHECK_THROWS_AS(bkend("env", "8u_bad", UINT32_C(0)), std::exception);
    CHECK_THROWS_AS(bkend("env", "8s_bad", UINT32_C(0)), std::exception);
    CHECK_THROWS_AS(bkend("env", "16u_bad", UINT32_C(0)), std::exception);
@@ -255,6 +266,8 @@ BACKEND_TEST_CASE( "Testing wasm <address_3_wasm>", "[address_3_wasm_tests]" ) {
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "32_good3", UINT32_C(65525))->to_f32()) == UINT32_C(0));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "32_good4", UINT32_C(65525))->to_f32()) == UINT32_C(0));
    CHECK_THROWS_AS(bkend("env", "32_good5", UINT32_C(65525)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "32_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "32_good3", UINT32_C(4294967295)), std::exception);
    CHECK_THROWS_AS(bkend("env", "32_bad", UINT32_C(0)), std::exception);
    CHECK_THROWS_AS(bkend("env", "32_bad", UINT32_C(1)), std::exception);
 }
@@ -279,6 +292,8 @@ BACKEND_TEST_CASE( "Testing wasm <address_4_wasm>", "[address_4_wasm_tests]" ) {
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "64_good3", UINT32_C(65511))->to_f64()) == UINT64_C(0));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "64_good4", UINT32_C(65511))->to_f64()) == UINT64_C(0));
    CHECK_THROWS_AS(bkend("env", "64_good5", UINT32_C(65511)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "64_good3", UINT32_C(4294967295)), std::exception);
+   CHECK_THROWS_AS(bkend("env", "64_good3", UINT32_C(4294967295)), std::exception);
    CHECK_THROWS_AS(bkend("env", "64_bad", UINT32_C(0)), std::exception);
    CHECK_THROWS_AS(bkend("env", "64_bad", UINT32_C(1)), std::exception);
 }
