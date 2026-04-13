@@ -145,7 +145,7 @@ namespace psio {
                world.types.push_back(wit_type_def{});
 
                wit_type_def td;
-               td.name = std::string(reflect<U>::name);
+               td.name = to_kebab_case(std::string(reflect<U>::name));
                td.kind = static_cast<uint8_t>(wit_type_kind::record_);
 
                // Iterate data members
@@ -158,7 +158,7 @@ namespace psio {
                         using ValType = std::remove_cvref_t<typename MType::ValueType>;
                         const char* name = reflect<U>::data_member_names[field_i];
                         int32_t type_idx = resolve_type<ValType>();
-                        td.fields.push_back({std::string(name), type_idx});
+                        td.fields.push_back({to_kebab_case(std::string(name)), type_idx});
                         field_i++;
                      };
                      (process(ptrs), ...);
@@ -404,16 +404,9 @@ namespace psio {
    inline std::string wit_to_text(const wit_world& world) {
       std::ostringstream os;
 
-      // Emit named types
-      for (auto& td : world.types) {
-         if (!td.name.empty()) {
-            detail::wit_emit_type(os, world, td, "  ");
-         }
-      }
-
       os << "world " << (world.name.empty() ? "unnamed" : world.name) << " {\n";
 
-      // Emit types used by this world
+      // Emit named types
       for (auto& td : world.types) {
          if (!td.name.empty()) {
             detail::wit_emit_type(os, world, td, "  ");

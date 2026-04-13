@@ -1,14 +1,54 @@
-use wit_macro::wit_interface;
+wit_macro::wit_world! {
+    package = "test:inventory@1.0.0";
 
-#[wit_interface(package = "myapp:balance@1.0.0")]
-pub trait BalanceApi {
-    fn get_balance(&self, account_id: u32) -> u64;
-    fn transfer(&self, sender: u32, receiver: u32, amount: u64) -> Result<(), String>;
-}
+    // ── Record types ────────────────────────────────────────────────────
+    // Must match the C++ structs in wit_compare_test.cpp
 
-#[wit_interface(package = "myapp:echo@1.0.0")]
-pub trait EchoApi {
-    fn echo(&self, message: String) -> String;
-    fn echo_bytes(&self, data: Vec<u8>) -> Vec<u8>;
-    fn ping(&self);
+    pub struct Item {
+        pub id: u64,
+        pub name: String,
+        pub category: String,
+        pub price_cents: u32,
+        pub in_stock: bool,
+        pub tags: Vec<String>,
+        pub weight_grams: Option<u32>,
+    }
+
+    pub struct StockResult {
+        pub item_id: u32,
+        pub old_quantity: u32,
+        pub new_quantity: u32,
+    }
+
+    pub struct SearchQuery {
+        pub text: String,
+        pub max_results: u32,
+        pub min_price: Option<u32>,
+        pub max_price: Option<u32>,
+        pub categories: Vec<String>,
+    }
+
+    pub struct SearchResponse {
+        pub items: Vec<Item>,
+        pub total_count: u64,
+        pub has_more: bool,
+    }
+
+    pub struct BulkResult {
+        pub inserted: u32,
+        pub failed: u32,
+        pub errors: Vec<String>,
+    }
+
+    // ── Interface ───────────────────────────────────────────────────────
+
+    pub trait InventoryApi {
+        fn get_item(&self, item_id: u32) -> Option<Item>;
+        fn list_items(&self, category: String) -> Vec<Item>;
+        fn add_item(&self, item: Item) -> u64;
+        fn update_stock(&self, item_id: u32, delta: i32) -> StockResult;
+        fn search(&self, query: SearchQuery) -> SearchResponse;
+        fn bulk_import(&self, items: Vec<Item>) -> BulkResult;
+        fn ping(&self);
+    }
 }

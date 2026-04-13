@@ -2,11 +2,28 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemTrait, TraitItem, FnArg, ReturnType, Type, PathSegment};
+use syn::{parse_macro_input, ItemStruct, ItemTrait, TraitItem, FnArg, ReturnType, Type,
+          PathSegment};
 
 /// Convert a Rust snake_case identifier to WIT kebab-case.
 fn to_kebab(s: &str) -> String {
     s.replace('_', "-")
+}
+
+/// Convert CamelCase to kebab-case: "BalanceApi" → "balance-api"
+fn camel_to_kebab(s: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                result.push('-');
+            }
+            result.push(c.to_ascii_lowercase());
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 /// Map a Rust type to its WIT representation.
@@ -16,7 +33,7 @@ fn rust_type_to_wit(ty: &Type) -> String {
             let seg = tp.path.segments.last().unwrap();
             path_segment_to_wit(seg)
         }
-        Type::Tuple(t) if t.elems.is_empty() => "_".to_string(), // unit
+        Type::Tuple(t) if t.elems.is_empty() => "_".to_string(),
         Type::Tuple(t) => {
             let inner: Vec<_> = t.elems.iter().map(rust_type_to_wit).collect();
             format!("tuple<{}>", inner.join(", "))
@@ -55,7 +72,7 @@ fn path_segment_to_wit(seg: &PathSegment) -> String {
             let err = if args.len() > 1 { args[1].clone() } else { "_".to_string() };
             format!("result<{}, {}>", ok, err)
         }
-        other => to_kebab(other),
+        other => to_kebab(&camel_to_kebab(other)),
     }
 }
 
@@ -74,7 +91,7 @@ fn get_generic_args(seg: &PathSegment) -> Vec<String> {
     }
 }
 
-/// Generate WIT text for a single method.
+/// Generate WIT text for a single trait method.
 fn method_to_wit(method: &syn::TraitItemFn) -> String {
     let name = to_kebab(&method.sig.ident.to_string());
 
@@ -106,31 +123,20 @@ fn method_to_wit(method: &syn::TraitItemFn) -> String {
     format!("    {}: func({}){};", name, params.join(", "), ret)
 }
 
-/// Parse the `#[wit_interface(package = "...")]` attribute arguments.
-struct InterfaceArgs {
-    package: String,
-}
-
-impl InterfaceArgs {
-    fn parse(attr: TokenStream) -> Self {
-        let mut package = None;
-
-        let parser = syn::meta::parser(|meta| {
-            if meta.path.is_ident("package") {
-                let value: syn::LitStr = meta.value()?.parse()?;
-                package = Some(value.value());
-                Ok(())
-            } else {
-                Err(meta.error("expected `package = \"...\"`"))
-            }
-        });
-
-        syn::parse::Parser::parse(parser, attr).expect("Failed to parse wit_interface arguments");
-
-        InterfaceArgs {
-            package: package.expect("#[wit_interface(package = \"...\")] is required"),
+/// Generate WIT record text from a struct's fields.
+fn struct_to_wit_record(s: &ItemStruct) -> String {
+    let record_name = to_kebab(&camel_to_kebab(&s.ident.to_string()));
+    let fields: Vec<String> = match &s.fields {
+        syn::Fields::Named(named) => {
+            named.named.iter().map(|f| {
+                let fname = to_kebab(&f.ident.as_ref().unwrap().to_string());
+                let ftype = rust_type_to_wit(&f.ty);
+                format!("    {}: {},", fname, ftype)
+            }).collect()
         }
-    }
+        _ => panic!("wit_record only supports named fields"),
+    };
+    format!("  record {} {{\n{}\n  }}", record_name, fields.join("\n"))
 }
 
 /// Encode WIT text into Component Model binary bytes using wit-component.
@@ -156,40 +162,85 @@ fn encode_wit(wit_text: &str) -> Vec<u8> {
         .expect("Failed to encode WIT as component-type")
 }
 
-/// Attribute macro that generates WIT from a Rust trait and embeds it
-/// as a `component-type` custom section in the WASM binary.
-///
-/// # Usage
+// =============================================================================
+// #[wit_record] — generate WIT record from a Rust struct
+// =============================================================================
+
+/// Attribute macro that generates a WIT record definition const from a Rust struct.
+#[proc_macro_attribute]
+pub fn wit_record(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let struct_def = parse_macro_input!(item as ItemStruct);
+    let wit_text = struct_to_wit_record(&struct_def);
+
+    let const_name = syn::Ident::new(
+        &format!("{}_WIT_RECORD", struct_def.ident.to_string().to_uppercase()),
+        struct_def.ident.span(),
+    );
+    let wit_literal = proc_macro2::Literal::string(&wit_text);
+
+    let output = quote! {
+        #struct_def
+
+        /// Generated WIT record definition for this struct.
+        pub const #const_name: &str = #wit_literal;
+    };
+
+    output.into()
+}
+
+// =============================================================================
+// wit_world! — bundle records + trait into a complete WIT package
+// =============================================================================
+
+/// Procedural macro that takes struct definitions and a trait definition,
+/// generates a complete WIT package with records and interface, and embeds
+/// it as a component-type custom section.
 ///
 /// ```rust,ignore
-/// #[wit_interface(package = "myapp:balance@1.0.0")]
-/// pub trait BalanceApi {
-///     fn get_balance(&self, account_id: u32) -> u64;
-///     fn transfer(&self, sender: u32, receiver: u32, amount: u64) -> Result<(), String>;
+/// wit_macro::wit_world! {
+///     package = "test:inventory@1.0.0";
+///
+///     pub struct Item {
+///         pub id: u64,
+///         pub name: String,
+///     }
+///
+///     pub trait InventoryApi {
+///         fn get_item(&self, id: u32) -> Option<Item>;
+///     }
 /// }
 /// ```
-#[proc_macro_attribute]
-pub fn wit_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let args = InterfaceArgs::parse(attr);
-    let trait_def = parse_macro_input!(item as ItemTrait);
+#[proc_macro]
+pub fn wit_world(input: TokenStream) -> TokenStream {
+    let world_input = parse_macro_input!(input as WorldInput);
 
-    // Derive interface name from trait: BalanceApi → balance-api
-    let trait_name = trait_def.ident.to_string();
-    let interface_name = to_kebab(&camel_to_kebab(&trait_name));
+    let interface_name = to_kebab(&camel_to_kebab(&world_input.trait_def.ident.to_string()));
+    let world_name = format!("{}-world", interface_name);
 
-    // Build WIT text from trait methods
+    // Generate WIT records from structs
+    let record_wits: Vec<String> = world_input.structs.iter()
+        .map(|s| struct_to_wit_record(s))
+        .collect();
+
+    // Generate WIT functions from trait
     let mut wit_funcs = Vec::new();
-    for item in &trait_def.items {
+    for item in &world_input.trait_def.items {
         if let TraitItem::Fn(method) = item {
             wit_funcs.push(method_to_wit(method));
         }
     }
 
-    let world_name = format!("{}-world", interface_name);
+    let records_section = if record_wits.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}\n\n", record_wits.join("\n\n"))
+    };
+
     let wit_text = format!(
-        "package {};\n\ninterface {} {{\n{}\n}}\n\nworld {} {{\n    export {};\n}}\n",
-        args.package,
+        "package {};\n\ninterface {} {{{}\n{}\n}}\n\nworld {} {{\n    export {};\n}}\n",
+        world_input.package,
         interface_name,
+        records_section,
         wit_funcs.join("\n"),
         world_name,
         interface_name,
@@ -200,31 +251,33 @@ pub fn wit_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     let byte_count = encoded_bytes.len();
     let byte_literals: Vec<proc_macro2::TokenTree> = encoded_bytes
         .iter()
-        .map(|b| {
-            proc_macro2::Literal::u8_suffixed(*b).into()
-        })
+        .map(|b| proc_macro2::Literal::u8_suffixed(*b).into())
         .collect();
 
     let section_name = format!("component-type:{}", interface_name);
+    let trait_name = world_input.trait_def.ident.to_string();
     let static_name = syn::Ident::new(
         &format!("__WIT_{}", trait_name.to_uppercase()),
-        trait_def.ident.span(),
+        world_input.trait_def.ident.span(),
     );
-
     let wit_const_name = syn::Ident::new(
         &format!("{}_WIT", trait_name.to_uppercase()),
-        trait_def.ident.span(),
+        world_input.trait_def.ident.span(),
     );
     let wit_text_literal = proc_macro2::Literal::string(&wit_text);
 
+    let structs = &world_input.structs;
+    let trait_def = &world_input.trait_def;
+
     let output = quote! {
+        #(#structs)*
+
         #trait_def
 
-        /// Generated WIT text for this interface.
+        /// Generated WIT text for this world.
         pub const #wit_const_name: &str = #wit_text_literal;
 
-        /// Component Model binary encoding, embedded as a WASM custom section
-        /// when compiled to wasm32.
+        /// Component Model binary encoding, embedded as a WASM custom section.
         #[cfg(target_arch = "wasm32")]
         #[unsafe(link_section = #section_name)]
         #[used]
@@ -234,18 +287,47 @@ pub fn wit_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     output.into()
 }
 
-/// Convert CamelCase to kebab-case: "BalanceApi" → "balance-api"
-fn camel_to_kebab(s: &str) -> String {
-    let mut result = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                result.push('-');
+// =============================================================================
+// Parser for wit_world! macro input
+// =============================================================================
+
+struct WorldInput {
+    package: String,
+    structs: Vec<ItemStruct>,
+    trait_def: ItemTrait,
+}
+
+impl syn::parse::Parse for WorldInput {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        // Parse: package = "...";
+        let _: syn::Ident = input.parse()?; // "package"
+        let _: syn::Token![=] = input.parse()?;
+        let pkg: syn::LitStr = input.parse()?;
+        let _: syn::Token![;] = input.parse()?;
+
+        let mut structs = Vec::new();
+        let mut trait_def = None;
+
+        while !input.is_empty() {
+            // Peek to see if it's a struct or trait
+            let fork = input.fork();
+            // Skip visibility
+            let _vis: syn::Visibility = fork.parse()?;
+
+            if fork.peek(syn::Token![struct]) {
+                let s: ItemStruct = input.parse()?;
+                structs.push(s);
+            } else if fork.peek(syn::Token![trait]) {
+                trait_def = Some(input.parse()?);
+            } else {
+                return Err(input.error("expected struct or trait"));
             }
-            result.push(c.to_ascii_lowercase());
-        } else {
-            result.push(c);
         }
+
+        Ok(WorldInput {
+            package: pkg.value(),
+            structs,
+            trait_def: trait_def.ok_or_else(|| input.error("expected a trait definition"))?,
+        })
     }
-    result
 }
