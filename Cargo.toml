@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = [
+    "libraries/psio/rust/fracpack-macros",
+    "libraries/psio/rust/fracpack",
+]

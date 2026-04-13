@@ -1,0 +1,18 @@
+[package]
+name = "fracpack"
+version = "0.1.0"
+edition = "2021"
+description = "Convert to and from the fracpack format"
+license = "MIT"
+
+[lib]
+path = "src/fracpack.rs"
+
+[dependencies]
+custom_error = "1.9.2"
+hex = "0.3.1"
+indexmap = { version = "2.2.6", features = ["serde"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = { version = "1.0.135", features = ["preserve_order"] }
+serde-aux = "4.5"
+fracpack-macros = { path = "../fracpack-macros" }

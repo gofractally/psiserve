@@ -192,6 +192,19 @@ target_include_directories(psizam_compliance_tests PUBLIC
 target_compile_definitions(psizam_compliance_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
 catch_discover_tests(psizam_compliance_tests)
 
+# ── Component / CType tests ───────────────────────────────────────────────────
+
+add_executable(component_tests main.cpp
+   component_tests.cpp
+)
+target_link_libraries(component_tests psizam psizam-exec Catch2::Catch2)
+target_include_directories(component_tests PUBLIC
+   ${CMAKE_CURRENT_SOURCE_DIR}
+   ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_compile_definitions(component_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
+catch_discover_tests(component_tests)
+
 add_executable(mem64_debug compliance/mem64_debug.cpp)
 target_link_libraries(mem64_debug psizam psizam-exec)
 target_include_directories(mem64_debug PUBLIC

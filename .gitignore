@@ -1,6 +1,9 @@
 # Build artifacts
 build/
 out/
+target/
+node_modules/
+dist/
 
 # CMake generated
 CMakeCache.txt
