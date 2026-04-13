@@ -1,8 +1,10 @@
 #include <catch2/catch.hpp>
 #include <psio/ctype.hpp>
+#include <psio/wit_encode.hpp>
 #include <psizam/component.hpp>
 
 #include <cstdint>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -219,6 +221,111 @@ TEST_CASE("generate_component_wit — scalar calculator", "[component]") {
    CHECK(wit.find("f64") != std::string::npos);
    CHECK(wit.find("world calculator-world") != std::string::npos);
    CHECK(wit.find("export calculator;") != std::string::npos);
+}
+
+// ── WIT binary encoding tests ────────────────────────────────────────────────
+
+struct Item {
+   uint64_t    id;
+   std::string name;
+   std::string category;
+   uint32_t    price_cents;
+   bool        in_stock;
+   std::vector<std::string> tags;
+   std::optional<uint32_t>  weight_grams;
+};
+PSIO_REFLECT(Item, id, name, category, price_cents, in_stock, tags, weight_grams)
+
+struct StockResult {
+   uint32_t item_id;
+   uint32_t old_quantity;
+   uint32_t new_quantity;
+};
+PSIO_REFLECT(StockResult, item_id, old_quantity, new_quantity)
+
+struct SearchQuery {
+   std::string text;
+   uint32_t    max_results;
+   std::optional<uint32_t> min_price;
+   std::optional<uint32_t> max_price;
+   std::vector<std::string> categories;
+};
+PSIO_REFLECT(SearchQuery, text, max_results, min_price, max_price, categories)
+
+struct SearchResponse {
+   std::vector<Item> items;
+   uint64_t          total_count;
+   bool              has_more;
+};
+PSIO_REFLECT(SearchResponse, items, total_count, has_more)
+
+struct BulkResult {
+   uint32_t inserted;
+   uint32_t failed;
+   std::vector<std::string> errors;
+};
+PSIO_REFLECT(BulkResult, inserted, failed, errors)
+
+struct InventoryApi {
+   std::optional<Item> get_item(uint32_t item_id) { return std::nullopt; }
+   std::vector<Item>   list_items(std::string category) { return {}; }
+   uint64_t            add_item(Item item) { return 0; }
+   StockResult         update_stock(uint32_t item_id, int32_t delta) { return {}; }
+   SearchResponse      search(SearchQuery query) { return {}; }
+   BulkResult          bulk_import(std::vector<Item> items) { return {}; }
+   void                ping() {}
+};
+PSIO_REFLECT(InventoryApi,
+   method(get_item, item_id),
+   method(list_items, category),
+   method(add_item, item),
+   method(update_stock, item_id, delta),
+   method(search, query),
+   method(bulk_import, items),
+   method(ping)
+)
+
+TEST_CASE("generate_wit_binary — produces valid Component Model binary", "[component]") {
+   auto binary = psio::generate_wit_binary<InventoryApi>("test:inventory@1.0.0");
+
+   // Must start with Component Model header
+   REQUIRE(binary.size() >= 8);
+   CHECK(binary[0] == 0x00);  // \0
+   CHECK(binary[1] == 0x61);  // a
+   CHECK(binary[2] == 0x73);  // s
+   CHECK(binary[3] == 0x6d);  // m
+   CHECK(binary[4] == 0x0d);  // version 13
+   CHECK(binary[5] == 0x00);
+   CHECK(binary[6] == 0x01);
+   CHECK(binary[7] == 0x00);
+
+   // Must contain wit-component-encoding custom section
+   std::string as_str(binary.begin(), binary.end());
+   CHECK(as_str.find("wit-component-encoding") != std::string::npos);
+
+   // Must contain the interface export name
+   CHECK(as_str.find("test:inventory/inventory-api@1.0.0") != std::string::npos);
+
+   // Must contain record field names (kebab-case)
+   CHECK(as_str.find("price-cents") != std::string::npos);
+   CHECK(as_str.find("weight-grams") != std::string::npos);
+   CHECK(as_str.find("item-id") != std::string::npos);
+
+   // Must contain function names
+   CHECK(as_str.find("get-item") != std::string::npos);
+   CHECK(as_str.find("list-items") != std::string::npos);
+   CHECK(as_str.find("bulk-import") != std::string::npos);
+   CHECK(as_str.find("ping") != std::string::npos);
+
+   // Write to a temp file for wasm-tools validation
+   auto path = std::string("/tmp/cpp_wit_binary_test.wasm");
+   {
+      std::ofstream out(path, std::ios::binary);
+      out.write(reinterpret_cast<const char*>(binary.data()),
+                static_cast<std::streamsize>(binary.size()));
+   }
+   INFO("Binary written to " << path << " (" << binary.size() << " bytes)");
+   INFO("Validate with: wasm-tools component wit " << path);
 }
 
 // ── PZAM_COMPONENT macro test ────────────────────────────────────────────────

@@ -20,7 +20,7 @@
 //   - Typed extern "C" exports for each method (16-wide flat signature)
 
 #include <psio/reflect.hpp>
-#include <psio/wit_gen.hpp>
+#include <psio/wit_encode.hpp>
 #include <psio/ctype.hpp>
 
 #include <cstdint>
@@ -206,10 +206,16 @@ namespace psizam {
 
    // ── WIT section generation ────────────────────────────────────────────────
 
-   // Generate WIT text for embedding in a custom section.
+   // Generate WIT text from PSIO_REFLECT-annotated types.
    template <typename T>
    std::string generate_component_wit(const std::string& package) {
       return psio::generate_wit_text<T>(package);
+   }
+
+   // Generate Component Model binary for embedding as a component-type custom section.
+   template <typename T>
+   std::vector<uint8_t> generate_component_wit_binary(const std::string& package) {
+      return psio::generate_wit_binary<T>(package);
    }
 
 } // namespace psizam
