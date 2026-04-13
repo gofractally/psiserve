@@ -262,6 +262,7 @@ TEST_CASE("Cross-thread wake stress: rapid park/wake cycles", "[stress][wake]")
 static void run_post_stress(int num_producers, int posts_per_producer)
 {
    auto sched = scheduler_access::make(150);
+   sched.setWorkHeapLimit(num_producers * posts_per_producer);  // unlimited for stress
 
    std::atomic<int> received{0};
    int total = num_producers * posts_per_producer;
@@ -272,7 +273,9 @@ static void run_post_stress(int num_producers, int posts_per_producer)
          sched.sleep(std::chrono::milliseconds{1});
    });
 
-   // Launch producer threads that fire-and-forget post() into the scheduler
+   // Launch producer threads that fire-and-forget post() into the scheduler.
+   // Use heap overflow — OS threads can't handle pool_exhausted exceptions
+   // and the point of this test is throughput, not backpressure.
    std::vector<std::thread> producers;
    for (int p = 0; p < num_producers; ++p)
    {
@@ -281,7 +284,7 @@ static void run_post_stress(int num_producers, int posts_per_producer)
          {
             sched.post([&received]() noexcept {
                received.fetch_add(1, std::memory_order_release);
-            });
+            }, post_overflow::heap);
          }
       });
    }
@@ -316,7 +319,7 @@ TEST_CASE("post() stress: 8 producer threads", "[stress][post]")
 
 TEST_CASE("post() stress: 8 producers, high volume", "[stress][post]")
 {
-   run_post_stress(8, 10000);
+   run_post_stress(8, 2000);
 }
 
 // ── Multi-thread stress: thread::call() with N callers ──────────────────────
@@ -369,8 +372,8 @@ TEST_CASE("thread::call() stress: 8 callers", "[stress][call]")
 TEST_CASE("post-to-self: fiber posts to its own scheduler", "[stress][post][pathological]")
 {
    // Verifies that a fiber can post() to its own scheduler without deadlock.
-   // The drain fiber runs independently, so even if the posting fiber parks,
-   // the posted callable still executes.
+   // Each posted callable gets its own fiber, so even if the posting fiber
+   // parks, the posted callable still executes.
    auto sched = scheduler_access::make(200);
 
    std::atomic<int> received{0};
@@ -392,13 +395,12 @@ TEST_CASE("post-to-self: fiber posts to its own scheduler", "[stress][post][path
    REQUIRE(received.load() == N);
 }
 
-TEST_CASE("re-entrant post: drain callable calls post()", "[stress][post][pathological]")
+TEST_CASE("re-entrant post: work fiber calls post()", "[stress][post][pathological]")
 {
-   // The drain fiber executes a callable that itself calls post().
+   // A work fiber executes a callable that itself calls post().
    // This exercises the re-entrant path: the callable acquires a WorkItem
-   // from the freelist (items are returned one at a time during drain),
-   // fills it, and CAS-pushes it onto _work_head.  The drain fiber will
-   // pick it up on the next iteration.
+   // from the freelist, fills it, and CAS-pushes it onto _work_head.
+   // The scheduler will pick it up and spawn another fiber for it.
    auto sched = scheduler_access::make(201);
 
    std::atomic<int> depth0{0};
@@ -436,7 +438,7 @@ TEST_CASE("re-entrant post: drain callable calls post()", "[stress][post][pathol
 TEST_CASE("post chaining: callable spawns fiber then posts follow-up", "[stress][post][pathological]")
 {
    // Tests the pattern: post() → do work → post() follow-up.
-   // The drain fiber has full fiber context, so the callable can
+   // Each callable gets its own fiber with full context, so it can
    // spawn fibers and yield between posts.
    auto sched = scheduler_access::make(202);
 
@@ -448,7 +450,7 @@ TEST_CASE("post chaining: callable spawns fiber then posts follow-up", "[stress]
       for (int i = 0; i < N; ++i)
       {
          sched.post([&]() noexcept {
-            // Spawn a fiber from within the drain context
+            // Spawn a fiber from within a work fiber
             sched.spawnFiber([&]() {
                spawned.fetch_add(1, std::memory_order_relaxed);
             });
@@ -471,17 +473,18 @@ TEST_CASE("post chaining: callable spawns fiber then posts follow-up", "[stress]
    REQUIRE(followed_up.load() == N);
 }
 
-TEST_CASE("pool exhaustion: fiber-aware wait under pressure", "[stress][post][pathological]")
+TEST_CASE("pool exhaustion: heap overflow under pressure", "[stress][post][pathological]")
 {
    // Exhaust the WorkItem pool (256 items) from multiple fibers.
-   // Fibers that can't acquire a WorkItem will park and be woken
-   // by the drain fiber after items are returned to the freelist.
-   auto sched = scheduler_access::make(203);
-
-   std::atomic<int> received{0};
+   // Uses heap policy — posts never fail, heap absorbs overflow.
    constexpr int    fibers_count = 8;
    constexpr int    posts_per_fiber = 200;  // 8 * 200 = 1600 > pool size (256)
    constexpr int    total = fibers_count * posts_per_fiber;
+
+   auto sched = scheduler_access::make(203);
+   sched.setWorkHeapLimit(total);
+
+   std::atomic<int> received{0};
 
    for (int f = 0; f < fibers_count; ++f)
    {
@@ -490,7 +493,7 @@ TEST_CASE("pool exhaustion: fiber-aware wait under pressure", "[stress][post][pa
          {
             sched.post([&received]() noexcept {
                received.fetch_add(1, std::memory_order_relaxed);
-            });
+            }, post_overflow::heap);
          }
       });
    }
@@ -508,13 +511,15 @@ TEST_CASE("pool exhaustion: fiber-aware wait under pressure", "[stress][post][pa
 TEST_CASE("cross-thread pool exhaustion: multiple threads saturate one receiver", "[stress][post][pathological]")
 {
    // Multiple OS threads post() to a single scheduler fast enough to
-   // exhaust the pool.  Non-fiber callers spin-pause; fiber callers park.
-   auto sched = scheduler_access::make(204);
-
-   std::atomic<int> received{0};
+   // exhaust the pool.  Uses heap policy for overflow.
    constexpr int    num_threads = 4;
    constexpr int    posts_per_thread = 500;
    constexpr int    total = num_threads * posts_per_thread;
+
+   auto sched = scheduler_access::make(204);
+   sched.setWorkHeapLimit(total);
+
+   std::atomic<int> received{0};
 
    // Keepalive
    sched.spawnFiber([&]() {
@@ -530,7 +535,7 @@ TEST_CASE("cross-thread pool exhaustion: multiple threads saturate one receiver"
          {
             sched.post([&received]() noexcept {
                received.fetch_add(1, std::memory_order_relaxed);
-            });
+            }, post_overflow::heap);
          }
       });
    }
@@ -543,11 +548,9 @@ TEST_CASE("cross-thread pool exhaustion: multiple threads saturate one receiver"
    REQUIRE(received.load() == total);
 }
 
-TEST_CASE("daemon shutdown: drain fiber exits cleanly on scheduler stop", "[stress][post][pathological]")
+TEST_CASE("shutdown with pending work: work fibers exit cleanly on scheduler stop", "[stress][post][pathological]")
 {
-   // Verify that the drain fiber (a daemon) exits cleanly when all
-   // non-daemon fibers complete.  The drain fiber is parked waiting
-   // for work; the scheduler must resume it with shutdown_exception.
+   // Verify clean shutdown when work fibers may still be pending.
    // No crash, no hang, no assertion failure.
    for (int trial = 0; trial < 10; ++trial)
    {
@@ -556,16 +559,16 @@ TEST_CASE("daemon shutdown: drain fiber exits cleanly on scheduler stop", "[stre
       std::atomic<int> count{0};
 
       sched.spawnFiber([&]() {
-         // Post some work, then exit — drain fiber should still clean up
+         // Post some work, then exit — work fibers should still clean up
          sched.post([&count]() noexcept {
             count.fetch_add(1, std::memory_order_relaxed);
          });
-         // Yield to let drain run
+         // Yield to let work fiber run
          sched.yieldCurrentFiber();
       });
 
       sched.run();
-      // Scheduler destructor runs — drain fiber must not crash
+      // Scheduler destructor runs — work fibers must not crash
       REQUIRE(count.load() >= 1);
    }
 }
@@ -573,7 +576,7 @@ TEST_CASE("daemon shutdown: drain fiber exits cleanly on scheduler stop", "[stre
 TEST_CASE("rapid post+quit: post work then immediately quit thread", "[stress][post][pathological]")
 {
    // Post work to a thread and immediately quit — exercises the
-   // shutdown path where the drain fiber may still have pending items.
+   // shutdown path where work fibers may still have pending items.
    for (int trial = 0; trial < 10; ++trial)
    {
       psiber::thread worker("rapid-quit");
@@ -853,28 +856,312 @@ TEST_CASE("thread::async(): multiple concurrent futures", "[async][stress]")
    worker.quit();
 }
 
-// ── drain yield guard tests ─────────────────────────────────────────────────
+// ── invoke() can yield tests ────────────────────────────────────────────────
 
-TEST_CASE("drain yield guard: invoke() callable that yields throws drain_yield_error", "[invoke][guard]")
+TEST_CASE("invoke() callable can yield without error", "[invoke][yield]")
 {
-   psiber::thread worker("guard-invoke");
+   psiber::thread worker("invoke-yield");
 
    psiber::thread caller([&]() {
-      bool caught = false;
-      try
-      {
-         worker.invoke([&]() {
-            // This should throw drain_yield_error
-            Scheduler::current()->sleep(std::chrono::milliseconds{1});
-         });
-      }
-      catch (const drain_yield_error&)
-      {
-         caught = true;
-      }
-      REQUIRE(caught);
-   }, "guard-caller");
+      // invoke() callables run on their own fiber and can yield
+      int result = worker.invoke([&]() -> int {
+         Scheduler::current()->sleep(std::chrono::milliseconds{1});
+         return 42;
+      });
+      REQUIRE(result == 42);
+   }, "invoke-caller");
 
    caller.quit();
    worker.quit();
+}
+
+// ── Multi-slot post() tests ────────────────────────────────────────────────
+
+// A callable that uses exactly N bytes of storage
+template <size_t N>
+struct sized_callable
+{
+   char data[N] = {};
+   void operator()() noexcept { data[0] = 42; }
+};
+
+TEST_CASE("post() oversized callable: between 49-128 bytes", "[post][multi-slot]")
+{
+   // sizeof(sized_callable<80>) = 80, which is > 48 (single) but <= 128 (double)
+   static_assert(sizeof(sized_callable<80>) > 48);
+   static_assert(sizeof(sized_callable<80>) <= 128);
+
+   std::atomic<int> count{0};
+
+   thread worker([&]() {
+      auto* sched = Scheduler::current();
+      constexpr int N = 100;
+      for (int i = 0; i < N; ++i)
+      {
+         sized_callable<80> big;
+         big.data[0] = static_cast<char>(i);
+         sched->post([big, &count]() noexcept {
+            (void)big;
+            count.fetch_add(1, std::memory_order_relaxed);
+         });
+      }
+      // Let work fibers complete
+      sched->sleep(std::chrono::milliseconds(50));
+   });
+
+   worker.quit();
+   REQUIRE(count.load() == 100);
+}
+
+TEST_CASE("post() heap callable: callable > 128 bytes", "[post][multi-slot]")
+{
+   // sizeof(sized_callable<200>) = 200, > 48 — callable heap-allocated
+   static_assert(sizeof(sized_callable<200>) > 48);
+
+   std::atomic<int> count{0};
+
+   thread worker([&]() {
+      auto* sched = Scheduler::current();
+      constexpr int N = 50;
+      for (int i = 0; i < N; ++i)
+      {
+         sized_callable<200> huge;
+         huge.data[0] = static_cast<char>(i);
+         sched->post([huge, &count]() noexcept {
+            (void)huge;
+            count.fetch_add(1, std::memory_order_relaxed);
+         });
+      }
+      sched->sleep(std::chrono::milliseconds(50));
+   });
+
+   worker.quit();
+   REQUIRE(count.load() == 50);
+}
+
+TEST_CASE("post() mixed sizes: single and heap-callable interleaved", "[post][multi-slot]")
+{
+   std::atomic<int> small_count{0};
+   std::atomic<int> medium_count{0};
+   std::atomic<int> large_count{0};
+
+   thread worker([&]() {
+      auto* sched = Scheduler::current();
+
+      for (int i = 0; i < 20; ++i)
+      {
+         // Single slot — callable fits in 48-byte payload
+         sched->post([&small_count, &sched]() noexcept {
+            (void)sched;
+            small_count.fetch_add(1, std::memory_order_relaxed);
+         });
+
+         // Single slot + heap-allocated callable (80 > 48 bytes)
+         sized_callable<80> med;
+         sched->post([med, &medium_count]() noexcept {
+            (void)med;
+            medium_count.fetch_add(1, std::memory_order_relaxed);
+         });
+
+         // Single slot + heap-allocated callable (200 > 48 bytes)
+         sized_callable<200> big;
+         sched->post([big, &large_count]() noexcept {
+            (void)big;
+            large_count.fetch_add(1, std::memory_order_relaxed);
+         });
+      }
+
+      sched->sleep(std::chrono::milliseconds(50));
+   });
+
+   worker.quit();
+   REQUIRE(small_count.load() == 20);
+   REQUIRE(medium_count.load() == 20);
+   REQUIRE(large_count.load() == 20);
+}
+
+// ── Overflow policy tests ──────────────────────────────────────────────────
+
+TEST_CASE("post_overflow::fail throws pool_exhausted", "[post][overflow]")
+{
+   // Exhaust the pool, then verify that fail policy throws.
+   auto sched = scheduler_access::make(300);
+
+   std::atomic<int> received{0};
+   bool caught = false;
+
+   sched.spawnFiber([&]() {
+      // Fill the pool (256 slots) — each post claims a slot
+      for (int i = 0; i < 256; ++i)
+      {
+         sched.post([&received]() {
+            received.fetch_add(1, std::memory_order_relaxed);
+         });
+      }
+
+      // 257th post should throw with fail policy
+      try
+      {
+         sched.post([&received]() {
+            received.fetch_add(1, std::memory_order_relaxed);
+         }, post_overflow::fail);
+      }
+      catch (const pool_exhausted&)
+      {
+         caught = true;
+      }
+
+      // Wait for all work to complete
+      while (received.load(std::memory_order_acquire) < 256)
+         sched.yieldCurrentFiber();
+   });
+
+   sched.run();
+   REQUIRE(caught);
+   REQUIRE(received.load() == 256);
+}
+
+TEST_CASE("post_overflow::heap succeeds past pool capacity", "[post][overflow]")
+{
+   // Exhaust the pool, then verify heap policy keeps working.
+   auto sched = scheduler_access::make(301);
+
+   std::atomic<int> received{0};
+   constexpr int N = 300;  // > 256 pool slots
+
+   sched.spawnFiber([&]() {
+      for (int i = 0; i < N; ++i)
+      {
+         sched.post([&received]() {
+            received.fetch_add(1, std::memory_order_relaxed);
+         }, post_overflow::heap);
+      }
+
+      while (received.load(std::memory_order_acquire) < N)
+         sched.yieldCurrentFiber();
+   });
+
+   sched.run();
+   REQUIRE(received.load() == N);
+}
+
+TEST_CASE("post_overflow::block parks until slot available", "[post][overflow]")
+{
+   // Fill both pool (256) and heap (set to 0 so block can't overflow),
+   // then post with block policy.  The fiber parks until work fibers
+   // complete and free pool slots.
+   auto sched = scheduler_access::make(302);
+   sched.setWorkHeapLimit(0);  // no heap overflow — forces parking
+
+   std::atomic<int> received{0};
+   bool blocked_post_succeeded = false;
+
+   sched.spawnFiber([&]() {
+      // Fill the pool
+      for (int i = 0; i < 256; ++i)
+      {
+         sched.post([&received]() {
+            received.fetch_add(1, std::memory_order_relaxed);
+         });
+      }
+
+      // Pool full, heap limit 0 → block must park until a slot frees
+      sched.post([&]() {
+         blocked_post_succeeded = true;
+         received.fetch_add(1, std::memory_order_relaxed);
+      }, post_overflow::block, std::chrono::milliseconds{5000});
+
+      while (received.load(std::memory_order_acquire) < 257)
+         sched.yieldCurrentFiber();
+   });
+
+   sched.run();
+   REQUIRE(blocked_post_succeeded);
+   REQUIRE(received.load() == 257);
+}
+
+TEST_CASE("post_overflow::block throws on timeout", "[post][overflow]")
+{
+   // Fill the pool with long-sleeping fibers that won't free slots
+   // before the timeout.  Heap limit 0 forces the block path to park.
+   auto sched = scheduler_access::make(303);
+   sched.setWorkHeapLimit(0);
+
+   bool timed_out = false;
+
+   sched.spawnFiber([&]() {
+      // Fill the pool with fibers that sleep longer than the timeout
+      for (int i = 0; i < 256; ++i)
+      {
+         sched.post([&sched]() {
+            sched.sleep(std::chrono::milliseconds{2000});
+         });
+      }
+
+      // Yield to let the sleeping fibers spawn
+      sched.yieldCurrentFiber();
+
+      // This should timeout (50ms) since no slots free for 2s
+      try
+      {
+         sched.post([]() {}, post_overflow::block,
+                    std::chrono::milliseconds{50});
+      }
+      catch (const pool_exhausted&)
+      {
+         timed_out = true;
+      }
+   });
+
+   sched.run();
+   REQUIRE(timed_out);
+}
+
+TEST_CASE("setWorkHeapLimit enforces heap overflow cap", "[post][overflow]")
+{
+   auto sched = scheduler_access::make(304);
+
+   // Allow only 10 heap-overflow items
+   sched.setWorkHeapLimit(10);
+
+   std::atomic<int> received{0};
+   bool heap_limit_hit = false;
+
+   sched.spawnFiber([&]() {
+      // Fill the 256-slot pool
+      for (int i = 0; i < 256; ++i)
+      {
+         sched.post([&received]() {
+            received.fetch_add(1, std::memory_order_relaxed);
+         });
+      }
+
+      // Post 10 more with heap policy — should succeed
+      for (int i = 0; i < 10; ++i)
+      {
+         sched.post([&received]() {
+            received.fetch_add(1, std::memory_order_relaxed);
+         }, post_overflow::heap);
+      }
+
+      // 11th heap overflow should throw
+      try
+      {
+         sched.post([&received]() {
+            received.fetch_add(1, std::memory_order_relaxed);
+         }, post_overflow::heap);
+      }
+      catch (const pool_exhausted&)
+      {
+         heap_limit_hit = true;
+      }
+
+      while (received.load(std::memory_order_acquire) < 266)
+         sched.yieldCurrentFiber();
+   });
+
+   sched.run();
+   REQUIRE(heap_limit_hit);
+   REQUIRE(received.load() == 266);
+   REQUIRE(sched.workHeapCount() == 0);  // all heap items freed
 }

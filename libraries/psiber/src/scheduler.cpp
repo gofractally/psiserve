@@ -21,10 +21,65 @@ namespace psiber
       : _index(index),
         _work_pool(std::make_unique<WorkItem[]>(work_pool_size))
    {
-      // Chain all pool items into the freelist
-      for (uint32_t i = 0; i < work_pool_size; ++i)
-         _work_pool[i].next = (i + 1 < work_pool_size) ? &_work_pool[i + 1] : nullptr;
-      _work_free = &_work_pool[0];
+   }
+
+   template <typename Engine>
+   basic_scheduler<Engine>::~basic_scheduler()
+   {
+      // Clean up all fibers with non-empty continuations to avoid
+      // Boost.Context's forced_unwind, which corrupts heap metadata
+      // on macOS ARM64 with fixedsize_stack.
+      for (auto& f : _fibers)
+      {
+         if (!f->cont)
+            continue;
+
+         switch (f->state)
+         {
+            case FiberState::Ready:
+            {
+               // Fiber was spawned (initial yield completed) but never
+               // entered the entry loop.  Destroy the entry callable
+               // to prevent execution during cleanup.
+               if (f->entry_dtor)
+               {
+                  f->entry_dtor(f->entry_buf);
+                  f->entry_dtor = nullptr;
+               }
+               f->entry_run = nullptr;
+
+               // Resume: fiber enters the while loop, runEntry() is
+               // a no-op, fiber yields as Recyclable.
+               f->cont = f->cont.resume();
+               // Fall through to handle the now-Recyclable fiber.
+            }
+            [[fallthrough]];
+
+            case FiberState::Recyclable:
+               f->state = FiberState::Done;
+               f->cont  = f->cont.resume();
+               break;
+
+            case FiberState::Parked:
+            case FiberState::Blocked:
+            case FiberState::Sleeping:
+               // Fiber is stuck mid-execution.  Set _interrupted so it
+               // throws shutdown_exception upon resume, then clean up.
+               _interrupted = true;
+               _current     = f.get();
+               f->cont      = f->cont.resume();
+               _current     = nullptr;
+               if (f->state == FiberState::Recyclable && f->cont)
+               {
+                  f->state = FiberState::Done;
+                  f->cont  = f->cont.resume();
+               }
+               break;
+
+            default:
+               break;
+         }
+      }
    }
 
    template <typename Engine>
@@ -41,85 +96,6 @@ namespace psiber
    {
       t_current = this;
       _io.registerUserEvent(_index);
-
-      // Spawn the drain fiber — a daemon that executes work items
-      // in fiber context so callables can use post(), sleep(), etc.
-      spawnFiber([this]() {
-         while (true)
-         {
-            WorkItem* batch = _work_head.exchange(nullptr, std::memory_order_acquire);
-            if (batch)
-            {
-               _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
-
-               // Reverse for FIFO order
-               WorkItem* reversed = nullptr;
-               while (batch)
-               {
-                  WorkItem* next = batch->next;
-                  batch->next    = reversed;
-                  reversed       = batch;
-                  batch          = next;
-               }
-
-               // Execute, destroy, and return each item to the freelist
-               while (reversed)
-               {
-                  WorkItem* next = reversed->next;
-
-                  _drain_executing = true;
-                  try
-                  {
-                     reversed->run(reversed->payload);
-                  }
-                  catch (...)
-                  {
-                     // For noexcept post() callables, drain_yield_error
-                     // calls std::terminate before reaching here.
-                     // For invoke() callables, exceptions are caught by
-                     // the run() callback and stored in the promise.
-                     // This catch handles any unexpected leakage.
-                  }
-                  _drain_executing = false;
-                  if (reversed->dtor)
-                     reversed->dtor(reversed->payload);
-                  reversed->run  = nullptr;
-                  reversed->dtor = nullptr;
-
-                  // Push back onto freelist (spin-locked)
-                  _work_free_lock.lock();
-                  reversed->next = _work_free;
-                  _work_free     = reversed;
-                  _work_free_lock.unlock();
-
-                  reversed = next;
-               }
-
-               // Wake fibers waiting for pool space
-               _work_space_lock.lock();
-               Fiber* waiters = _work_space_wait_head;
-               _work_space_wait_head = nullptr;
-               _work_space_lock.unlock();
-
-               while (waiters)
-               {
-                  Fiber* next = waiters->next_wake;
-                  waiters->next_wake = nullptr;
-                  basic_scheduler::wake(waiters);
-                  waiters = next;
-               }
-            }
-
-            // Check for more work before parking
-            if (_work_head.load(std::memory_order_acquire))
-               continue;
-
-            parkCurrentFiber();
-         }
-      }, "drain");
-      _drain_fiber = _fibers.back().get();
-      _drain_fiber->daemon   = true;
-      _drain_fiber->priority = 0;  // high priority — run before normal fibers
 
       while (true)
       {
@@ -177,6 +153,7 @@ namespace psiber
             fiber->state     = FiberState::Running;
             fiber->home_sched = this;  // track current scheduler (fiber may have migrated)
 
+            assert(fiber->cont && "resuming fiber with null continuation");
             fiber->cont = fiber->cont.resume();
 
             _current = nullptr;
@@ -319,9 +296,9 @@ namespace psiber
                bool found = false;
                for (int spin = 0; spin < _spin_budget; ++spin)
                {
-                  if (_wake_head.load(std::memory_order_acquire) ||
-                      _task_head.load(std::memory_order_acquire) ||
-                      _work_head.load(std::memory_order_acquire))
+                  if (_wake_list.probably_non_empty() ||
+                      _task_list.probably_non_empty() ||
+                      _work_list.probably_non_empty())
                   {
                      found = true;
                      break;
@@ -364,6 +341,7 @@ namespace psiber
          if (f->state == FiberState::Recyclable)
          {
             f->state = FiberState::Done;
+            assert(f->cont && "cleanup: resuming fiber with null continuation");
             f->cont  = f->cont.resume();
          }
       }
@@ -372,16 +350,8 @@ namespace psiber
    }
 
    template <typename Engine>
-   void basic_scheduler<Engine>::checkNotDrainFiber() const
-   {
-      if (_drain_executing) [[unlikely]]
-         throw drain_yield_error{};
-   }
-
-   template <typename Engine>
    void basic_scheduler<Engine>::yield(RealFd fd, EventKind events)
    {
-      checkNotDrainFiber();
       _current->state          = FiberState::Blocked;
       _current->blocked_fd     = fd;
       _current->blocked_events = events;
@@ -399,7 +369,6 @@ namespace psiber
    template <typename Engine>
    void basic_scheduler<Engine>::sleep(std::chrono::milliseconds duration)
    {
-      checkNotDrainFiber();
       _current->state     = FiberState::Sleeping;
       _current->wake_time = std::chrono::steady_clock::now() + duration;
 
@@ -414,7 +383,6 @@ namespace psiber
    void basic_scheduler<Engine>::parkCurrentFiber()
    {
       assert(_current && "parkCurrentFiber called with no current fiber");
-      checkNotDrainFiber();
       _current->state = FiberState::Parked;
 
       auto& sched = *_current->sched_cont;
@@ -434,7 +402,6 @@ namespace psiber
    void basic_scheduler<Engine>::waitForSignal(int signo)
    {
       assert(_current && "waitForSignal called with no current fiber");
-      checkNotDrainFiber();
       _current->state          = FiberState::Blocked;
       _current->blocked_fd     = RealFd{signo};
       _current->blocked_events = Signal;
@@ -450,7 +417,6 @@ namespace psiber
    void basic_scheduler<Engine>::yieldCurrentFiber()
    {
       assert(_current && "yieldCurrentFiber called with no current fiber");
-      checkNotDrainFiber();
       _current->state      = FiberState::Ready;
       _current->posted_num = _posted_counter++;
       addToReadyQueue(_current);
@@ -476,15 +442,9 @@ namespace psiber
       assert(fiber && fiber->home_sched);
       basic_scheduler* target = fiber->home_sched;
 
-      // CAS-push onto the target scheduler's wake list
-      Fiber* old_head = target->_wake_head.load(std::memory_order_relaxed);
-      do
-      {
-         fiber->next_wake = old_head;
-      } while (!target->_wake_head.compare_exchange_weak(
-         old_head, fiber, std::memory_order_release, std::memory_order_relaxed));
+      target->_wake_list.push(fiber);
 
-      // Same-thread wake: the drain at the top of the run loop will
+      // Same-thread wake: the exchange at the top of the run loop will
       // pick this up — no kevent trigger needed.
       // Cross-thread wake: must trigger EVFILT_USER to wake the target
       // from a potential blocking kevent.
@@ -495,13 +455,7 @@ namespace psiber
    template <typename Engine>
    void basic_scheduler<Engine>::postTask(TaskSlotHeader* slot)
    {
-      // CAS-push onto the task intake list
-      TaskSlotHeader* old_head = _task_head.load(std::memory_order_relaxed);
-      do
-      {
-         slot->next = old_head;
-      } while (!_task_head.compare_exchange_weak(
-         old_head, slot, std::memory_order_release, std::memory_order_relaxed));
+      _task_list.push(slot);
 
       notifyIfPolling();
    }
@@ -511,32 +465,29 @@ namespace psiber
    template <typename Engine>
    void basic_scheduler<Engine>::drainWakeList()
    {
-      Fiber* batch = _wake_head.exchange(nullptr, std::memory_order_acquire);
+      Fiber* batch = _wake_list.drain();
       if (!batch)
          return;
 
       // Cross-thread work arrived — boost spin budget for next idle
       _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
 
-      // Reverse the list to restore FIFO order (MPSC stack is LIFO)
-      Fiber* reversed = nullptr;
-      while (batch)
-      {
-         Fiber* next      = batch->next_wake;
-         batch->next_wake = reversed;
-         reversed         = batch;
-         batch            = next;
-      }
+      Fiber* reversed = decltype(_wake_list)::reverse(batch);
 
       // Route a woken fiber: strand fibers re-enter their strand,
       // standalone fibers go directly to the ready queue.
+      //
+      // Guard: only process fibers that are still Parked.  A fiber
+      // can appear in the wake list while no longer Parked if the
+      // scheduler's shutdown code already set it to Ready (race
+      // between cross-thread wake() and local shutdown scan).
+      // Re-enqueueing such a fiber causes a double-resume → crash.
       auto routeWokenFiber = [this](Fiber* f) {
          f->next_wake = nullptr;
+         if (f->state != FiberState::Parked)
+            return;
          if (f->home_strand)
          {
-            // Re-enter the strand.  If the fiber becomes active and
-            // the strand has no reactor, enqueue returns the fiber
-            // for us to handle locally.
             Fiber* local = f->home_strand->enqueue(f);
             if (local)
             {
@@ -544,7 +495,6 @@ namespace psiber
                local->posted_num = _posted_counter++;
                addToReadyQueue(local);
             }
-            // else: strand posted to reactor, or fiber is waiting
          }
          else
          {
@@ -559,6 +509,8 @@ namespace psiber
       if (!reversed->next_wake && !_lifo_slot && !reversed->home_strand)
       {
          reversed->next_wake  = nullptr;
+         if (reversed->state != FiberState::Parked)
+            return;
          reversed->state      = FiberState::Ready;
          reversed->posted_num = _posted_counter++;
          _lifo_slot           = reversed;
@@ -577,35 +529,39 @@ namespace psiber
    template <typename Engine>
    void basic_scheduler<Engine>::drainTaskList()
    {
-      TaskSlotHeader* batch = _task_head.exchange(nullptr, std::memory_order_acquire);
+      TaskSlotHeader* batch = _task_list.drain();
       if (!batch)
          return;
 
       _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
 
-      // Reverse for FIFO order
-      TaskSlotHeader* reversed = nullptr;
-      while (batch)
-      {
-         TaskSlotHeader* next = batch->next;
-         batch->next          = reversed;
-         reversed             = batch;
-         batch                = next;
-      }
+      TaskSlotHeader* reversed = decltype(_task_list)::reverse(batch);
 
-      // Execute each task
+      // Execute each task.
+      //
+      // Cache heap_owned and consumed before run(): for stack-allocated
+      // slots (e.g. thread::call()), run() wakes the caller via a
+      // promise.  The caller may return and free the stack frame before
+      // we get back here.  By caching these flags first, we avoid
+      // touching the slot after run() for non-heap, pre-consumed slots.
       while (reversed)
       {
-         TaskSlotHeader* next = reversed->next;
+         TaskSlotHeader* next       = reversed->next;
+         bool            is_heap    = reversed->heap_owned;
+         bool            pre_consumed = reversed->consumed.load(std::memory_order_relaxed);
+
          if (reversed->run)
          {
             void* payload = reversed + 1;
             reversed->run(payload);
          }
-         if (reversed->heap_owned)
+
+         // After run(), the slot may no longer be valid for
+         // stack-allocated slots (pre_consumed == true).
+         // Only touch heap-owned slots (we own them) or
+         // SendQueue slots that need their consumed flag set.
+         if (is_heap)
          {
-            // Heap-allocated slot: destroy payload and free the block.
-            // No consumed signal — nobody is waiting on it.
             if (reversed->destroy)
             {
                void* payload = reversed + 1;
@@ -613,7 +569,7 @@ namespace psiber
             }
             delete[] reinterpret_cast<char*>(reversed);
          }
-         else
+         else if (!pre_consumed)
          {
             reversed->consumed.store(true, std::memory_order_release);
          }
@@ -624,15 +580,104 @@ namespace psiber
    template <typename Engine>
    void basic_scheduler<Engine>::drainWorkList()
    {
-      // Poke the drain fiber if work is pending and it's parked.
-      // The drain fiber does the actual exchange + execute + return cycle
-      // in fiber context, so callables have full fiber capabilities.
-      if (_work_head.load(std::memory_order_acquire) &&
-          _drain_fiber && _drain_fiber->state == FiberState::Parked)
+      // Exchange-drain the work list — each item becomes its own fiber.
+      // Concurrency self-sizes: if a callable blocks, the scheduler
+      // picks up the next ready fiber (which may be another work item).
+      // Fiber pool reuse keeps the common case cheap.
+      WorkItem* batch = _work_list.drain();
+      if (!batch)
+         return;
+
+      _spin_budget = std::min(std::max(_spin_budget, 64) * 2, max_spin);
+
+      WorkItem* reversed = decltype(_work_list)::reverse(batch);
+
+      // Spawn a fiber for each work item
+      while (reversed)
       {
-         _drain_fiber->state      = FiberState::Ready;
-         _drain_fiber->posted_num = _posted_counter++;
-         addToReadyQueue(_drain_fiber);
+         WorkItem* item = reversed;
+         reversed       = reversed->next;
+         item->next     = nullptr;
+
+         spawnFiber([this, item]() {
+            try
+            {
+               item->run(item->payload);
+            }
+            catch (...)
+            {
+               // Fire-and-forget: swallow exceptions from callables.
+               // invoke() callables catch internally and store in the
+               // promise, so exceptions here are unexpected leakage.
+            }
+            if (item->dtor)
+               item->dtor(item->payload);
+            item->run  = nullptr;
+            item->dtor = nullptr;
+            bool was_pool = (item >= &_work_pool[0] &&
+                             item < &_work_pool[work_pool_size]);
+            return_work_slots(item);
+            if (was_pool)
+               wakePoolWaiter();
+         });
+      }
+   }
+
+   // ── Pool wait list helpers ──────────────────────────────────────────────
+
+   template <typename Engine>
+   void basic_scheduler<Engine>::wakePoolWaiter()
+   {
+      // Pop the first waiter whose timer hasn't already fired.
+      // Fibers that timed out have state != Sleeping (pollAndUnblock
+      // already set them to Ready).  Skip and discard those.
+      while (_pool_wait_head)
+      {
+         Fiber* waiter   = _pool_wait_head;
+         _pool_wait_head = waiter->next_blocked;
+         if (!_pool_wait_head)
+            _pool_wait_tail = nullptr;
+         waiter->next_blocked = nullptr;
+
+         if (waiter->state == FiberState::Sleeping)
+         {
+            // Cancel the timer by setting Ready before pollAndUnblock sees it
+            waiter->state      = FiberState::Ready;
+            waiter->posted_num = _posted_counter++;
+            addToReadyQueue(waiter);
+            return;
+         }
+         // else: timer already woke this fiber — try next waiter
+      }
+   }
+
+   template <typename Engine>
+   void basic_scheduler<Engine>::removeFromPoolWait(Fiber* fiber)
+   {
+      if (!_pool_wait_head)
+         return;
+
+      if (_pool_wait_head == fiber)
+      {
+         _pool_wait_head = fiber->next_blocked;
+         if (!_pool_wait_head)
+            _pool_wait_tail = nullptr;
+         fiber->next_blocked = nullptr;
+         return;
+      }
+
+      Fiber* prev = _pool_wait_head;
+      while (prev->next_blocked)
+      {
+         if (prev->next_blocked == fiber)
+         {
+            prev->next_blocked = fiber->next_blocked;
+            if (_pool_wait_tail == fiber)
+               _pool_wait_tail = prev;
+            fiber->next_blocked = nullptr;
+            return;
+         }
+         prev = prev->next_blocked;
       }
    }
 

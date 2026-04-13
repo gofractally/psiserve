@@ -76,6 +76,7 @@ if(PSIBER_ENABLE_TESTS)
       tests/strand_tests.cpp
       tests/reactor_tests.cpp
       tests/reactor_integration_tests.cpp
+      tests/detail_atomic_tests.cpp
    )
 
    if(c-ares_FOUND AND PSIBER_ENABLE_DNS)
@@ -101,4 +102,14 @@ if(PSIBER_ENABLE_BENCHMARKS)
    target_include_directories(psiber_bench PRIVATE
       ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include
    )
+
+   # Optional Boost.Fiber comparison benchmark (for marketing/evaluation)
+   option(PSIBER_ENABLE_BOOST_FIBER_BENCH "Build Boost.Fiber comparison benchmark" OFF)
+   if(PSIBER_ENABLE_BOOST_FIBER_BENCH)
+      find_package(Boost REQUIRED COMPONENTS fiber context)
+      add_executable(boost_fiber_bench benchmarks/boost_fiber_bench.cpp)
+      target_link_libraries(boost_fiber_bench PRIVATE
+         Boost::fiber Boost::context Threads::Threads
+      )
+   endif()
 endif()

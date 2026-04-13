@@ -34,3 +34,8 @@ build.ninja
 *.so
 *.dylib
 *.dll
+
+
+# Added by cargo
+
+/target

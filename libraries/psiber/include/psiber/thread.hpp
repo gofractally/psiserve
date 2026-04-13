@@ -40,11 +40,11 @@ namespace psiber
       // ── Dispatch API ─────────────────────────────────────────────
       //
       //                 sync (blocks)    async (future)    fire-and-forget
-      //  own fiber:     call()           async()           spawn()
-      //  drain fiber:   invoke()           —               post()
+      //  fiber pool:    call()           async()           spawn()
+      //  work pool:     invoke()           —               post()
       //
-      // Drain fiber callables must NOT yield (sleep/park/I/O).
-      // Attempting to yield throws drain_yield_error.
+      // All callables run on fibers with full fiber context — they
+      // can yield, sleep, do I/O, and use fiber-aware locks.
 
       /// Synchronous cross-thread call (own fiber, may yield).
       ///
@@ -71,29 +71,42 @@ namespace psiber
       template <typename F>
       auto async(F&& func);
 
-      /// Synchronous cross-thread call (drain fiber, non-blocking).
+      /// Synchronous cross-thread call (work pool, may yield).
       ///
-      /// Parks the calling fiber, runs `func` on this thread's drain
-      /// fiber, returns the result.  The callable must NOT yield —
-      /// attempting to sleep/park/do I/O throws drain_yield_error.
-      /// Use for fast getters and state reads.
+      /// Parks the calling fiber, runs `func` on this thread via the
+      /// WorkItem pool (zero allocation), returns the result.  The
+      /// callable gets its own fiber and can yield.  Use for fast
+      /// getters, state reads, or short operations.
       ///
       ///     int n = other_thread.invoke([&]{ return _counter; });
       ///
       template <typename F>
-      auto invoke(F&& func) -> std::invoke_result_t<F>;
+      auto invoke(F&& func, post_overflow policy = post_overflow::block,
+                  std::chrono::milliseconds timeout = std::chrono::milliseconds{1000})
+         -> std::invoke_result_t<F>;
 
-      /// Fire-and-forget (drain fiber, non-blocking, noexcept).
+      /// Fire-and-forget (work pool, may yield).
       ///
-      /// Runs serially on the drain fiber.  Must be noexcept — no
-      /// error channel.  Must NOT yield.  Zero allocation (pool).
-      /// Best for short coordination: counters, state updates,
-      /// posting follow-ups.
+      /// Each callable gets its own fiber.  Zero allocation from the
+      /// WorkItem pool.  Best for short coordination: counters, state
+      /// updates, posting follow-ups.  Can also block on I/O or locks.
       ///
-      ///     other_thread.post([&]() noexcept { counter++; });
+      ///     other_thread.post([&]() { counter++; });
       ///
       template <typename F>
-      void post(F&& fn) { _sched->post(std::forward<F>(fn)); }
+      void post(F&& fn, post_overflow policy = post_overflow::block,
+                std::chrono::milliseconds timeout = std::chrono::milliseconds{1000})
+      {
+         _sched->post(std::forward<F>(fn), policy, timeout);
+      }
+
+      /// Non-throwing post.  Returns true if enqueued, false if full.
+      template <typename F>
+      bool try_post(F&& fn,
+                    try_post_overflow overflow = try_post_overflow::allow_heap) noexcept
+      {
+         return _sched->try_post(std::forward<F>(fn), overflow);
+      }
 
       /// Fire-and-forget (own fiber, may yield, noexcept).
       ///
@@ -148,10 +161,11 @@ namespace psiber
 
    // ── Template implementations ─────────────────────────────────────────────
 
-   // ── invoke(): sync, drain fiber, non-blocking ──────────────────────────
+   // ── invoke(): sync, work pool, may yield ────────────────────────────────
 
    template <typename F>
-   auto thread::invoke(F&& func) -> std::invoke_result_t<F>
+   auto thread::invoke(F&& func, post_overflow policy,
+                       std::chrono::milliseconds timeout) -> std::invoke_result_t<F>
    {
       using R = std::invoke_result_t<F>;
 
@@ -163,14 +177,18 @@ namespace psiber
       // Promise lives on caller's fiber stack (stable while parked).
       fiber_promise<R> promise;
 
-      // Capture pointers to stack-locals and post to drain fiber.
-      // The post() callable is noexcept — it catches exceptions from
-      // func and stores them in the promise.  The promise handles wake
-      // coordination via CAS protocol.
+      // Capture pointers to stack-locals and post via the WorkItem pool.
+      // Each work item gets its own fiber, so the callable can yield.
+      //
+      // Stack safety: the captured pointers (func_ptr, promise_ptr)
+      // reference the caller's fiber stack, which is stable while parked.
+      // After set_value()/set_exception() wakes the caller, the work
+      // fiber only touches WorkItem fields (freelist push) afterward,
+      // not the captured pointers.
       F* func_ptr = &func;
       fiber_promise<R>* promise_ptr = &promise;
 
-      _sched->post([func_ptr, promise_ptr]() noexcept {
+      _sched->post([func_ptr, promise_ptr]() {
          try
          {
             if constexpr (std::is_void_v<R>)
@@ -187,7 +205,7 @@ namespace psiber
          {
             promise_ptr->set_exception(std::current_exception());
          }
-      });
+      }, policy, timeout);
 
       if (promise.try_register_waiter(caller_fiber))
          caller_sched->parkCurrentFiber();
@@ -265,7 +283,16 @@ namespace psiber
 
       slot->total_size = sizeof(buf);
       slot->next       = nullptr;
-      slot->consumed.store(false, std::memory_order_relaxed);
+
+      // Pre-mark consumed: drainTaskList() caches this flag before
+      // calling run(), and skips the post-run consumed store for
+      // slots that are already consumed.  This eliminates a race:
+      // run() wakes the caller via promise, and if drainTaskList()
+      // tried to write consumed AFTER run(), it would be touching
+      // this stack-local slot after the caller had already returned.
+      // The promise provides all synchronization for call() — the
+      // consumed flag is only needed for SendQueue ring reclamation.
+      slot->consumed.store(true, std::memory_order_relaxed);
 
       // The promise handles wake coordination via CAS protocol.
       slot->run = [](void* p) {
@@ -294,41 +321,7 @@ namespace psiber
       // Register waiter + park.  CAS ensures we only park if the
       // producer hasn't fulfilled yet.
       if (promise.try_register_waiter(caller_fiber))
-      {
-         try
-         {
-            caller_sched->parkCurrentFiber();
-         }
-         catch (...)
-         {
-            // Shutdown interrupted us — spin until the target thread finishes
-            // touching our stack-local slot before we unwind.
-            while (!slot->consumed.load(std::memory_order_acquire))
-            {
-#if defined(__x86_64__)
-               __builtin_ia32_pause();
-#elif defined(__aarch64__)
-               asm volatile("yield" ::: "memory");
-#endif
-            }
-            throw;  // re-throw shutdown_exception
-         }
-      }
-      else
-      {
-         // Fast path: producer already fulfilled.  But the slot and
-         // payload live on our stack — the worker's drainTaskList still
-         // needs to touch slot->consumed after slot->run returns.
-         // Spin until the worker is done with our stack data.
-         while (!slot->consumed.load(std::memory_order_acquire))
-         {
-#if defined(__x86_64__)
-            __builtin_ia32_pause();
-#elif defined(__aarch64__)
-            asm volatile("yield" ::: "memory");
-#endif
-         }
-      }
+         caller_sched->parkCurrentFiber();
 
       if constexpr (std::is_void_v<R>)
          promise.get();

@@ -1,5 +1,6 @@
 #include <psiber/detail/send_queue.hpp>
 
+#include <cassert>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -12,10 +13,14 @@ namespace psiber::detail
       _ring = static_cast<char*>(std::aligned_alloc(alignment, _ring_bytes));
       if (!_ring)
          throw std::bad_alloc();
+
+
    }
 
    SendQueue::~SendQueue()
    {
+
+
       // Destroy any unconsumed tasks still in the ring
       while (_free_bytes.load(std::memory_order_relaxed) < _ring_bytes)
       {
