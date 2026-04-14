@@ -46,6 +46,10 @@ namespace psio {
    /// True if the type index refers to a primitive (negative).
    constexpr bool is_prim_idx(int32_t idx) { return idx < 0; }
 
+   /// Sentinel: "no type" for variant cases without payloads
+   /// and result types without ok/err.
+   constexpr int32_t WIT_NO_TYPE = INT32_MIN;
+
    // ---- Compound type definitions ----
 
    enum class wit_type_kind : uint8_t {

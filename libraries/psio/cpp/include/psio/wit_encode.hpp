@@ -68,6 +68,7 @@ namespace psio {
 
          // Instance/component item tags
          constexpr uint8_t item_type_def           = 0x01;
+         constexpr uint8_t item_import             = 0x03;
          constexpr uint8_t item_export             = 0x04;
 
          // Export sort
@@ -85,6 +86,10 @@ namespace psio {
          // Function result
          constexpr uint8_t result_single           = 0x00;
          constexpr uint8_t result_named            = 0x01;
+
+         // Option encoding (used in variant cases and result types)
+         constexpr uint8_t option_none             = 0x00;
+         constexpr uint8_t option_some             = 0x01;
       } // namespace cm
 
       class wit_binary_writer {
@@ -185,15 +190,34 @@ namespace psio {
                   break;
                case wit_type_kind::result_:
                   w.emit_byte(cm::def_result);
-                  emit_valtype(w, td.element_type_idx, remap);
-                  emit_valtype(w, td.error_type_idx, remap);
+                  // ok type: option(valtype)
+                  if (td.element_type_idx == WIT_NO_TYPE) {
+                     w.emit_byte(cm::option_none);
+                  } else {
+                     w.emit_byte(cm::option_some);
+                     emit_valtype(w, td.element_type_idx, remap);
+                  }
+                  // err type: option(valtype)
+                  if (td.error_type_idx == WIT_NO_TYPE) {
+                     w.emit_byte(cm::option_none);
+                  } else {
+                     w.emit_byte(cm::option_some);
+                     emit_valtype(w, td.error_type_idx, remap);
+                  }
                   break;
                case wit_type_kind::variant_:
                   w.emit_byte(cm::def_variant);
                   w.emit_uleb128(static_cast<uint32_t>(td.fields.size()));
                   for (auto& f : td.fields) {
                      w.emit_string(f.name);
-                     emit_valtype(w, f.type_idx, remap);
+                     // Each case: option(valtype) + option(refines)
+                     if (f.type_idx == WIT_NO_TYPE) {
+                        w.emit_byte(cm::option_none);
+                     } else {
+                        w.emit_byte(cm::option_some);
+                        emit_valtype(w, f.type_idx, remap);
+                     }
+                     w.emit_byte(cm::option_none);  // refines: none
                   }
                   break;
                case wit_type_kind::enum_:
@@ -258,6 +282,7 @@ namespace psio {
                              std::unordered_map<int32_t, uint32_t>& remap,
                              uint32_t& next_type_idx,
                              uint32_t& item_count) const {
+            if (type_idx == WIT_NO_TYPE) return;
             if (is_prim_idx(type_idx)) return;
             if (remap.count(type_idx)) return;
 
@@ -282,6 +307,10 @@ namespace psio {
                   ensure_emitted(td.error_type_idx, w, remap, next_type_idx, item_count);
                   break;
                case wit_type_kind::variant_:
+                  for (auto& f : td.fields)
+                     if (f.type_idx != WIT_NO_TYPE)
+                        ensure_emitted(f.type_idx, w, remap, next_type_idx, item_count);
+                  break;
                case wit_type_kind::tuple_:
                   for (auto& f : td.fields)
                      ensure_emitted(f.type_idx, w, remap, next_type_idx, item_count);
@@ -400,12 +429,24 @@ namespace psio {
                out.emit_bytes(cs.data());
             }
 
-            // Build the instance for the first export interface
-            // Structure: COMPONENT → COMPONENT → INSTANCE → types/exports
-            if (world_.exports.empty()) return out.take();
+            // Build instances for all import and export interfaces
+            // Structure: COMPONENT → COMPONENT → INSTANCE(s) → types/exports
+            if (world_.exports.empty() && world_.imports.empty()) return out.take();
 
-            auto& exp_iface = world_.exports[0];
-            auto inst = encode_interface(exp_iface);
+            // Pre-encode all interfaces
+            struct iface_entry {
+               const wit_interface* iface;
+               instance_encoding    enc;
+               bool                 is_import;
+            };
+            std::vector<iface_entry> entries;
+            for (auto& imp : world_.imports)
+               entries.push_back({&imp, encode_interface(imp), true});
+            for (auto& exp : world_.exports)
+               entries.push_back({&exp, encode_interface(exp), false});
+
+            // Inner component item count: 2 per interface (instance def + import/export)
+            uint32_t inner_item_count = static_cast<uint32_t>(entries.size() * 2);
 
             // Type section: 1 type = outer COMPONENT
             {
@@ -416,22 +457,34 @@ namespace psio {
                type_sec.emit_byte(cm::type_component);
                type_sec.emit_uleb128(2);
 
-               // Item 0: inner component (2 items: instance + interface export)
+               // Item 0: inner component
                type_sec.emit_byte(cm::item_type_def);
                type_sec.emit_byte(cm::type_component);
-               type_sec.emit_uleb128(2);
+               type_sec.emit_uleb128(inner_item_count);
 
-               // Inner item 0: instance type
-               type_sec.emit_byte(cm::item_type_def);
-               type_sec.emit_byte(cm::type_instance);
-               type_sec.emit_uleb128(inst.item_count);
-               type_sec.emit_bytes(inst.bytes);
+               // Emit each interface: instance type def + import/export
+               uint32_t inner_type_idx = 0;
+               for (auto& entry : entries) {
+                  // Instance type definition
+                  type_sec.emit_byte(cm::item_type_def);
+                  type_sec.emit_byte(cm::type_instance);
+                  type_sec.emit_uleb128(entry.enc.item_count);
+                  type_sec.emit_bytes(entry.enc.bytes);
 
-               // Inner item 1: export interface as instance(0)
-               type_sec.emit_byte(cm::item_export);
-               emit_extern_name(type_sec, qualified_interface_name(exp_iface));
-               type_sec.emit_byte(cm::sort_instance);
-               type_sec.emit_uleb128(0);
+                  // Import or export referencing the instance
+                  if (entry.is_import) {
+                     type_sec.emit_byte(cm::item_import);
+                     emit_extern_name(type_sec, qualified_interface_name(*entry.iface));
+                     type_sec.emit_byte(cm::sort_instance);
+                     type_sec.emit_uleb128(inner_type_idx);
+                  } else {
+                     type_sec.emit_byte(cm::item_export);
+                     emit_extern_name(type_sec, qualified_interface_name(*entry.iface));
+                     type_sec.emit_byte(cm::sort_instance);
+                     type_sec.emit_uleb128(inner_type_idx);
+                  }
+                  inner_type_idx++;
+               }
 
                // Outer item 1: export world as component(0)
                type_sec.emit_byte(cm::item_export);
