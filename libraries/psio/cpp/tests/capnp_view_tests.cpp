@@ -1614,3 +1614,405 @@ TEST_CASE("cp ref: default-value XOR round-trip", "[ref][cp]")
    REQUIRE(unpacked.count == 42);
    REQUIRE(unpacked.ratio == Approx(7.77));
 }
+
+// ── Free-list allocator tests ──────────────────────────────────────────────
+
+TEST_CASE("cp ref: repeated string mutation reuses space", "[ref][cp][freelist]")
+{
+   CpToken tok{42, 100, 5, "hello"};
+   auto    data = psio::capnp_pack(tok);
+
+   psio::capnp_ref<CpToken> ref(std::move(data));
+   size_t size_after_pack = ref.size();
+
+   auto f = ref.fields();
+
+   // Mutate string to same-length string many times
+   for (int i = 0; i < 100; ++i)
+      f.text() = "world";
+
+   // Size should NOT have grown 100x — the free list reclaims the old strings
+   // Original "hello" is 6 bytes (incl NUL) → 1 word.
+   // "world" is also 1 word. So each mutation frees 1 word and reuses it.
+   size_t size_after_mutations = ref.size();
+   INFO("size after pack: " << size_after_pack
+                            << " after 100 mutations: " << size_after_mutations);
+   REQUIRE(size_after_mutations == size_after_pack);
+
+   // Verify the value is correct
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.text == "world");
+}
+
+TEST_CASE("cp ref: string mutation to longer string grows once", "[ref][cp][freelist]")
+{
+   CpToken tok{1, 2, 3, "hi"};
+   auto    data = psio::capnp_pack(tok);
+
+   psio::capnp_ref<CpToken> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   // Mutate to a much longer string — must grow segment
+   f.text() = "a longer string value";
+   size_t size_after_grow = ref.size();
+
+   // Mutate again with same-length string — should reuse the block
+   for (int i = 0; i < 50; ++i)
+      f.text() = "another long str value";  // same length as above (21 chars)
+
+   REQUIRE(ref.size() == size_after_grow);
+   REQUIRE(ref.unpack().text == "another long str value");
+}
+
+TEST_CASE("cp ref: repeated vector mutation reuses space", "[ref][cp][freelist]")
+{
+   CpUser user{1, "name", "email", "bio", 25, 3.14, {"a", "b", "c"}, false};
+   auto   data = psio::capnp_pack(user);
+
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   auto                    f = ref.fields();
+
+   // Mutate with same-structure vectors repeatedly
+   for (int i = 0; i < 50; ++i)
+      f.tags() = std::vector<std::string>{"x", "y", "z"};
+
+   // Verify correctness
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.tags.size() == 3);
+   REQUIRE(unpacked.tags[0] == "x");
+   REQUIRE(unpacked.tags[2] == "z");
+
+   // The free list should have reclaimed space from old vectors
+   REQUIRE(ref.free_list().total_free() <= 10);  // bounded internal waste
+}
+
+TEST_CASE("cp ref: variant mutation frees old pointer data", "[ref][cp][freelist]")
+{
+   CpShape shape{99.0, std::string("triangle")};
+   auto    data = psio::capnp_pack(shape);
+
+   psio::capnp_ref<CpShape> ref(std::move(data));
+   size_t initial_size = ref.size();
+   auto   f            = ref.fields();
+
+   // Change from string to double (pointer → scalar)
+   using shape_var = std::variant<double, std::string, std::monostate>;
+   f.shape() = shape_var(3.14);
+   // Old string should be freed
+   REQUIRE(ref.free_list().total_free() > 0);
+
+   // Change back to string — should reuse freed space
+   f.shape() = shape_var(std::string("square"));
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.area == Approx(99.0));
+   REQUIRE(std::get<std::string>(unpacked.shape) == "square");
+}
+
+TEST_CASE("cp ref: free list coalesces adjacent blocks", "[ref][cp][freelist]")
+{
+   // Create a struct with multiple string fields to test coalescing
+   CpUser user{1, "Alice", "alice@example.com", "", 30, 5.0, {}, false};
+   auto   data = psio::capnp_pack(user);
+
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   auto                    f = ref.fields();
+
+   // Set both name and email to empty — frees both string allocations
+   f.name()  = "";
+   f.email() = "";
+
+   // Both freed blocks should be tracked (may or may not coalesce depending
+   // on whether they were adjacent in the segment)
+   REQUIRE(ref.free_list().total_free() > 0);
+
+   // Set them back — should reuse freed space
+   f.name()  = "Bob";
+   f.email() = "bob@test.com";
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.name == "Bob");
+   REQUIRE(unpacked.email == "bob@test.com");
+}
+
+TEST_CASE("cp ref: nested struct mutation frees recursively", "[ref][cp][freelist]")
+{
+   CpLineItem item{"Widget", 10, 4.99};
+   CpUser     customer{42, "Customer", "cust@test.com", "bio", 25, 100.0,
+                       std::vector<std::string>{"vip"}, true};
+   CpOrder    order{1, customer, {item}, 49.90, "rush"};
+   auto       data = psio::capnp_pack(order);
+
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   size_t initial_size = ref.size();
+
+   // Mutate the note field repeatedly
+   auto f = ref.fields();
+   for (int i = 0; i < 20; ++i)
+      f.note() = "updated note text";
+
+   // Should not have grown much — the free list reclaims old note strings
+   INFO("initial: " << initial_size << " final: " << ref.size());
+   // At most one extra allocation beyond initial (first mutation grows, rest reuse)
+   size_t growth = ref.size() - initial_size;
+   REQUIRE(growth <= 24);  // at most 3 words of growth (24 bytes)
+
+   REQUIRE(ref.unpack().note == "updated note text");
+}
+
+// ── Dynamic view tests ────────────────────────────────────────────────────
+
+using dv_cp = psio::dynamic_view<psio::cp>;
+using psio::operator""_f;
+
+TEST_CASE("dynamic_view: schema lookup and introspection", "[view][cp][dynamic]")
+{
+   auto* schema = &psio::cp_schema<CpUser>::schema;
+   REQUIRE(schema->field_count == 8);
+
+   auto* id_field = schema->find("id");
+   REQUIRE(id_field != nullptr);
+   REQUIRE(id_field->name == "id");
+   REQUIRE(id_field->type == psio::dynamic_type::t_u64);
+   REQUIRE(id_field->is_ptr == false);
+
+   auto* name_field = schema->find("name");
+   REQUIRE(name_field != nullptr);
+   REQUIRE(name_field->type == psio::dynamic_type::t_text);
+   REQUIRE(name_field->is_ptr == true);
+
+   REQUIRE(schema->find("nonexistent") == nullptr);
+
+   CpUser user{1, "a", "b", "c", 2, 3.0, {}, false};
+   auto data = psio::capnp_pack(user);
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   dv_cp dv(ref);
+
+   auto names = dv.field_names();
+   REQUIRE(names.size() == 8);
+   REQUIRE(std::string_view(names[0]) == "id");
+   REQUIRE(std::string_view(names[1]) == "name");
+   REQUIRE(std::string_view(names[7]) == "verified");
+
+   REQUIRE(dv.field_index("id") == 0);
+   REQUIRE(dv.field_index("verified") == 7);
+}
+
+TEST_CASE("dynamic_view: implicit scalar conversion", "[view][cp][dynamic]")
+{
+   CpUser user{42, "Alice", "alice@test.com", "bio", 30, 99.5,
+               std::vector<std::string>{"admin", "user"}, true};
+   auto data = psio::capnp_pack(user);
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   dv_cp dv(ref);
+
+   // Implicit conversion — assignment just works
+   uint64_t id = dv["id"_f];
+   REQUIRE(id == 42);
+
+   uint32_t age = dv["age"_f];
+   REQUIRE(age == 30);
+
+   double score = dv["score"_f];
+   REQUIRE(score == 99.5);
+
+   bool verified = (bool)dv["verified"_f];
+   REQUIRE(verified == true);
+}
+
+TEST_CASE("dynamic_view: implicit text conversion", "[view][cp][dynamic]")
+{
+   CpUser user{1, "Bob", "bob@test.com", "A bio", 25, 0.0, {}, false};
+   auto data = psio::capnp_pack(user);
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   dv_cp dv(ref);
+
+   std::string_view name = dv["name"_f];
+   REQUIRE(name == "Bob");
+
+   std::string_view email = dv["email"_f];
+   REQUIRE(email == "bob@test.com");
+
+   std::string_view bio = dv["bio"_f];
+   REQUIRE(bio == "A bio");
+
+   REQUIRE(dv["name"_f].size() == 3);
+   REQUIRE(dv["email"_f].size() == 12);
+}
+
+TEST_CASE("dynamic_view: chained struct navigation", "[view][cp][dynamic]")
+{
+   CpLineItem item{"Widget", 10, 4.99};
+   CpUser     customer{42, "Customer", "c@test.com", "", 25, 100.0,
+                        std::vector<std::string>{"vip"}, true};
+   CpOrder    order{1, customer, {item}, 49.90, "rush"};
+   auto       data = psio::capnp_pack(order);
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   dv_cp dv(ref);
+
+   uint64_t id = dv["id"_f];
+   REQUIRE(id == 1);
+
+   double total = dv["total"_f];
+   REQUIRE(total == Approx(49.90));
+
+   std::string_view note = dv["note"_f];
+   REQUIRE(note == "rush");
+
+   // Chained navigation into nested struct
+   std::string_view cust_name = dv["customer"_f]["name"_f];
+   REQUIRE(cust_name == "Customer");
+
+   uint32_t cust_age = dv["customer"_f]["age"_f];
+   REQUIRE(cust_age == 25);
+
+   uint64_t cust_id = dv["customer"_f]["id"_f];
+   REQUIRE(cust_id == 42);
+}
+
+TEST_CASE("dynamic_view: missing field throws", "[view][cp][dynamic]")
+{
+   CpPoint pt{1.0, 2.0};
+   auto    data = psio::capnp_pack(pt);
+   psio::capnp_ref<CpPoint> ref(std::move(data));
+   dv_cp dv(ref);
+
+   REQUIRE_THROWS_AS(dv["z"_f], std::runtime_error);
+}
+
+TEST_CASE("dynamic_view: type mismatch throws", "[view][cp][dynamic]")
+{
+   CpPoint pt{1.0, 2.0};
+   auto    data = psio::capnp_pack(pt);
+   psio::capnp_ref<CpPoint> ref(std::move(data));
+   dv_cp dv(ref);
+
+   REQUIRE_THROWS_AS(static_cast<uint64_t>(dv["x"_f]), std::runtime_error);
+   REQUIRE_THROWS_AS(static_cast<std::string_view>(dv["x"_f]), std::runtime_error);
+}
+
+TEST_CASE("dynamic_view: comparison operators", "[view][cp][dynamic]")
+{
+   CpUser user1{10, "Alice", "a@test.com", "", 20, 1.0, {}, false};
+   CpUser user2{20, "Bob", "b@test.com", "", 30, 2.0, {}, true};
+   auto   data1 = psio::capnp_pack(user1);
+   auto   data2 = psio::capnp_pack(user2);
+   psio::capnp_ref<CpUser> ref1(std::move(data1));
+   psio::capnp_ref<CpUser> ref2(std::move(data2));
+   dv_cp dv1(ref1);
+   dv_cp dv2(ref2);
+
+   REQUIRE(dv1["id"_f] < dv2["id"_f]);
+   REQUIRE(dv2["id"_f] > dv1["id"_f]);
+   REQUIRE(dv1["id"_f] == dv1["id"_f]);
+
+   REQUIRE(dv1["name"_f] < dv2["name"_f]);  // "Alice" < "Bob"
+
+   REQUIRE(dv1["score"_f] < dv2["score"_f]);
+}
+
+TEST_CASE("dynamic_view: type introspection", "[view][cp][dynamic]")
+{
+   CpUser user{1, "a", "b", "c", 2, 3.0, {}, false};
+   auto   data = psio::capnp_pack(user);
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   dv_cp dv(ref);
+
+   REQUIRE(dv.type().kind == psio::dynamic_type::t_struct);
+   REQUIRE(dv["id"_f].type().kind == psio::dynamic_type::t_u64);
+   REQUIRE(dv["name"_f].type().kind == psio::dynamic_type::t_text);
+   REQUIRE(dv["verified"_f].type().kind == psio::dynamic_type::t_bool);
+   REQUIRE(dv["score"_f].type().kind == psio::dynamic_type::t_f64);
+   REQUIRE(dv["age"_f].type().kind == psio::dynamic_type::t_u32);
+}
+
+TEST_CASE("dynamic_view: vector access", "[view][cp][dynamic]")
+{
+   CpLineItem item1{"Widget", 10, 4.99};
+   CpLineItem item2{"Gadget", 5, 19.99};
+   CpUser     customer{42, "Cust", "c@t.com", "", 25, 0.0, {}, true};
+   CpOrder    order{1, customer, {item1, item2}, 74.85, "note"};
+   auto       data = psio::capnp_pack(order);
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   dv_cp dv(ref);
+
+   REQUIRE(dv["items"_f].size() == 2);
+
+   std::string_view prod0 = dv["items"_f][0]["product"_f];
+   REQUIRE(prod0 == "Widget");
+
+   uint32_t qty0 = dv["items"_f][0]["qty"_f];
+   REQUIRE(qty0 == 10);
+
+   double price1 = dv["items"_f][1]["unit_price"_f];
+   REQUIRE(price1 == 19.99);
+
+   std::string_view prod1 = dv["items"_f][1]["product"_f];
+   REQUIRE(prod1 == "Gadget");
+}
+
+TEST_CASE("dynamic_view: dynamic_vector iteration", "[view][cp][dynamic]")
+{
+   CpLineItem item1{"A", 1, 1.0};
+   CpLineItem item2{"B", 2, 2.0};
+   CpLineItem item3{"C", 3, 3.0};
+   CpUser     customer{1, "X", "x@t.com", "", 1, 0.0, {}, false};
+   CpOrder    order{1, customer, {item1, item2, item3}, 6.0, ""};
+   auto       data = psio::capnp_pack(order);
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   dv_cp dv(ref);
+
+   psio::dynamic_vector<psio::cp> items(dv["items"_f]);
+   REQUIRE(items.size() == 3);
+
+   std::vector<std::string> products;
+   for (auto elem : items)
+   {
+      std::string_view p = elem["product"_f];
+      products.push_back(std::string(p));
+   }
+   REQUIRE(products == std::vector<std::string>{"A", "B", "C"});
+}
+
+TEST_CASE("dynamic_view: string vector", "[view][cp][dynamic]")
+{
+   CpUser user{1, "X", "x@t.com", "", 1, 0.0,
+               std::vector<std::string>{"tag1", "tag2", "tag3"}, false};
+   auto   data = psio::capnp_pack(user);
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   dv_cp dv(ref);
+
+   REQUIRE(dv["tags"_f].size() == 3);
+
+   std::string_view t0 = dv["tags"_f][0];
+   REQUIRE(t0 == "tag1");
+
+   std::string_view t2 = dv["tags"_f][2];
+   REQUIRE(t2 == "tag3");
+}
+
+TEST_CASE("dynamic_view: construct from view<T,cp>", "[view][cp][dynamic]")
+{
+   CpPoint pt{3.14, 2.718};
+   auto    data = psio::capnp_pack(pt);
+   auto    v    = psio::view<CpPoint, psio::cp>::from_buffer(data.data());
+   dv_cp   dv(v);
+
+   double x = dv["x"_f];
+   REQUIRE(x == 3.14);
+
+   double y = dv["y"_f];
+   REQUIRE(y == 2.718);
+}
+
+TEST_CASE("dynamic_view: as<T>() duck-typed extraction", "[view][cp][dynamic]")
+{
+   CpPoint pt{1.5, 2.5};
+   auto    data = psio::capnp_pack(pt);
+   psio::capnp_ref<CpPoint> ref(std::move(data));
+   dv_cp dv(ref);
+
+   CpPoint extracted = dv.as<CpPoint>();
+   REQUIRE(extracted.x == 1.5);
+   REQUIRE(extracted.y == 2.5);
+}

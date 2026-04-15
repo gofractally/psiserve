@@ -92,6 +92,11 @@ void unpack_user(UserProfile::Reader r, NativeUserProfile& out)
 // ── Prevent dead-code elimination ────────────────────────────────────────────
 
 template <typename T>
+inline void do_not_optimize(T& val)
+{
+   asm volatile("" : "+r,m"(val) : : "memory");
+}
+template <typename T>
 inline void do_not_optimize(T const& val)
 {
    asm volatile("" : : "r,m"(val) : "memory");
@@ -585,8 +590,7 @@ void bench_capnp_unpack_native()
          NativePoint out;
          out.x = p.getX();
          out.y = p.getY();
-         do_not_optimize(out.x);
-         do_not_optimize(out.y);
+         do_not_optimize(out);
       });
    }
 
@@ -606,7 +610,9 @@ void bench_capnp_unpack_native()
          out.length = t.getLength();
          out.text   = t.getText();
          do_not_optimize(out.kind);
-         do_not_optimize(out.text.data());
+         do_not_optimize(out.offset);
+         do_not_optimize(out.length);
+         do_not_optimize(out.text);
       });
    }
 
@@ -622,7 +628,13 @@ void bench_capnp_unpack_native()
          NativeUserProfile out;
          unpack_user(reader.getRoot<UserProfile>(), out);
          do_not_optimize(out.id);
-         do_not_optimize(out.name.data());
+         do_not_optimize(out.name);
+         do_not_optimize(out.email);
+         do_not_optimize(out.bio);
+         do_not_optimize(out.age);
+         do_not_optimize(out.score);
+         do_not_optimize(out.tags);
+         do_not_optimize(out.verified);
       });
    }
 
@@ -651,7 +663,13 @@ void bench_capnp_unpack_native()
             out.items.push_back(std::move(li));
          }
          do_not_optimize(out.id);
-         do_not_optimize(out.items.data());
+         do_not_optimize(out.customer.name);
+         do_not_optimize(out.customer.email);
+         do_not_optimize(out.customer.bio);
+         do_not_optimize(out.customer.tags);
+         do_not_optimize(out.items);
+         do_not_optimize(out.total);
+         do_not_optimize(out.note);
       });
    }
 
@@ -685,7 +703,23 @@ void bench_capnp_unpack_native()
          out.error_code = s.getErrorCode();
          out.firmware   = s.getFirmware();
          do_not_optimize(out.timestamp);
-         do_not_optimize(out.firmware.data());
+         do_not_optimize(out.device_id);
+         do_not_optimize(out.temp);
+         do_not_optimize(out.humidity);
+         do_not_optimize(out.pressure);
+         do_not_optimize(out.accel_x);
+         do_not_optimize(out.accel_y);
+         do_not_optimize(out.accel_z);
+         do_not_optimize(out.gyro_x);
+         do_not_optimize(out.gyro_y);
+         do_not_optimize(out.gyro_z);
+         do_not_optimize(out.mag_x);
+         do_not_optimize(out.mag_y);
+         do_not_optimize(out.mag_z);
+         do_not_optimize(out.battery);
+         do_not_optimize(out.signal_dbm);
+         do_not_optimize(out.error_code);
+         do_not_optimize(out.firmware);
       });
    }
 }

@@ -22,10 +22,20 @@
 #include <vector>
 
 // ── Prevent dead-code elimination ────────────────────────────────────────────
+// Uses output constraint "+r,m" (matching Google Benchmark's DoNotOptimize)
+// to force the compiler to both produce the value AND assume it may be
+// modified, preventing dead-code elimination even for trivial types.
 
+template <typename T>
+inline void do_not_optimize(T& val)
+{
+   asm volatile("" : "+r,m"(val) : : "memory");
+}
 template <typename T>
 inline void do_not_optimize(T const& val)
 {
+   // For const refs (temporaries), use input constraint — the value must
+   // be computed but we can't use output constraint on const.
    asm volatile("" : : "r,m"(val) : "memory");
 }
 inline void clobber_memory()
@@ -318,22 +328,57 @@ void bench_unpack()
    bench("cp-unpack/Point", pt_buf.size(), [&] {
       auto pt = psio::capnp_unpack<BPoint>(pt_buf.data());
       do_not_optimize(pt.x);
+      do_not_optimize(pt.y);
    });
    bench("cp-unpack/Token", tok_buf.size(), [&] {
       auto tok = psio::capnp_unpack<BToken>(tok_buf.data());
       do_not_optimize(tok.kind);
+      do_not_optimize(tok.offset);
+      do_not_optimize(tok.length);
+      do_not_optimize(tok.text);
    });
    bench("cp-unpack/UserProfile", user_buf.size(), [&] {
       auto u = psio::capnp_unpack<BUserProfile>(user_buf.data());
       do_not_optimize(u.id);
+      do_not_optimize(u.name);
+      do_not_optimize(u.email);
+      do_not_optimize(u.bio);
+      do_not_optimize(u.age);
+      do_not_optimize(u.score);
+      do_not_optimize(u.tags);
+      do_not_optimize(u.verified);
    });
    bench("cp-unpack/Order", order_buf.size(), [&] {
       auto o = psio::capnp_unpack<BOrder>(order_buf.data());
       do_not_optimize(o.id);
+      do_not_optimize(o.customer.name);
+      do_not_optimize(o.customer.email);
+      do_not_optimize(o.customer.bio);
+      do_not_optimize(o.customer.tags);
+      do_not_optimize(o.items);
+      do_not_optimize(o.total);
+      do_not_optimize(o.note);
    });
    bench("cp-unpack/SensorReading", sens_buf.size(), [&] {
       auto s = psio::capnp_unpack<BSensorReading>(sens_buf.data());
       do_not_optimize(s.timestamp);
+      do_not_optimize(s.device_id);
+      do_not_optimize(s.temp);
+      do_not_optimize(s.humidity);
+      do_not_optimize(s.pressure);
+      do_not_optimize(s.accel_x);
+      do_not_optimize(s.accel_y);
+      do_not_optimize(s.accel_z);
+      do_not_optimize(s.gyro_x);
+      do_not_optimize(s.gyro_y);
+      do_not_optimize(s.gyro_z);
+      do_not_optimize(s.mag_x);
+      do_not_optimize(s.mag_y);
+      do_not_optimize(s.mag_z);
+      do_not_optimize(s.battery);
+      do_not_optimize(s.signal_dbm);
+      do_not_optimize(s.error_code);
+      do_not_optimize(s.firmware);
    });
 }
 
