@@ -1055,9 +1055,10 @@ namespace psio
          }
       };
 
-      // Forward declaration for recursive packing
-      template <typename T>
-      void pack_struct(capnp_word_buf& buf, uint32_t data_start,
+      // Forward declaration for recursive packing (templated on Builder
+      // so the same logic works with both capnp_word_buf and capnp_seg_builder)
+      template <typename T, typename Builder>
+      void pack_struct(Builder& buf, uint32_t data_start,
                        uint32_t ptrs_start, const T& obj);
 
       // Capnp element size tag for a scalar type
@@ -1079,8 +1080,8 @@ namespace psio
       }
 
       // Pack a vector into capnp wire format, writing the list pointer at ptr_word
-      template <typename E>
-      void pack_vec(capnp_word_buf& buf, uint32_t ptr_word, const std::vector<E>& vec)
+      template <typename E, typename Builder>
+      void pack_vec(Builder& buf, uint32_t ptr_word, const std::vector<E>& vec)
       {
          if (vec.empty())
             return;  // null pointer = empty list
@@ -1162,8 +1163,8 @@ namespace psio
       }
 
       // Pack a single value of type A into the given location
-      template <typename T, typename A, size_t FieldIdx>
-      void pack_one_value(capnp_word_buf& buf, uint32_t data_start,
+      template <typename T, typename A, size_t FieldIdx, typename Builder>
+      void pack_one_value(Builder& buf, uint32_t data_start,
                           uint32_t ptrs_start, const A& val,
                           typename capnp_layout<T>::field_loc aloc)
       {
@@ -1204,8 +1205,8 @@ namespace psio
       }
 
       // Pack one field (N and member pointer always in sync)
-      template <typename T, size_t N, typename MemberPtr>
-      void pack_one_field(capnp_word_buf& buf, uint32_t data_start,
+      template <typename T, size_t N, typename MemberPtr, typename Builder>
+      void pack_one_field(Builder& buf, uint32_t data_start,
                           uint32_t ptrs_start, const T& obj, MemberPtr mp)
       {
          using F      = std::remove_cvref_t<decltype(obj.*mp)>;
@@ -1288,8 +1289,8 @@ namespace psio
       }
 
       // Pack all fields of struct T
-      template <typename T>
-      void pack_struct(capnp_word_buf& buf, uint32_t data_start,
+      template <typename T, typename Builder>
+      void pack_struct(Builder& buf, uint32_t data_start,
                        uint32_t ptrs_start, const T& obj)
       {
          apply_members(
@@ -1487,5 +1488,474 @@ namespace psio
       auto root = capnp_detail::resolve_struct_ptr(seg_start);
       return capnp_detail::validate_struct(seg_start, seg_end, root, words_left);
    }
+
+   // ══════════════════════════════════════════════════════════════════════════
+   // capnp_ref — mutable reference over Cap'n Proto wire data
+   //
+   // Provides field-level in-place mutation of capnp flat-array messages.
+   // Scalar fields are overwritten in-place.  Pointer fields (strings, vectors,
+   // nested structs) allocate new space at the end of the segment and repoint
+   // the pointer — old data becomes dead space.  No sibling/ancestor offset
+   // patching is needed (unlike fracpack) because capnp pointers are
+   // self-contained relative offsets.
+   //
+   // Usage:
+   //   auto data = capnp_pack(my_obj);
+   //   capnp_ref<MyStruct> ref(std::move(data));
+   //   auto f = ref.fields();
+   //   uint32_t id = f.id();         // read via implicit conversion
+   //   f.id() = 42;                  // write scalar in-place
+   //   f.name() = "new name";        // write string (grows segment)
+   //   f.items() = {1, 2, 3};        // write vector (grows segment)
+   //   f.customer().age() = 30;      // drill into nested struct
+   //
+   // Buffer capability tiers (deduced from Buffer type):
+   //   span<const uint8_t>   → read-only
+   //   span<uint8_t>         → read + scalar overwrite
+   //   vector<uint8_t>       → read + full mutation (grow segment)
+   // ══════════════════════════════════════════════════════════════════════════
+
+   namespace capnp_detail
+   {
+      // ── Buffer capability traits ─────────────────────────────────────────
+
+      template <typename Buffer>
+      struct capnp_buf_traits
+      {
+         static constexpr bool is_const = []
+         {
+            if constexpr (requires(Buffer& b) { b.data(); })
+               return std::is_const_v<
+                   std::remove_pointer_t<decltype(std::declval<Buffer>().data())>>;
+            else
+               return true;
+         }();
+         static constexpr bool can_resize =
+             requires(Buffer& b) { b.resize(size_t{}); };
+         static constexpr bool can_write = !is_const;
+         static constexpr bool can_grow  = can_write && can_resize;
+      };
+
+      // ── Segment builder for mutation ─────────────────────────────────────
+      //
+      // Same interface as capnp_word_buf but operates on an existing flat-array
+      // message (header + segment).  Word indices are within the segment.
+
+      class capnp_seg_builder
+      {
+         std::vector<uint8_t>& msg_;
+
+        public:
+         explicit capnp_seg_builder(std::vector<uint8_t>& msg) : msg_(msg) {}
+
+         uint32_t seg_words() const
+         {
+            uint32_t w;
+            std::memcpy(&w, msg_.data() + 4, 4);
+            return w;
+         }
+
+         uint32_t alloc(uint32_t n)
+         {
+            uint32_t off       = seg_words();
+            uint32_t new_words = off + n;
+            msg_.resize(8 + static_cast<size_t>(new_words) * 8, 0);
+            std::memcpy(msg_.data() + 4, &new_words, 4);
+            return off;
+         }
+
+         uint8_t* byte_ptr(uint32_t word_idx)
+         {
+            return msg_.data() + 8 + static_cast<size_t>(word_idx) * 8;
+         }
+
+         void write_struct_ptr(uint32_t at, uint32_t target, uint16_t dw,
+                               uint16_t pc)
+         {
+            int32_t  off  = static_cast<int32_t>(target) - static_cast<int32_t>(at) - 1;
+            uint64_t word = (uint64_t(pc) << 48) | (uint64_t(dw) << 32) |
+                            (static_cast<uint32_t>(off << 2) & 0xFFFFFFFFu);
+            std::memcpy(byte_ptr(at), &word, 8);
+         }
+
+         void write_list_ptr(uint32_t at, uint32_t target, uint8_t elem_sz,
+                             uint32_t count)
+         {
+            int32_t  off  = static_cast<int32_t>(target) - static_cast<int32_t>(at) - 1;
+            uint64_t word = (uint64_t(count) << 35) | (uint64_t(elem_sz) << 32) |
+                            (static_cast<uint32_t>(off << 2) & 0xFFFFFFFFu) | 1u;
+            std::memcpy(byte_ptr(at), &word, 8);
+         }
+
+         void write_composite_tag(uint32_t at, uint32_t count, uint16_t dw,
+                                  uint16_t pc)
+         {
+            uint64_t word = (uint64_t(pc) << 48) | (uint64_t(dw) << 32) |
+                            (static_cast<uint32_t>(count) << 2);
+            std::memcpy(byte_ptr(at), &word, 8);
+         }
+
+         template <typename V>
+         void write_field(uint32_t struct_start, uint32_t byte_offset, V val)
+         {
+            std::memcpy(byte_ptr(struct_start) + byte_offset, &val, sizeof(val));
+         }
+
+         void write_bool(uint32_t struct_start, uint32_t byte_offset,
+                         uint8_t bit, bool val)
+         {
+            auto* p = byte_ptr(struct_start) + byte_offset;
+            if (val)
+               *p |= (1u << bit);
+            else
+               *p &= ~(1u << bit);
+         }
+
+         void write_text(uint32_t ptr_word, std::string_view text)
+         {
+            uint32_t len     = static_cast<uint32_t>(text.size());
+            uint32_t total   = len + 1;
+            uint32_t n_words = (total + 7) / 8;
+            uint32_t target  = alloc(n_words);
+            write_list_ptr(ptr_word, target, 2, total);
+            std::memcpy(byte_ptr(target), text.data(), len);
+            byte_ptr(target)[len] = 0;
+         }
+
+         void write_text(uint32_t ptr_word, const std::string& text)
+         {
+            write_text(ptr_word, std::string_view(text));
+         }
+      };
+
+      // ── capnp_field_handle ───────────────────────────────────────────────
+      //
+      // Read/write handle for a single field of a capnp struct.
+      // Reading returns the zero-copy view type; writing accepts the native type.
+
+      template <typename T, typename Buffer>
+      class capnp_proxy_obj;  // forward decl
+
+      template <typename Root, typename FieldType, typename Buffer, size_t FieldIdx>
+      class capnp_field_handle
+      {
+         Buffer*  buf_;
+         uint32_t struct_data_byte_;  // byte offset of struct data section from seg start
+         uint16_t data_words_;
+         uint16_t ptr_count_;
+
+         static constexpr bool can_write = capnp_buf_traits<Buffer>::can_write;
+         static constexpr bool can_grow  = capnp_buf_traits<Buffer>::can_grow;
+
+         capnp_ptr make_ptr() const
+         {
+            auto* seg = reinterpret_cast<const uint8_t*>(buf_->data()) + 8;
+            return {seg + struct_data_byte_, data_words_, ptr_count_};
+         }
+
+         uint32_t data_start_word() const { return struct_data_byte_ / 8; }
+         uint32_t ptrs_start_word() const { return data_start_word() + data_words_; }
+
+        public:
+         capnp_field_handle(Buffer* b, uint32_t sdb, uint16_t dw, uint16_t pc)
+             : buf_(b), struct_data_byte_(sdb), data_words_(dw), ptr_count_(pc)
+         {
+         }
+
+         // ── Read ──────────────────────────────────────────────────────────
+         auto get() const { return capnp_view_field<Root, FieldIdx>(make_ptr()); }
+
+         using view_type =
+             decltype(capnp_view_field<Root, FieldIdx>(std::declval<capnp_ptr>()));
+         operator view_type() const { return get(); }
+
+         // ── Write: data-section scalar/enum/bool (in-place) ───────────────
+         capnp_field_handle& operator=(const FieldType& v)
+            requires(is_data_type<FieldType>() && can_write &&
+                     !is_variant_type<FieldType>::value)
+         {
+            using layout       = capnp_layout<Root>;
+            constexpr auto loc = layout::loc(FieldIdx);
+            static_assert(!loc.is_ptr, "data field must be in data section");
+
+            auto* data =
+                reinterpret_cast<uint8_t*>(buf_->data()) + 8 + struct_data_byte_;
+
+            if constexpr (std::is_same_v<FieldType, bool>)
+            {
+               bool wire = xor_default(v, field_default<Root, FieldIdx, bool>());
+               if (wire)
+                  data[loc.offset] |= (1u << loc.bit_index);
+               else
+                  data[loc.offset] &= ~(1u << loc.bit_index);
+            }
+            else if constexpr (std::is_enum_v<FieldType>)
+            {
+               using U = std::underlying_type_t<FieldType>;
+               U def   = static_cast<U>(field_default<Root, FieldIdx, FieldType>());
+               U wire  = xor_default(static_cast<U>(v), def);
+               std::memcpy(data + loc.offset, &wire, sizeof(U));
+            }
+            else
+            {
+               FieldType wire =
+                   xor_default(v, field_default<Root, FieldIdx, FieldType>());
+               std::memcpy(data + loc.offset, &wire, sizeof(FieldType));
+            }
+            return *this;
+         }
+
+         // ── Write: string (allocate at end, repoint) ──────────────────────
+         capnp_field_handle& operator=(std::string_view v)
+            requires(std::is_same_v<FieldType, std::string> && can_grow)
+         {
+            using layout       = capnp_layout<Root>;
+            constexpr auto loc = layout::loc(FieldIdx);
+            static_assert(loc.is_ptr, "string field must be a pointer");
+
+            uint32_t ptr_word = ptrs_start_word() + loc.offset;
+
+            if (v.empty())
+            {
+               // Zero the pointer — represents empty/null string
+               uint64_t zero = 0;
+               std::memcpy(buf_->data() + 8 + ptr_word * 8, &zero, 8);
+               return *this;
+            }
+
+            capnp_seg_builder sb(*buf_);
+            sb.write_text(ptr_word, v);
+            return *this;
+         }
+
+         capnp_field_handle& operator=(const std::string& v)
+            requires(std::is_same_v<FieldType, std::string> && can_grow)
+         {
+            return *this = std::string_view(v);
+         }
+
+         capnp_field_handle& operator=(const char* v)
+            requires(std::is_same_v<FieldType, std::string> && can_grow)
+         {
+            return *this = std::string_view(v);
+         }
+
+         // ── Write: vector (allocate at end, repoint) ──────────────────────
+         capnp_field_handle& operator=(const FieldType& v)
+            requires(is_vector<FieldType>::value && can_grow)
+         {
+            using layout       = capnp_layout<Root>;
+            constexpr auto loc = layout::loc(FieldIdx);
+            static_assert(loc.is_ptr, "vector field must be a pointer");
+
+            uint32_t ptr_word = ptrs_start_word() + loc.offset;
+
+            if (v.empty())
+            {
+               uint64_t zero = 0;
+               std::memcpy(buf_->data() + 8 + ptr_word * 8, &zero, 8);
+               return *this;
+            }
+
+            capnp_seg_builder sb(*buf_);
+            using E = typename is_vector<FieldType>::element_type;
+            pack_vec<E>(sb, ptr_word, v);
+            return *this;
+         }
+
+         // ── Write: nested struct (allocate at end, repoint) ───────────────
+         capnp_field_handle& operator=(const FieldType& v)
+            requires(Reflected<FieldType> && !std::is_enum_v<FieldType> &&
+                     !is_variant_type<FieldType>::value &&
+                     !is_data_type<FieldType>() && can_grow)
+         {
+            using layout       = capnp_layout<Root>;
+            constexpr auto loc = layout::loc(FieldIdx);
+            static_assert(loc.is_ptr, "struct field must be a pointer");
+
+            capnp_seg_builder sb(*buf_);
+            uint32_t          ptr_word = ptrs_start_word() + loc.offset;
+
+            using FL     = capnp_layout<FieldType>;
+            uint32_t cd  = sb.alloc(FL::data_words);
+            uint32_t cp_ = sb.alloc(FL::ptr_count);
+            sb.write_struct_ptr(ptr_word, cd, FL::data_words, FL::ptr_count);
+            pack_struct(sb, cd, cp_, v);
+            return *this;
+         }
+
+         // ── Write: variant (set discriminant + active alternative) ────────
+         capnp_field_handle& operator=(const FieldType& v)
+            requires(is_variant_type<FieldType>::value && can_grow)
+         {
+            using layout       = capnp_layout<Root>;
+            capnp_seg_builder sb(*buf_);
+
+            uint32_t dw = data_start_word();
+            uint32_t pw = ptrs_start_word();
+
+            // Write discriminant
+            constexpr auto disc_loc = layout::loc(FieldIdx);
+            uint16_t       disc     = static_cast<uint16_t>(v.index());
+            sb.write_field(dw, disc_loc.offset, disc);
+
+            // Write the active alternative's value
+            [&]<size_t... Js>(std::index_sequence<Js...>)
+            {
+               ((v.index() == Js
+                     ? [&]
+                   {
+                      constexpr auto aloc = layout::alt_loc(FieldIdx, Js);
+                      using A = std::variant_alternative_t<Js, FieldType>;
+                      pack_one_value<Root, A, FieldIdx>(sb, dw, pw,
+                                                        std::get<Js>(v), aloc);
+                      return true;
+                   }()
+                     : false) ||
+                ...);
+            }(std::make_index_sequence<std::variant_size_v<FieldType>>{});
+
+            return *this;
+         }
+      };
+
+      // ── capnp_proxy_obj ──────────────────────────────────────────────────
+      //
+      // Bridges PSIO_REFLECT's proxy pattern to capnp_field_handle.
+      // For struct fields → returns a nested proxy (enabling drill-in).
+      // For leaf fields → returns a capnp_field_handle (enabling read/write).
+
+      template <typename T, typename Buffer>
+      class capnp_proxy_obj
+      {
+         Buffer*  buf_;
+         uint32_t struct_data_byte_;  // data section byte offset from seg start
+         uint16_t data_words_;
+         uint16_t ptr_count_;
+
+        public:
+         capnp_proxy_obj(Buffer* b, uint32_t sdb, uint16_t dw, uint16_t pc)
+             : buf_(b), struct_data_byte_(sdb), data_words_(dw), ptr_count_(pc)
+         {
+         }
+
+         template <int I, auto MemberPtr>
+         decltype(auto) get()
+         {
+            using F            = std::remove_cvref_t<decltype(std::declval<T>().*MemberPtr)>;
+            constexpr size_t idx = static_cast<size_t>(I);
+
+            if constexpr (Reflected<F> && !std::is_enum_v<F> &&
+                          !is_variant_type<F>::value && !is_vector<F>::value &&
+                          !std::is_arithmetic_v<F> &&
+                          !std::is_same_v<F, std::string>)
+            {
+               // Nested struct → resolve pointer, return nested proxy
+               using layout       = capnp_layout<T>;
+               constexpr auto loc = layout::loc(idx);
+               static_assert(loc.is_ptr, "nested struct must be a pointer field");
+
+               uint32_t ptr_byte =
+                   struct_data_byte_ + data_words_ * 8 + loc.offset * 8;
+               const auto* seg =
+                   reinterpret_cast<const uint8_t*>(buf_->data()) + 8;
+               uint64_t word;
+               std::memcpy(&word, seg + ptr_byte, 8);
+
+               if (word == 0)
+               {
+                  // Null pointer — create proxy at offset 0 with zero layout.
+                  // Reads return defaults; writes require allocating the struct
+                  // first (not yet supported — use operator= on parent).
+                  using inner_proxy = capnp_proxy_obj<F, Buffer>;
+                  using proxy_type =
+                      typename reflect<F>::template proxy<inner_proxy>;
+                  return proxy_type{inner_proxy{buf_, 0, 0, 0}};
+               }
+
+               int32_t  off = ptr_offset(word);
+               uint16_t dw  = static_cast<uint16_t>((word >> 32) & 0xFFFF);
+               uint16_t pc  = static_cast<uint16_t>((word >> 48) & 0xFFFF);
+               uint32_t target_byte =
+                   ptr_byte + 8 + static_cast<int32_t>(off) * 8;
+
+               using inner_proxy = capnp_proxy_obj<F, Buffer>;
+               using proxy_type =
+                   typename reflect<F>::template proxy<inner_proxy>;
+               return proxy_type{inner_proxy{buf_, target_byte, dw, pc}};
+            }
+            else
+            {
+               // Leaf field → return field handle
+               return capnp_field_handle<T, F, Buffer, idx>{
+                   buf_, struct_data_byte_, data_words_, ptr_count_};
+            }
+         }
+
+         template <int I, auto MemberPtr>
+         decltype(auto) get() const
+         {
+            return const_cast<capnp_proxy_obj*>(this)
+                ->template get<I, MemberPtr>();
+         }
+      };
+
+   }  // namespace capnp_detail
+
+   // ── capnp_ref: top-level typed handle over a capnp message ────────────────
+
+   template <typename T, typename Buffer = std::vector<uint8_t>>
+      requires Reflected<T>
+   class capnp_ref
+   {
+      Buffer buf_;
+
+      using proxy_obj_t = capnp_detail::capnp_proxy_obj<T, Buffer>;
+      using proxy_t     = typename reflect<T>::template proxy<proxy_obj_t>;
+
+      // Resolve root struct from the flat-array message
+      auto root_info() const
+      {
+         auto* seg = reinterpret_cast<const uint8_t*>(buf_.data()) + 8;
+         auto  root = capnp_detail::resolve_struct_ptr(seg);
+         return std::tuple{
+             static_cast<uint32_t>(root.data - seg), root.data_words,
+             root.ptr_count};
+      }
+
+     public:
+      explicit capnp_ref(Buffer b) : buf_(std::move(b)) {}
+
+      /// Named field accessors.  Each accessor returns either a field_handle
+      /// (for leaf fields) or a nested proxy (for struct fields).
+      proxy_t fields()
+      {
+         auto [data_byte, dw, pc] = root_info();
+         return proxy_t{proxy_obj_t{&buf_, data_byte, dw, pc}};
+      }
+
+      /// Read-only view of the message
+      view<T, cp> as_view() const
+      {
+         auto p = capnp_detail::resolve_struct_ptr(
+             reinterpret_cast<const uint8_t*>(buf_.data()) + 8);
+         return view<T, cp>(p);
+      }
+
+      /// Unpack to native struct
+      T unpack() const { return capnp_unpack<T>(buf_.data()); }
+
+      /// Validate the message
+      bool validate() const { return capnp_validate(buf_.data(), buf_.size()); }
+
+      /// Raw buffer access
+      const uint8_t* data() const
+      {
+         return reinterpret_cast<const uint8_t*>(buf_.data());
+      }
+      size_t         size() const { return buf_.size(); }
+      Buffer&        buffer() { return buf_; }
+      const Buffer&  buffer() const { return buf_; }
+   };
 
 }  // namespace psio

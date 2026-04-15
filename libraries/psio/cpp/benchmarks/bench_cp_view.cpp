@@ -472,6 +472,87 @@ void bench_validate()
    });
 }
 
+// ── Mutation benchmarks ──────────────────────────────────────────────────────
+
+void bench_mutate()
+{
+   print_header("Mutate (capnp_ref — in-place field mutation)");
+
+   // --- Point: mutate 2 scalars ---
+   auto pt_data = psio::capnp_pack(make_point());
+   bench("cp-mutate-scalar/Point", pt_data.size(),
+         [&]
+         {
+            psio::capnp_ref<BPoint> ref(pt_data);
+            auto                    f = ref.fields();
+            f.x() = 99.0;
+            f.y() = -1.0;
+            do_not_optimize(ref.data());
+            pt_data = std::move(ref.buffer());
+         });
+
+   // --- Token: mutate scalar + string ---
+   auto tok_data = psio::capnp_pack(make_token());
+   bench("cp-mutate-scalar+string/Token", tok_data.size(),
+         [&]
+         {
+            psio::capnp_ref<BToken> ref(tok_data);
+            auto                    f = ref.fields();
+            f.kind()   = uint16_t(99);
+            f.offset() = uint32_t(2048);
+            f.text()   = "mutated_identifier";
+            do_not_optimize(ref.data());
+            // Reset to original size to avoid unbounded growth
+            tok_data = psio::capnp_pack(make_token());
+         });
+
+   // --- UserProfile: mutate nested string + scalar ---
+   auto user_data = psio::capnp_pack(make_user());
+   bench("cp-mutate-string/UserProfile", user_data.size(),
+         [&]
+         {
+            psio::capnp_ref<BUserProfile> ref(user_data);
+            auto                          f = ref.fields();
+            f.name()  = "Bob Smith";
+            f.score() = 77.7;
+            do_not_optimize(ref.data());
+            user_data = psio::capnp_pack(make_user());
+         });
+
+   // --- Point: mutate scalar only (no growth, pure in-place) ---
+   auto pt2 = psio::capnp_pack(make_point());
+   bench("cp-mutate-scalar-only/Point", pt2.size(),
+         [&]
+         {
+            psio::capnp_ref<BPoint> ref(pt2);
+            auto                    f = ref.fields();
+            f.x() = 1.0;
+            f.y() = 2.0;
+            do_not_optimize(ref.data());
+            pt2 = std::move(ref.buffer());
+         });
+
+   // --- SensorReading: mutate many scalars (13 fields) ---
+   auto sens_data = psio::capnp_pack(make_sensor());
+   bench("cp-mutate-many-scalars/Sensor", sens_data.size(),
+         [&]
+         {
+            psio::capnp_ref<BSensorReading> ref(sens_data);
+            auto                            f = ref.fields();
+            f.temp()     = 25.0;
+            f.humidity() = 60.0;
+            f.pressure() = 1013.0;
+            f.accel_x()  = 0.1;
+            f.accel_y()  = 0.2;
+            f.accel_z()  = 9.8;
+            f.battery()  = 3.7f;
+            f.signal_dbm() = int16_t(-50);
+            f.error_code() = uint32_t(0);
+            do_not_optimize(ref.data());
+            sens_data = std::move(ref.buffer());
+         });
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main()
@@ -484,6 +565,7 @@ int main()
    bench_view();
    bench_view_one();
    bench_validate();
+   bench_mutate();
 
    // Summary
    std::printf("\n=== Summary ===\n");

@@ -1253,3 +1253,364 @@ TEST_CASE("cp vec_view iterator is random access", "[view][cp]")
    using iter = psio::vec_view<CpLineItem, psio::cp>::iterator;
    STATIC_REQUIRE(std::random_access_iterator<iter>);
 }
+
+// ============================================================================
+//  MUTATION TESTS (capnp_ref)
+// ============================================================================
+
+struct CpDefaults
+{
+   int32_t count = 10;
+   double  ratio = 2.5;
+};
+PSIO_REFLECT(CpDefaults, count, ratio)
+
+TEST_CASE("cp ref: read scalar fields", "[ref][cp]")
+{
+   CpToken tok{3, 100, 42, "hello"};
+   auto    data = psio::capnp_pack(tok);
+
+   psio::capnp_ref<CpToken> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   uint16_t k = f.kind();
+   uint32_t o = f.offset();
+   uint32_t l = f.length();
+
+   REQUIRE(k == 3);
+   REQUIRE(o == 100);
+   REQUIRE(l == 42);
+
+   std::string_view t = f.text();
+   REQUIRE(t == "hello");
+}
+
+TEST_CASE("cp ref: mutate scalar field", "[ref][cp]")
+{
+   CpToken tok{3, 100, 42, "hello"};
+   auto    data = psio::capnp_pack(tok);
+
+   psio::capnp_ref<CpToken> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   // Verify original
+   REQUIRE(uint16_t(f.kind()) == 3);
+   REQUIRE(uint32_t(f.offset()) == 100);
+
+   // Mutate
+   f.kind()   = uint16_t(7);
+   f.offset() = uint32_t(999);
+
+   // Verify mutation
+   REQUIRE(uint16_t(f.kind()) == 7);
+   REQUIRE(uint32_t(f.offset()) == 999);
+
+   // Verify via unpack round-trip
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.kind == 7);
+   REQUIRE(unpacked.offset == 999);
+   REQUIRE(unpacked.length == 42);   // unchanged
+   REQUIRE(unpacked.text == "hello");  // unchanged
+}
+
+TEST_CASE("cp ref: mutate string field", "[ref][cp]")
+{
+   CpToken tok{1, 0, 0, "old"};
+   auto    data = psio::capnp_pack(tok);
+
+   psio::capnp_ref<CpToken> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   REQUIRE(std::string_view(f.text()) == "old");
+
+   // Mutate the string
+   f.text() = "new and longer string";
+
+   // Verify via view
+   REQUIRE(std::string_view(f.text()) == "new and longer string");
+
+   // Verify via unpack
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.text == "new and longer string");
+   REQUIRE(unpacked.kind == 1);  // unchanged
+
+   // Validate the mutated message
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: mutate string to empty", "[ref][cp]")
+{
+   CpToken tok{1, 0, 0, "hello"};
+   auto    data = psio::capnp_pack(tok);
+
+   psio::capnp_ref<CpToken> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   f.text() = "";
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.text.empty());
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: mutate vector field", "[ref][cp]")
+{
+   CpUser user{};
+   user.id   = 1;
+   user.name = "test";
+   user.tags = {"a", "b"};
+   auto data = psio::capnp_pack(user);
+
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   auto                    f = ref.fields();
+
+   // Read original
+   auto tags = f.tags().get();
+   REQUIRE(tags.size() == 2);
+
+   // Mutate to larger vector
+   f.tags() = std::vector<std::string>{"x", "y", "z", "w"};
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.tags.size() == 4);
+   REQUIRE(unpacked.tags[0] == "x");
+   REQUIRE(unpacked.tags[1] == "y");
+   REQUIRE(unpacked.tags[2] == "z");
+   REQUIRE(unpacked.tags[3] == "w");
+   REQUIRE(unpacked.id == 1);    // unchanged
+   REQUIRE(unpacked.name == "test");  // unchanged
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: mutate vector to empty", "[ref][cp]")
+{
+   CpUser user{};
+   user.tags = {"a", "b"};
+   auto data = psio::capnp_pack(user);
+
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   ref.fields().tags() = std::vector<std::string>{};
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.tags.empty());
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: drill into nested struct", "[ref][cp]")
+{
+   CpOrder order{};
+   order.id            = 42;
+   order.customer.id   = 7;
+   order.customer.name = "Alice";
+   order.customer.age  = 30;
+   order.total         = 99.99;
+   auto data = psio::capnp_pack(order);
+
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   // Read through nested proxy
+   uint64_t cid = f.customer().id();
+   REQUIRE(cid == 7);
+
+   std::string_view cname = f.customer().name();
+   REQUIRE(cname == "Alice");
+
+   uint32_t cage = f.customer().age();
+   REQUIRE(cage == 30);
+
+   // Mutate nested scalar
+   f.customer().age() = uint32_t(31);
+   REQUIRE(uint32_t(f.customer().age()) == 31);
+
+   // Mutate nested string
+   f.customer().name() = "Bob";
+   REQUIRE(std::string_view(f.customer().name()) == "Bob");
+
+   // Verify top-level unchanged
+   REQUIRE(uint64_t(f.id()) == 42);
+
+   // Full round-trip
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.id == 42);
+   REQUIRE(unpacked.customer.id == 7);
+   REQUIRE(unpacked.customer.name == "Bob");
+   REQUIRE(unpacked.customer.age == 31);
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: mutate variant field", "[ref][cp]")
+{
+   // Start with circle variant (double)
+   CpShape shape{};
+   shape.area  = 10.0;
+   shape.shape = 3.14;  // circle radius
+   auto data = psio::capnp_pack(shape);
+
+   psio::capnp_ref<CpShape> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   // Read original
+   REQUIRE(double(f.area()) == Approx(10.0));
+   auto var = f.shape().get();
+   REQUIRE(var.index() == 0);
+   REQUIRE(std::get<0>(var) == Approx(3.14));
+
+   // Mutate to string variant (rectangle description)
+   f.shape() = std::variant<double, std::string, std::monostate>{
+       std::string("wide rectangle")};
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.area == Approx(10.0));
+   REQUIRE(unpacked.shape.index() == 1);
+   REQUIRE(std::get<1>(unpacked.shape) == "wide rectangle");
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: mutate variant to void", "[ref][cp]")
+{
+   CpShape shape{};
+   shape.area  = 5.0;
+   shape.shape = 1.0;  // circle
+   auto data = psio::capnp_pack(shape);
+
+   psio::capnp_ref<CpShape> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   // Mutate to monostate (void)
+   f.shape() = std::variant<double, std::string, std::monostate>{
+       std::monostate{}};
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.shape.index() == 2);
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: mutate nested struct fields individually", "[ref][cp]")
+{
+   CpOrder order{};
+   order.id            = 1;
+   order.customer.id   = 5;
+   order.customer.name = "old";
+   order.customer.age  = 20;
+   auto data = psio::capnp_pack(order);
+
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   // Replace individual fields via drill-in
+   f.customer().id()   = uint64_t(99);
+   f.customer().name() = "New Customer";
+   f.customer().age()  = uint32_t(25);
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.id == 1);  // unchanged
+   REQUIRE(unpacked.customer.id == 99);
+   REQUIRE(unpacked.customer.name == "New Customer");
+   REQUIRE(unpacked.customer.age == 25);
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: mutate scalar vector field", "[ref][cp]")
+{
+   CpMatrix mat{};
+   mat.id   = 1;
+   mat.rows = {{1, 2, 3}, {4, 5, 6}};
+   auto data = psio::capnp_pack(mat);
+
+   psio::capnp_ref<CpMatrix> ref(std::move(data));
+
+   // Replace with different data
+   ref.fields().rows() =
+       std::vector<std::vector<uint32_t>>{{10, 20}, {30, 40}, {50, 60}};
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.id == 1);
+   REQUIRE(unpacked.rows.size() == 3);
+   REQUIRE(unpacked.rows[0] == std::vector<uint32_t>{10, 20});
+   REQUIRE(unpacked.rows[1] == std::vector<uint32_t>{30, 40});
+   REQUIRE(unpacked.rows[2] == std::vector<uint32_t>{50, 60});
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: multiple mutations compound correctly", "[ref][cp]")
+{
+   CpToken tok{1, 10, 20, "start"};
+   auto    data = psio::capnp_pack(tok);
+
+   psio::capnp_ref<CpToken> ref(std::move(data));
+   auto                     f = ref.fields();
+
+   // Multiple scalar mutations
+   f.kind()   = uint16_t(5);
+   f.offset() = uint32_t(50);
+   f.length() = uint32_t(100);
+
+   // String mutation
+   f.text() = "after first mutation";
+
+   // Another string mutation (creates more dead space)
+   f.text() = "final value";
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.kind == 5);
+   REQUIRE(unpacked.offset == 50);
+   REQUIRE(unpacked.length == 100);
+   REQUIRE(unpacked.text == "final value");
+   REQUIRE(ref.validate());
+}
+
+TEST_CASE("cp ref: as_view returns valid view", "[ref][cp]")
+{
+   CpToken tok{3, 100, 42, "hello"};
+   auto    data = psio::capnp_pack(tok);
+
+   psio::capnp_ref<CpToken> ref(std::move(data));
+   auto                     v = ref.as_view();
+
+   REQUIRE(v.kind() == 3);
+   REQUIRE(v.offset() == 100);
+   REQUIRE(v.text() == "hello");
+}
+
+TEST_CASE("cp ref: bool mutation", "[ref][cp]")
+{
+   CpUser user{};
+   user.verified = false;
+   auto data = psio::capnp_pack(user);
+
+   psio::capnp_ref<CpUser> ref(std::move(data));
+   auto                    f = ref.fields();
+
+   REQUIRE(bool(f.verified()) == false);
+
+   f.verified() = true;
+   REQUIRE(bool(f.verified()) == true);
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.verified == true);
+}
+
+TEST_CASE("cp ref: default-value XOR round-trip", "[ref][cp]")
+{
+   // CpDefaults has non-zero defaults: count=10, ratio=2.5
+   CpDefaults d{};
+   d.count = 10;  // equal to default
+   d.ratio = 2.5;
+   auto data = psio::capnp_pack(d);
+
+   psio::capnp_ref<CpDefaults> ref(std::move(data));
+   auto                        f = ref.fields();
+
+   // Read back — should get the original values
+   REQUIRE(int32_t(f.count()) == 10);
+   REQUIRE(double(f.ratio()) == Approx(2.5));
+
+   // Mutate to non-default value
+   f.count() = int32_t(42);
+   f.ratio()  = 7.77;
+
+   auto unpacked = ref.unpack();
+   REQUIRE(unpacked.count == 42);
+   REQUIRE(unpacked.ratio == Approx(7.77));
+}
