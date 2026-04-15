@@ -10,35 +10,35 @@ At a Glance
 
 Columns ordered left-to-right by similarity to fracpack.
 
-                        Frac Cap'n Flat       Proto       Msg        Bin  ASN1
-                        pack Proto Buf  Borsh buf  CBOR   Pack Avro  code DER  BSON JSON Boost
-                        ---- ----- ---- ----- ---- ----   ---- ----  ---- ---- ---- ---- -----
+                        Frac  WIT  Cap'n Flat       Proto       Msg        Bin  ASN1
+                        pack  ABI  Proto Buf  Borsh buf  CBOR   Pack Avro  code DER  BSON JSON Boost
+                        ----  ---  ----- ---- ----- ---- ----   ---- ----  ---- ---- ---- ---- -----
   DATA ACCESS
-  Zero-copy views        Y    Y     Y    .     .    .      .    .     .    .    .    .    .
-  Safe in-place mutate   Y    Y     !!   .     .    .      .    .     .    .    ~    .    .
-  Compact (no padding)   Y    .     ~    Y     Y    Y      Y    Y     Y    ~    .    .    ~
+  Zero-copy views        Y     Y    Y     Y    .     .    .      .    .     .    .    .    .    .
+  Safe in-place mutate   Y     Y    Y     !!   .     .    .      .    .     .    .    ~    .    .
+  Compact (no padding)   Y     .    .     ~    Y     Y    Y      Y    Y     Y    ~    .    .    ~
 
   CORRECTNESS
-  Canonical encoding     Y    ~     .    Y     .    Y      .    .     ~    Y    .    .    .
-  Validate w/o unpack    Y    Y     Y    .     .    .      .    .     .    .    .    .    .
+  Canonical encoding     Y     Y    ~     .    Y     .    Y      .    .     ~    Y    .    .    .
+  Validate w/o unpack    Y     ~    Y     Y    .     .    .      .    .     .    .    .    .    .
 
   EVOLUTION
-  Forward compat [1]   Y [3] Y     Y    .     Y    ~      ~    ~     .    ~    ~    Y    ~
-  Backward compat [2]  Y [3] Y     Y    .     Y    ~      ~    Y     .    ~    ~    ~    ~
+  Forward compat [1]   Y [3]  .    Y     Y    .     Y    ~      ~    ~     .    ~    ~    Y    ~
+  Backward compat [2]  Y [3]  .    Y     Y    .     Y    ~      ~    Y     .    ~    ~    ~    ~
 
   SCHEMA & DX
-  No codegen build step  Y    .     .    Y     .    Y      Y    ~     Y    .    Y    Y    Y
-  Schema from code [4]   Y    .     .    ~     .    .      .    .     ~    .    .    .    ~
-  Use your own types     Y    .     .    Y     .    ~      ~    .     Y    .    ~    ~    Y
-  Any-order construct    Y    .     .    Y     Y    Y      Y    ~     Y    Y    Y    Y    Y
-  Self-describing        .    .     .    .     ~    Y      Y    .     .    ~    Y    Y    ~
-  Binary format          Y    Y     Y    Y     Y    Y      Y    Y     Y    Y    Y    .    Y
+  No codegen build step  Y     ~    .     .    Y     .    Y      Y    ~     Y    .    Y    Y    Y
+  Schema from code [4]   Y     Y    .     .    ~     .    .      .    .     ~    .    .    .    ~
+  Use your own types     Y     Y    .     .    Y     .    ~      ~    .     Y    .    ~    ~    Y
+  Any-order construct    Y     Y    .     .    Y     Y    Y      Y    ~     Y    Y    Y    Y    Y
+  Self-describing        .     .    .     .    .     ~    Y      Y    .     .    ~    Y    Y    ~
+  Binary format          Y     Y    Y     Y    Y     Y    Y      Y    Y     Y    Y    Y    .    Y
 
   STRUCTURE
-  Graph/DAG support      .    .     ~    .     .    ~      .    .     .    .    .    .    Y
+  Graph/DAG support      .     .    .     ~    .     .    ~      .    .     .    .    .    .    Y
 
-                        ---- ----- ---- ----- ---- ----   ---- ----  ---- ---- ---- ---- -----
-  Languages              6   10+   14+   7    11+  20+    50+  10+    1   all  12+  all   1
+                        ----  ---  ----- ---- ----- ---- ----   ---- ----  ---- ---- ---- ---- -----
+  Languages              6    all   10+   14+   7    11+  20+    50+  10+    1   all  12+  all   1
 
   Y = yes   ~ = partial   !! = yes but unsafe   . = no
 
@@ -68,6 +68,7 @@ Contenders
   Format            Origin                    Primary Use Case
   ----------------  ------------------------  -------------------------------------------
   Fracpack          Fractally                 WASM IPC, blockchain state, cross-lang interop
+  WIT Canonical ABI W3C WASI (Component Mdl)  WASM component boundary data passing
   Protocol Buffers  Google                    RPC (gRPC), general interchange
   FlatBuffers       Google                    Game engines, zero-copy access
   Cap'n Proto       Sandstorm (Kenton Varda)  Zero-copy RPC with promise pipelining
@@ -103,6 +104,16 @@ u16 header, no ability to add fields later, but zero overhead. The
 programmer chooses per type -- coordinate pairs, hash digests, and
 color values get fixedStruct; API messages and database rows get the
 extensible default. No other format offers this per-type choice.
+
+WIT CANONICAL ABI: ·  The Canonical ABI uses positional layout with
+natural alignment. Fields are at fixed byte offsets determined by the WIT
+record definition order and type alignment rules. There is no header,
+no length prefix, no field tags. Adding a field changes the offsets of
+subsequent fields and the overall struct size. This is a breaking change
+-- old code reading new data will misinterpret bytes. The Component Model
+does not provide schema evolution; interface versioning is handled at
+the world/package level (semantic versioning of the entire interface),
+not at the field level.
 
 CAP'N PROTO: ✅  Struct pointers encode data-section and pointer-section
 word counts. Old code sees smaller section sizes in its compiled schema
@@ -156,6 +167,11 @@ is shorter than expected, missing trailing fields are treated as absent
 optionals. New fields must be optional and must be appended to the end --
 but that constraint is enforced by the type system. Fixed structs opt out
 of this: no header, no evolution, no overhead. The choice is per-type.
+
+WIT CANONICAL ABI: ·  Same as forward compat. Positional layout with no
+versioning mechanism. Old data is shorter than new code expects. The
+Component Model relies on semantic versioning of entire interfaces
+(world/package), not field-level evolution.
 
 CAP'N PROTO: ✅  New code sees the old data's smaller section sizes and
 fills in defaults (XOR'd zeros) for the missing fields. Clean.
@@ -461,12 +477,17 @@ Per-field overhead comparison:
   Format       u32 field              string "hello"                   bool     struct overhead
   -----------  ---------------------  -------------------------------  -------  -----------------------
   Fracpack     4 bytes (inline)       4 (off) + 4 (len) + 5 = 13      1 byte   2 bytes (u16 header)
+  WIT Cn ABI   4 + 0-3 pad (align)   4 (ptr) + 4 (len) = 8 [5]       1 + pad  0 (positional)
   Protobuf     1 (tag) + 1-5 (var)   1 (tag) + 1 (len) + 5 = 7       2        0 (tag-value pairs)
   FlatBuffers  4 + 2 (vtable slot)   4 (off) + 4 (len) + 5 + pad     1 + pad  vtable (4+ shared)
   Cap'n Proto  4 + 4 pad (8B word)   8 (ptr) + 8 (rounded to word)   1 bit    8 bytes (struct ptr)
   Borsh        4 bytes               4 (len) + 5 = 9                  1 byte   0
   Avro         1-5 (varint)          1 (var len) + 5 = 6              1        0
   BSON         name + 6              name + NUL + 4 + 5 + NUL         name+3   5 (len + NUL term)
+
+  [5] WIT Canonical ABI strings are (pointer, length) pairs stored inline.
+      The string data itself lives separately in linear memory. The record
+      stores only the 8-byte descriptor; actual bytes are out-of-line.
 
 Key size observations:
 
@@ -773,6 +794,7 @@ lives and which direction it flows.
   Format       Schema Direction             External Tool Required?
   -----------  ---------------------------  ----------------------------------
   Fracpack     Code -> schema (exportable)  No. Schema derived + exported
+  WIT Cn ABI   IDL -> code (or code-first)  Yes (wit-bindgen), or No (psio)
   Protobuf     IDL -> code                  Yes (protoc)
   FlatBuffers  IDL -> code                  Yes (flatc)
   Cap'n Proto  IDL -> code                  Yes (capnpc)
@@ -868,6 +890,12 @@ Tier 1 -- Fastest (memcpy-class):
   - Fracpack fixedStruct (all scalars): Encoding is identical to
     #pragma pack(1) -- a single memcpy of contiguous fields. No
     headers, no offsets, no passes. Deserialization is a pointer cast.
+  - WIT Canonical ABI: For all-scalar records, the layout IS the C
+    struct layout with natural alignment. "Serialization" is the struct
+    itself. "Deserialization" is a pointer cast into linear memory.
+    Zero overhead for scalar-only types. For records with strings or
+    lists, the record stores (pointer, length) pairs and the data lives
+    separately -- lowering/lifting requires copying string data.
   - Cap'n Proto: Serialization is essentially writing into a pre-
     allocated buffer. Deserialization is a pointer cast. The wire format
     IS the working format.
@@ -921,6 +949,7 @@ entire message?
   Format       Scalar Mutation              Var-Size Mutation        Safety
   -----------  ---------------------------  ----------------------  -------------------------
   Fracpack     Yes (known offsets)          Requires repack         Safe (relative offsets)
+  WIT Cn ABI   Yes (direct memory write)    No (ptr+len immutable)  Safe (linear memory)
   FlatBuffers  Yes (mutate_* methods)       No (cannot resize)      UNSAFE on untrusted bufs
   Cap'n Proto  Yes (builder side)           Requires realloc        Safe (builder tracks)
   Protobuf     No                           No                      N/A
@@ -1215,6 +1244,7 @@ Fracpack is the only format that simultaneously provides:
 
 No other format achieves all eight:
 
+  WIT Cn ABI   has #1, #2, #8 but not #3, #4, #5 (partial), #6, or #7
   Cap'n Proto  has #2, #3, #4, #8 but not #1, #5, #6, or #7
   FlatBuffers  has #2, #3, #4 but not #1, #5, #6; #8 is unsafe
   Borsh        has #1, #7 but not #2, #3, #4, #5, or #6
