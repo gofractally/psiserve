@@ -586,6 +586,7 @@ The C++ psio library supports five serialization formats from a single `PSIO_REF
 
 **Internal formats** (all from a single `PSIO_REFLECT` — no codegen, no IDL):
 - **Fracpack** — Zero-copy binary with offset tables, extensible structs, in-place mutation. Optimized for read-heavy workloads.
+- **WIT Canonical ABI** — WASM Component Model standard encoding. Natural alignment, (pointer, length) pairs for strings/lists. Zero-copy views via `WView<T>`. No schema evolution.
 - **Binary** (`to_bin`/`from_bin`) — Compact binary with varint-encoded lengths. Minimal framing overhead.
 - **Bincode** (`to_bincode`/`from_bincode`) — Rust ecosystem binary format (v1 legacy). Fixed-width integers, u64 length prefixes.
 - **Avro** (`to_avro`/`from_avro`) — Apache Avro binary encoding. Zig-zag varint integers, schema-ordered fields.
@@ -597,19 +598,21 @@ The C++ psio library supports five serialization formats from a single `PSIO_REF
 - **Protocol Buffers** — Variable-length encoding with tag-length-value framing. Schema-compiled (`.proto` IDL). v34.0 (proto3).
 - **MessagePack** — Schema-less compact binary (binary JSON). `MSGPACK_DEFINE` macro on user structs. msgpack-cxx v7.0.
 
-**Schema approach**: Fracpack, binary, bincode, avro, and JSON all work directly with user-defined C++ structs via a one-line `PSIO_REFLECT` macro — no code generation, no separate schema files. MessagePack is also schema-less (`MSGPACK_DEFINE` on plain structs), but its types are independent from psio. Cap'n Proto, FlatBuffers, and Protocol Buffers each require a separate IDL file and a code-generation step that produces builder/reader types distinct from user application types.
+**Schema approach**: Fracpack, WIT Canonical ABI, binary, bincode, avro, and JSON all work directly with user-defined C++ structs via a one-line `PSIO_REFLECT` macro — no code generation, no separate schema files. WIT Canonical ABI uses `WView<T>` for zero-copy views of the flattened record layout in WASM linear memory. MessagePack is also schema-less (`MSGPACK_DEFINE` on plain structs), but its types are independent from psio. Cap'n Proto, FlatBuffers, and Protocol Buffers each require a separate IDL file and a code-generation step that produces builder/reader types distinct from user application types.
 
 **SBE note**: Simple Binary Encoding (SBE) was considered but excluded — it is designed for fixed-size financial messages and does not support variable-length strings or nested objects in the way our test schemas require. It also requires a Java runtime for code generation and has no Homebrew package.
 
 ### Wire Size (bytes)
 
-| Schema              | Fracpack | Binary | Bincode | Avro   | Protobuf | MsgPack | Cap'n Proto | FlatBuffers | JSON   |
-|---------------------|----------|--------|---------|--------|----------|---------|-------------|-------------|--------|
-| **Point**           | 16 B     | 16 B   | 16 B    | 16 B   | 18 B     | 19 B    | 32 B        | 32 B        | 43 B   |
-| **Token**           | 35 B     | 26 B   | 33 B    | 20 B   | 24 B     | 22 B    | 56 B        | 56 B        | 62 B   |
-| **UserProfile**     | 211 B    | 154 B  | 210 B   | 149 B  | 156 B    | 150 B   | 264 B       | 264 B       | 231 B  |
-| **Order**           | 449 B    | 308 B  | 413 B   | 286 B  | 321 B    | 297 B   | 544 B       | 584 B       | 602 B  |
-| **SensorReading**   | 157 B    | 138 B  | 152 B   | 136 B  | 162 B    | 155 B   | 184 B       | 208 B       | 325 B  |
+| Schema              | Fracpack | WIT Cn ABI | Binary | Bincode | Avro   | Protobuf | MsgPack | Cap'n Proto | FlatBuffers | JSON   |
+|---------------------|----------|------------|--------|---------|--------|----------|---------|-------------|-------------|--------|
+| **Point**           | 16 B     | 16 B       | 16 B   | 16 B    | 16 B   | 18 B     | 19 B    | 32 B        | 32 B        | 43 B   |
+| **Token**           | 35 B     | —          | 26 B   | 33 B    | 20 B   | 24 B     | 22 B    | 56 B        | 56 B        | 62 B   |
+| **UserProfile**     | 211 B    | —          | 154 B  | 210 B   | 149 B  | 156 B    | 150 B   | 264 B       | 264 B       | 231 B  |
+| **Order**           | 449 B    | —          | 308 B  | 413 B   | 286 B  | 321 B    | 297 B   | 544 B       | 584 B       | 602 B  |
+| **SensorReading**   | 157 B    | —          | 138 B  | 152 B   | 136 B  | 162 B    | 155 B   | 184 B       | 208 B       | 325 B  |
+
+*WIT Canonical ABI Point: 2×f64 at natural alignment = 16 bytes, identical to fracpack fixedStruct. For types with strings/lists, Canonical ABI wire size is the flattened record (scalars + pointer/length pairs) plus out-of-line string data; total sizes are pending benchmarks (marked —).*
 
 Protobuf and MsgPack achieve compact wire sizes comparable to binary/avro — Protobuf uses varint encoding for integers and field tags; MsgPack uses a compact type-length-value scheme. Both are significantly smaller than Cap'n Proto/FlatBuffers (which pay for alignment padding) and comparable to or slightly larger than avro (the most compact). Fracpack sits in the middle — larger than streaming formats because offset tables enable zero-copy access, but much smaller than the zero-copy external formats.
 
@@ -643,17 +646,19 @@ Protobuf unpack is **2–2.4x slower than fracpack** across all types. Its varia
 
 Zero-copy read of all top-level fields without deserialization. This is the apples-to-apples comparison between the three zero-copy formats. Protobuf, MsgPack, binary, bincode, and avro cannot do this — they must fully parse/unpack to access any field.
 
-| Schema              | Fracpack view | FlatBuffers view | Cap'n Proto view | Protobuf parse | MsgPack parse |
-|---------------------|---------------|------------------|------------------|----------------|---------------|
-| **Point**           | <1            | 0.8              | 20               | 18             | 66            |
-| **Token**           | 1.2           | 1.1              | 25               | 40             | 82            |
-| **UserProfile**     | 1.6           | 2.6              | 40               | 222            | 184           |
-| **Order**           | 1.1           | 1.6              | 40               | 536            | 368           |
-| **SensorReading**   | 3.2           | 5.1              | 35               | 72             | 156           |
+| Schema              | Fracpack view | WIT WView | FlatBuffers view | Cap'n Proto view | Protobuf parse | MsgPack parse |
+|---------------------|---------------|-----------|------------------|------------------|----------------|---------------|
+| **Point**           | <1            | <1        | 0.8              | 20               | 18             | 66            |
+| **Token**           | 1.2           | —         | 1.1              | 25               | 40             | 82            |
+| **UserProfile**     | 1.6           | —         | 2.6              | 40               | 222            | 184           |
+| **Order**           | 1.1           | —         | 1.6              | 40               | 536            | 368           |
+| **SensorReading**   | 3.2           | —         | 5.1              | 35               | 72             | 156           |
 
-*Note: Sub-1ns measurements are at the CPU pipeline noise floor; actual values are near-zero but imprecise.*
+*Note: Sub-1ns measurements are at the CPU pipeline noise floor; actual values are near-zero but imprecise. WIT WView benchmarks for types with strings/lists are pending (marked —).*
 
-Fracpack views are **1.4–2x faster** than FlatBuffers, **11–35x faster** than Cap'n Proto, **45–487x faster** than Protobuf, and **49–334x faster** than MsgPack for reading all fields. The fundamental difference: fracpack and FlatBuffers read fields directly from the wire format with zero allocation. Protobuf and MsgPack must allocate strings and decode varint/type tags for every field — there is no "view" mode.
+*WIT Canonical ABI Point view: `WView<Point>` is a direct pointer cast (the Canonical ABI layout for all-scalar records matches the C struct layout). For all-scalar types, WIT WView is structurally identical to a native struct read — zero overhead. For types with strings or nested structs, `WView<T>` maps `string → string_view`, `vector<U> → span<WView<U>>`, providing zero-copy access without deserialization.*
+
+Fracpack views are **1.4–2x faster** than FlatBuffers, **11–35x faster** than Cap'n Proto, **45–487x faster** than Protobuf, and **49–334x faster** than MsgPack for reading all fields. WIT WView matches fracpack for scalar-only types and is expected to be comparable for mixed types. The fundamental difference: fracpack, WIT WView, and FlatBuffers read fields directly from the wire format with zero allocation. Protobuf and MsgPack must allocate strings and decode varint/type tags for every field — there is no "view" mode.
 
 ### View Access Speed — Single Field (ns, C++)
 

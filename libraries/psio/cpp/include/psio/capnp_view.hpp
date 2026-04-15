@@ -1536,17 +1536,117 @@ namespace psio
          static constexpr bool can_grow  = can_write && can_resize;
       };
 
+      // ── Free-list allocator for reclaiming dead space ──────────────────
+      //
+      // When a pointer field is overwritten, the old data becomes unreachable.
+      // The free list tracks these dead regions so alloc() can reuse them
+      // instead of growing the segment indefinitely.
+
+      class capnp_free_list
+      {
+         struct block
+         {
+            uint32_t offset;  // word offset in segment
+            uint32_t size;    // size in words
+         };
+         std::vector<block> blocks_;  // sorted by offset
+
+        public:
+         void free(uint32_t offset, uint32_t size)
+         {
+            if (size == 0)
+               return;
+
+            auto it = std::lower_bound(
+                blocks_.begin(), blocks_.end(), offset,
+                [](const block& b, uint32_t off) { return b.offset < off; });
+
+            // Try to merge with predecessor
+            if (it != blocks_.begin())
+            {
+               auto prev = std::prev(it);
+               if (prev->offset + prev->size == offset)
+               {
+                  prev->size += size;
+                  if (it != blocks_.end() &&
+                      prev->offset + prev->size == it->offset)
+                  {
+                     prev->size += it->size;
+                     blocks_.erase(it);
+                  }
+                  return;
+               }
+            }
+
+            // Try to merge with successor
+            if (it != blocks_.end() && offset + size == it->offset)
+            {
+               it->offset = offset;
+               it->size += size;
+               return;
+            }
+
+            blocks_.insert(it, {offset, size});
+         }
+
+         // Returns word offset of a block >= n words, or UINT32_MAX if none
+         uint32_t try_alloc(uint32_t n)
+         {
+            uint32_t best_idx  = UINT32_MAX;
+            uint32_t best_size = UINT32_MAX;
+            for (uint32_t i = 0; i < static_cast<uint32_t>(blocks_.size()); ++i)
+            {
+               if (blocks_[i].size >= n && blocks_[i].size < best_size)
+               {
+                  best_idx  = i;
+                  best_size = blocks_[i].size;
+                  if (best_size == n)
+                     break;
+               }
+            }
+
+            if (best_idx == UINT32_MAX)
+               return UINT32_MAX;
+
+            uint32_t offset = blocks_[best_idx].offset;
+            if (blocks_[best_idx].size == n)
+               blocks_.erase(blocks_.begin() + best_idx);
+            else
+            {
+               blocks_[best_idx].offset += n;
+               blocks_[best_idx].size -= n;
+            }
+            return offset;
+         }
+
+         bool     empty() const { return blocks_.empty(); }
+         size_t   block_count() const { return blocks_.size(); }
+         uint32_t total_free() const
+         {
+            uint32_t sum = 0;
+            for (auto& b : blocks_)
+               sum += b.size;
+            return sum;
+         }
+      };
+
       // ── Segment builder for mutation ─────────────────────────────────────
       //
       // Same interface as capnp_word_buf but operates on an existing flat-array
       // message (header + segment).  Word indices are within the segment.
+      // Optionally backed by a free list for reclaiming dead pointer data.
 
       class capnp_seg_builder
       {
          std::vector<uint8_t>& msg_;
+         capnp_free_list*      free_list_;
 
         public:
-         explicit capnp_seg_builder(std::vector<uint8_t>& msg) : msg_(msg) {}
+         explicit capnp_seg_builder(std::vector<uint8_t>& msg,
+                                    capnp_free_list*      fl = nullptr)
+             : msg_(msg), free_list_(fl)
+         {
+         }
 
          uint32_t seg_words() const
          {
@@ -1557,11 +1657,113 @@ namespace psio
 
          uint32_t alloc(uint32_t n)
          {
+            // Try to reuse a dead region first
+            if (free_list_)
+            {
+               uint32_t off = free_list_->try_alloc(n);
+               if (off != UINT32_MAX)
+               {
+                  std::memset(byte_ptr(off), 0, static_cast<size_t>(n) * 8);
+                  return off;
+               }
+            }
+
             uint32_t off       = seg_words();
             uint32_t new_words = off + n;
             msg_.resize(8 + static_cast<size_t>(new_words) * 8, 0);
             std::memcpy(msg_.data() + 4, &new_words, 4);
             return off;
+         }
+
+         // Recursively free the allocation pointed to by the pointer at
+         // ptr_word.  Handles struct, list (scalar, pointer, composite),
+         // and text pointers.  Child pointer allocations are freed first.
+         void free_ptr_target(uint32_t ptr_word)
+         {
+            if (!free_list_)
+               return;
+
+            uint64_t word;
+            std::memcpy(&word, byte_ptr(ptr_word), 8);
+            if (word == 0)
+               return;
+
+            uint8_t  tag    = word & 3;
+            int32_t  off    = ptr_offset(word);
+            uint32_t target = static_cast<uint32_t>(
+                static_cast<int32_t>(ptr_word) + 1 + off);
+
+            if (tag == 0)
+            {
+               // Struct pointer
+               uint16_t dw = static_cast<uint16_t>((word >> 32) & 0xFFFF);
+               uint16_t pc = static_cast<uint16_t>((word >> 48) & 0xFFFF);
+
+               // Recursively free pointer children first
+               uint32_t ptrs_start = target + dw;
+               for (uint16_t i = 0; i < pc; ++i)
+                  free_ptr_target(ptrs_start + i);
+
+               free_list_->free(target, static_cast<uint32_t>(dw) + pc);
+            }
+            else if (tag == 1)
+            {
+               // List pointer
+               uint8_t  elem_sz = static_cast<uint8_t>((word >> 32) & 7);
+               uint32_t count   = static_cast<uint32_t>(word >> 35);
+
+               if (elem_sz == 7)
+               {
+                  // Composite list: tag word + body
+                  uint64_t tag_word;
+                  std::memcpy(&tag_word, byte_ptr(target), 8);
+                  uint32_t elem_count =
+                      static_cast<uint32_t>(tag_word) >> 2;
+                  uint16_t edw =
+                      static_cast<uint16_t>((tag_word >> 32) & 0xFFFF);
+                  uint16_t epc =
+                      static_cast<uint16_t>((tag_word >> 48) & 0xFFFF);
+                  uint32_t stride = static_cast<uint32_t>(edw) + epc;
+
+                  for (uint32_t e = 0; e < elem_count; ++e)
+                  {
+                     uint32_t elem_ptrs =
+                         target + 1 + e * stride + edw;
+                     for (uint16_t p = 0; p < epc; ++p)
+                        free_ptr_target(elem_ptrs + p);
+                  }
+
+                  free_list_->free(target, 1 + count);
+               }
+               else if (elem_sz == 6)
+               {
+                  // Pointer list: each element is a pointer
+                  for (uint32_t i = 0; i < count; ++i)
+                     free_ptr_target(target + i);
+                  if (count > 0)
+                     free_list_->free(target, count);
+               }
+               else if (elem_sz == 1)
+               {
+                  // Bit list
+                  uint32_t words = (count + 63) / 64;
+                  if (words > 0)
+                     free_list_->free(target, words);
+               }
+               else
+               {
+                  // Scalar list (byte=2, 2-byte=3, 4-byte=4, 8-byte=5)
+                  static constexpr uint32_t sizes[] = {0, 0, 1, 2, 4, 8,
+                                                       8, 0};
+                  uint64_t total_bytes =
+                      static_cast<uint64_t>(count) * sizes[elem_sz];
+                  uint32_t words =
+                      static_cast<uint32_t>((total_bytes + 7) / 8);
+                  if (words > 0)
+                     free_list_->free(target, words);
+               }
+            }
+            // tag 2,3 = far/inter-segment (not used in flat messages)
          }
 
          uint8_t* byte_ptr(uint32_t word_idx)
@@ -1639,10 +1841,11 @@ namespace psio
       template <typename Root, typename FieldType, typename Buffer, size_t FieldIdx>
       class capnp_field_handle
       {
-         Buffer*  buf_;
-         uint32_t struct_data_byte_;  // byte offset of struct data section from seg start
-         uint16_t data_words_;
-         uint16_t ptr_count_;
+         Buffer*          buf_;
+         capnp_free_list* free_list_;
+         uint32_t         struct_data_byte_;  // byte offset of struct data section from seg start
+         uint16_t         data_words_;
+         uint16_t         ptr_count_;
 
          static constexpr bool can_write = capnp_buf_traits<Buffer>::can_write;
          static constexpr bool can_grow  = capnp_buf_traits<Buffer>::can_grow;
@@ -1657,8 +1860,13 @@ namespace psio
          uint32_t ptrs_start_word() const { return data_start_word() + data_words_; }
 
         public:
-         capnp_field_handle(Buffer* b, uint32_t sdb, uint16_t dw, uint16_t pc)
-             : buf_(b), struct_data_byte_(sdb), data_words_(dw), ptr_count_(pc)
+         capnp_field_handle(Buffer* b, capnp_free_list* fl, uint32_t sdb,
+                            uint16_t dw, uint16_t pc)
+             : buf_(b),
+               free_list_(fl),
+               struct_data_byte_(sdb),
+               data_words_(dw),
+               ptr_count_(pc)
          {
          }
 
@@ -1705,7 +1913,7 @@ namespace psio
             return *this;
          }
 
-         // ── Write: string (allocate at end, repoint) ──────────────────────
+         // ── Write: string (free old, allocate, repoint) ─────────────────
          capnp_field_handle& operator=(std::string_view v)
             requires(std::is_same_v<FieldType, std::string> && can_grow)
          {
@@ -1713,17 +1921,17 @@ namespace psio
             constexpr auto loc = layout::loc(FieldIdx);
             static_assert(loc.is_ptr, "string field must be a pointer");
 
-            uint32_t ptr_word = ptrs_start_word() + loc.offset;
+            uint32_t          ptr_word = ptrs_start_word() + loc.offset;
+            capnp_seg_builder sb(*buf_, free_list_);
+            sb.free_ptr_target(ptr_word);
 
             if (v.empty())
             {
-               // Zero the pointer — represents empty/null string
                uint64_t zero = 0;
                std::memcpy(buf_->data() + 8 + ptr_word * 8, &zero, 8);
                return *this;
             }
 
-            capnp_seg_builder sb(*buf_);
             sb.write_text(ptr_word, v);
             return *this;
          }
@@ -1740,7 +1948,7 @@ namespace psio
             return *this = std::string_view(v);
          }
 
-         // ── Write: vector (allocate at end, repoint) ──────────────────────
+         // ── Write: vector (free old, allocate, repoint) ─────────────────
          capnp_field_handle& operator=(const FieldType& v)
             requires(is_vector<FieldType>::value && can_grow)
          {
@@ -1748,7 +1956,9 @@ namespace psio
             constexpr auto loc = layout::loc(FieldIdx);
             static_assert(loc.is_ptr, "vector field must be a pointer");
 
-            uint32_t ptr_word = ptrs_start_word() + loc.offset;
+            uint32_t          ptr_word = ptrs_start_word() + loc.offset;
+            capnp_seg_builder sb(*buf_, free_list_);
+            sb.free_ptr_target(ptr_word);
 
             if (v.empty())
             {
@@ -1757,13 +1967,12 @@ namespace psio
                return *this;
             }
 
-            capnp_seg_builder sb(*buf_);
             using E = typename is_vector<FieldType>::element_type;
             pack_vec<E>(sb, ptr_word, v);
             return *this;
          }
 
-         // ── Write: nested struct (allocate at end, repoint) ───────────────
+         // ── Write: nested struct (free old, allocate, repoint) ────────────
          capnp_field_handle& operator=(const FieldType& v)
             requires(Reflected<FieldType> && !std::is_enum_v<FieldType> &&
                      !is_variant_type<FieldType>::value &&
@@ -1773,8 +1982,9 @@ namespace psio
             constexpr auto loc = layout::loc(FieldIdx);
             static_assert(loc.is_ptr, "struct field must be a pointer");
 
-            capnp_seg_builder sb(*buf_);
             uint32_t          ptr_word = ptrs_start_word() + loc.offset;
+            capnp_seg_builder sb(*buf_, free_list_);
+            sb.free_ptr_target(ptr_word);
 
             using FL     = capnp_layout<FieldType>;
             uint32_t cd  = sb.alloc(FL::data_words);
@@ -1784,19 +1994,44 @@ namespace psio
             return *this;
          }
 
-         // ── Write: variant (set discriminant + active alternative) ────────
+         // ── Write: variant (free old, set discriminant + alternative) ────
          capnp_field_handle& operator=(const FieldType& v)
             requires(is_variant_type<FieldType>::value && can_grow)
          {
             using layout       = capnp_layout<Root>;
-            capnp_seg_builder sb(*buf_);
+            capnp_seg_builder sb(*buf_, free_list_);
 
             uint32_t dw = data_start_word();
             uint32_t pw = ptrs_start_word();
 
-            // Write discriminant
+            // Read old discriminant and free old alternative's pointer data
             constexpr auto disc_loc = layout::loc(FieldIdx);
-            uint16_t       disc     = static_cast<uint16_t>(v.index());
+            {
+               uint16_t old_disc;
+               std::memcpy(&old_disc,
+                           reinterpret_cast<uint8_t*>(buf_->data()) + 8 +
+                               dw * 8 + disc_loc.offset,
+                           sizeof(old_disc));
+
+               [&]<size_t... Js>(std::index_sequence<Js...>)
+               {
+                  ((old_disc == Js
+                        ? [&]
+                      {
+                         constexpr auto aloc =
+                             layout::alt_loc(FieldIdx, Js);
+                         if constexpr (aloc.is_ptr)
+                            sb.free_ptr_target(pw + aloc.offset);
+                         return true;
+                      }()
+                        : false) ||
+                   ...);
+               }(std::make_index_sequence<
+                   std::variant_size_v<FieldType>>{});
+            }
+
+            // Write new discriminant
+            uint16_t disc = static_cast<uint16_t>(v.index());
             sb.write_field(dw, disc_loc.offset, disc);
 
             // Write the active alternative's value
@@ -1828,14 +2063,20 @@ namespace psio
       template <typename T, typename Buffer>
       class capnp_proxy_obj
       {
-         Buffer*  buf_;
-         uint32_t struct_data_byte_;  // data section byte offset from seg start
-         uint16_t data_words_;
-         uint16_t ptr_count_;
+         Buffer*          buf_;
+         capnp_free_list* free_list_;
+         uint32_t         struct_data_byte_;  // data section byte offset from seg start
+         uint16_t         data_words_;
+         uint16_t         ptr_count_;
 
         public:
-         capnp_proxy_obj(Buffer* b, uint32_t sdb, uint16_t dw, uint16_t pc)
-             : buf_(b), struct_data_byte_(sdb), data_words_(dw), ptr_count_(pc)
+         capnp_proxy_obj(Buffer* b, capnp_free_list* fl, uint32_t sdb,
+                         uint16_t dw, uint16_t pc)
+             : buf_(b),
+               free_list_(fl),
+               struct_data_byte_(sdb),
+               data_words_(dw),
+               ptr_count_(pc)
          {
          }
 
@@ -1870,7 +2111,8 @@ namespace psio
                   using inner_proxy = capnp_proxy_obj<F, Buffer>;
                   using proxy_type =
                       typename reflect<F>::template proxy<inner_proxy>;
-                  return proxy_type{inner_proxy{buf_, 0, 0, 0}};
+                  return proxy_type{
+                      inner_proxy{buf_, free_list_, 0, 0, 0}};
                }
 
                int32_t  off = ptr_offset(word);
@@ -1882,13 +2124,15 @@ namespace psio
                using inner_proxy = capnp_proxy_obj<F, Buffer>;
                using proxy_type =
                    typename reflect<F>::template proxy<inner_proxy>;
-               return proxy_type{inner_proxy{buf_, target_byte, dw, pc}};
+               return proxy_type{
+                   inner_proxy{buf_, free_list_, target_byte, dw, pc}};
             }
             else
             {
                // Leaf field → return field handle
                return capnp_field_handle<T, F, Buffer, idx>{
-                   buf_, struct_data_byte_, data_words_, ptr_count_};
+                   buf_, free_list_, struct_data_byte_, data_words_,
+                   ptr_count_};
             }
          }
 
@@ -1902,13 +2146,1775 @@ namespace psio
 
    }  // namespace capnp_detail
 
+   // ══════════════════════════════════════════════════════════════════════════
+   // Dynamic field access — format-generic runtime name→value navigation
+   //
+   //   auto dv = dynamic_view(ref);
+   //   double score    = dv["score"_f];       // implicit conversion
+   //   auto   customer = dv["customer"_f];    // nested struct cursor
+   //   std::string_view name = customer["name"_f];
+   //   auto   item     = dv["items"_f][3];    // vector element
+   //
+   // ══════════════════════════════════════════════════════════════════════════
+
+   // ── Constexpr xxh64 — compile-time and runtime field name hashing ─────
+   //
+   // Follows the same pattern as the existing xxh32.hpp in external/psitri.
+   // Produces identical output to XXH64() from the vendored xxhash.h.
+   // Used for hash-based schema field lookup in dynamic_view.
+
+   struct xxh64
+   {
+      static constexpr uint64_t hash(const char* input, size_t len, uint64_t seed = 0)
+      {
+         return (len >= 32) ? finalize(h32bytes(input, len, seed), input + (len & ~31u), len & 31)
+                            : finalize(seed + PRIME5 + len, input, len);
+      }
+
+     private:
+      static constexpr uint64_t PRIME1 = 0x9E3779B185EBCA87ULL;
+      static constexpr uint64_t PRIME2 = 0xC2B2AE3D27D4EB4FULL;
+      static constexpr uint64_t PRIME3 = 0x165667B19E3779F9ULL;
+      static constexpr uint64_t PRIME4 = 0x85EBCA77C2B2AE63ULL;
+      static constexpr uint64_t PRIME5 = 0x27D4EB2F165667C5ULL;
+
+      static constexpr uint64_t rotl(uint64_t x, int r) { return (x << r) | (x >> (64 - r)); }
+
+      static constexpr uint64_t round(uint64_t acc, uint64_t input)
+      {
+         return rotl(acc + input * PRIME2, 31) * PRIME1;
+      }
+
+      static constexpr uint64_t merge_round(uint64_t acc, uint64_t val)
+      {
+         return (acc ^ round(0, val)) * PRIME1 + PRIME4;
+      }
+
+      static constexpr uint64_t read64(const char* p)
+      {
+         return uint64_t(uint8_t(p[0])) | (uint64_t(uint8_t(p[1])) << 8) |
+                (uint64_t(uint8_t(p[2])) << 16) | (uint64_t(uint8_t(p[3])) << 24) |
+                (uint64_t(uint8_t(p[4])) << 32) | (uint64_t(uint8_t(p[5])) << 40) |
+                (uint64_t(uint8_t(p[6])) << 48) | (uint64_t(uint8_t(p[7])) << 56);
+      }
+
+      static constexpr uint32_t read32(const char* p)
+      {
+         return uint32_t(uint8_t(p[0])) | (uint32_t(uint8_t(p[1])) << 8) |
+                (uint32_t(uint8_t(p[2])) << 16) | (uint32_t(uint8_t(p[3])) << 24);
+      }
+
+      static constexpr uint64_t avalanche(uint64_t h)
+      {
+         h ^= h >> 33;
+         h *= PRIME2;
+         h ^= h >> 29;
+         h *= PRIME3;
+         h ^= h >> 32;
+         return h;
+      }
+
+      static constexpr uint64_t finalize(uint64_t h, const char* p, size_t len)
+      {
+         if (len >= 8)
+            return finalize(
+                rotl(h ^ round(0, read64(p)), 27) * PRIME1 + PRIME4, p + 8, len - 8);
+         if (len >= 4)
+            return finalize(
+                rotl(h ^ (read32(p) * PRIME1), 23) * PRIME2 + PRIME3, p + 4, len - 4);
+         if (len > 0)
+            return finalize(
+                rotl(h ^ (uint8_t(*p) * PRIME5), 11) * PRIME1, p + 1, len - 1);
+         return avalanche(h);
+      }
+
+      static constexpr uint64_t h32bytes(const char*    p,
+                                          size_t         len,
+                                          uint64_t       v1,
+                                          uint64_t       v2,
+                                          uint64_t       v3,
+                                          uint64_t       v4)
+      {
+         if (len >= 32)
+            return h32bytes(p + 32, len - 32,
+                            round(v1, read64(p)),
+                            round(v2, read64(p + 8)),
+                            round(v3, read64(p + 16)),
+                            round(v4, read64(p + 24)));
+         return merge_round(
+                    merge_round(
+                        merge_round(
+                            merge_round(
+                                rotl(v1, 1) + rotl(v2, 7) + rotl(v3, 12) + rotl(v4, 18),
+                                v1),
+                            v2),
+                        v3),
+                    v4) +
+                len;
+      }
+
+      static constexpr uint64_t h32bytes(const char* p, size_t len, uint64_t seed)
+      {
+         return h32bytes(p, len,
+                         seed + PRIME1 + PRIME2,
+                         seed + PRIME2,
+                         seed,
+                         seed - PRIME1);
+      }
+   };
+
+   // Convenience: hash a string_view
+   constexpr uint64_t xxh64_hash(std::string_view s)
+   {
+      return xxh64::hash(s.data(), s.size());
+   }
+
+   // ── Field name wrapper ─────────────────────────────────────────────────
+   //
+   // Produced by the _f literal suffix.  Stores pre-computed hash so
+   // schema lookup is a single integer binary search + collision check.
+   struct field_name
+   {
+      std::string_view name;
+      uint64_t         hash;
+      constexpr field_name(std::string_view n) : name(n), hash(xxh64_hash(n)) {}
+      constexpr field_name(std::string_view n, uint64_t h) : name(n), hash(h) {}
+   };
+
+   // User-defined literal: "foo"_f → field_name{"foo"}
+   constexpr field_name operator""_f(const char* s, size_t len)
+   {
+      return {std::string_view(s, len)};
+   }
+
+   // Type tag for dynamically-accessed values
+   enum class dynamic_type : uint8_t
+   {
+      t_void,
+      t_bool,
+      t_i8,
+      t_i16,
+      t_i32,
+      t_i64,
+      t_u8,
+      t_u16,
+      t_u32,
+      t_u64,
+      t_f32,
+      t_f64,
+      t_text,
+      t_data,
+      t_vector,
+      t_struct,
+      t_variant,
+   };
+
+   // Rich type descriptor returned by dynamic_view::type()
+   struct dynamic_type_info
+   {
+      dynamic_type kind        = dynamic_type::t_void;
+      dynamic_type active_kind = dynamic_type::t_void;  // for variants
+      uint8_t      variant_index = 0;                   // for variants
+      uint8_t      byte_size     = 0;                   // for scalars
+   };
+
+   // ── Runtime schema descriptors ─────────────────────────────────────────
+
+   struct dynamic_schema;  // forward
+
+   // Per-field descriptor for variant alternatives
+   struct dynamic_alt_desc
+   {
+      dynamic_type          type      = dynamic_type::t_void;
+      bool                  is_ptr    = false;
+      uint32_t              offset    = 0;
+      uint8_t               bit_index = 0;
+      uint8_t               byte_size = 0;
+      const dynamic_schema* nested    = nullptr;
+   };
+
+   // Per-field descriptor
+   struct dynamic_field_desc
+   {
+      uint64_t              name_hash = 0;     // xxh64 of field name
+      const char*           name      = nullptr;  // original name (collision verify / debug)
+      dynamic_type          type      = dynamic_type::t_void;
+      bool                  is_ptr    = false;
+      uint32_t              offset    = 0;     // byte offset in data section, or ptr index
+      uint8_t               bit_index = 0;     // for bools
+      uint8_t               byte_size = 0;     // scalar size in bytes (0 for ptr/bool)
+      const dynamic_schema* nested    = nullptr;  // for struct fields / struct vector elements
+
+      // Variant support
+      const dynamic_alt_desc* alternatives = nullptr;
+      uint8_t                 alt_count    = 0;
+      uint32_t                disc_offset  = 0;  // discriminant byte offset
+   };
+
+   // Maximum fields supported for SIMD tag lookup.
+   // Structs with more fields fall back to binary search on hash.
+   static constexpr size_t max_simd_fields = 64;
+
+   // Per-type schema: hash-sorted field table with SIMD tag bytes
+   struct dynamic_schema
+   {
+      const dynamic_field_desc* sorted_fields = nullptr;  // sorted by name_hash
+      size_t                    field_count    = 0;
+      const char* const*        ordered_names = nullptr;  // declaration order
+      uint16_t                  data_words     = 0;
+      uint16_t                  ptr_count      = 0;
+      const uint8_t*            tags           = nullptr;  // low byte of each hash, parallel to sorted_fields
+
+      // Find by pre-computed hash + name (for collision safety)
+      const dynamic_field_desc* find(uint64_t hash, std::string_view name) const
+      {
+         uint8_t tag = static_cast<uint8_t>(hash);
+
+         // Linear scan on tag bytes — SIMD-friendly for typical struct sizes.
+         // Most structs have <32 fields; one or two NEON/SSE loads cover it.
+         for (size_t i = 0; i < field_count; ++i)
+         {
+            if (tags[i] == tag)
+            {
+               if (sorted_fields[i].name_hash == hash &&
+                   name == sorted_fields[i].name)
+                  return &sorted_fields[i];
+            }
+         }
+         return nullptr;
+      }
+
+      // Find by field_name (has pre-computed hash)
+      const dynamic_field_desc* find(field_name fn) const
+      {
+         return find(fn.hash, fn.name);
+      }
+
+      // Find by string_view (computes hash on the fly)
+      const dynamic_field_desc* find(std::string_view name) const
+      {
+         return find(xxh64_hash(name), name);
+      }
+   };
+
+   // ── Capnp schema builder ───────────────────────────────────────────────
+
+   namespace capnp_detail
+   {
+      template <typename F>
+      consteval dynamic_type type_tag_for()
+      {
+         if constexpr (std::is_same_v<F, bool>)
+            return dynamic_type::t_bool;
+         else if constexpr (std::is_same_v<F, int8_t>)
+            return dynamic_type::t_i8;
+         else if constexpr (std::is_same_v<F, int16_t>)
+            return dynamic_type::t_i16;
+         else if constexpr (std::is_same_v<F, int32_t>)
+            return dynamic_type::t_i32;
+         else if constexpr (std::is_same_v<F, int64_t>)
+            return dynamic_type::t_i64;
+         else if constexpr (std::is_same_v<F, uint8_t>)
+            return dynamic_type::t_u8;
+         else if constexpr (std::is_same_v<F, uint16_t>)
+            return dynamic_type::t_u16;
+         else if constexpr (std::is_same_v<F, uint32_t>)
+            return dynamic_type::t_u32;
+         else if constexpr (std::is_same_v<F, uint64_t>)
+            return dynamic_type::t_u64;
+         else if constexpr (std::is_same_v<F, float>)
+            return dynamic_type::t_f32;
+         else if constexpr (std::is_same_v<F, double>)
+            return dynamic_type::t_f64;
+         else if constexpr (std::is_enum_v<F>)
+            return type_tag_for<std::underlying_type_t<F>>();
+         else if constexpr (std::is_same_v<F, std::string>)
+            return dynamic_type::t_text;
+         else if constexpr (is_vector<F>::value)
+         {
+            if constexpr (std::is_same_v<typename is_vector<F>::element_type, uint8_t>)
+               return dynamic_type::t_data;
+            else
+               return dynamic_type::t_vector;
+         }
+         else if constexpr (is_variant_type<F>::value)
+            return dynamic_type::t_variant;
+         else if constexpr (Reflected<F>)
+            return dynamic_type::t_struct;
+         else
+            return dynamic_type::t_void;
+      }
+
+      template <typename F>
+      consteval uint8_t scalar_byte_size()
+      {
+         if constexpr (std::is_same_v<F, bool>)
+            return 0;
+         else if constexpr (std::is_enum_v<F>)
+            return sizeof(std::underlying_type_t<F>);
+         else if constexpr (std::is_arithmetic_v<F>)
+            return sizeof(F);
+         else
+            return 0;
+      }
+   }  // namespace capnp_detail
+
+   // Forward declaration — each reflected type gets a constexpr schema
+   template <typename T>
+      requires Reflected<T>
+   struct cp_schema;
+
+   namespace capnp_detail
+   {
+      // Helper: get the nested schema pointer for a type.
+      // Returns nullptr for non-struct types.
+      template <typename F>
+      consteval const dynamic_schema* nested_schema_ptr()
+      {
+         if constexpr (Reflected<F> && !std::is_enum_v<F> && !std::is_arithmetic_v<F>
+                       && !std::is_same_v<F, bool>)
+            return &cp_schema<F>::schema;
+         else
+            return nullptr;
+      }
+
+      // Helper: get the element schema pointer for vector types
+      template <typename F>
+      consteval const dynamic_schema* element_schema_ptr()
+      {
+         if constexpr (is_vector<F>::value)
+         {
+            using E = typename is_vector<F>::element_type;
+            if constexpr (Reflected<E> && !std::is_enum_v<E>)
+               return &cp_schema<E>::schema;
+            else
+               return nullptr;
+         }
+         else
+            return nullptr;
+      }
+
+      // Build variant alternative descriptors
+      template <typename T, size_t FieldIdx, typename Variant, size_t... Js>
+      consteval auto build_alt_descs(std::index_sequence<Js...>)
+      {
+         using layout = capnp_layout<T>;
+         std::array<dynamic_alt_desc, sizeof...(Js)> alts{};
+         (
+             [&]
+             {
+                using A         = std::variant_alternative_t<Js, Variant>;
+                auto aloc       = layout::alt_loc(FieldIdx, Js);
+                alts[Js].type   = type_tag_for<A>();
+                alts[Js].is_ptr = aloc.is_ptr;
+                alts[Js].offset = aloc.offset;
+                alts[Js].bit_index = aloc.bit_index;
+                alts[Js].byte_size = scalar_byte_size<A>();
+                alts[Js].nested    = nested_schema_ptr<A>();
+             }(),
+             ...);
+         return alts;
+      }
+   }  // namespace capnp_detail
+
+   // Constexpr schema for a reflected type in capnp format
+   template <typename T>
+      requires Reflected<T>
+   struct cp_schema
+   {
+      static constexpr size_t N = capnp_layout<T>::num_members;
+
+      // Original-order field names
+      static constexpr auto names = reflect<T>::data_member_names;
+
+      // Build field descriptor array sorted by name_hash
+      static constexpr auto build_fields()
+      {
+         std::array<dynamic_field_desc, N> arr{};
+         apply_members(
+             (typename reflect<T>::data_members*)nullptr,
+             [&]<typename... Ms>(Ms... members)
+             {
+                auto tup = std::make_tuple(members...);
+                [&]<size_t... Is>(std::index_sequence<Is...>)
+                {
+                   (
+                       [&]
+                       {
+                          using F = std::remove_cvref_t<
+                              decltype(std::declval<T>().*std::get<Is>(tup))>;
+                          using layout = capnp_layout<T>;
+                          constexpr auto loc = layout::loc(Is);
+
+                          const char* fname = reflect<T>::data_member_names[Is];
+                          size_t      flen  = 0;
+                          for (const char* p = fname; *p; ++p)
+                             ++flen;
+
+                          arr[Is].name_hash = xxh64::hash(fname, flen);
+                          arr[Is].name      = fname;
+                          arr[Is].type      = capnp_detail::type_tag_for<F>();
+                          arr[Is].is_ptr    = loc.is_ptr;
+                          arr[Is].offset    = loc.offset;
+                          arr[Is].bit_index = loc.bit_index;
+                          arr[Is].byte_size = capnp_detail::scalar_byte_size<F>();
+
+                          // Nested schema for struct fields
+                          if constexpr (Reflected<F> && !std::is_enum_v<F>
+                                        && !std::is_arithmetic_v<F>
+                                        && !std::is_same_v<F, bool>)
+                             arr[Is].nested = &cp_schema<F>::schema;
+
+                          // Element schema for vector-of-struct fields
+                          if constexpr (capnp_detail::is_vector<F>::value)
+                          {
+                             using E = typename capnp_detail::is_vector<F>::element_type;
+                             if constexpr (Reflected<E> && !std::is_enum_v<E>)
+                                arr[Is].nested = &cp_schema<E>::schema;
+                          }
+
+                          // Variant support
+                          if constexpr (capnp_detail::is_variant_type<F>::value)
+                          {
+                             constexpr size_t AC = std::variant_size_v<F>;
+                             arr[Is].alt_count   = static_cast<uint8_t>(AC);
+                             arr[Is].disc_offset = loc.offset;
+                             arr[Is].alternatives = alt_descs<Is>.data();
+                          }
+                       }(),
+                       ...);
+                }(std::make_index_sequence<sizeof...(Ms)>{});
+             });
+
+         // Sort by name_hash for tag-byte scanning
+         for (size_t i = 1; i < N; ++i)
+            for (size_t j = i; j > 0 && arr[j].name_hash < arr[j - 1].name_hash; --j)
+               std::swap(arr[j], arr[j - 1]);
+
+         return arr;
+      }
+
+      // Build tag byte array (low byte of each hash, parallel to sorted_fields)
+      static constexpr auto build_tags()
+      {
+         auto fields = build_fields();
+         std::array<uint8_t, N> t{};
+         for (size_t i = 0; i < N; ++i)
+            t[i] = static_cast<uint8_t>(fields[i].name_hash);
+         return t;
+      }
+
+      // Variant alt desc arrays — one per variant field
+      // We need a static constexpr array for each variant field so that
+      // dynamic_field_desc::alternatives can point to it.
+      template <size_t FieldIdx>
+      static constexpr auto build_alts_for_field()
+      {
+         using F = std::tuple_element_t<FieldIdx, struct_tuple_t<T>>;
+         if constexpr (capnp_detail::is_variant_type<F>::value)
+         {
+            constexpr size_t AC = std::variant_size_v<F>;
+            return capnp_detail::build_alt_descs<T, FieldIdx, F>(
+                std::make_index_sequence<AC>{});
+         }
+         else
+         {
+            return std::array<dynamic_alt_desc, 0>{};
+         }
+      }
+
+      // We need one constexpr array per field index; use a variable template.
+      template <size_t FieldIdx>
+      static constexpr auto alt_descs = build_alts_for_field<FieldIdx>();
+
+      static constexpr auto sorted = build_fields();
+      static constexpr auto tag_bytes = build_tags();
+      static constexpr dynamic_schema schema{
+          sorted.data(), N,
+          names,
+          capnp_layout<T>::result.data_words,
+          capnp_layout<T>::result.ptr_count,
+          tag_bytes.data()};
+   };
+
+   // ── dynamic_view — format-generic chainable cursor ─────────────────────
+
+   // Forward declarations
+   template <typename T, typename Buffer = std::vector<uint8_t>>
+      requires Reflected<T>
+   class capnp_ref;
+
+   template <typename Format>
+   class dynamic_vector;
+
+   template <typename Format>
+   class dynamic_view
+   {
+      dynamic_type          type_   = dynamic_type::t_void;
+      const dynamic_schema* schema_ = nullptr;
+
+      // Struct cursor state
+      const uint8_t* data_       = nullptr;
+      uint16_t       data_words_ = 0;
+      uint16_t       ptr_count_  = 0;
+
+      // Leaf value (only valid when type_ is a leaf type)
+      union
+      {
+         bool     bval_;
+         int64_t  ival_;
+         uint64_t uval_;
+         double   fval_;
+      };
+      std::string_view sval_{};
+
+      // Vector state (valid when type_ == t_vector)
+      uint32_t              vec_count_       = 0;
+      uint32_t              vec_elem_stride_ = 0;
+      uint16_t              vec_elem_dw_     = 0;
+      uint16_t              vec_elem_pc_     = 0;
+      dynamic_type          vec_elem_type_   = dynamic_type::t_void;
+      const dynamic_schema* vec_elem_schema_ = nullptr;
+
+      // Variant state
+      uint8_t variant_index_ = 0;
+      bool    is_variant_    = false;
+
+      // ── Private helpers ──────────────────────────────────────────────
+
+      const uint8_t* ptr_slot(uint32_t ptr_index) const
+      {
+         return data_ + static_cast<uint32_t>(data_words_) * 8 + ptr_index * 8;
+      }
+
+      // Read a scalar from the data section
+      void read_scalar(const dynamic_field_desc& field)
+      {
+         type_ = field.type;
+         if (!data_ || field.offset + field.byte_size > data_words_ * 8u)
+         {
+            uval_ = 0;
+            return;
+         }
+         switch (field.type)
+         {
+            case dynamic_type::t_bool:
+            {
+               uint8_t byte = data_[field.offset];
+               bval_ = (byte >> field.bit_index) & 1;
+               break;
+            }
+            case dynamic_type::t_i8:
+            {
+               int8_t v = 0;
+               std::memcpy(&v, data_ + field.offset, 1);
+               ival_ = v;
+               break;
+            }
+            case dynamic_type::t_i16:
+            {
+               int16_t v = 0;
+               std::memcpy(&v, data_ + field.offset, 2);
+               ival_ = v;
+               break;
+            }
+            case dynamic_type::t_i32:
+            {
+               int32_t v = 0;
+               std::memcpy(&v, data_ + field.offset, 4);
+               ival_ = v;
+               break;
+            }
+            case dynamic_type::t_i64:
+            {
+               int64_t v = 0;
+               std::memcpy(&v, data_ + field.offset, 8);
+               ival_ = v;
+               break;
+            }
+            case dynamic_type::t_u8:
+            {
+               uint8_t v = 0;
+               std::memcpy(&v, data_ + field.offset, 1);
+               uval_ = v;
+               break;
+            }
+            case dynamic_type::t_u16:
+            {
+               uint16_t v = 0;
+               std::memcpy(&v, data_ + field.offset, 2);
+               uval_ = v;
+               break;
+            }
+            case dynamic_type::t_u32:
+            {
+               uint32_t v = 0;
+               std::memcpy(&v, data_ + field.offset, 4);
+               uval_ = v;
+               break;
+            }
+            case dynamic_type::t_u64:
+            {
+               uint64_t v = 0;
+               std::memcpy(&v, data_ + field.offset, 8);
+               uval_ = v;
+               break;
+            }
+            case dynamic_type::t_f32:
+            {
+               float v = 0;
+               std::memcpy(&v, data_ + field.offset, 4);
+               fval_ = v;
+               break;
+            }
+            case dynamic_type::t_f64:
+            {
+               double v = 0;
+               std::memcpy(&v, data_ + field.offset, 8);
+               fval_ = v;
+               break;
+            }
+            default:
+               uval_ = 0;
+               break;
+         }
+      }
+
+      // Read a scalar from a variant alternative descriptor
+      void read_scalar_alt(const dynamic_alt_desc& alt)
+      {
+         type_ = alt.type;
+         if (!data_)
+         {
+            uval_ = 0;
+            return;
+         }
+         // Reuse the same switch logic via a temporary field_desc
+         dynamic_field_desc tmp{};
+         tmp.type      = alt.type;
+         tmp.offset    = alt.offset;
+         tmp.bit_index = alt.bit_index;
+         tmp.byte_size = alt.byte_size;
+         read_scalar(tmp);
+      }
+
+      // Read a pointer-section field
+      void read_pointer(const dynamic_field_desc& field)
+      {
+         const uint8_t* slot = ptr_slot(field.offset);
+
+         switch (field.type)
+         {
+            case dynamic_type::t_text:
+               type_ = dynamic_type::t_text;
+               sval_ = capnp_detail::read_text(slot);
+               break;
+
+            case dynamic_type::t_struct:
+            {
+               auto p      = capnp_detail::resolve_struct_ptr(slot);
+               type_       = dynamic_type::t_struct;
+               data_       = p.data;
+               data_words_ = p.data_words;
+               ptr_count_  = p.ptr_count;
+               schema_     = field.nested;
+               break;
+            }
+
+            case dynamic_type::t_data:
+            case dynamic_type::t_vector:
+            {
+               auto info         = capnp_detail::resolve_list_ptr(slot);
+               type_             = field.type;
+               data_             = info.data;
+               vec_count_        = info.count;
+               vec_elem_stride_  = info.elem_stride;
+               vec_elem_dw_      = info.elem_data_words;
+               vec_elem_pc_      = info.elem_ptr_count;
+               vec_elem_schema_  = field.nested;  // struct element schema (may be null)
+               // Determine element type from the element schema/stride
+               if (info.elem_data_words > 0 || info.elem_ptr_count > 0)
+                  vec_elem_type_ = dynamic_type::t_struct;
+               else if (info.elem_stride == 8)
+                  vec_elem_type_ = dynamic_type::t_text;  // pointer list → text
+               else
+                  vec_elem_type_ = dynamic_type::t_void;  // scalar list
+               break;
+            }
+
+            default:
+               type_ = dynamic_type::t_void;
+               break;
+         }
+      }
+
+      // Read a pointer-section field from a variant alt
+      void read_pointer_alt(const dynamic_alt_desc& alt)
+      {
+         const uint8_t* slot = ptr_slot(alt.offset);
+         switch (alt.type)
+         {
+            case dynamic_type::t_text:
+               type_ = dynamic_type::t_text;
+               sval_ = capnp_detail::read_text(slot);
+               break;
+            case dynamic_type::t_struct:
+            {
+               auto p      = capnp_detail::resolve_struct_ptr(slot);
+               type_       = dynamic_type::t_struct;
+               data_       = p.data;
+               data_words_ = p.data_words;
+               ptr_count_  = p.ptr_count;
+               schema_     = alt.nested;
+               break;
+            }
+            case dynamic_type::t_vector:
+            {
+               auto info         = capnp_detail::resolve_list_ptr(slot);
+               type_             = dynamic_type::t_vector;
+               data_             = info.data;
+               vec_count_        = info.count;
+               vec_elem_stride_  = info.elem_stride;
+               vec_elem_dw_      = info.elem_data_words;
+               vec_elem_pc_      = info.elem_ptr_count;
+               vec_elem_schema_  = alt.nested;
+               if (info.elem_data_words > 0 || info.elem_ptr_count > 0)
+                  vec_elem_type_ = dynamic_type::t_struct;
+               else
+                  vec_elem_type_ = dynamic_type::t_void;
+               break;
+            }
+            default:
+               type_ = dynamic_type::t_void;
+               break;
+         }
+      }
+
+      // Resolve a variant field — read discriminant, pick alternative
+      void read_variant(const dynamic_field_desc& field)
+      {
+         is_variant_ = true;
+         uint16_t disc = 0;
+         if (data_ && field.disc_offset + 1 < data_words_ * 8u)
+            std::memcpy(&disc, data_ + field.disc_offset, 2);
+
+         variant_index_ = static_cast<uint8_t>(disc);
+         if (disc >= field.alt_count)
+         {
+            type_ = dynamic_type::t_void;
+            return;
+         }
+
+         const auto& alt = field.alternatives[disc];
+         if (alt.type == dynamic_type::t_void)  // monostate
+         {
+            type_ = dynamic_type::t_void;
+            return;
+         }
+
+         if (alt.is_ptr)
+            read_pointer_alt(alt);
+         else
+            read_scalar_alt(alt);
+      }
+
+     public:
+      dynamic_view() = default;
+
+      // Construct from a capnp_ptr + schema
+      dynamic_view(capnp_ptr p, const dynamic_schema* s)
+          : type_(dynamic_type::t_struct)
+          , schema_(s)
+          , data_(p.data)
+          , data_words_(p.data_words)
+          , ptr_count_(p.ptr_count)
+      {
+         uval_ = 0;
+      }
+
+      // Construct from view<T, cp>
+      template <typename T>
+         requires Reflected<T>
+      dynamic_view(view<T, cp> v)
+          : dynamic_view(v.data(), &cp_schema<T>::schema)
+      {
+      }
+
+      // Construct from capnp_ref<T> — defined after capnp_ref
+      template <typename T, typename Buffer>
+         requires Reflected<T>
+      dynamic_view(const capnp_ref<T, Buffer>& ref);
+
+      // ── Navigation ──────────────────────────────────────────────────
+
+      // Direct field access from a pre-resolved descriptor.
+      // Used by compiled_path::eval() to skip hash lookup entirely.
+      dynamic_view resolve_field(const dynamic_field_desc& field) const
+      {
+         dynamic_view result;
+         result.data_       = data_;
+         result.data_words_ = data_words_;
+         result.ptr_count_  = ptr_count_;
+
+         if (field.type == dynamic_type::t_variant)
+            result.read_variant(field);
+         else if (field.is_ptr)
+            result.read_pointer(field);
+         else
+            result.read_scalar(field);
+
+         return result;
+      }
+
+      // Access a named field — throws if field not found
+      dynamic_view operator[](field_name fn) const
+      {
+         if (type_ != dynamic_type::t_struct || !schema_)
+            throw std::runtime_error(
+                "dynamic_view: cannot access field on non-struct");
+
+         auto* field = schema_->find(fn);
+         if (!field)
+            throw std::runtime_error(
+                std::string("dynamic_view: field not found: ") +
+                std::string(fn.name));
+
+         return resolve_field(*field);
+      }
+
+      // Access a vector element by index
+      dynamic_view operator[](size_t idx) const
+      {
+         if (type_ != dynamic_type::t_vector)
+            throw std::runtime_error(
+                "dynamic_view: cannot index non-vector");
+         if (idx >= vec_count_)
+            throw std::out_of_range("dynamic_view: index out of range");
+
+         dynamic_view result;
+         result.uval_ = 0;
+
+         if (vec_elem_dw_ > 0 || vec_elem_pc_ > 0)
+         {
+            // Composite list — struct elements
+            uint32_t stride = (vec_elem_dw_ + vec_elem_pc_) * 8u;
+            result.type_       = dynamic_type::t_struct;
+            result.data_       = data_ + idx * stride;
+            result.data_words_ = vec_elem_dw_;
+            result.ptr_count_  = vec_elem_pc_;
+            result.schema_     = vec_elem_schema_;
+         }
+         else if (vec_elem_stride_ == 8 && vec_elem_type_ == dynamic_type::t_text)
+         {
+            // Pointer list — text elements
+            const uint8_t* slot = data_ + idx * 8;
+            result.type_ = dynamic_type::t_text;
+            result.sval_ = capnp_detail::read_text(slot);
+         }
+         else
+         {
+            // Scalar list — read raw bytes
+            const uint8_t* elem = data_ + idx * vec_elem_stride_;
+            switch (vec_elem_stride_)
+            {
+               case 1:
+               {
+                  uint8_t v;
+                  std::memcpy(&v, elem, 1);
+                  result.type_ = dynamic_type::t_u8;
+                  result.uval_ = v;
+                  break;
+               }
+               case 2:
+               {
+                  uint16_t v;
+                  std::memcpy(&v, elem, 2);
+                  result.type_ = dynamic_type::t_u16;
+                  result.uval_ = v;
+                  break;
+               }
+               case 4:
+               {
+                  uint32_t v;
+                  std::memcpy(&v, elem, 4);
+                  result.type_ = dynamic_type::t_u32;
+                  result.uval_ = v;
+                  break;
+               }
+               case 8:
+               {
+                  uint64_t v;
+                  std::memcpy(&v, elem, 8);
+                  result.type_ = dynamic_type::t_u64;
+                  result.uval_ = v;
+                  break;
+               }
+               default:
+                  result.type_ = dynamic_type::t_void;
+                  break;
+            }
+         }
+
+         return result;
+      }
+
+      // ── Existence check ─────────────────────────────────────────────
+
+      bool exists() const { return type_ != dynamic_type::t_void; }
+
+      // ── Type introspection ──────────────────────────────────────────
+
+      dynamic_type_info type() const
+      {
+         dynamic_type_info info;
+         if (is_variant_)
+         {
+            info.kind          = dynamic_type::t_variant;
+            info.active_kind   = type_;
+            info.variant_index = variant_index_;
+         }
+         else
+         {
+            info.kind = type_;
+         }
+         return info;
+      }
+
+      // Variant discriminant index
+      size_t index() const { return variant_index_; }
+
+      // ── Size (for strings and vectors) ──────────────────────────────
+
+      size_t size() const
+      {
+         if (type_ == dynamic_type::t_text)
+            return sval_.size();
+         if (type_ == dynamic_type::t_vector || type_ == dynamic_type::t_data)
+            return vec_count_;
+         return 0;
+      }
+
+      // ── Schema introspection ────────────────────────────────────────
+
+      // Field names in declaration order
+      std::span<const char* const> field_names() const
+      {
+         if (schema_)
+            return {schema_->ordered_names, schema_->field_count};
+         return {};
+      }
+
+      // Field index by name (declaration order), throws if not found
+      size_t field_index(std::string_view name) const
+      {
+         if (!schema_)
+            throw std::runtime_error("dynamic_view: no schema");
+         for (size_t i = 0; i < schema_->field_count; ++i)
+            if (name == schema_->ordered_names[i])
+               return i;
+         throw std::runtime_error(
+             std::string("dynamic_view: field not found: ") +
+             std::string(name));
+      }
+
+      // ── Implicit conversion operators ───────────────────────────────
+
+      explicit operator bool() const
+      {
+         if (type_ != dynamic_type::t_bool)
+            throw std::runtime_error("dynamic_view: not a bool");
+         return bval_;
+      }
+
+      operator int8_t() const
+      {
+         if (type_ != dynamic_type::t_i8)
+            throw std::runtime_error("dynamic_view: not an int8");
+         return static_cast<int8_t>(ival_);
+      }
+
+      operator int16_t() const
+      {
+         if (type_ != dynamic_type::t_i16)
+            throw std::runtime_error("dynamic_view: not an int16");
+         return static_cast<int16_t>(ival_);
+      }
+
+      operator int32_t() const
+      {
+         if (type_ != dynamic_type::t_i32)
+            throw std::runtime_error("dynamic_view: not an int32");
+         return static_cast<int32_t>(ival_);
+      }
+
+      operator int64_t() const
+      {
+         if (type_ != dynamic_type::t_i64)
+            throw std::runtime_error("dynamic_view: not an int64");
+         return ival_;
+      }
+
+      operator uint8_t() const
+      {
+         if (type_ != dynamic_type::t_u8)
+            throw std::runtime_error("dynamic_view: not a uint8");
+         return static_cast<uint8_t>(uval_);
+      }
+
+      operator uint16_t() const
+      {
+         if (type_ != dynamic_type::t_u16)
+            throw std::runtime_error("dynamic_view: not a uint16");
+         return static_cast<uint16_t>(uval_);
+      }
+
+      operator uint32_t() const
+      {
+         if (type_ != dynamic_type::t_u32)
+            throw std::runtime_error("dynamic_view: not a uint32");
+         return static_cast<uint32_t>(uval_);
+      }
+
+      operator uint64_t() const
+      {
+         if (type_ != dynamic_type::t_u64)
+            throw std::runtime_error("dynamic_view: not a uint64");
+         return uval_;
+      }
+
+      operator float() const
+      {
+         if (type_ != dynamic_type::t_f32)
+            throw std::runtime_error("dynamic_view: not a float");
+         return static_cast<float>(fval_);
+      }
+
+      operator double() const
+      {
+         if (type_ != dynamic_type::t_f64)
+            throw std::runtime_error("dynamic_view: not a double");
+         return fval_;
+      }
+
+      operator std::string_view() const
+      {
+         if (type_ != dynamic_type::t_text)
+            throw std::runtime_error("dynamic_view: not text");
+         return sval_;
+      }
+
+      // Duck-typed extraction to a reflected struct
+      template <typename U>
+         requires Reflected<U>
+      U as() const
+      {
+         if (type_ != dynamic_type::t_struct || !schema_)
+            throw std::runtime_error("dynamic_view: not a struct");
+
+         U result{};
+         apply_members(
+             (typename reflect<U>::data_members*)nullptr,
+             [&]<typename... Ms>(Ms... members)
+             {
+                auto tup = std::make_tuple(members...);
+                [&]<size_t... Is>(std::index_sequence<Is...>)
+                {
+                   (
+                       [&]
+                       {
+                          auto fname = reflect<U>::data_member_names[Is];
+                          auto* field = schema_->find(fname);
+                          if (field)
+                          {
+                             using F = std::remove_cvref_t<
+                                 decltype(std::declval<U>().*std::get<Is>(tup))>;
+                             auto child = (*this)[field_name{fname}];
+                             if constexpr (std::is_same_v<F, std::string>)
+                                result.*std::get<Is>(tup) = std::string(
+                                    static_cast<std::string_view>(child));
+                             else if constexpr (std::is_same_v<F, bool>)
+                                result.*std::get<Is>(tup) = static_cast<bool>(child);
+                             else if constexpr (std::is_arithmetic_v<F>)
+                                result.*std::get<Is>(tup) = static_cast<F>(child);
+                             else if constexpr (Reflected<F> && !std::is_enum_v<F>)
+                                result.*std::get<Is>(tup) = child.template as<F>();
+                          }
+                       }(),
+                       ...);
+                }(std::make_index_sequence<sizeof...(Ms)>{});
+             });
+         return result;
+      }
+
+      // ── Comparison ──────────────────────────────────────────────────
+
+      int compare(const dynamic_view& rhs) const
+      {
+         if (type_ != rhs.type_)
+            return static_cast<int>(type_) - static_cast<int>(rhs.type_);
+         switch (type_)
+         {
+            case dynamic_type::t_bool:
+               return int(bval_) - int(rhs.bval_);
+            case dynamic_type::t_i8:
+            case dynamic_type::t_i16:
+            case dynamic_type::t_i32:
+            case dynamic_type::t_i64:
+               return (ival_ < rhs.ival_) ? -1 : (ival_ > rhs.ival_) ? 1 : 0;
+            case dynamic_type::t_u8:
+            case dynamic_type::t_u16:
+            case dynamic_type::t_u32:
+            case dynamic_type::t_u64:
+               return (uval_ < rhs.uval_) ? -1 : (uval_ > rhs.uval_) ? 1 : 0;
+            case dynamic_type::t_f32:
+            case dynamic_type::t_f64:
+               return (fval_ < rhs.fval_) ? -1 : (fval_ > rhs.fval_) ? 1 : 0;
+            case dynamic_type::t_text:
+               return sval_.compare(rhs.sval_);
+            default:
+               return 0;
+         }
+      }
+
+      bool operator<(const dynamic_view& rhs) const { return compare(rhs) < 0; }
+      bool operator>(const dynamic_view& rhs) const { return compare(rhs) > 0; }
+      bool operator<=(const dynamic_view& rhs) const { return compare(rhs) <= 0; }
+      bool operator>=(const dynamic_view& rhs) const { return compare(rhs) >= 0; }
+      bool operator==(const dynamic_view& rhs) const { return compare(rhs) == 0; }
+      bool operator!=(const dynamic_view& rhs) const { return compare(rhs) != 0; }
+
+      // ── Path navigation ─────────────────────────────────────────────
+
+      // operator/ chains — programmatic path building
+      dynamic_view operator/(const char* name) const { return (*this)[field_name{name}]; }
+      dynamic_view operator/(std::string_view name) const { return (*this)[field_name{name}]; }
+      dynamic_view operator/(field_name fn) const { return (*this)[fn]; }
+      dynamic_view operator/(size_t idx) const { return (*this)[idx]; }
+
+      // .path("a.b.c[1].d") — runtime string path traversal
+      // Grammar: segment ('.' segment | '[' index ']')*
+      //   segment = identifier
+      //   index   = digits
+      dynamic_view path(std::string_view p) const
+      {
+         dynamic_view cur = *this;
+         size_t       i   = 0;
+         while (i < p.size())
+         {
+            if (p[i] == '.')
+               ++i;  // skip dot separator
+
+            if (i >= p.size())
+               break;
+
+            if (p[i] == '[')
+            {
+               // Parse array index: [digits]
+               ++i;  // skip '['
+               size_t idx = 0;
+               while (i < p.size() && p[i] >= '0' && p[i] <= '9')
+               {
+                  idx = idx * 10 + (p[i] - '0');
+                  ++i;
+               }
+               if (i >= p.size() || p[i] != ']')
+                  throw std::runtime_error(
+                      "dynamic_view::path: expected ']' in: " + std::string(p));
+               ++i;  // skip ']'
+               cur = cur[idx];
+            }
+            else
+            {
+               // Parse field name: alphanumeric + underscore
+               size_t start = i;
+               while (i < p.size() && p[i] != '.' && p[i] != '[')
+                  ++i;
+               cur = cur[field_name{p.substr(start, i - start)}];
+            }
+         }
+         return cur;
+      }
+
+      // Grant dynamic_vector access to private state
+      friend class dynamic_vector<Format>;
+   };
+
+   // ── dynamic_vector — format-generic list cursor ────────────────────────
+
+   template <typename Format>
+   class dynamic_vector
+   {
+      const uint8_t*        data_        = nullptr;
+      uint32_t              count_       = 0;
+      uint32_t              elem_stride_ = 0;
+      uint16_t              elem_dw_     = 0;
+      uint16_t              elem_pc_     = 0;
+      dynamic_type          elem_type_   = dynamic_type::t_void;
+      const dynamic_schema* elem_schema_ = nullptr;
+
+     public:
+      dynamic_vector() = default;
+
+      // Construct from a dynamic_view that holds a vector
+      dynamic_vector(const dynamic_view<Format>& dv)
+      {
+         if (dv.type_ != dynamic_type::t_vector && dv.type_ != dynamic_type::t_data)
+            throw std::runtime_error("dynamic_vector: source is not a vector");
+         data_        = dv.data_;
+         count_       = dv.vec_count_;
+         elem_stride_ = dv.vec_elem_stride_;
+         elem_dw_     = dv.vec_elem_dw_;
+         elem_pc_     = dv.vec_elem_pc_;
+         elem_type_   = dv.vec_elem_type_;
+         elem_schema_ = dv.vec_elem_schema_;
+      }
+
+      size_t size() const { return count_; }
+      bool   empty() const { return count_ == 0; }
+
+      dynamic_view<Format> operator[](size_t idx) const
+      {
+         if (idx >= count_)
+            throw std::out_of_range("dynamic_vector: index out of range");
+
+         dynamic_view<Format> result;
+         result.uval_ = 0;
+
+         if (elem_dw_ > 0 || elem_pc_ > 0)
+         {
+            uint32_t stride    = (elem_dw_ + elem_pc_) * 8u;
+            result.type_       = dynamic_type::t_struct;
+            result.data_       = data_ + idx * stride;
+            result.data_words_ = elem_dw_;
+            result.ptr_count_  = elem_pc_;
+            result.schema_     = elem_schema_;
+         }
+         else if (elem_stride_ == 8 && elem_type_ == dynamic_type::t_text)
+         {
+            const uint8_t* slot = data_ + idx * 8;
+            result.type_ = dynamic_type::t_text;
+            result.sval_ = capnp_detail::read_text(slot);
+         }
+         else
+         {
+            const uint8_t* elem = data_ + idx * elem_stride_;
+            switch (elem_stride_)
+            {
+               case 1:
+               {
+                  uint8_t v;
+                  std::memcpy(&v, elem, 1);
+                  result.type_ = dynamic_type::t_u8;
+                  result.uval_ = v;
+                  break;
+               }
+               case 2:
+               {
+                  uint16_t v;
+                  std::memcpy(&v, elem, 2);
+                  result.type_ = dynamic_type::t_u16;
+                  result.uval_ = v;
+                  break;
+               }
+               case 4:
+               {
+                  uint32_t v;
+                  std::memcpy(&v, elem, 4);
+                  result.type_ = dynamic_type::t_u32;
+                  result.uval_ = v;
+                  break;
+               }
+               case 8:
+               {
+                  uint64_t v;
+                  std::memcpy(&v, elem, 8);
+                  result.type_ = dynamic_type::t_u64;
+                  result.uval_ = v;
+                  break;
+               }
+               default:
+                  result.type_ = dynamic_type::t_void;
+                  break;
+            }
+         }
+
+         return result;
+      }
+
+      // Iterator for range-based for loops
+      class iterator
+      {
+         const dynamic_vector* vec_;
+         size_t                idx_;
+
+        public:
+         iterator(const dynamic_vector* v, size_t i) : vec_(v), idx_(i) {}
+
+         dynamic_view<Format> operator*() const { return (*vec_)[idx_]; }
+         iterator&            operator++()
+         {
+            ++idx_;
+            return *this;
+         }
+         bool operator!=(const iterator& rhs) const { return idx_ != rhs.idx_; }
+         bool operator==(const iterator& rhs) const { return idx_ == rhs.idx_; }
+      };
+
+      iterator begin() const { return {this, 0}; }
+      iterator end() const { return {this, count_}; }
+   };
+
+   // Forward declaration for hashed_path::compile()
+   template <typename Format>
+   class compiled_path;
+
+   // ── hashed_path — pre-parsed, pre-hashed path (schema-independent) ──────
+   //
+   // Parses a dotted path once and pre-computes xxh64 hashes for each field
+   // name segment.  Schema-independent: can be evaluated against any schema
+   // that has matching field names.  eval() uses pre-computed hashes for
+   // tag-byte lookup — no string parsing or hashing per row.
+   //
+   //   auto hp = hashed_path("customer.score");
+   //   for (auto& row : rows)
+   //      double score = hp.eval<cp>(row_view);  // tag scan, no parse/hash
+
+   class hashed_path
+   {
+     public:
+      struct step
+      {
+         uint64_t    hash    = 0;       // pre-computed xxh64 (for field steps)
+         const char* name    = nullptr;  // owned copy for collision verify
+         size_t      index   = 0;       // array index (for index steps)
+         bool        is_index = false;
+      };
+
+     private:
+      static constexpr size_t inline_cap = 8;
+      step    inline_[inline_cap];
+      step*   steps_    = inline_;
+      size_t  count_    = 0;
+      size_t  capacity_ = inline_cap;
+
+      // Owned string storage for field names
+      char*  name_buf_  = nullptr;
+      size_t name_used_ = 0;
+      size_t name_cap_  = 0;
+
+      char* alloc_name(std::string_view s)
+      {
+         size_t needed = s.size() + 1;
+         if (name_used_ + needed > name_cap_)
+         {
+            size_t new_cap = (name_cap_ == 0) ? 64 : name_cap_ * 2;
+            while (new_cap < name_used_ + needed)
+               new_cap *= 2;
+            auto* buf = new char[new_cap];
+            if (name_buf_)
+            {
+               for (size_t i = 0; i < name_used_; ++i)
+                  buf[i] = name_buf_[i];
+               // Fix up existing step name pointers
+               for (size_t i = 0; i < count_; ++i)
+                  if (!steps_[i].is_index)
+                     steps_[i].name = buf + (steps_[i].name - name_buf_);
+               delete[] name_buf_;
+            }
+            name_buf_ = buf;
+            name_cap_ = new_cap;
+         }
+         char* dst = name_buf_ + name_used_;
+         for (size_t i = 0; i < s.size(); ++i)
+            dst[i] = s[i];
+         dst[s.size()] = '\0';
+         name_used_ += needed;
+         return dst;
+      }
+
+      void push(step s)
+      {
+         if (count_ == capacity_)
+         {
+            size_t new_cap = capacity_ * 2;
+            auto*  buf     = new step[new_cap];
+            for (size_t i = 0; i < count_; ++i)
+               buf[i] = steps_[i];
+            if (steps_ != inline_)
+               delete[] steps_;
+            steps_    = buf;
+            capacity_ = new_cap;
+         }
+         steps_[count_++] = s;
+      }
+
+      void free_resources()
+      {
+         if (steps_ != inline_)
+            delete[] steps_;
+         delete[] name_buf_;
+      }
+
+     public:
+      hashed_path() = default;
+
+      // Parse and pre-hash a dotted path
+      explicit hashed_path(std::string_view path)
+      {
+         size_t i = 0;
+         while (i < path.size())
+         {
+            if (path[i] == '.')
+               ++i;
+
+            if (i >= path.size())
+               break;
+
+            if (path[i] == '[')
+            {
+               ++i;
+               size_t idx = 0;
+               while (i < path.size() && path[i] >= '0' && path[i] <= '9')
+               {
+                  idx = idx * 10 + (path[i] - '0');
+                  ++i;
+               }
+               if (i >= path.size() || path[i] != ']')
+                  throw std::runtime_error(
+                      "hashed_path: expected ']' in: " + std::string(path));
+               ++i;
+               push({0, nullptr, idx, true});
+            }
+            else
+            {
+               size_t start = i;
+               while (i < path.size() && path[i] != '.' && path[i] != '[')
+                  ++i;
+               auto seg  = path.substr(start, i - start);
+               auto hash = xxh64_hash(seg);
+               auto* owned_name = alloc_name(seg);
+               push({hash, owned_name, 0, false});
+            }
+         }
+      }
+
+      ~hashed_path() { free_resources(); }
+
+      // Move-only
+      hashed_path(hashed_path&& o) noexcept
+          : count_(o.count_), capacity_(o.capacity_),
+            name_buf_(o.name_buf_), name_used_(o.name_used_), name_cap_(o.name_cap_)
+      {
+         if (o.steps_ == o.inline_)
+         {
+            for (size_t i = 0; i < count_; ++i)
+               inline_[i] = o.inline_[i];
+            steps_ = inline_;
+         }
+         else
+         {
+            steps_   = o.steps_;
+            o.steps_ = o.inline_;
+         }
+         o.count_    = 0;
+         o.name_buf_ = nullptr;
+         o.name_used_ = 0;
+         o.name_cap_  = 0;
+      }
+
+      hashed_path& operator=(hashed_path&& o) noexcept
+      {
+         if (this != &o)
+         {
+            free_resources();
+            count_     = o.count_;
+            capacity_  = o.capacity_;
+            name_buf_  = o.name_buf_;
+            name_used_ = o.name_used_;
+            name_cap_  = o.name_cap_;
+            if (o.steps_ == o.inline_)
+            {
+               for (size_t i = 0; i < count_; ++i)
+                  inline_[i] = o.inline_[i];
+               steps_ = inline_;
+            }
+            else
+            {
+               steps_   = o.steps_;
+               o.steps_ = o.inline_;
+            }
+            o.count_     = 0;
+            o.name_buf_  = nullptr;
+            o.name_used_ = 0;
+            o.name_cap_  = 0;
+         }
+         return *this;
+      }
+
+      hashed_path(const hashed_path&)            = delete;
+      hashed_path& operator=(const hashed_path&) = delete;
+
+      size_t      depth() const { return count_; }
+      const step* steps() const { return steps_; }
+
+      // Evaluate against a dynamic_view using pre-computed hashes.
+      // Each field step does a tag-byte scan (no parsing, no hashing).
+      template <typename Format>
+      dynamic_view<Format> eval(dynamic_view<Format> root) const
+      {
+         dynamic_view<Format> cur = root;
+         for (size_t i = 0; i < count_; ++i)
+         {
+            if (steps_[i].is_index)
+            {
+               cur = cur[steps_[i].index];
+            }
+            else
+            {
+               // Use pre-computed hash for fast schema lookup
+               cur = cur[field_name{std::string_view(steps_[i].name),
+                                    steps_[i].hash}];
+            }
+         }
+         return cur;
+      }
+
+      // Compile against a specific schema for even faster eval.
+      // Returns a compiled_path with pre-resolved field descriptors.
+      template <typename Format>
+      compiled_path<Format> compile(const dynamic_schema& schema) const;
+   };
+
+   // ── compiled_path — parse-once, eval-many field accessor ─────────────────
+   //
+   // Pre-resolves a dotted path ("customer.score", "items[0].product") against
+   // a schema at query-compile time.  eval() then walks pre-resolved field
+   // descriptors with no hashing or string ops — just pointer arithmetic.
+   //
+   //   auto accessor = compiled_path<cp>(schema, "customer.score");
+   //   for (auto& row : rows)
+   //      double score = accessor.eval(row_ptr);  // no string ops per row
+
+   template <typename Format>
+   class compiled_path
+   {
+     public:
+      struct step
+      {
+         const dynamic_field_desc* field = nullptr;  // pre-resolved (for field steps)
+         size_t                    index = 0;         // array index (for index steps)
+         bool                      is_index = false;
+      };
+
+     private:
+      // Inline storage for short paths (most queries access 1-4 levels deep)
+      static constexpr size_t inline_cap = 8;
+      step    inline_[inline_cap];
+      step*   steps_    = inline_;
+      size_t  count_    = 0;
+      size_t  capacity_ = inline_cap;
+
+      // The root schema this path was compiled against
+      const dynamic_schema* root_schema_ = nullptr;
+
+      void push(step s)
+      {
+         if (count_ == capacity_)
+         {
+            size_t new_cap = capacity_ * 2;
+            auto*  buf     = new step[new_cap];
+            for (size_t i = 0; i < count_; ++i)
+               buf[i] = steps_[i];
+            if (steps_ != inline_)
+               delete[] steps_;
+            steps_    = buf;
+            capacity_ = new_cap;
+         }
+         steps_[count_++] = s;
+      }
+
+     public:
+      compiled_path() = default;
+
+      // Compile a dotted path against a schema
+      compiled_path(const dynamic_schema& root, std::string_view path)
+          : root_schema_(&root)
+      {
+         const dynamic_schema* cur_schema = &root;
+         size_t                i          = 0;
+
+         while (i < path.size())
+         {
+            if (path[i] == '.')
+               ++i;
+
+            if (i >= path.size())
+               break;
+
+            if (path[i] == '[')
+            {
+               ++i;
+               size_t idx = 0;
+               while (i < path.size() && path[i] >= '0' && path[i] <= '9')
+               {
+                  idx = idx * 10 + (path[i] - '0');
+                  ++i;
+               }
+               if (i >= path.size() || path[i] != ']')
+                  throw std::runtime_error(
+                      "compiled_path: expected ']' in: " + std::string(path));
+               ++i;
+               push({nullptr, idx, true});
+               // After indexing into a vector, the element schema (if struct) is
+               // already stored in the preceding field step's field->nested.
+            }
+            else
+            {
+               size_t start = i;
+               while (i < path.size() && path[i] != '.' && path[i] != '[')
+                  ++i;
+               auto seg = path.substr(start, i - start);
+
+               if (!cur_schema)
+                  throw std::runtime_error(
+                      "compiled_path: cannot navigate into non-struct at: " +
+                      std::string(seg));
+
+               auto* field = cur_schema->find(seg);
+               if (!field)
+                  throw std::runtime_error(
+                      "compiled_path: field not found: " + std::string(seg));
+
+               push({field, 0, false});
+
+               // Advance schema for next segment
+               cur_schema = field->nested;
+            }
+         }
+      }
+
+      ~compiled_path()
+      {
+         if (steps_ != inline_)
+            delete[] steps_;
+      }
+
+      // Move-only
+      compiled_path(compiled_path&& o) noexcept
+          : count_(o.count_), capacity_(o.capacity_), root_schema_(o.root_schema_)
+      {
+         if (o.steps_ == o.inline_)
+         {
+            for (size_t i = 0; i < count_; ++i)
+               inline_[i] = o.inline_[i];
+            steps_ = inline_;
+         }
+         else
+         {
+            steps_   = o.steps_;
+            o.steps_ = o.inline_;
+         }
+         o.count_ = 0;
+      }
+
+      compiled_path& operator=(compiled_path&& o) noexcept
+      {
+         if (this != &o)
+         {
+            if (steps_ != inline_)
+               delete[] steps_;
+            count_       = o.count_;
+            capacity_    = o.capacity_;
+            root_schema_ = o.root_schema_;
+            if (o.steps_ == o.inline_)
+            {
+               for (size_t i = 0; i < count_; ++i)
+                  inline_[i] = o.inline_[i];
+               steps_ = inline_;
+            }
+            else
+            {
+               steps_   = o.steps_;
+               o.steps_ = o.inline_;
+            }
+            o.count_ = 0;
+         }
+         return *this;
+      }
+
+      compiled_path(const compiled_path&)            = delete;
+      compiled_path& operator=(const compiled_path&) = delete;
+
+      size_t      depth() const { return count_; }
+      const step* steps() const { return steps_; }
+
+      // Evaluate the pre-resolved path against a root dynamic_view.
+      // No hashing, no string comparison — just pointer walks.
+      dynamic_view<Format> eval(dynamic_view<Format> root) const
+      {
+         dynamic_view<Format> cur = root;
+         for (size_t i = 0; i < count_; ++i)
+         {
+            if (steps_[i].is_index)
+            {
+               cur = cur[steps_[i].index];
+            }
+            else
+            {
+               // Direct field access using pre-resolved descriptor
+               // This bypasses the hash lookup entirely
+               cur = cur.resolve_field(*steps_[i].field);
+            }
+         }
+         return cur;
+      }
+
+      friend class hashed_path;
+   };
+
+   // Deferred definition: hashed_path::compile()
+   template <typename Format>
+   compiled_path<Format> hashed_path::compile(const dynamic_schema& schema) const
+   {
+      compiled_path<Format> result;
+      const dynamic_schema* cur_schema = &schema;
+
+      for (size_t i = 0; i < count_; ++i)
+      {
+         if (steps_[i].is_index)
+         {
+            result.push({nullptr, steps_[i].index, true});
+         }
+         else
+         {
+            if (!cur_schema)
+               throw std::runtime_error(
+                   "hashed_path::compile: cannot navigate into non-struct at: " +
+                   std::string(steps_[i].name));
+
+            auto* field = cur_schema->find(steps_[i].hash,
+                                           std::string_view(steps_[i].name));
+            if (!field)
+               throw std::runtime_error(
+                   "hashed_path::compile: field not found: " +
+                   std::string(steps_[i].name));
+
+            result.push({field, 0, false});
+            cur_schema = field->nested;
+         }
+      }
+      result.root_schema_ = &schema;
+      return result;
+   }
+
    // ── capnp_ref: top-level typed handle over a capnp message ────────────────
 
-   template <typename T, typename Buffer = std::vector<uint8_t>>
+   template <typename T, typename Buffer>
       requires Reflected<T>
    class capnp_ref
    {
-      Buffer buf_;
+      Buffer                          buf_;
+      capnp_detail::capnp_free_list   free_list_;
 
       using proxy_obj_t = capnp_detail::capnp_proxy_obj<T, Buffer>;
       using proxy_t     = typename reflect<T>::template proxy<proxy_obj_t>;
@@ -1931,7 +3937,7 @@ namespace psio
       proxy_t fields()
       {
          auto [data_byte, dw, pc] = root_info();
-         return proxy_t{proxy_obj_t{&buf_, data_byte, dw, pc}};
+         return proxy_t{proxy_obj_t{&buf_, &free_list_, data_byte, dw, pc}};
       }
 
       /// Read-only view of the message
@@ -1948,6 +3954,19 @@ namespace psio
       /// Validate the message
       bool validate() const { return capnp_validate(buf_.data(), buf_.size()); }
 
+      /// Free-list statistics
+      const capnp_detail::capnp_free_list& free_list() const
+      {
+         return free_list_;
+      }
+
+      /// Get the root struct as a capnp_ptr for dynamic field access
+      capnp_ptr root_ptr() const
+      {
+         return capnp_detail::resolve_struct_ptr(
+             reinterpret_cast<const uint8_t*>(buf_.data()) + 8);
+      }
+
       /// Raw buffer access
       const uint8_t* data() const
       {
@@ -1957,5 +3976,14 @@ namespace psio
       Buffer&        buffer() { return buf_; }
       const Buffer&  buffer() const { return buf_; }
    };
+
+   // Deferred definition: dynamic_view constructor from capnp_ref
+   template <typename Format>
+   template <typename T, typename Buffer>
+      requires Reflected<T>
+   dynamic_view<Format>::dynamic_view(const capnp_ref<T, Buffer>& ref)
+       : dynamic_view(ref.root_ptr(), &cp_schema<T>::schema)
+   {
+   }
 
 }  // namespace psio
