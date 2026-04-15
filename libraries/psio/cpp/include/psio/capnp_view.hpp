@@ -2278,6 +2278,7 @@ namespace psio
       std::string_view name;
       uint64_t         hash;
       constexpr field_name(std::string_view n) : name(n), hash(xxh64_hash(n)) {}
+      constexpr field_name(std::string_view n, uint64_t h) : name(n), hash(h) {}
    };
 
    // User-defined literal: "foo"_f → field_name{"foo"}
@@ -3463,6 +3464,227 @@ namespace psio
       iterator end() const { return {this, count_}; }
    };
 
+   // Forward declaration for hashed_path::compile()
+   template <typename Format>
+   class compiled_path;
+
+   // ── hashed_path — pre-parsed, pre-hashed path (schema-independent) ──────
+   //
+   // Parses a dotted path once and pre-computes xxh64 hashes for each field
+   // name segment.  Schema-independent: can be evaluated against any schema
+   // that has matching field names.  eval() uses pre-computed hashes for
+   // tag-byte lookup — no string parsing or hashing per row.
+   //
+   //   auto hp = hashed_path("customer.score");
+   //   for (auto& row : rows)
+   //      double score = hp.eval<cp>(row_view);  // tag scan, no parse/hash
+
+   class hashed_path
+   {
+     public:
+      struct step
+      {
+         uint64_t    hash    = 0;       // pre-computed xxh64 (for field steps)
+         const char* name    = nullptr;  // owned copy for collision verify
+         size_t      index   = 0;       // array index (for index steps)
+         bool        is_index = false;
+      };
+
+     private:
+      static constexpr size_t inline_cap = 8;
+      step    inline_[inline_cap];
+      step*   steps_    = inline_;
+      size_t  count_    = 0;
+      size_t  capacity_ = inline_cap;
+
+      // Owned string storage for field names
+      char*  name_buf_  = nullptr;
+      size_t name_used_ = 0;
+      size_t name_cap_  = 0;
+
+      char* alloc_name(std::string_view s)
+      {
+         size_t needed = s.size() + 1;
+         if (name_used_ + needed > name_cap_)
+         {
+            size_t new_cap = (name_cap_ == 0) ? 64 : name_cap_ * 2;
+            while (new_cap < name_used_ + needed)
+               new_cap *= 2;
+            auto* buf = new char[new_cap];
+            if (name_buf_)
+            {
+               for (size_t i = 0; i < name_used_; ++i)
+                  buf[i] = name_buf_[i];
+               // Fix up existing step name pointers
+               for (size_t i = 0; i < count_; ++i)
+                  if (!steps_[i].is_index)
+                     steps_[i].name = buf + (steps_[i].name - name_buf_);
+               delete[] name_buf_;
+            }
+            name_buf_ = buf;
+            name_cap_ = new_cap;
+         }
+         char* dst = name_buf_ + name_used_;
+         for (size_t i = 0; i < s.size(); ++i)
+            dst[i] = s[i];
+         dst[s.size()] = '\0';
+         name_used_ += needed;
+         return dst;
+      }
+
+      void push(step s)
+      {
+         if (count_ == capacity_)
+         {
+            size_t new_cap = capacity_ * 2;
+            auto*  buf     = new step[new_cap];
+            for (size_t i = 0; i < count_; ++i)
+               buf[i] = steps_[i];
+            if (steps_ != inline_)
+               delete[] steps_;
+            steps_    = buf;
+            capacity_ = new_cap;
+         }
+         steps_[count_++] = s;
+      }
+
+      void free_resources()
+      {
+         if (steps_ != inline_)
+            delete[] steps_;
+         delete[] name_buf_;
+      }
+
+     public:
+      hashed_path() = default;
+
+      // Parse and pre-hash a dotted path
+      explicit hashed_path(std::string_view path)
+      {
+         size_t i = 0;
+         while (i < path.size())
+         {
+            if (path[i] == '.')
+               ++i;
+
+            if (i >= path.size())
+               break;
+
+            if (path[i] == '[')
+            {
+               ++i;
+               size_t idx = 0;
+               while (i < path.size() && path[i] >= '0' && path[i] <= '9')
+               {
+                  idx = idx * 10 + (path[i] - '0');
+                  ++i;
+               }
+               if (i >= path.size() || path[i] != ']')
+                  throw std::runtime_error(
+                      "hashed_path: expected ']' in: " + std::string(path));
+               ++i;
+               push({0, nullptr, idx, true});
+            }
+            else
+            {
+               size_t start = i;
+               while (i < path.size() && path[i] != '.' && path[i] != '[')
+                  ++i;
+               auto seg  = path.substr(start, i - start);
+               auto hash = xxh64_hash(seg);
+               auto* owned_name = alloc_name(seg);
+               push({hash, owned_name, 0, false});
+            }
+         }
+      }
+
+      ~hashed_path() { free_resources(); }
+
+      // Move-only
+      hashed_path(hashed_path&& o) noexcept
+          : count_(o.count_), capacity_(o.capacity_),
+            name_buf_(o.name_buf_), name_used_(o.name_used_), name_cap_(o.name_cap_)
+      {
+         if (o.steps_ == o.inline_)
+         {
+            for (size_t i = 0; i < count_; ++i)
+               inline_[i] = o.inline_[i];
+            steps_ = inline_;
+         }
+         else
+         {
+            steps_   = o.steps_;
+            o.steps_ = o.inline_;
+         }
+         o.count_    = 0;
+         o.name_buf_ = nullptr;
+         o.name_used_ = 0;
+         o.name_cap_  = 0;
+      }
+
+      hashed_path& operator=(hashed_path&& o) noexcept
+      {
+         if (this != &o)
+         {
+            free_resources();
+            count_     = o.count_;
+            capacity_  = o.capacity_;
+            name_buf_  = o.name_buf_;
+            name_used_ = o.name_used_;
+            name_cap_  = o.name_cap_;
+            if (o.steps_ == o.inline_)
+            {
+               for (size_t i = 0; i < count_; ++i)
+                  inline_[i] = o.inline_[i];
+               steps_ = inline_;
+            }
+            else
+            {
+               steps_   = o.steps_;
+               o.steps_ = o.inline_;
+            }
+            o.count_     = 0;
+            o.name_buf_  = nullptr;
+            o.name_used_ = 0;
+            o.name_cap_  = 0;
+         }
+         return *this;
+      }
+
+      hashed_path(const hashed_path&)            = delete;
+      hashed_path& operator=(const hashed_path&) = delete;
+
+      size_t      depth() const { return count_; }
+      const step* steps() const { return steps_; }
+
+      // Evaluate against a dynamic_view using pre-computed hashes.
+      // Each field step does a tag-byte scan (no parsing, no hashing).
+      template <typename Format>
+      dynamic_view<Format> eval(dynamic_view<Format> root) const
+      {
+         dynamic_view<Format> cur = root;
+         for (size_t i = 0; i < count_; ++i)
+         {
+            if (steps_[i].is_index)
+            {
+               cur = cur[steps_[i].index];
+            }
+            else
+            {
+               // Use pre-computed hash for fast schema lookup
+               cur = cur[field_name{std::string_view(steps_[i].name),
+                                    steps_[i].hash}];
+            }
+         }
+         return cur;
+      }
+
+      // Compile against a specific schema for even faster eval.
+      // Returns a compiled_path with pre-resolved field descriptors.
+      template <typename Format>
+      compiled_path<Format> compile(const dynamic_schema& schema) const;
+   };
+
    // ── compiled_path — parse-once, eval-many field accessor ─────────────────
    //
    // Pre-resolves a dotted path ("customer.score", "items[0].product") against
@@ -3646,7 +3868,44 @@ namespace psio
          }
          return cur;
       }
+
+      friend class hashed_path;
    };
+
+   // Deferred definition: hashed_path::compile()
+   template <typename Format>
+   compiled_path<Format> hashed_path::compile(const dynamic_schema& schema) const
+   {
+      compiled_path<Format> result;
+      const dynamic_schema* cur_schema = &schema;
+
+      for (size_t i = 0; i < count_; ++i)
+      {
+         if (steps_[i].is_index)
+         {
+            result.push({nullptr, steps_[i].index, true});
+         }
+         else
+         {
+            if (!cur_schema)
+               throw std::runtime_error(
+                   "hashed_path::compile: cannot navigate into non-struct at: " +
+                   std::string(steps_[i].name));
+
+            auto* field = cur_schema->find(steps_[i].hash,
+                                           std::string_view(steps_[i].name));
+            if (!field)
+               throw std::runtime_error(
+                   "hashed_path::compile: field not found: " +
+                   std::string(steps_[i].name));
+
+            result.push({field, 0, false});
+            cur_schema = field->nested;
+         }
+      }
+      result.root_schema_ = &schema;
+      return result;
+   }
 
    // ── capnp_ref: top-level typed handle over a capnp message ────────────────
 

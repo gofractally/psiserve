@@ -2164,3 +2164,50 @@ TEST_CASE("dynamic: compiled_path eval", "[dynamic]")
    // Compiled path error: bad field
    REQUIRE_THROWS(psio::compiled_path<psio::cp>(schema, "customer.nonexistent"));
 }
+
+TEST_CASE("dynamic: hashed_path eval and compile", "[dynamic]")
+{
+   CpOrder order;
+   order.id       = 55;
+   order.customer = CpUser{5, "Eve", "eve@test.com", "qa", 40, 0.75, {}, true};
+   order.items    = {{"Zap", 60, 7.5}, {"Bop", 80, 3.0}};
+   order.total    = 160;
+   order.note     = "hashed";
+
+   auto data = psio::capnp_pack(order);
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   dv_cp root(ref);
+
+   // hashed_path: parse + hash once, eval with tag-byte lookup
+   psio::hashed_path hp_id("id");
+   psio::hashed_path hp_name("customer.name");
+   psio::hashed_path hp_score("customer.score");
+   psio::hashed_path hp_item("items[1].product");
+
+   uint64_t id = hp_id.eval<psio::cp>(root);
+   REQUIRE(id == 55);
+
+   std::string_view name = hp_name.eval<psio::cp>(root);
+   REQUIRE(name == "Eve");
+
+   double score = hp_score.eval<psio::cp>(root);
+   REQUIRE(score == Approx(0.75));
+
+   std::string_view product = hp_item.eval<psio::cp>(root);
+   REQUIRE(product == "Bop");
+
+   // Promote hashed_path → compiled_path for even faster eval
+   auto& schema = psio::cp_schema<CpOrder>::schema;
+   auto cp_name = hp_name.compile<psio::cp>(schema);
+   auto cp_score = hp_score.compile<psio::cp>(schema);
+
+   std::string_view name2 = cp_name.eval(root);
+   REQUIRE(name2 == "Eve");
+
+   double score2 = cp_score.eval(root);
+   REQUIRE(score2 == Approx(0.75));
+
+   // Verify promotion rejects bad fields
+   psio::hashed_path hp_bad("customer.nonexistent");
+   REQUIRE_THROWS(hp_bad.compile<psio::cp>(schema));
+}
