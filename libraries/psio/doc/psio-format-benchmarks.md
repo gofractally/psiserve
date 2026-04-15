@@ -286,7 +286,7 @@ PSIO doesn't just match the official libraries' feature sets — it surpasses th
 | Fixed-length arrays            |        Yes        |         Yes          |
 | Buffer verification            |        Yes        |         Yes          |
 | Vtable deduplication           |     Optional      |        Always        |
-| **In-place scalar mutation**   |      **Yes**      |       **No**         |
+| In-place scalar mutation       |        Yes        |   Yes (`--gen-mutable`) |
 | **String/dynamic mutation**    |      **Yes**      |       **No**         |
 | **Canonical representation**   |      **Yes**      |       **No**         |
 | **Code-first (no IDL)**        |      **Yes**      |       **No**         |
@@ -302,23 +302,25 @@ PSIO doesn't just match the official libraries' feature sets — it surpasses th
 
 ### In-Place Mutation
 
-Official Cap'n Proto and FlatBuffers treat serialized buffers as **immutable**. To change a field, you must deserialize, modify, and reserialize the entire struct.
+Official Cap'n Proto treats serialized buffers as **immutable** — the API has separate Reader and Builder types with no way to modify an existing message. Official FlatBuffers supports in-place scalar mutation (`--gen-mutable` flag) but **not** string or variable-length field mutation.
 
-PSIO mutates serialized data in place:
+PSIO goes further — full mutation for both formats, including strings:
 
 ```cpp
-// Cap'n Proto format — mutate a scalar in-place
+// Cap'n Proto format — mutate scalar AND pointer fields in-place
 auto ref = psio::capnp_ref<UserProfile>::from_buffer(buf);
-ref.age() = 33;  // direct overwrite, no deserialization
+ref.age() = 33;            // scalar: direct overwrite
+ref.name() = "Bob";        // string: allocate new, repoint, free-list old
 
 // FlatBuffers format — mutate a scalar in-place
 auto m = psio::fb_mut<UserProfile>::from_buffer(buf.data());
-m.age() = 33;    // direct overwrite
+m.age() = 33;              // direct overwrite (same as official --gen-mutable)
 
 // FlatBuffers format — mutate a STRING in-place (O(1))
+// Official FlatBuffers CANNOT do this
 auto doc = psio::fb_doc<UserProfile>::from_buffer(std::move(buf));
-doc.name() = "Bob";  // appends new string, updates offset in O(1)
-doc.canonicalize();   // optional: compact dead space
+doc.name() = "Bob";        // appends new string, updates offset in O(1)
+doc.canonicalize();         // optional: compact dead space
 ```
 
 Cap'n Proto mutation uses a free-list allocator to reclaim dead space when pointer fields are replaced. FlatBuffers `fb_doc` appends new data and updates offsets without tree-walking or memmove.

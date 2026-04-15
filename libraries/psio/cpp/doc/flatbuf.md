@@ -262,7 +262,7 @@ formats later** — or use several simultaneously.
 | Schema file required           |      No      |     Yes      |      Yes      |
 | Use native language types      |     Yes      |      No      |       No      |
 | Named field views              |     Yes      |   Yes (gen)  |   Yes (gen)   |
-| In-place scalar mutation       |     Yes      |      No      |       No      |
+| In-place scalar mutation       |     Yes      | Yes (`--gen-mutable`) | No   |
 | String/dynamic mutation        |     Yes      |      No      |       No      |
 | Canonical representation       |     Yes      |      No      |       No      |
 | Struct-aware defaults          |     Yes      |   Partial    |    Partial    |
