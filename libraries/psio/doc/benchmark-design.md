@@ -167,7 +167,7 @@ Each language benchmarks fracpack against the most common alternatives:
 | Protocol Buffers | Y | Y | Y | Y | - | Y | - |
 | FlatBuffers | Y | Y | - | - | - | Y | - |
 
-WIT Canonical ABI is the WASM Component Model's standard data encoding. It uses natural alignment, (pointer, length) pairs for strings/lists, and positional record layout. psio provides code-first WIT schema generation and `CView<T>` for zero-copy viewing of Canonical ABI data in WASM linear memory. Competitors only need to implement `pack` and `unpack` (no view/validate — that's fracpack's differentiator).
+WIT Canonical ABI is the WASM Component Model's standard data encoding. It uses natural alignment, (pointer, length) pairs for strings/lists, and positional record layout. psio provides code-first WIT schema generation and `WView<T>` for zero-copy viewing of Canonical ABI data in WASM linear memory. Competitors only need to implement `pack` and `unpack` (no view/validate — that's fracpack's differentiator).
 
 ## Metrics Reported
 
