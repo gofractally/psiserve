@@ -3128,6 +3128,58 @@ namespace psio
       bool operator==(const dynamic_view& rhs) const { return compare(rhs) == 0; }
       bool operator!=(const dynamic_view& rhs) const { return compare(rhs) != 0; }
 
+      // ── Path navigation ─────────────────────────────────────────────
+
+      // operator/ chains — programmatic path building
+      dynamic_view operator/(const char* name) const { return (*this)[field_name{name}]; }
+      dynamic_view operator/(std::string_view name) const { return (*this)[field_name{name}]; }
+      dynamic_view operator/(field_name fn) const { return (*this)[fn]; }
+      dynamic_view operator/(size_t idx) const { return (*this)[idx]; }
+
+      // .path("a.b.c[1].d") — runtime string path traversal
+      // Grammar: segment ('.' segment | '[' index ']')*
+      //   segment = identifier
+      //   index   = digits
+      dynamic_view path(std::string_view p) const
+      {
+         dynamic_view cur = *this;
+         size_t       i   = 0;
+         while (i < p.size())
+         {
+            if (p[i] == '.')
+               ++i;  // skip dot separator
+
+            if (i >= p.size())
+               break;
+
+            if (p[i] == '[')
+            {
+               // Parse array index: [digits]
+               ++i;  // skip '['
+               size_t idx = 0;
+               while (i < p.size() && p[i] >= '0' && p[i] <= '9')
+               {
+                  idx = idx * 10 + (p[i] - '0');
+                  ++i;
+               }
+               if (i >= p.size() || p[i] != ']')
+                  throw std::runtime_error(
+                      "dynamic_view::path: expected ']' in: " + std::string(p));
+               ++i;  // skip ']'
+               cur = cur[idx];
+            }
+            else
+            {
+               // Parse field name: alphanumeric + underscore
+               size_t start = i;
+               while (i < p.size() && p[i] != '.' && p[i] != '[')
+                  ++i;
+               cur = cur[field_name{p.substr(start, i - start)}];
+            }
+         }
+         return cur;
+      }
+
       // Grant dynamic_vector access to private state
       friend class dynamic_vector<Format>;
    };
