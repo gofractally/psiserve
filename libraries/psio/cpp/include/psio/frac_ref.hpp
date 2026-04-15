@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstring>
 #include <span>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -529,6 +530,73 @@ namespace psio
 
       operator FieldType() const { return get(); }
 
+      // ── Zero-copy read for string fields ──
+
+      std::string_view str_view() const
+         requires(std::is_same_v<FieldType, std::string>)
+      {
+         const char* data = buf_data();
+
+         frac_detail::level_info levels[depth];
+         uint32_t                leaf_off_pos, leaf_data_pos;
+         frac_detail::navigate_recording<Root, Path...>(
+             data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
+
+         uint32_t len = frac_detail::read_u32(data, leaf_data_pos);
+         return {data + leaf_data_pos + 4, len};
+      }
+
+      // ── Zero-copy read for bytes fields ──
+
+      std::span<const char> data_span() const
+         requires(std::is_same_v<FieldType, std::vector<char>> ||
+                  std::is_same_v<FieldType, std::string>)
+      {
+         const char* data = buf_data();
+
+         frac_detail::level_info levels[depth];
+         uint32_t                leaf_off_pos, leaf_data_pos;
+         frac_detail::navigate_recording<Root, Path...>(
+             data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
+
+         uint32_t len = frac_detail::read_u32(data, leaf_data_pos);
+         return {data + leaf_data_pos + 4, len};
+      }
+
+      // ── Zero-copy check for optional fields ──
+
+      bool has_value() const
+         requires(is_packable<FieldType>::is_optional)
+      {
+         const char* data = buf_data();
+
+         frac_detail::level_info levels[depth];
+         uint32_t                leaf_off_pos, leaf_data_pos;
+         frac_detail::navigate_recording<Root, Path...>(
+             data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
+
+         uint32_t offset = frac_detail::read_u32(data, leaf_off_pos);
+         return offset >= 4;  // 0=elided, 1=None → false; >=4=Some → true
+      }
+
+      // ── Zero-copy byte length for variable-size fields ──
+
+      uint32_t raw_byte_size() const
+         requires(is_packable<FieldType>::is_variable_size)
+      {
+         const char* data = buf_data();
+
+         frac_detail::level_info levels[depth];
+         uint32_t                leaf_off_pos, leaf_data_pos;
+         frac_detail::navigate_recording<Root, Path...>(
+             data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
+
+         uint32_t offset = frac_detail::read_u32(data, leaf_off_pos);
+         if (offset < 4)
+            return 0;
+         return frac_detail::packed_size_at<FieldType>(data, leaf_data_pos);
+      }
+
       // ── Write: fixed-size fields (requires mutable buffer) ──
 
       field_handle& operator=(const FieldType& v)
@@ -747,6 +815,235 @@ namespace psio
       T unpack() const
       {
          return from_frac<T>(std::span<const char>{buf_.data(), buf_.size()});
+      }
+   };
+
+   // ── Sorted container views with binary search ──────────────────────────────
+   //
+   // Zero-copy O(log n) lookup over fracpack-encoded flat_set / flat_map data.
+   //
+   // Construction: pass a span/pointer to the packed container bytes,
+   // i.e. the [u32 byte_count][entries...] region.
+   //
+   //   auto packed = psio::to_frac(my_struct);
+   //   auto s = psio::frac_sorted_set<int32_t>(packed_container_bytes);
+   //   if (s.contains(42)) { ... }
+
+   namespace frac_detail
+   {
+      inline uint32_t read_u32(const char* p)
+      {
+         uint32_t v;
+         std::memcpy(&v, p, 4);
+         return v;
+      }
+
+      // Read a string from a fracpack offset field.
+      // `off_pos` points to the 4-byte relative offset.
+      // Returns empty view if offset is 0 (elided).
+      inline std::string_view read_frac_string(const char* off_pos)
+      {
+         uint32_t off = read_u32(off_pos);
+         if (off == 0)
+            return {};
+         const char* str = off_pos + off;
+         uint32_t    len = read_u32(str);
+         return {str + 4, len};
+      }
+   }  // namespace frac_detail
+
+   /// Zero-copy sorted view over a fracpack-encoded flat_set<K>.
+   /// Provides O(log n) contains/find/lower_bound via binary search.
+   template <typename K>
+   class frac_sorted_set
+   {
+      const char* data_;
+      uint32_t    count_;
+
+      static constexpr uint32_t entry_sz = is_packable<K>::fixed_size;
+
+      auto read_key(uint32_t i) const
+      {
+         const char* entry = data_ + 4 + i * entry_sz;
+         if constexpr (std::is_same_v<K, std::string>)
+            return frac_detail::read_frac_string(entry);
+         else
+         {
+            K val;
+            std::memcpy(&val, entry, sizeof(K));
+            return val;
+         }
+      }
+
+     public:
+      explicit frac_sorted_set(const char* data = nullptr)
+          : data_(data), count_(data ? frac_detail::read_u32(data) / entry_sz : 0)
+      {
+      }
+      explicit frac_sorted_set(std::span<const char> sp)
+          : frac_sorted_set(sp.empty() ? nullptr : sp.data())
+      {
+      }
+
+      explicit operator bool() const { return data_ != nullptr; }
+      uint32_t size() const { return count_; }
+
+      auto operator[](uint32_t i) const { return read_key(i); }
+
+      bool contains(const auto& key) const
+      {
+         uint32_t lo = 0, hi = count_;
+         while (lo < hi)
+         {
+            uint32_t mid = lo + (hi - lo) / 2;
+            auto     mk  = read_key(mid);
+            if (mk < key)
+               lo = mid + 1;
+            else if (key < mk)
+               hi = mid;
+            else
+               return true;
+         }
+         return false;
+      }
+
+      uint32_t find(const auto& key) const
+      {
+         uint32_t lo = 0, hi = count_;
+         while (lo < hi)
+         {
+            uint32_t mid = lo + (hi - lo) / 2;
+            auto     mk  = read_key(mid);
+            if (mk < key)
+               lo = mid + 1;
+            else if (key < mk)
+               hi = mid;
+            else
+               return mid;
+         }
+         return count_;
+      }
+
+      uint32_t lower_bound(const auto& key) const
+      {
+         uint32_t lo = 0, hi = count_;
+         while (lo < hi)
+         {
+            uint32_t mid = lo + (hi - lo) / 2;
+            if (read_key(mid) < key)
+               lo = mid + 1;
+            else
+               hi = mid;
+         }
+         return lo;
+      }
+   };
+
+   /// Zero-copy sorted view over a fracpack-encoded flat_map<K, V>.
+   /// Provides O(log n) lookup by key via binary search.
+   ///
+   /// Fracpack layout: pair<K,V> is always variable-size (no definitionWillNotChange),
+   /// so entries are indirected:
+   ///   [u32 total_fixed = count * 4][offset0, offset1, ...]
+   ///   [pair0: [u16 members_fixed][K_data][V_data][variable...]]
+   ///   [pair1: ...]
+   /// The key is the first field of the pair sub-object, after the u16 header.
+   template <typename K, typename V>
+   class frac_sorted_map
+   {
+      const char* data_;
+      uint32_t    count_;
+
+      static constexpr uint32_t key_fixed = is_packable<K>::fixed_size;
+      static constexpr uint32_t val_fixed = is_packable<V>::fixed_size;
+
+      // Follow offset at index i to get the pair sub-object's fixed region
+      // (skips the u16 members_fixed header)
+      const char* pair_fixed(uint32_t i) const
+      {
+         const char* off_pos = data_ + 4 + i * 4;
+         uint32_t    off     = frac_detail::read_u32(off_pos);
+         return off_pos + off + 2;  // skip u16 members_fixed header
+      }
+
+      auto read_key(uint32_t i) const
+      {
+         const char* pf = pair_fixed(i);
+         if constexpr (std::is_same_v<K, std::string>)
+            return frac_detail::read_frac_string(pf);
+         else
+         {
+            K val;
+            std::memcpy(&val, pf, sizeof(K));
+            return val;
+         }
+      }
+
+      auto read_value(uint32_t i) const
+      {
+         const char* pf = pair_fixed(i) + key_fixed;
+         if constexpr (std::is_same_v<V, std::string>)
+            return frac_detail::read_frac_string(pf);
+         else if constexpr (std::is_same_v<V, bool>)
+            return *pf != 0;
+         else
+         {
+            V val;
+            std::memcpy(&val, pf, sizeof(V));
+            return val;
+         }
+      }
+
+      uint32_t find_index(const auto& key) const
+      {
+         uint32_t lo = 0, hi = count_;
+         while (lo < hi)
+         {
+            uint32_t mid = lo + (hi - lo) / 2;
+            auto     mk  = read_key(mid);
+            if (mk < key)
+               lo = mid + 1;
+            else if (key < mk)
+               hi = mid;
+            else
+               return mid;
+         }
+         return count_;
+      }
+
+     public:
+      explicit frac_sorted_map(const char* data = nullptr)
+          : data_(data), count_(data ? frac_detail::read_u32(data) / 4 : 0)
+      {
+      }
+      explicit frac_sorted_map(std::span<const char> sp)
+          : frac_sorted_map(sp.empty() ? nullptr : sp.data())
+      {
+      }
+
+      explicit operator bool() const { return data_ != nullptr; }
+      uint32_t size() const { return count_; }
+
+      struct entry_view
+      {
+         const frac_sorted_map* map_;
+         uint32_t               idx_;
+         auto                   key() const { return map_->read_key(idx_); }
+         auto                   value() const { return map_->read_value(idx_); }
+      };
+
+      entry_view operator[](uint32_t i) const { return {this, i}; }
+
+      bool       contains(const auto& key) const { return find_index(key) < count_; }
+      entry_view find(const auto& key) const { return {this, find_index(key)}; }
+
+      /// Value lookup — returns default-constructed V if not found.
+      auto value_or(const auto& key, const auto& fallback) const
+      {
+         uint32_t idx = find_index(key);
+         if (idx < count_)
+            return read_value(idx);
+         return decltype(read_value(0))(fallback);
       }
    };
 

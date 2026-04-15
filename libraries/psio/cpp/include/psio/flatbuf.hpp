@@ -31,12 +31,15 @@
 #pragma once
 
 #include <psio/reflect.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <flat_map>
+#include <flat_set>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -49,6 +52,10 @@ template <typename T>
 class fb_view;
 template <typename T>
 class fb_vec;
+template <typename T>
+class fb_sorted_vec;
+template <typename K, typename V>
+class fb_sorted_map;
 template <typename T>
 class fb_nested;
 template <typename T>
@@ -106,6 +113,38 @@ template <typename T>
 struct is_fb_nested<fb_nested<T>> : std::true_type
 {
    using inner_type = T;
+};
+
+template <typename T>
+struct is_flat_set : std::false_type
+{
+};
+template <typename K, typename... Rest>
+struct is_flat_set<std::flat_set<K, Rest...>> : std::true_type
+{
+   using key_type = K;
+};
+template <typename K, typename... Rest>
+struct is_flat_set<std::set<K, Rest...>> : std::true_type
+{
+   using key_type = K;
+};
+
+template <typename T>
+struct is_flat_map : std::false_type
+{
+};
+template <typename K, typename V, typename... Rest>
+struct is_flat_map<std::flat_map<K, V, Rest...>> : std::true_type
+{
+   using key_type    = K;
+   using mapped_type = V;
+};
+template <typename K, typename V, typename... Rest>
+struct is_flat_map<std::map<K, V, Rest...>> : std::true_type
+{
+   using key_type    = K;
+   using mapped_type = V;
 };
 
 template <typename T, typename = void>
@@ -519,6 +558,95 @@ void read_field(const uint8_t* table, const uint8_t* vt, int slot, V& out, const
          out = V(std::vector<uint8_t>(elems, elems + count));
       }
    }
+   else if constexpr (is_flat_set<V>::value)
+   {
+      using K = typename is_flat_set<V>::key_type;
+      if (!fo)
+         return;
+      auto*    vp    = deref(table + fo);
+      uint32_t count = read<uint32_t>(vp);
+      auto*    elems = vp + 4;
+      for (uint32_t j = 0; j < count; ++j)
+      {
+         if constexpr (std::is_same_v<K, std::string>)
+         {
+            auto* entry = elems + j * 4;
+            auto  sv    = read_string(entry + read<uint32_t>(entry));
+            out.insert(std::string(sv.data(), sv.size()));
+         }
+         else if constexpr (std::is_enum_v<K>)
+         {
+            using U = std::underlying_type_t<K>;
+            out.insert(static_cast<K>(read<U>(elems + j * sizeof(U))));
+         }
+         else if constexpr (std::is_arithmetic_v<K>)
+            out.insert(read<K>(elems + j * sizeof(K)));
+      }
+   }
+   else if constexpr (is_flat_map<V>::value)
+   {
+      using K  = typename is_flat_map<V>::key_type;
+      using MV = typename is_flat_map<V>::mapped_type;
+      if (!fo)
+         return;
+      auto*    vp    = deref(table + fo);
+      uint32_t count = read<uint32_t>(vp);
+      auto*    elems = vp + 4;
+      for (uint32_t j = 0; j < count; ++j)
+      {
+         auto* entry     = elems + j * 4;
+         auto* sub_table = entry + read<uint32_t>(entry);
+         auto* sub_vt    = get_vtable(sub_table);
+         // Read key (field 0, vtable offset 4)
+         K        key{};
+         uint16_t key_fo = field_offset(sub_vt, 4);
+         if constexpr (std::is_same_v<K, std::string>)
+         {
+            if (key_fo)
+            {
+               auto sv = read_string(deref(sub_table + key_fo));
+               key.assign(sv.data(), sv.size());
+            }
+         }
+         else if constexpr (std::is_enum_v<K>)
+         {
+            using U = std::underlying_type_t<K>;
+            key     = key_fo ? static_cast<K>(read<U>(sub_table + key_fo)) : K{};
+         }
+         else if constexpr (std::is_arithmetic_v<K>)
+            key = key_fo ? read<K>(sub_table + key_fo) : K{};
+         // Read value (field 1, vtable offset 6)
+         MV       val{};
+         uint16_t val_fo = field_offset(sub_vt, 6);
+         if constexpr (std::is_same_v<MV, bool>)
+            val = val_fo ? (read<uint8_t>(sub_table + val_fo) != 0) : MV{};
+         else if constexpr (std::is_enum_v<MV>)
+         {
+            using U = std::underlying_type_t<MV>;
+            val     = val_fo ? static_cast<MV>(read<U>(sub_table + val_fo)) : MV{};
+         }
+         else if constexpr (std::is_arithmetic_v<MV>)
+            val = val_fo ? read<MV>(sub_table + val_fo) : MV{};
+         else if constexpr (std::is_same_v<MV, std::string>)
+         {
+            if (val_fo)
+            {
+               auto sv = read_string(deref(sub_table + val_fo));
+               val.assign(sv.data(), sv.size());
+            }
+         }
+         else if constexpr (is_table<MV>::value)
+         {
+            if (val_fo)
+            {
+               auto* nested    = deref(sub_table + val_fo);
+               auto* nested_vt = get_vtable(nested);
+               unpack_table(nested, nested_vt, val);
+            }
+         }
+         out.insert_or_assign(std::move(key), std::move(val));
+      }
+   }
    else if constexpr (is_vector<V>::value)
    {
       using E = typename V::value_type;
@@ -718,6 +846,17 @@ auto view_field(const uint8_t* table)
          return fb_view<Inner>(get_root(bytes));
       }
       return fb_view<Inner>{};
+   }
+   else if constexpr (is_flat_set<F>::value)
+   {
+      using K = typename is_flat_set<F>::key_type;
+      return fo ? fb_sorted_vec<K>(deref(table + fo)) : fb_sorted_vec<K>{};
+   }
+   else if constexpr (is_flat_map<F>::value)
+   {
+      using K  = typename is_flat_map<F>::key_type;
+      using MV = typename is_flat_map<F>::mapped_type;
+      return fo ? fb_sorted_map<K, MV>(deref(table + fo)) : fb_sorted_map<K, MV>{};
    }
    else if constexpr (is_vector<F>::value)
    {
@@ -1078,6 +1217,60 @@ class basic_fb_builder
 
    // ── Reflect-driven helpers ─────────────────────────────────────────
 
+   /// Write a key-value pair as a 2-field FlatBuffer table.
+   /// Field 0 = key (vtable offset 4), field 1 = value (vtable offset 6).
+   template <typename K, typename V>
+   uint32_t write_pair_table(const K& key, const V& value)
+   {
+      uint32_t key_off = pre_create<K>(key);
+      uint32_t val_off = pre_create<V>(value);
+      start_table();
+      // Add in reverse alignment order (largest first) for minimal padding
+      constexpr size_t ka = detail::fbs::field_align<K>();
+      constexpr size_t va = detail::fbs::field_align<V>();
+      auto add_key = [&]
+      {
+         if constexpr (std::is_same_v<K, bool>)
+            add_scalar<uint8_t>(4, static_cast<uint8_t>(key), uint8_t(0));
+         else if constexpr (std::is_enum_v<K>)
+         {
+            using U = std::underlying_type_t<K>;
+            add_scalar<U>(4, static_cast<U>(key), U(0));
+         }
+         else if constexpr (std::is_arithmetic_v<K>)
+            add_scalar<K>(4, key, K{});
+         else if (key_off)
+            add_offset_field(4, key_off);
+      };
+      auto add_val = [&]
+      {
+         if constexpr (std::is_same_v<V, bool>)
+            add_scalar<uint8_t>(6, static_cast<uint8_t>(value), uint8_t(0));
+         else if constexpr (std::is_enum_v<V>)
+         {
+            using U = std::underlying_type_t<V>;
+            add_scalar<U>(6, static_cast<U>(value), U(0));
+         }
+         else if constexpr (std::is_arithmetic_v<V>)
+            add_scalar<V>(6, value, V{});
+         else if constexpr (detail::fbs::is_fb_struct<V>())
+            add_struct_field(6, value);
+         else if (val_off)
+            add_offset_field(6, val_off);
+      };
+      if constexpr (ka < va)
+      {
+         add_key();
+         add_val();
+      }
+      else
+      {
+         add_val();
+         add_key();
+      }
+      return end_table();
+   }
+
    template <typename V>
    uint32_t pre_create(const V& val)
    {
@@ -1121,6 +1314,44 @@ class basic_fb_builder
          if (val.size() == 0)
             return 0;
          return create_vec_scalar(val.data(), val.size());
+      }
+      else if constexpr (detail::fbs::is_flat_set<V>::value)
+      {
+         using K = typename detail::fbs::is_flat_set<V>::key_type;
+         if (val.empty())
+            return 0;
+         if constexpr (std::is_same_v<K, std::string>)
+         {
+            std::vector<std::string> keys(val.begin(), val.end());
+            return create_vec_strings(keys);
+         }
+         else if constexpr (std::is_enum_v<K>)
+         {
+            using U = std::underlying_type_t<K>;
+            std::vector<U> raw(val.size());
+            size_t         i = 0;
+            for (auto& k : val)
+               raw[i++] = static_cast<U>(k);
+            return create_vec_scalar(raw.data(), raw.size());
+         }
+         else if constexpr (std::is_arithmetic_v<K>)
+         {
+            std::vector<K> keys(val.begin(), val.end());
+            return create_vec_scalar(keys.data(), keys.size());
+         }
+         else
+            static_assert(!sizeof(K*), "unsupported flat_set key type");
+      }
+      else if constexpr (detail::fbs::is_flat_map<V>::value)
+      {
+         if (val.empty())
+            return 0;
+         // Each entry becomes a 2-field table {key, value}
+         std::vector<uint32_t> offs(val.size());
+         size_t                i = 0;
+         for (const auto& entry : val)
+            offs[i++] = write_pair_table(entry.first, entry.second);
+         return create_vec_offsets(offs.data(), offs.size());
       }
       else if constexpr (detail::fbs::is_vector<V>::value)
       {
@@ -1418,6 +1649,209 @@ class fb_vec
          static_assert(std::is_arithmetic_v<T>);
          return detail::fbs::read<T>(elems + i * sizeof(T));
       }
+   }
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+// fb_sorted_vec — zero-copy sorted vector view with binary search
+//
+// Used for flat_set fields.  Wire format is identical to fb_vec (sorted
+// vector of scalars/strings), but provides O(log n) lookup.
+// ══════════════════════════════════════════════════════════════════════════
+
+template <typename K>
+class fb_sorted_vec
+{
+   const uint8_t* data_;
+
+   auto read_key(uint32_t i) const
+   {
+      auto* elems = data_ + 4;
+      if constexpr (std::is_same_v<K, std::string>)
+      {
+         auto* entry = elems + i * 4;
+         return detail::fbs::read_string(entry + detail::fbs::read<uint32_t>(entry));
+      }
+      else if constexpr (std::is_enum_v<K>)
+      {
+         using U = std::underlying_type_t<K>;
+         return static_cast<K>(detail::fbs::read<U>(elems + i * sizeof(U)));
+      }
+      else
+      {
+         static_assert(std::is_arithmetic_v<K>);
+         return detail::fbs::read<K>(elems + i * sizeof(K));
+      }
+   }
+
+  public:
+   explicit fb_sorted_vec(const uint8_t* p = nullptr) : data_(p) {}
+   explicit operator bool() const { return data_ != nullptr; }
+
+   uint32_t size() const { return data_ ? detail::fbs::read<uint32_t>(data_) : 0; }
+
+   auto operator[](uint32_t i) const { return read_key(i); }
+
+   bool contains(const auto& key) const { return find(key) < size(); }
+
+   uint32_t find(const auto& key) const
+   {
+      uint32_t lo = 0, hi = size();
+      while (lo < hi)
+      {
+         uint32_t mid = lo + (hi - lo) / 2;
+         auto     mk  = read_key(mid);
+         if (mk < key)
+            lo = mid + 1;
+         else if (key < mk)
+            hi = mid;
+         else
+            return mid;
+      }
+      return size();
+   }
+
+   uint32_t lower_bound(const auto& key) const
+   {
+      uint32_t lo = 0, hi = size();
+      while (lo < hi)
+      {
+         uint32_t mid = lo + (hi - lo) / 2;
+         if (read_key(mid) < key)
+            lo = mid + 1;
+         else
+            hi = mid;
+      }
+      return lo;
+   }
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+// fb_sorted_map — zero-copy sorted map view with O(log n) key lookup
+//
+// Used for flat_map fields.  Wire format: sorted vector of 2-field
+// entry tables {key (field 0), value (field 1)}.
+// ══════════════════════════════════════════════════════════════════════════
+
+template <typename K, typename V>
+class fb_sorted_map
+{
+   const uint8_t* data_;  // points to vector: [count][off, off, ...]
+
+   const uint8_t* entry_table(uint32_t i) const
+   {
+      auto* elems = data_ + 4;
+      auto* slot  = elems + i * 4;
+      return slot + detail::fbs::read<uint32_t>(slot);
+   }
+
+   // Read key (field 0, vtable offset 4) from entry table
+   auto read_key(uint32_t i) const
+   {
+      auto* t  = entry_table(i);
+      auto* vt = detail::fbs::get_vtable(t);
+      uint16_t fo = detail::fbs::field_offset(vt, 4);
+      if constexpr (std::is_same_v<K, std::string>)
+         return fo ? detail::fbs::read_string(detail::fbs::deref(t + fo))
+                   : std::string_view{};
+      else if constexpr (std::is_enum_v<K>)
+      {
+         using U = std::underlying_type_t<K>;
+         return fo ? static_cast<K>(detail::fbs::read<U>(t + fo)) : K{};
+      }
+      else
+      {
+         static_assert(std::is_arithmetic_v<K>);
+         return fo ? detail::fbs::read<K>(t + fo) : K{};
+      }
+   }
+
+   // Read value (field 1, vtable offset 6) from entry table
+   auto read_value(uint32_t i) const
+   {
+      auto*    t  = entry_table(i);
+      auto*    vt = detail::fbs::get_vtable(t);
+      uint16_t fo = detail::fbs::field_offset(vt, 6);
+      if constexpr (std::is_same_v<V, bool>)
+         return fo ? (detail::fbs::read<uint8_t>(t + fo) != 0) : false;
+      else if constexpr (std::is_enum_v<V>)
+      {
+         using U = std::underlying_type_t<V>;
+         return fo ? static_cast<V>(detail::fbs::read<U>(t + fo)) : V{};
+      }
+      else if constexpr (std::is_arithmetic_v<V>)
+         return fo ? detail::fbs::read<V>(t + fo) : V{};
+      else if constexpr (std::is_same_v<V, std::string>)
+         return fo ? detail::fbs::read_string(detail::fbs::deref(t + fo))
+                   : std::string_view{};
+      else if constexpr (detail::fbs::is_table<V>::value)
+         return fo ? fb_view<V>(detail::fbs::deref(t + fo)) : fb_view<V>{};
+      else
+      {
+         static_assert(!sizeof(V*), "unsupported map value type for view");
+         return V{};
+      }
+   }
+
+   uint32_t find_index(const auto& key) const
+   {
+      uint32_t n = size();
+      if (n == 0)
+         return 0;
+      uint32_t lo = 0, hi = n;
+      while (lo < hi)
+      {
+         uint32_t mid = lo + (hi - lo) / 2;
+         auto     mk  = read_key(mid);
+         if (mk < key)
+            lo = mid + 1;
+         else if (key < mk)
+            hi = mid;
+         else
+            return mid;
+      }
+      return n;
+   }
+
+  public:
+   explicit fb_sorted_map(const uint8_t* p = nullptr) : data_(p) {}
+   explicit operator bool() const { return data_ != nullptr; }
+
+   uint32_t size() const { return data_ ? detail::fbs::read<uint32_t>(data_) : 0; }
+
+   /// Proxy for a single key-value entry.
+   struct entry_view
+   {
+      const fb_sorted_map* map_;
+      uint32_t             idx_;
+      auto                 key() const { return map_->read_key(idx_); }
+      auto                 value() const { return map_->read_value(idx_); }
+   };
+
+   entry_view operator[](uint32_t i) const { return {this, i}; }
+
+   bool contains(const auto& key) const { return find_index(key) < size(); }
+
+   /// Find by key — returns entry_view.  Check `idx < map.size()` to test found.
+   entry_view find(const auto& key) const { return {this, find_index(key)}; }
+
+   /// Look up value by key.  Returns value directly (default if not found).
+   auto operator[](const auto& key) const
+      requires(!std::is_integral_v<std::remove_cvref_t<decltype(key)>>)
+   {
+      uint32_t idx = find_index(key);
+      if (idx < size())
+         return read_value(idx);
+      return read_value(size());  // won't reach — for type deduction
+   }
+
+   /// Value lookup by key with explicit found check
+   auto value_or(const auto& key, const auto& fallback) const
+   {
+      uint32_t idx = find_index(key);
+      if (idx < size())
+         return read_value(idx);
+      return decltype(read_value(0))(fallback);
    }
 };
 
@@ -2409,6 +2843,15 @@ std::string fbs_type_name()
       using Inner = typename is_fb_nested<V>::inner_type;
       return "[ubyte] (nested_flatbuffer: \"" + std::string(reflect<Inner>::name.c_str()) + "\")";
    }
+   else if constexpr (is_flat_set<V>::value)
+      return "[" + fbs_type_name<typename is_flat_set<V>::key_type>() + "]";
+   else if constexpr (is_flat_map<V>::value)
+   {
+      // Emit as vector of entry tables with key attribute
+      using K  = typename is_flat_map<V>::key_type;
+      using MV = typename is_flat_map<V>::mapped_type;
+      return "[" + fbs_type_name<K>() + "_" + fbs_type_name<MV>() + "_entry]";
+   }
    else if constexpr (is_vector<V>::value)
       return "[" + fbs_type_name<typename V::value_type>() + "]";
    else if constexpr (is_table<V>::value)
@@ -2496,6 +2939,28 @@ void emit_schema(std::string& out, std::vector<std::string>& seen)
                     ...);
                 }(std::make_index_sequence<std::variant_size_v<F>>{});
                 emit_union<F>(out, seen, reflect<T>::data_member_names[fi]);
+             }
+             else if constexpr (is_flat_map<F>::value)
+             {
+                using K  = typename is_flat_map<F>::key_type;
+                using MV = typename is_flat_map<F>::mapped_type;
+                // Emit value type schema if it's a table
+                if constexpr (is_table<MV>::value)
+                   emit_schema<MV>(out, seen);
+                // Emit auto-generated entry table
+                std::string entry_name = fbs_type_name<K>() + "_" + fbs_type_name<MV>() + "_entry";
+                bool already = false;
+                for (auto& s : seen)
+                   if (s == entry_name)
+                      already = true;
+                if (!already)
+                {
+                   seen.push_back(entry_name);
+                   out += "table " + entry_name + " {\n";
+                   out += "  key: " + fbs_type_name<K>() + " (key);\n";
+                   out += "  value: " + fbs_type_name<MV>() + ";\n";
+                   out += "}\n\n";
+                }
              }
              else if constexpr (is_vector<F>::value)
              {

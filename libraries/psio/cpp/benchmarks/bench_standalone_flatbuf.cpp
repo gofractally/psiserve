@@ -20,6 +20,8 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
+#include <flat_map>
+#include <flat_set>
 #include <optional>
 #include <string>
 #include <variant>
@@ -291,6 +293,16 @@ struct Config
    uint16_t    retries = 3;
 };
 PSIO_REFLECT(Config, timeout, scale, enabled, label, retries)
+
+// ── Sorted container types ─────────────────────────────────────────────────
+
+struct Inventory
+{
+   std::flat_set<int32_t>              item_ids;
+   std::flat_map<std::string, int32_t> counts;
+   std::flat_map<int32_t, std::string> labels;
+};
+PSIO_REFLECT(Inventory, item_ids, counts, labels)
 
 // ── Test data ────────────────────────────────────────────────────────────────
 
@@ -902,6 +914,93 @@ void verify_wire_compat()
                   "defaults", default_sz, custom_sz);
    }
 
+   // ── flat_set and flat_map ─────────────────────────────────────────────
+   {
+      Inventory inv;
+      inv.item_ids.insert(100);
+      inv.item_ids.insert(42);
+      inv.item_ids.insert(7);
+      inv.item_ids.insert(200);
+      inv.counts["apples"]  = 10;
+      inv.counts["bananas"] = 25;
+      inv.counts["cherries"] = 3;
+      inv.labels[1] = "warehouse-A";
+      inv.labels[2] = "warehouse-B";
+      inv.labels[5] = "cold-storage";
+
+      // Pack
+      psio::fb_builder fbb;
+      fbb.pack(inv);
+
+      // Unpack round-trip
+      auto inv2 = psio::fb_unpack<Inventory>(fbb.data());
+      assert(inv2.item_ids.size() == 4);
+      assert(inv2.item_ids.contains(7));
+      assert(inv2.item_ids.contains(42));
+      assert(inv2.item_ids.contains(100));
+      assert(inv2.item_ids.contains(200));
+
+      assert(inv2.counts.size() == 3);
+      assert(inv2.counts["apples"] == 10);
+      assert(inv2.counts["bananas"] == 25);
+      assert(inv2.counts["cherries"] == 3);
+
+      assert(inv2.labels.size() == 3);
+      assert(inv2.labels[1] == "warehouse-A");
+      assert(inv2.labels[2] == "warehouse-B");
+      assert(inv2.labels[5] == "cold-storage");
+
+      // View: fb_sorted_vec (flat_set)
+      auto v = psio::fb_view<Inventory>::from_buffer(fbb.data());
+      auto ids = v.item_ids();
+      assert(ids.size() == 4);
+      assert(ids.contains(42));
+      assert(ids.contains(7));
+      assert(ids.contains(200));
+      assert(!ids.contains(999));
+      assert(ids.find(100) < ids.size());
+      assert(ids.find(999) == ids.size());
+      // Verify sorted order
+      assert(ids[0] == 7);
+      assert(ids[1] == 42);
+      assert(ids[2] == 100);
+      assert(ids[3] == 200);
+
+      // View: fb_sorted_map (string→int)
+      auto cnts = v.counts();
+      assert(cnts.size() == 3);
+      assert(cnts.contains("apples"));
+      assert(cnts.contains("bananas"));
+      assert(!cnts.contains("dates"));
+      auto e = cnts.find("cherries");
+      assert(e.idx_ < cnts.size());
+      assert(e.value() == 3);
+
+      // View: fb_sorted_map (int→string)
+      auto lbls = v.labels();
+      assert(lbls.size() == 3);
+      assert(lbls.contains(1));
+      assert(lbls.contains(5));
+      assert(!lbls.contains(99));
+      auto lbl = lbls.find(2);
+      assert(lbl.idx_ < lbls.size());
+      assert(lbl.value() == "warehouse-B");
+
+      std::printf("  %-16s OK  (%zu bytes, set=%zu, map1=%zu, map2=%zu)\n",
+                  "flat_set/map", fbb.size(), inv2.item_ids.size(),
+                  inv2.counts.size(), inv2.labels.size());
+   }
+
+   // ── flat_set/map schema export ────────────────────────────────────────
+   {
+      std::string schema = psio::to_fbs_schema<Inventory>();
+      // Verify the schema contains expected patterns
+      assert(schema.find("[int]") != std::string::npos);      // flat_set<int32_t>
+      assert(schema.find("(key)") != std::string::npos);       // key attribute
+      assert(schema.find("_entry") != std::string::npos);      // entry table
+      std::printf("  %-16s OK  (schema exports correctly)\n", "flat_set/schema");
+   }
+
    std::printf("\n  All cross-format verifications passed.\n");
 }
 
@@ -1319,6 +1418,9 @@ int main()
 
    std::printf("\n=== Generated FlatBuffer Schema (Envelope — nested) ===\n");
    std::printf("%s", psio::to_fbs_schema<Envelope>().c_str());
+
+   std::printf("\n=== Generated FlatBuffer Schema (Inventory — flat_set/map) ===\n");
+   std::printf("%s", psio::to_fbs_schema<Inventory>().c_str());
 
    // Summary
    std::printf("\n=== Head-to-Head Summary ===\n");
