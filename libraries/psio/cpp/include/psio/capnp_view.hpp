@@ -2157,12 +2157,127 @@ namespace psio
    //
    // ══════════════════════════════════════════════════════════════════════════
 
-   // Field name wrapper — produced by the _f literal suffix.
-   // Disambiguates operator[](field_name) from operator[](size_t).
+   // ── Constexpr xxh64 — compile-time and runtime field name hashing ─────
+   //
+   // Follows the same pattern as the existing xxh32.hpp in external/psitri.
+   // Produces identical output to XXH64() from the vendored xxhash.h.
+   // Used for hash-based schema field lookup in dynamic_view.
+
+   struct xxh64
+   {
+      static constexpr uint64_t hash(const char* input, size_t len, uint64_t seed = 0)
+      {
+         return (len >= 32) ? finalize(h32bytes(input, len, seed), input + (len & ~31u), len & 31)
+                            : finalize(seed + PRIME5 + len, input, len);
+      }
+
+     private:
+      static constexpr uint64_t PRIME1 = 0x9E3779B185EBCA87ULL;
+      static constexpr uint64_t PRIME2 = 0xC2B2AE3D27D4EB4FULL;
+      static constexpr uint64_t PRIME3 = 0x165667B19E3779F9ULL;
+      static constexpr uint64_t PRIME4 = 0x85EBCA77C2B2AE63ULL;
+      static constexpr uint64_t PRIME5 = 0x27D4EB2F165667C5ULL;
+
+      static constexpr uint64_t rotl(uint64_t x, int r) { return (x << r) | (x >> (64 - r)); }
+
+      static constexpr uint64_t round(uint64_t acc, uint64_t input)
+      {
+         return rotl(acc + input * PRIME2, 31) * PRIME1;
+      }
+
+      static constexpr uint64_t merge_round(uint64_t acc, uint64_t val)
+      {
+         return (acc ^ round(0, val)) * PRIME1 + PRIME4;
+      }
+
+      static constexpr uint64_t read64(const char* p)
+      {
+         return uint64_t(uint8_t(p[0])) | (uint64_t(uint8_t(p[1])) << 8) |
+                (uint64_t(uint8_t(p[2])) << 16) | (uint64_t(uint8_t(p[3])) << 24) |
+                (uint64_t(uint8_t(p[4])) << 32) | (uint64_t(uint8_t(p[5])) << 40) |
+                (uint64_t(uint8_t(p[6])) << 48) | (uint64_t(uint8_t(p[7])) << 56);
+      }
+
+      static constexpr uint32_t read32(const char* p)
+      {
+         return uint32_t(uint8_t(p[0])) | (uint32_t(uint8_t(p[1])) << 8) |
+                (uint32_t(uint8_t(p[2])) << 16) | (uint32_t(uint8_t(p[3])) << 24);
+      }
+
+      static constexpr uint64_t avalanche(uint64_t h)
+      {
+         h ^= h >> 33;
+         h *= PRIME2;
+         h ^= h >> 29;
+         h *= PRIME3;
+         h ^= h >> 32;
+         return h;
+      }
+
+      static constexpr uint64_t finalize(uint64_t h, const char* p, size_t len)
+      {
+         if (len >= 8)
+            return finalize(
+                rotl(h ^ round(0, read64(p)), 27) * PRIME1 + PRIME4, p + 8, len - 8);
+         if (len >= 4)
+            return finalize(
+                rotl(h ^ (read32(p) * PRIME1), 23) * PRIME2 + PRIME3, p + 4, len - 4);
+         if (len > 0)
+            return finalize(
+                rotl(h ^ (uint8_t(*p) * PRIME5), 11) * PRIME1, p + 1, len - 1);
+         return avalanche(h);
+      }
+
+      static constexpr uint64_t h32bytes(const char*    p,
+                                          size_t         len,
+                                          uint64_t       v1,
+                                          uint64_t       v2,
+                                          uint64_t       v3,
+                                          uint64_t       v4)
+      {
+         if (len >= 32)
+            return h32bytes(p + 32, len - 32,
+                            round(v1, read64(p)),
+                            round(v2, read64(p + 8)),
+                            round(v3, read64(p + 16)),
+                            round(v4, read64(p + 24)));
+         return merge_round(
+                    merge_round(
+                        merge_round(
+                            merge_round(
+                                rotl(v1, 1) + rotl(v2, 7) + rotl(v3, 12) + rotl(v4, 18),
+                                v1),
+                            v2),
+                        v3),
+                    v4) +
+                len;
+      }
+
+      static constexpr uint64_t h32bytes(const char* p, size_t len, uint64_t seed)
+      {
+         return h32bytes(p, len,
+                         seed + PRIME1 + PRIME2,
+                         seed + PRIME2,
+                         seed,
+                         seed - PRIME1);
+      }
+   };
+
+   // Convenience: hash a string_view
+   constexpr uint64_t xxh64_hash(std::string_view s)
+   {
+      return xxh64::hash(s.data(), s.size());
+   }
+
+   // ── Field name wrapper ─────────────────────────────────────────────────
+   //
+   // Produced by the _f literal suffix.  Stores pre-computed hash so
+   // schema lookup is a single integer binary search + collision check.
    struct field_name
    {
       std::string_view name;
-      constexpr field_name(std::string_view n) : name(n) {}
+      uint64_t         hash;
+      constexpr field_name(std::string_view n) : name(n), hash(xxh64_hash(n)) {}
    };
 
    // User-defined literal: "foo"_f → field_name{"foo"}
@@ -2220,7 +2335,8 @@ namespace psio
    // Per-field descriptor
    struct dynamic_field_desc
    {
-      std::string_view      name;
+      uint64_t              name_hash = 0;     // xxh64 of field name
+      const char*           name      = nullptr;  // original name (collision verify / debug)
       dynamic_type          type      = dynamic_type::t_void;
       bool                  is_ptr    = false;
       uint32_t              offset    = 0;     // byte offset in data section, or ptr index
@@ -2234,30 +2350,49 @@ namespace psio
       uint32_t                disc_offset  = 0;  // discriminant byte offset
    };
 
-   // Per-type schema: sorted field table + original-order names
+   // Maximum fields supported for SIMD tag lookup.
+   // Structs with more fields fall back to binary search on hash.
+   static constexpr size_t max_simd_fields = 64;
+
+   // Per-type schema: hash-sorted field table with SIMD tag bytes
    struct dynamic_schema
    {
-      const dynamic_field_desc* sorted_fields = nullptr;
+      const dynamic_field_desc* sorted_fields = nullptr;  // sorted by name_hash
       size_t                    field_count    = 0;
       const char* const*        ordered_names = nullptr;  // declaration order
       uint16_t                  data_words     = 0;
       uint16_t                  ptr_count      = 0;
+      const uint8_t*            tags           = nullptr;  // low byte of each hash, parallel to sorted_fields
 
-      const dynamic_field_desc* find(std::string_view name) const
+      // Find by pre-computed hash + name (for collision safety)
+      const dynamic_field_desc* find(uint64_t hash, std::string_view name) const
       {
-         size_t lo = 0, hi = field_count;
-         while (lo < hi)
+         uint8_t tag = static_cast<uint8_t>(hash);
+
+         // Linear scan on tag bytes — SIMD-friendly for typical struct sizes.
+         // Most structs have <32 fields; one or two NEON/SSE loads cover it.
+         for (size_t i = 0; i < field_count; ++i)
          {
-            size_t mid = lo + (hi - lo) / 2;
-            int    cmp = name.compare(sorted_fields[mid].name);
-            if (cmp == 0)
-               return &sorted_fields[mid];
-            if (cmp < 0)
-               hi = mid;
-            else
-               lo = mid + 1;
+            if (tags[i] == tag)
+            {
+               if (sorted_fields[i].name_hash == hash &&
+                   name == sorted_fields[i].name)
+                  return &sorted_fields[i];
+            }
          }
          return nullptr;
+      }
+
+      // Find by field_name (has pre-computed hash)
+      const dynamic_field_desc* find(field_name fn) const
+      {
+         return find(fn.hash, fn.name);
+      }
+
+      // Find by string_view (computes hash on the fly)
+      const dynamic_field_desc* find(std::string_view name) const
+      {
+         return find(xxh64_hash(name), name);
       }
    };
 
@@ -2391,7 +2526,7 @@ namespace psio
       // Original-order field names
       static constexpr auto names = reflect<T>::data_member_names;
 
-      // Build sorted field descriptor array
+      // Build field descriptor array sorted by name_hash
       static constexpr auto build_fields()
       {
          std::array<dynamic_field_desc, N> arr{};
@@ -2410,7 +2545,13 @@ namespace psio
                           using layout = capnp_layout<T>;
                           constexpr auto loc = layout::loc(Is);
 
-                          arr[Is].name      = reflect<T>::data_member_names[Is];
+                          const char* fname = reflect<T>::data_member_names[Is];
+                          size_t      flen  = 0;
+                          for (const char* p = fname; *p; ++p)
+                             ++flen;
+
+                          arr[Is].name_hash = xxh64::hash(fname, flen);
+                          arr[Is].name      = fname;
                           arr[Is].type      = capnp_detail::type_tag_for<F>();
                           arr[Is].is_ptr    = loc.is_ptr;
                           arr[Is].offset    = loc.offset;
@@ -2444,12 +2585,22 @@ namespace psio
                 }(std::make_index_sequence<sizeof...(Ms)>{});
              });
 
-         // Sort by name for binary search
+         // Sort by name_hash for tag-byte scanning
          for (size_t i = 1; i < N; ++i)
-            for (size_t j = i; j > 0 && arr[j].name < arr[j - 1].name; --j)
+            for (size_t j = i; j > 0 && arr[j].name_hash < arr[j - 1].name_hash; --j)
                std::swap(arr[j], arr[j - 1]);
 
          return arr;
+      }
+
+      // Build tag byte array (low byte of each hash, parallel to sorted_fields)
+      static constexpr auto build_tags()
+      {
+         auto fields = build_fields();
+         std::array<uint8_t, N> t{};
+         for (size_t i = 0; i < N; ++i)
+            t[i] = static_cast<uint8_t>(fields[i].name_hash);
+         return t;
       }
 
       // Variant alt desc arrays — one per variant field
@@ -2475,12 +2626,14 @@ namespace psio
       template <size_t FieldIdx>
       static constexpr auto alt_descs = build_alts_for_field<FieldIdx>();
 
-      static constexpr auto sorted  = build_fields();
+      static constexpr auto sorted = build_fields();
+      static constexpr auto tag_bytes = build_tags();
       static constexpr dynamic_schema schema{
           sorted.data(), N,
           names,
           capnp_layout<T>::result.data_words,
-          capnp_layout<T>::result.ptr_count};
+          capnp_layout<T>::result.ptr_count,
+          tag_bytes.data()};
    };
 
    // ── dynamic_view — format-generic chainable cursor ─────────────────────
@@ -2793,6 +2946,25 @@ namespace psio
 
       // ── Navigation ──────────────────────────────────────────────────
 
+      // Direct field access from a pre-resolved descriptor.
+      // Used by compiled_path::eval() to skip hash lookup entirely.
+      dynamic_view resolve_field(const dynamic_field_desc& field) const
+      {
+         dynamic_view result;
+         result.data_       = data_;
+         result.data_words_ = data_words_;
+         result.ptr_count_  = ptr_count_;
+
+         if (field.type == dynamic_type::t_variant)
+            result.read_variant(field);
+         else if (field.is_ptr)
+            result.read_pointer(field);
+         else
+            result.read_scalar(field);
+
+         return result;
+      }
+
       // Access a named field — throws if field not found
       dynamic_view operator[](field_name fn) const
       {
@@ -2800,31 +2972,13 @@ namespace psio
             throw std::runtime_error(
                 "dynamic_view: cannot access field on non-struct");
 
-         auto* field = schema_->find(fn.name);
+         auto* field = schema_->find(fn);
          if (!field)
             throw std::runtime_error(
                 std::string("dynamic_view: field not found: ") +
                 std::string(fn.name));
 
-         dynamic_view result;
-         result.data_       = data_;
-         result.data_words_ = data_words_;
-         result.ptr_count_  = ptr_count_;
-
-         if (field->type == dynamic_type::t_variant)
-         {
-            result.read_variant(*field);
-         }
-         else if (field->is_ptr)
-         {
-            result.read_pointer(*field);
-         }
-         else
-         {
-            result.read_scalar(*field);
-         }
-
-         return result;
+         return resolve_field(*field);
       }
 
       // Access a vector element by index
@@ -3307,6 +3461,191 @@ namespace psio
 
       iterator begin() const { return {this, 0}; }
       iterator end() const { return {this, count_}; }
+   };
+
+   // ── compiled_path — parse-once, eval-many field accessor ─────────────────
+   //
+   // Pre-resolves a dotted path ("customer.score", "items[0].product") against
+   // a schema at query-compile time.  eval() then walks pre-resolved field
+   // descriptors with no hashing or string ops — just pointer arithmetic.
+   //
+   //   auto accessor = compiled_path<cp>(schema, "customer.score");
+   //   for (auto& row : rows)
+   //      double score = accessor.eval(row_ptr);  // no string ops per row
+
+   template <typename Format>
+   class compiled_path
+   {
+     public:
+      struct step
+      {
+         const dynamic_field_desc* field = nullptr;  // pre-resolved (for field steps)
+         size_t                    index = 0;         // array index (for index steps)
+         bool                      is_index = false;
+      };
+
+     private:
+      // Inline storage for short paths (most queries access 1-4 levels deep)
+      static constexpr size_t inline_cap = 8;
+      step    inline_[inline_cap];
+      step*   steps_    = inline_;
+      size_t  count_    = 0;
+      size_t  capacity_ = inline_cap;
+
+      // The root schema this path was compiled against
+      const dynamic_schema* root_schema_ = nullptr;
+
+      void push(step s)
+      {
+         if (count_ == capacity_)
+         {
+            size_t new_cap = capacity_ * 2;
+            auto*  buf     = new step[new_cap];
+            for (size_t i = 0; i < count_; ++i)
+               buf[i] = steps_[i];
+            if (steps_ != inline_)
+               delete[] steps_;
+            steps_    = buf;
+            capacity_ = new_cap;
+         }
+         steps_[count_++] = s;
+      }
+
+     public:
+      compiled_path() = default;
+
+      // Compile a dotted path against a schema
+      compiled_path(const dynamic_schema& root, std::string_view path)
+          : root_schema_(&root)
+      {
+         const dynamic_schema* cur_schema = &root;
+         size_t                i          = 0;
+
+         while (i < path.size())
+         {
+            if (path[i] == '.')
+               ++i;
+
+            if (i >= path.size())
+               break;
+
+            if (path[i] == '[')
+            {
+               ++i;
+               size_t idx = 0;
+               while (i < path.size() && path[i] >= '0' && path[i] <= '9')
+               {
+                  idx = idx * 10 + (path[i] - '0');
+                  ++i;
+               }
+               if (i >= path.size() || path[i] != ']')
+                  throw std::runtime_error(
+                      "compiled_path: expected ']' in: " + std::string(path));
+               ++i;
+               push({nullptr, idx, true});
+               // After indexing into a vector, the element schema (if struct) is
+               // already stored in the preceding field step's field->nested.
+            }
+            else
+            {
+               size_t start = i;
+               while (i < path.size() && path[i] != '.' && path[i] != '[')
+                  ++i;
+               auto seg = path.substr(start, i - start);
+
+               if (!cur_schema)
+                  throw std::runtime_error(
+                      "compiled_path: cannot navigate into non-struct at: " +
+                      std::string(seg));
+
+               auto* field = cur_schema->find(seg);
+               if (!field)
+                  throw std::runtime_error(
+                      "compiled_path: field not found: " + std::string(seg));
+
+               push({field, 0, false});
+
+               // Advance schema for next segment
+               cur_schema = field->nested;
+            }
+         }
+      }
+
+      ~compiled_path()
+      {
+         if (steps_ != inline_)
+            delete[] steps_;
+      }
+
+      // Move-only
+      compiled_path(compiled_path&& o) noexcept
+          : count_(o.count_), capacity_(o.capacity_), root_schema_(o.root_schema_)
+      {
+         if (o.steps_ == o.inline_)
+         {
+            for (size_t i = 0; i < count_; ++i)
+               inline_[i] = o.inline_[i];
+            steps_ = inline_;
+         }
+         else
+         {
+            steps_   = o.steps_;
+            o.steps_ = o.inline_;
+         }
+         o.count_ = 0;
+      }
+
+      compiled_path& operator=(compiled_path&& o) noexcept
+      {
+         if (this != &o)
+         {
+            if (steps_ != inline_)
+               delete[] steps_;
+            count_       = o.count_;
+            capacity_    = o.capacity_;
+            root_schema_ = o.root_schema_;
+            if (o.steps_ == o.inline_)
+            {
+               for (size_t i = 0; i < count_; ++i)
+                  inline_[i] = o.inline_[i];
+               steps_ = inline_;
+            }
+            else
+            {
+               steps_   = o.steps_;
+               o.steps_ = o.inline_;
+            }
+            o.count_ = 0;
+         }
+         return *this;
+      }
+
+      compiled_path(const compiled_path&)            = delete;
+      compiled_path& operator=(const compiled_path&) = delete;
+
+      size_t      depth() const { return count_; }
+      const step* steps() const { return steps_; }
+
+      // Evaluate the pre-resolved path against a root dynamic_view.
+      // No hashing, no string comparison — just pointer walks.
+      dynamic_view<Format> eval(dynamic_view<Format> root) const
+      {
+         dynamic_view<Format> cur = root;
+         for (size_t i = 0; i < count_; ++i)
+         {
+            if (steps_[i].is_index)
+            {
+               cur = cur[steps_[i].index];
+            }
+            else
+            {
+               // Direct field access using pre-resolved descriptor
+               // This bypasses the hash lookup entirely
+               cur = cur.resolve_field(*steps_[i].field);
+            }
+         }
+         return cur;
+      }
    };
 
    // ── capnp_ref: top-level typed handle over a capnp message ────────────────
