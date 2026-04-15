@@ -596,24 +596,18 @@ void bench_view()
    // All fields
    bench("view-all/UserProfile", user_data.size(), [&] {
       escape(user_data.data());
-      auto     ref      = psio::frac_ref<UserProfile, std::span<const char>>(user_span);
-      uint64_t id       = ref.fields().id();
-      do_not_optimize(id);
-      std::string_view name  = ref.fields().name().str_view();
-      do_not_optimize(name.size());
-      std::string_view email = ref.fields().email().str_view();
-      do_not_optimize(email.size());
-      bool bio_set      = ref.fields().bio().has_value();
-      do_not_optimize(bio_set);
-      uint32_t age      = ref.fields().age();
-      do_not_optimize(age);
-      double score      = ref.fields().score();
-      do_not_optimize(score);
-      uint32_t tags_sz  = ref.fields().tags().raw_byte_size();
-      do_not_optimize(tags_sz);
-      bool verified     = ref.fields().verified();
-      do_not_optimize(verified);
-      return verified;
+      auto v = psio::view<UserProfile, psio::frac>::from_buffer(user_data.data());
+      do_not_optimize(v.id());
+      do_not_optimize(v.name());
+      do_not_optimize(v.email());
+      do_not_optimize(v.bio());
+      do_not_optimize(v.age());
+      do_not_optimize(v.score());
+      auto tags = v.tags();
+      do_not_optimize(tags.size());
+      for (uint32_t i = 0; i < tags.size(); ++i)
+         do_not_optimize(tags[i]);
+      do_not_optimize(v.verified());
    });
 
    // Nested field access
@@ -637,98 +631,73 @@ void bench_view()
    // All fields — Order (nested struct + vector)
    bench("view-all/Order", order_data.size(), [&] {
       escape(order_data.data());
-      auto ref = psio::frac_ref<Order, std::span<const char>>(order_span);
-      auto f   = ref.fields();
-      uint64_t         id    = f.id();
-      do_not_optimize(id);
-      std::string_view cname = f.customer().name().str_view();
-      do_not_optimize(cname.data());
-      uint32_t         nitems = f.items().raw_byte_size();
-      do_not_optimize(nitems);
-      double           total = f.total();
-      do_not_optimize(total);
-      bool             note_set = f.note().has_value();
-      do_not_optimize(note_set);
-      return id;
+      auto v = psio::view<Order, psio::frac>::from_buffer(order_data.data());
+      do_not_optimize(v.id());
+      auto cust = v.customer();
+      do_not_optimize(cust.id());
+      do_not_optimize(cust.name());
+      do_not_optimize(cust.email());
+      do_not_optimize(cust.bio());
+      do_not_optimize(cust.age());
+      do_not_optimize(cust.score());
+      do_not_optimize(cust.verified());
+      auto items = v.items();
+      for (uint32_t i = 0; i < items.size(); ++i) {
+         auto item = items[i];
+         do_not_optimize(item.product());
+         do_not_optimize(item.qty());
+         do_not_optimize(item.unit_price());
+      }
+      do_not_optimize(v.total());
+      do_not_optimize(v.note());
    });
 
    // All fields — Token
    {
       auto token_data = psio::to_frac(make_token());
-      auto token_span = std::span<const char>(token_data.data(), token_data.size());
       bench("view-all/Token", token_data.size(), [&] {
          escape(token_data.data());
-         auto ref = psio::frac_ref<Token, std::span<const char>>(token_span);
-         auto f   = ref.fields();
-         auto kind   = f.kind();
-         do_not_optimize(kind);
-         auto offset = f.offset();
-         do_not_optimize(offset);
-         auto length = f.length();
-         do_not_optimize(length);
-         std::string_view text = f.text().str_view();
-         do_not_optimize(text.data());
-         return kind;
+         auto v = psio::view<Token, psio::frac>::from_buffer(token_data.data());
+         do_not_optimize(v.kind());
+         do_not_optimize(v.offset());
+         do_not_optimize(v.length());
+         do_not_optimize(v.text());
       });
    }
 
    // All fields — Point (fixed-size, trivial)
    {
       auto point_data = psio::to_frac(make_point());
-      auto point_span = std::span<const char>(point_data.data(), point_data.size());
       bench("view-all/Point", point_data.size(), [&] {
          escape(point_data.data());
-         auto   ref = psio::frac_ref<BPoint, std::span<const char>>(point_span);
-         double x   = ref.fields().x();
-         double y   = ref.fields().y();
-         double r   = x + y;
-         do_not_optimize(r);
-         return r;
+         auto v = psio::view<BPoint, psio::frac>::from_buffer(point_data.data());
+         do_not_optimize(v.x());
+         do_not_optimize(v.y());
       });
    }
 
    // All fields — SensorReading (18 fields)
    bench("view-all/SensorReading", sensor_data.size(), [&] {
       escape(sensor_data.data());
-      auto ref = psio::frac_ref<SensorReading, std::span<const char>>(sensor_span);
-      auto f   = ref.fields();
-      uint64_t         ts         = f.timestamp();
-      do_not_optimize(ts);
-      std::string_view device_id  = f.device_id().str_view();
-      do_not_optimize(device_id.data());
-      double           temp       = f.temp();
-      do_not_optimize(temp);
-      double           humidity   = f.humidity();
-      do_not_optimize(humidity);
-      double           pressure   = f.pressure();
-      do_not_optimize(pressure);
-      double           accel_x    = f.accel_x();
-      do_not_optimize(accel_x);
-      double           accel_y    = f.accel_y();
-      do_not_optimize(accel_y);
-      double           accel_z    = f.accel_z();
-      do_not_optimize(accel_z);
-      double           gyro_x     = f.gyro_x();
-      do_not_optimize(gyro_x);
-      double           gyro_y     = f.gyro_y();
-      do_not_optimize(gyro_y);
-      double           gyro_z     = f.gyro_z();
-      do_not_optimize(gyro_z);
-      double           mag_x      = f.mag_x();
-      do_not_optimize(mag_x);
-      double           mag_y      = f.mag_y();
-      do_not_optimize(mag_y);
-      double           mag_z      = f.mag_z();
-      do_not_optimize(mag_z);
-      float            battery    = f.battery();
-      do_not_optimize(battery);
-      int16_t          signal_dbm = f.signal_dbm();
-      do_not_optimize(signal_dbm);
-      bool             err_set    = f.error_code().has_value();
-      do_not_optimize(err_set);
-      std::string_view firmware   = f.firmware().str_view();
-      do_not_optimize(firmware.data());
-      return ts;
+      auto v = psio::view<SensorReading, psio::frac>::from_buffer(sensor_data.data());
+      do_not_optimize(v.timestamp());
+      do_not_optimize(v.device_id());
+      do_not_optimize(v.temp());
+      do_not_optimize(v.humidity());
+      do_not_optimize(v.pressure());
+      do_not_optimize(v.accel_x());
+      do_not_optimize(v.accel_y());
+      do_not_optimize(v.accel_z());
+      do_not_optimize(v.gyro_x());
+      do_not_optimize(v.gyro_y());
+      do_not_optimize(v.gyro_z());
+      do_not_optimize(v.mag_x());
+      do_not_optimize(v.mag_y());
+      do_not_optimize(v.mag_z());
+      do_not_optimize(v.battery());
+      do_not_optimize(v.signal_dbm());
+      do_not_optimize(v.error_code());
+      do_not_optimize(v.firmware());
    });
 }
 
