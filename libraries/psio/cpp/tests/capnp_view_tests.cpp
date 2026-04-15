@@ -2016,3 +2016,93 @@ TEST_CASE("dynamic_view: as<T>() duck-typed extraction", "[view][cp][dynamic]")
    REQUIRE(extracted.x == 1.5);
    REQUIRE(extracted.y == 2.5);
 }
+
+TEST_CASE("dynamic: operator/ chaining", "[dynamic]")
+{
+   CpOrder order;
+   order.id       = 42;
+   order.customer = CpUser{1, "Alice", "alice@test.com", "hi", 30, 0.95, {}, true};
+   order.items    = {{"Widget", 100, 2.0}, {"Gadget", 200, 1.0}};
+   order.total    = 400;
+   order.note     = "rush";
+
+   auto data = psio::capnp_pack(order);
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   dv_cp root(ref);
+
+   // Simple field access
+   uint64_t id = root / "id";
+   REQUIRE(id == 42);
+
+   // Chained struct navigation
+   std::string_view name = root / "customer" / "name";
+   REQUIRE(name == "Alice");
+
+   // Mixed field + index
+   std::string_view product = root / "items" / size_t(0) / "product";
+   REQUIRE(product == "Widget");
+
+   uint32_t qty = root / "items" / size_t(1) / "qty";
+   REQUIRE(qty == 200);
+}
+
+TEST_CASE("dynamic: .path() string traversal", "[dynamic]")
+{
+   CpOrder order;
+   order.id       = 99;
+   order.customer = CpUser{2, "Bob", "bob@test.com", "dev", 25, 0.8, {}, false};
+   order.items    = {{"Alpha", 10, 5.0}, {"Beta", 20, 3.0}, {"Gamma", 30, 1.0}};
+   order.total    = 110;
+   order.note     = "test";
+
+   auto data = psio::capnp_pack(order);
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   dv_cp root(ref);
+
+   // Simple field
+   uint64_t id = root.path("id");
+   REQUIRE(id == 99);
+
+   // Dotted path
+   std::string_view name = root.path("customer.name");
+   REQUIRE(name == "Bob");
+
+   // Deep dotted path
+   double score = root.path("customer.score");
+   REQUIRE(score == Approx(0.8));
+
+   // Array index
+   std::string_view item0 = root.path("items[0].product");
+   REQUIRE(item0 == "Alpha");
+
+   // Array index mid-path
+   uint32_t qty = root.path("items[2].qty");
+   REQUIRE(qty == 30);
+
+   // Field after array index
+   double price = root.path("items[1].unit_price");
+   REQUIRE(price == Approx(3.0));
+
+   // Trailing field
+   std::string_view last_product = root.path("items[2].product");
+   REQUIRE(last_product == "Gamma");
+}
+
+TEST_CASE("dynamic: .path() error handling", "[dynamic]")
+{
+   CpOrder order;
+   order.id       = 1;
+   order.customer = CpUser{0, "X", "x@x.com", "", 0, 0.0, {}, false};
+   order.items    = {};
+   order.total    = 0;
+
+   auto data = psio::capnp_pack(order);
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   dv_cp root(ref);
+
+   // Missing field throws
+   REQUIRE_THROWS(root.path("customer.nonexistent"));
+
+   // Bad bracket syntax throws
+   REQUIRE_THROWS(root.path("items[abc"));
+}
