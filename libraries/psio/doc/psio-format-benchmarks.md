@@ -236,6 +236,145 @@ Fracpack and WIT are fastest for packing. Cap'n Proto and FlatBuffers wire forma
 
 ---
 
+## Feature Parity: PSIO vs Official Libraries
+
+PSIO doesn't just match the official libraries' feature sets — it surpasses them. Every wire format feature the official library supports, PSIO supports too, using only `PSIO_REFLECT` on plain C++ structs.
+
+### Cap'n Proto Feature Parity
+
+| Feature                        | PSIO `view<T,cp>` | Official Cap'n Proto |
+|--------------------------------|:------------------:|:--------------------:|
+| Scalar fields (int, float, bool) |        Yes       |         Yes          |
+| Text (strings)                 |        Yes         |         Yes          |
+| Data (byte vectors)            |        Yes         |         Yes          |
+| Nested structs                 |        Yes         |         Yes          |
+| Lists of scalars               |        Yes         |         Yes          |
+| Lists of structs (composite)   |        Yes         |         Yes          |
+| Lists of text                  |        Yes         |         Yes          |
+| Unions (variants)              |        Yes         |         Yes          |
+| Void alternatives              |        Yes         |         Yes          |
+| Default values (XOR encoding)  |        Yes         |         Yes          |
+| Validation (bounds + depth)    |        Yes         |         Yes          |
+| Traversal limit (amplification) |       Yes         |         Yes          |
+| **In-place mutation**          |      **Yes**       |       **No**         |
+| **Code-first (no IDL)**        |      **Yes**       |       **No**         |
+| **Use your own types**         |      **Yes**       |       **No**         |
+| **Export .capnp schema**       |      **Yes**       |       **N/A**        |
+| **Multi-format from same types** |    **Yes**       |       **No**         |
+| **Dynamic runtime field access** |    **Yes**       |     Yes (dynamic)    |
+| **Header-only, zero dependencies** |  **Yes**       |       **No**         |
+| Far pointers / multi-segment   |        No          |         Yes          |
+| Groups                         |        No          |         Yes          |
+| AnyPointer                     |        No          |         Yes          |
+| Packed encoding                |        No          |         Yes          |
+
+### FlatBuffers Feature Parity
+
+| Feature                        | PSIO `fb_builder` | Official FlatBuffers |
+|--------------------------------|:-----------------:|:--------------------:|
+| Tables (variable-size)         |        Yes        |         Yes          |
+| Inline structs (fixed-size)    |        Yes        |         Yes          |
+| Scalars, enums                 |        Yes        |         Yes          |
+| Strings                        |        Yes        |         Yes          |
+| Vectors of scalars             |        Yes        |         Yes          |
+| Vectors of tables              |        Yes        |         Yes          |
+| Vectors of strings             |        Yes        |         Yes          |
+| Unions (variants)              |        Yes        |         Yes          |
+| Nested FlatBuffers             |        Yes        |         Yes          |
+| File identifiers               |        Yes        |         Yes          |
+| Size-prefixed buffers          |        Yes        |         Yes          |
+| Fixed-length arrays            |        Yes        |         Yes          |
+| Buffer verification            |        Yes        |         Yes          |
+| Vtable deduplication           |     Optional      |        Always        |
+| **In-place scalar mutation**   |      **Yes**      |       **No**         |
+| **String/dynamic mutation**    |      **Yes**      |       **No**         |
+| **Canonical representation**   |      **Yes**      |       **No**         |
+| **Code-first (no IDL)**        |      **Yes**      |       **No**         |
+| **Use your own types**         |      **Yes**      |       **No**         |
+| **Export .fbs schema**         |      **Yes**      |       **N/A**        |
+| **Struct-aware defaults**      |      **Yes**      |     Partial          |
+| **Multi-format from same types** |    **Yes**      |       **No**         |
+| **Header-only, zero dependencies** |  **Yes**      |       **No**         |
+
+---
+
+## Beyond Official: Features They Don't Have
+
+### In-Place Mutation
+
+Official Cap'n Proto and FlatBuffers treat serialized buffers as **immutable**. To change a field, you must deserialize, modify, and reserialize the entire struct.
+
+PSIO mutates serialized data in place:
+
+```cpp
+// Cap'n Proto format — mutate a scalar in-place
+auto ref = psio::capnp_ref<UserProfile>::from_buffer(buf);
+ref.age() = 33;  // direct overwrite, no deserialization
+
+// FlatBuffers format — mutate a scalar in-place
+auto m = psio::fb_mut<UserProfile>::from_buffer(buf.data());
+m.age() = 33;    // direct overwrite
+
+// FlatBuffers format — mutate a STRING in-place (O(1))
+auto doc = psio::fb_doc<UserProfile>::from_buffer(std::move(buf));
+doc.name() = "Bob";  // appends new string, updates offset in O(1)
+doc.canonicalize();   // optional: compact dead space
+```
+
+Cap'n Proto mutation uses a free-list allocator to reclaim dead space when pointer fields are replaced. FlatBuffers `fb_doc` appends new data and updates offsets without tree-walking or memmove.
+
+### Code-First Schema Export
+
+Official libraries go schema-first: write `.capnp` or `.fbs` files, run a code generator, use the generated types. PSIO goes **code-first**: write C++ structs, add `PSIO_REFLECT`, and PSIO can export the schema for interop:
+
+```cpp
+// Generate Cap'n Proto schema from C++ types:
+std::string schema = psio::capnp_schema<Order>();
+// Output:
+//   @0xa1b2c3d4e5f67890;
+//   struct UserProfile @0x... { id @0 :UInt64; name @1 :Text; ... }
+//   struct LineItem @0x...    { product @0 :Text; qty @1 :UInt32; ... }
+//   struct Order @0x...       { id @0 :UInt64; customer @1 :UserProfile; ... }
+
+// Generate FlatBuffers schema from C++ types:
+std::string fbs = psio::to_fbs_schema<Order>();
+// Output:
+//   table UserProfile { id: ulong; name: string; ... }
+//   table LineItem    { product: string; qty: uint; ... }
+//   table Order       { id: ulong; customer: UserProfile; items: [LineItem]; ... }
+```
+
+This means you can integrate with Cap'n Proto or FlatBuffers systems without adopting their toolchain. Export the schema, hand it to the other team, and your wire bytes are already compatible.
+
+### Use Your Own Types
+
+Official Cap'n Proto produces `capnp::MessageReader` / `capnp::MessageBuilder` with generated accessor classes. Official FlatBuffers produces generated `*T` types from `flatc`. Both require you to bridge between generated types and your application types.
+
+PSIO works directly with your structs:
+
+```cpp
+struct UserProfile {
+   uint64_t id;
+   std::string name;
+   // ... your types, your memory layout, your constructors
+};
+PSIO_REFLECT(UserProfile, id, name, ...)
+
+// Same struct, every format:
+auto fp = psio::fracpack(user);           // Fracpack
+auto cp = psio::cp::pack(user);           // Cap'n Proto wire format
+auto fb = psio::to_flatbuf(user);         // FlatBuffers wire format
+auto user2 = psio::cp::unpack<UserProfile>(cp);   // back to YOUR type
+```
+
+No generated wrapper classes. No copying between generated and application types.
+
+### Header-Only, Zero Dependencies
+
+PSIO's Cap'n Proto and FlatBuffers implementations are self-contained in header files. They do not link against the official Cap'n Proto or FlatBuffers libraries. You can read and write Cap'n Proto wire format without installing Cap'n Proto. You can read and write FlatBuffers wire format without installing FlatBuffers.
+
+---
+
 ## What This Means
 
 **You don't choose a serialization format at design time and live with it forever.** With PSIO, you write your types once with `PSIO_REFLECT` and serialize to whatever format the consumer needs:
