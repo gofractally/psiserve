@@ -31,6 +31,7 @@
 #pragma once
 
 #include <psio/reflect.hpp>
+#include <psio/view.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -48,14 +49,8 @@
 
 namespace psio {
 
-template <typename T>
-class fb_view;
-template <typename T>
-class fb_vec;
-template <typename T>
-class fb_sorted_vec;
-template <typename K, typename V>
-class fb_sorted_map;
+struct fb;  // Format tag for FlatBuffer wire format
+
 template <typename T>
 class fb_nested;
 template <typename T>
@@ -744,10 +739,9 @@ auto default_value()
        });
 }
 
-// ── View: zero-copy field read for fb_view ───────────────────────────────
-// Returns by value for scalars, string_view for strings, fb_vec for
-// vectors, fb_view for nested tables.  Defined here so both
-// fb_view_impl::get and fb_view::get<N> can share the implementation.
+// ── View: zero-copy field read ───────────────────────────────────────────
+// Returns by value for scalars, string_view for strings, vec_view for
+// vectors, view<T,fb> for nested tables.  Used by fb::field<T,N>().
 
 template <typename T, size_t N>
 auto view_field(const uint8_t* table)
@@ -843,25 +837,25 @@ auto view_field(const uint8_t* table)
          auto*    vp    = deref(table + fo);
          uint32_t count = read<uint32_t>(vp);
          auto*    bytes = vp + 4;
-         return fb_view<Inner>(get_root(bytes));
+         return view<Inner, fb>(get_root(bytes));
       }
-      return fb_view<Inner>{};
+      return view<Inner, fb>{};
    }
    else if constexpr (is_flat_set<F>::value)
    {
       using K = typename is_flat_set<F>::key_type;
-      return fo ? fb_sorted_vec<K>(deref(table + fo)) : fb_sorted_vec<K>{};
+      return fo ? set_view<K, fb>(deref(table + fo)) : set_view<K, fb>{};
    }
    else if constexpr (is_flat_map<F>::value)
    {
       using K  = typename is_flat_map<F>::key_type;
       using MV = typename is_flat_map<F>::mapped_type;
-      return fo ? fb_sorted_map<K, MV>(deref(table + fo)) : fb_sorted_map<K, MV>{};
+      return fo ? map_view<K, MV, fb>(deref(table + fo)) : map_view<K, MV, fb>{};
    }
    else if constexpr (is_vector<F>::value)
    {
       using E = typename F::value_type;
-      return fo ? fb_vec<E>(deref(table + fo)) : fb_vec<E>{};
+      return fo ? vec_view<E, fb>(deref(table + fo)) : vec_view<E, fb>{};
    }
    else if constexpr (is_fb_struct<F>())
    {
@@ -871,7 +865,7 @@ auto view_field(const uint8_t* table)
       return result;
    }
    else if constexpr (is_table<F>::value)
-      return fo ? fb_view<F>(deref(table + fo)) : fb_view<F>{};
+      return fo ? view<F, fb>(deref(table + fo)) : view<F, fb>{};
    else
       static_assert(!sizeof(F*), "unsupported field type");
 }
@@ -1605,64 +1599,70 @@ inline uint32_t fb_size_prefixed_length(const uint8_t* buf)
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// fb_vec — zero-copy vector view
+// vec_view<E, fb> — zero-copy vector view (FlatBuffer format)
 // ══════════════════════════════════════════════════════════════════════════
 
-template <typename T>
-class fb_vec
+template <typename E>
+class vec_view<E, fb>
 {
-   const uint8_t* data_;
+   const uint8_t* data_ = nullptr;
 
   public:
-   explicit fb_vec(const uint8_t* p = nullptr) : data_(p) {}
+   vec_view() = default;
+   explicit vec_view(const uint8_t* p) : data_(p) {}
    explicit operator bool() const { return data_ != nullptr; }
 
    uint32_t size() const { return data_ ? detail::fbs::read<uint32_t>(data_) : 0; }
+   bool     empty() const { return size() == 0; }
 
    auto operator[](uint32_t i) const
    {
       auto* elems = data_ + 4;
-      if constexpr (std::is_same_v<T, std::string>)
+      if constexpr (std::is_same_v<E, std::string>)
       {
          auto* entry = elems + i * 4;
          return detail::fbs::read_string(entry + detail::fbs::read<uint32_t>(entry));
       }
-      else if constexpr (detail::fbs::is_fb_struct<T>())
+      else if constexpr (detail::fbs::is_fb_struct<E>())
       {
-         constexpr size_t esz = detail::fbs::struct_type_size<T>();
-         T                result{};
+         constexpr size_t esz = detail::fbs::struct_type_size<E>();
+         E                result{};
          detail::fbs::read_struct_bytes(elems + i * esz, result);
          return result;
       }
-      else if constexpr (detail::fbs::is_table<T>::value)
+      else if constexpr (detail::fbs::is_table<E>::value)
       {
          auto* entry = elems + i * 4;
-         return fb_view<T>(entry + detail::fbs::read<uint32_t>(entry));
+         return view<E, fb>(entry + detail::fbs::read<uint32_t>(entry));
       }
-      else if constexpr (std::is_enum_v<T>)
+      else if constexpr (std::is_enum_v<E>)
       {
-         using U = std::underlying_type_t<T>;
-         return static_cast<T>(detail::fbs::read<U>(elems + i * sizeof(U)));
+         using U = std::underlying_type_t<E>;
+         return static_cast<E>(detail::fbs::read<U>(elems + i * sizeof(U)));
       }
       else
       {
-         static_assert(std::is_arithmetic_v<T>);
-         return detail::fbs::read<T>(elems + i * sizeof(T));
+         static_assert(std::is_arithmetic_v<E>);
+         return detail::fbs::read<E>(elems + i * sizeof(E));
       }
    }
+
+   auto at(uint32_t i) const { return operator[](i); }
 };
 
 // ══════════════════════════════════════════════════════════════════════════
-// fb_sorted_vec — zero-copy sorted vector view with binary search
+// set_view<K, fb> — zero-copy sorted set view with binary search
 //
-// Used for flat_set fields.  Wire format is identical to fb_vec (sorted
-// vector of scalars/strings), but provides O(log n) lookup.
+// Inherits sorted_set_algo for contains(), find(), lower_bound().
+// No operator[] — sets are not indexed.
 // ══════════════════════════════════════════════════════════════════════════
 
 template <typename K>
-class fb_sorted_vec
+class set_view<K, fb> : public sorted_set_algo<set_view<K, fb>>
 {
-   const uint8_t* data_;
+   friend class sorted_set_algo<set_view<K, fb>>;
+
+   const uint8_t* data_ = nullptr;
 
    auto read_key(uint32_t i) const
    {
@@ -1685,58 +1685,28 @@ class fb_sorted_vec
    }
 
   public:
-   explicit fb_sorted_vec(const uint8_t* p = nullptr) : data_(p) {}
+   set_view() = default;
+   explicit set_view(const uint8_t* p) : data_(p) {}
    explicit operator bool() const { return data_ != nullptr; }
 
    uint32_t size() const { return data_ ? detail::fbs::read<uint32_t>(data_) : 0; }
-
-   auto operator[](uint32_t i) const { return read_key(i); }
-
-   bool contains(const auto& key) const { return find(key) < size(); }
-
-   uint32_t find(const auto& key) const
-   {
-      uint32_t lo = 0, hi = size();
-      while (lo < hi)
-      {
-         uint32_t mid = lo + (hi - lo) / 2;
-         auto     mk  = read_key(mid);
-         if (mk < key)
-            lo = mid + 1;
-         else if (key < mk)
-            hi = mid;
-         else
-            return mid;
-      }
-      return size();
-   }
-
-   uint32_t lower_bound(const auto& key) const
-   {
-      uint32_t lo = 0, hi = size();
-      while (lo < hi)
-      {
-         uint32_t mid = lo + (hi - lo) / 2;
-         if (read_key(mid) < key)
-            lo = mid + 1;
-         else
-            hi = mid;
-      }
-      return lo;
-   }
+   bool     empty() const { return size() == 0; }
+   // contains(), find(), lower_bound() inherited from sorted_set_algo
 };
 
 // ══════════════════════════════════════════════════════════════════════════
-// fb_sorted_map — zero-copy sorted map view with O(log n) key lookup
+// map_view<K, V, fb> — zero-copy sorted map view with O(log n) key lookup
 //
-// Used for flat_map fields.  Wire format: sorted vector of 2-field
-// entry tables {key (field 0), value (field 1)}.
+// Inherits sorted_map_algo for find_index(), contains(), lower_bound().
+// Wire format: sorted vector of 2-field entry tables {key, value}.
 // ══════════════════════════════════════════════════════════════════════════
 
 template <typename K, typename V>
-class fb_sorted_map
+class map_view<K, V, fb> : public sorted_map_algo<map_view<K, V, fb>>
 {
-   const uint8_t* data_;  // points to vector: [count][off, off, ...]
+   friend class sorted_map_algo<map_view<K, V, fb>>;
+
+   const uint8_t* data_ = nullptr;
 
    const uint8_t* entry_table(uint32_t i) const
    {
@@ -1745,11 +1715,10 @@ class fb_sorted_map
       return slot + detail::fbs::read<uint32_t>(slot);
    }
 
-   // Read key (field 0, vtable offset 4) from entry table
    auto read_key(uint32_t i) const
    {
-      auto* t  = entry_table(i);
-      auto* vt = detail::fbs::get_vtable(t);
+      auto*    t  = entry_table(i);
+      auto*    vt = detail::fbs::get_vtable(t);
       uint16_t fo = detail::fbs::field_offset(vt, 4);
       if constexpr (std::is_same_v<K, std::string>)
          return fo ? detail::fbs::read_string(detail::fbs::deref(t + fo))
@@ -1766,7 +1735,6 @@ class fb_sorted_map
       }
    }
 
-   // Read value (field 1, vtable offset 6) from entry table
    auto read_value(uint32_t i) const
    {
       auto*    t  = entry_table(i);
@@ -1785,7 +1753,7 @@ class fb_sorted_map
          return fo ? detail::fbs::read_string(detail::fbs::deref(t + fo))
                    : std::string_view{};
       else if constexpr (detail::fbs::is_table<V>::value)
-         return fo ? fb_view<V>(detail::fbs::deref(t + fo)) : fb_view<V>{};
+         return fo ? view<V, fb>(detail::fbs::deref(t + fo)) : view<V, fb>{};
       else
       {
          static_assert(!sizeof(V*), "unsupported map value type for view");
@@ -1793,119 +1761,77 @@ class fb_sorted_map
       }
    }
 
-   uint32_t find_index(const auto& key) const
-   {
-      uint32_t n = size();
-      if (n == 0)
-         return 0;
-      uint32_t lo = 0, hi = n;
-      while (lo < hi)
-      {
-         uint32_t mid = lo + (hi - lo) / 2;
-         auto     mk  = read_key(mid);
-         if (mk < key)
-            lo = mid + 1;
-         else if (key < mk)
-            hi = mid;
-         else
-            return mid;
-      }
-      return n;
-   }
-
   public:
-   explicit fb_sorted_map(const uint8_t* p = nullptr) : data_(p) {}
+   map_view() = default;
+   explicit map_view(const uint8_t* p) : data_(p) {}
    explicit operator bool() const { return data_ != nullptr; }
 
    uint32_t size() const { return data_ ? detail::fbs::read<uint32_t>(data_) : 0; }
+   bool     empty() const { return size() == 0; }
 
    /// Proxy for a single key-value entry.
    struct entry_view
    {
-      const fb_sorted_map* map_;
-      uint32_t             idx_;
-      auto                 key() const { return map_->read_key(idx_); }
-      auto                 value() const { return map_->read_value(idx_); }
+      const map_view* map_;
+      uint32_t        idx_;
+      auto            key() const { return map_->read_key(idx_); }
+      auto            value() const { return map_->read_value(idx_); }
    };
 
-   entry_view operator[](uint32_t i) const { return {this, i}; }
+   // contains(), find_index(), lower_bound() inherited from sorted_map_algo
 
-   bool contains(const auto& key) const { return find_index(key) < size(); }
-
-   /// Find by key — returns entry_view.  Check `idx < map.size()` to test found.
-   entry_view find(const auto& key) const { return {this, find_index(key)}; }
-
-   /// Look up value by key.  Returns value directly (default if not found).
-   auto operator[](const auto& key) const
-      requires(!std::is_integral_v<std::remove_cvref_t<decltype(key)>>)
+   /// Find by key — returns entry_view.  Check `idx_ < map.size()` for found.
+   entry_view find(const auto& key) const
    {
-      uint32_t idx = find_index(key);
-      if (idx < size())
-         return read_value(idx);
-      return read_value(size());  // won't reach — for type deduction
+      return {this, sorted_map_algo<map_view>::find_index(key)};
    }
 
-   /// Value lookup by key with explicit found check
+   /// Value lookup by key with fallback
    auto value_or(const auto& key, const auto& fallback) const
    {
-      uint32_t idx = find_index(key);
+      uint32_t idx = sorted_map_algo<map_view>::find_index(key);
       if (idx < size())
          return read_value(idx);
       return decltype(read_value(0))(fallback);
    }
 };
 
-// ══════════════════════════════════════════════════════════════════════════
-// fb_view_impl — proxy object backing the named-accessor view
-// ══════════════════════════════════════════════════════════════════════════
+// ── Backward-compatible aliases ─────────────────────────────────────────
 
-template <typename T>
-class fb_view_impl
-{
-   const uint8_t* table_;
-
-  public:
-   explicit fb_view_impl(const uint8_t* t = nullptr) : table_(t) {}
-
-   const uint8_t* table_ptr() const { return table_; }
-
-   /// Called by PSIO_REFLECT proxy: view.name() → get<I, &T::name>()
-   template <size_t I, auto /* MemberPtr */>
-   auto get() const
-   {
-      return detail::fbs::view_field<T, I>(table_);
-   }
-};
+template <typename E>
+using fb_vec = vec_view<E, fb>;
+template <typename K>
+using fb_sorted_vec = set_view<K, fb>;
+template <typename K, typename V>
+using fb_sorted_map = map_view<K, V, fb>;
 
 // ══════════════════════════════════════════════════════════════════════════
-// fb_view — zero-copy table view with named field access
+// struct fb — FlatBuffer format tag for view<T, fb>
 //
-// Inherits PSIO_REFLECT–generated proxy methods so that every
-// reflected data member becomes a named accessor:
-//   view.id(), view.name(), view.customer().email(), …
+// Satisfies the Format concept: ptr_t, root<T>(), field<T,N>().
+// view<T, fb> provides named field access identical to the old fb_view<T>.
 // ══════════════════════════════════════════════════════════════════════════
 
-template <typename T>
-class fb_view : public reflect<T>::template proxy<fb_view_impl<T>>
+struct fb
 {
-   using base = typename reflect<T>::template proxy<fb_view_impl<T>>;
+   using ptr_t = const uint8_t*;
 
-  public:
-   explicit fb_view(const uint8_t* t = nullptr) : base(t) {}
-   explicit operator bool() const { return this->psio_get_proxy().table_ptr() != nullptr; }
-
-   static fb_view from_buffer(const uint8_t* buf)
+   template <typename T>
+   static ptr_t root(const void* buf)
    {
-      return fb_view(detail::fbs::get_root(buf));
+      return detail::fbs::get_root(static_cast<const uint8_t*>(buf));
    }
 
-   /// Index-based access (for generic / metaprogramming code).
-   template <size_t N>
-   auto get() const
+   template <typename T, size_t N>
+   static auto field(ptr_t table)
    {
-      return detail::fbs::view_field<T, N>(this->psio_get_proxy().table_ptr());
+      return detail::fbs::view_field<T, N>(table);
    }
 };
+
+/// fb_view<T> — alias for view<T, fb> (backward-compatible name)
+template <typename T>
+using fb_view = view<T, fb>;
 
 // ══════════════════════════════════════════════════════════════════════════
 // fb_mut_ref — assignable proxy reference for unaligned in-buffer scalars

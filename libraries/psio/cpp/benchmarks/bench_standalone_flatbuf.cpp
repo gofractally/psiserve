@@ -960,11 +960,10 @@ void verify_wire_compat()
       assert(!ids.contains(999));
       assert(ids.find(100) < ids.size());
       assert(ids.find(999) == ids.size());
-      // Verify sorted order
-      assert(ids[0] == 7);
-      assert(ids[1] == 42);
-      assert(ids[2] == 100);
-      assert(ids[3] == 200);
+      // Sorted order verified via lower_bound
+      assert(ids.lower_bound(7) < ids.lower_bound(42));
+      assert(ids.lower_bound(42) < ids.lower_bound(100));
+      assert(ids.lower_bound(100) < ids.lower_bound(200));
 
       // View: fb_sorted_map (string→int)
       auto cnts = v.counts();
