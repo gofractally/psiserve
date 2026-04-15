@@ -1772,7 +1772,7 @@ TEST_CASE("dynamic_view: schema lookup and introspection", "[view][cp][dynamic]"
 
    auto* id_field = schema->find("id");
    REQUIRE(id_field != nullptr);
-   REQUIRE(id_field->name == "id");
+   REQUIRE(std::string_view(id_field->name) == "id");
    REQUIRE(id_field->type == psio::dynamic_type::t_u64);
    REQUIRE(id_field->is_ptr == false);
 
@@ -2105,4 +2105,62 @@ TEST_CASE("dynamic: .path() error handling", "[dynamic]")
 
    // Bad bracket syntax throws
    REQUIRE_THROWS(root.path("items[abc"));
+}
+
+TEST_CASE("dynamic: compiled_path eval", "[dynamic]")
+{
+   CpOrder order;
+   order.id       = 77;
+   order.customer = CpUser{3, "Charlie", "charlie@test.com", "eng", 35, 0.92, {}, true};
+   order.items    = {{"Foo", 50, 10.0}, {"Bar", 75, 20.0}};
+   order.total    = 250;
+   order.note     = "compiled";
+
+   auto data = psio::capnp_pack(order);
+   psio::capnp_ref<CpOrder> ref(std::move(data));
+   dv_cp root(ref);
+
+   auto& schema = psio::cp_schema<CpOrder>::schema;
+
+   // Simple field
+   psio::compiled_path<psio::cp> id_path(schema, "id");
+   uint64_t id = id_path.eval(root);
+   REQUIRE(id == 77);
+
+   // Dotted path
+   psio::compiled_path<psio::cp> name_path(schema, "customer.name");
+   std::string_view name = name_path.eval(root);
+   REQUIRE(name == "Charlie");
+
+   // Deep path
+   psio::compiled_path<psio::cp> score_path(schema, "customer.score");
+   double score = score_path.eval(root);
+   REQUIRE(score == Approx(0.92));
+
+   // Path with array index
+   psio::compiled_path<psio::cp> item_path(schema, "items[1].product");
+   std::string_view product = item_path.eval(root);
+   REQUIRE(product == "Bar");
+
+   // Reuse compiled path across different data (same schema)
+   CpOrder order2;
+   order2.id       = 88;
+   order2.customer = CpUser{4, "Dana", "dana@test.com", "", 28, 0.5, {}, false};
+   order2.items    = {{"Qux", 100, 5.0}};
+   order2.total    = 100;
+   order2.note     = "reuse";
+
+   auto data2 = psio::capnp_pack(order2);
+   psio::capnp_ref<CpOrder> ref2(std::move(data2));
+   dv_cp root2(ref2);
+
+   // Same compiled paths, different data
+   uint64_t id2 = id_path.eval(root2);
+   REQUIRE(id2 == 88);
+
+   std::string_view name2 = name_path.eval(root2);
+   REQUIRE(name2 == "Dana");
+
+   // Compiled path error: bad field
+   REQUIRE_THROWS(psio::compiled_path<psio::cp>(schema, "customer.nonexistent"));
 }
