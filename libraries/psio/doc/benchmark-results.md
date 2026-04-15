@@ -586,7 +586,7 @@ The C++ psio library supports five serialization formats from a single `PSIO_REF
 
 **Internal formats** (all from a single `PSIO_REFLECT` — no codegen, no IDL):
 - **Fracpack** — Zero-copy binary with offset tables, extensible structs, in-place mutation. Optimized for read-heavy workloads.
-- **WIT Canonical ABI** — WASM Component Model standard encoding. Natural alignment, (pointer, length) pairs for strings/lists. Zero-copy views via `CView<T>`. No schema evolution.
+- **WIT Canonical ABI** — WASM Component Model standard encoding. Natural alignment, (pointer, length) pairs for strings/lists. Zero-copy views via `WView<T>`. No schema evolution.
 - **Binary** (`to_bin`/`from_bin`) — Compact binary with varint-encoded lengths. Minimal framing overhead.
 - **Bincode** (`to_bincode`/`from_bincode`) — Rust ecosystem binary format (v1 legacy). Fixed-width integers, u64 length prefixes.
 - **Avro** (`to_avro`/`from_avro`) — Apache Avro binary encoding. Zig-zag varint integers, schema-ordered fields.
@@ -598,7 +598,7 @@ The C++ psio library supports five serialization formats from a single `PSIO_REF
 - **Protocol Buffers** — Variable-length encoding with tag-length-value framing. Schema-compiled (`.proto` IDL). v34.0 (proto3).
 - **MessagePack** — Schema-less compact binary (binary JSON). `MSGPACK_DEFINE` macro on user structs. msgpack-cxx v7.0.
 
-**Schema approach**: Fracpack, WIT Canonical ABI, binary, bincode, avro, and JSON all work directly with user-defined C++ structs via a one-line `PSIO_REFLECT` macro — no code generation, no separate schema files. WIT Canonical ABI uses `CView<T>` for zero-copy views of the flattened record layout in WASM linear memory. MessagePack is also schema-less (`MSGPACK_DEFINE` on plain structs), but its types are independent from psio. Cap'n Proto, FlatBuffers, and Protocol Buffers each require a separate IDL file and a code-generation step that produces builder/reader types distinct from user application types.
+**Schema approach**: Fracpack, WIT Canonical ABI, binary, bincode, avro, and JSON all work directly with user-defined C++ structs via a one-line `PSIO_REFLECT` macro — no code generation, no separate schema files. WIT Canonical ABI uses `WView<T>` for zero-copy views of the flattened record layout in WASM linear memory. MessagePack is also schema-less (`MSGPACK_DEFINE` on plain structs), but its types are independent from psio. Cap'n Proto, FlatBuffers, and Protocol Buffers each require a separate IDL file and a code-generation step that produces builder/reader types distinct from user application types.
 
 **SBE note**: Simple Binary Encoding (SBE) was considered but excluded — it is designed for fixed-size financial messages and does not support variable-length strings or nested objects in the way our test schemas require. It also requires a Java runtime for code generation and has no Homebrew package.
 
@@ -646,7 +646,7 @@ Protobuf unpack is **2–2.4x slower than fracpack** across all types. Its varia
 
 Zero-copy read of all top-level fields without deserialization. This is the apples-to-apples comparison between the three zero-copy formats. Protobuf, MsgPack, binary, bincode, and avro cannot do this — they must fully parse/unpack to access any field.
 
-| Schema              | Fracpack view | WIT CView | FlatBuffers view | Cap'n Proto view | Protobuf parse | MsgPack parse |
+| Schema              | Fracpack view | WIT WView | FlatBuffers view | Cap'n Proto view | Protobuf parse | MsgPack parse |
 |---------------------|---------------|-----------|------------------|------------------|----------------|---------------|
 | **Point**           | <1            | <1        | 0.8              | 20               | 18             | 66            |
 | **Token**           | 1.2           | —         | 1.1              | 25               | 40             | 82            |
@@ -654,11 +654,11 @@ Zero-copy read of all top-level fields without deserialization. This is the appl
 | **Order**           | 1.1           | —         | 1.6              | 40               | 536            | 368           |
 | **SensorReading**   | 3.2           | —         | 5.1              | 35               | 72             | 156           |
 
-*Note: Sub-1ns measurements are at the CPU pipeline noise floor; actual values are near-zero but imprecise. WIT CView benchmarks for types with strings/lists are pending (marked —).*
+*Note: Sub-1ns measurements are at the CPU pipeline noise floor; actual values are near-zero but imprecise. WIT WView benchmarks for types with strings/lists are pending (marked —).*
 
-*WIT Canonical ABI Point view: `CView<Point>` is a direct pointer cast (the Canonical ABI layout for all-scalar records matches the C struct layout). For all-scalar types, WIT CView is structurally identical to a native struct read — zero overhead. For types with strings or nested structs, `CView<T>` maps `string → string_view`, `vector<U> → span<CView<U>>`, providing zero-copy access without deserialization.*
+*WIT Canonical ABI Point view: `WView<Point>` is a direct pointer cast (the Canonical ABI layout for all-scalar records matches the C struct layout). For all-scalar types, WIT WView is structurally identical to a native struct read — zero overhead. For types with strings or nested structs, `WView<T>` maps `string → string_view`, `vector<U> → span<WView<U>>`, providing zero-copy access without deserialization.*
 
-Fracpack views are **1.4–2x faster** than FlatBuffers, **11–35x faster** than Cap'n Proto, **45–487x faster** than Protobuf, and **49–334x faster** than MsgPack for reading all fields. WIT CView matches fracpack for scalar-only types and is expected to be comparable for mixed types. The fundamental difference: fracpack, WIT CView, and FlatBuffers read fields directly from the wire format with zero allocation. Protobuf and MsgPack must allocate strings and decode varint/type tags for every field — there is no "view" mode.
+Fracpack views are **1.4–2x faster** than FlatBuffers, **11–35x faster** than Cap'n Proto, **45–487x faster** than Protobuf, and **49–334x faster** than MsgPack for reading all fields. WIT WView matches fracpack for scalar-only types and is expected to be comparable for mixed types. The fundamental difference: fracpack, WIT WView, and FlatBuffers read fields directly from the wire format with zero allocation. Protobuf and MsgPack must allocate strings and decode varint/type tags for every field — there is no "view" mode.
 
 ### View Access Speed — Single Field (ns, C++)
 
