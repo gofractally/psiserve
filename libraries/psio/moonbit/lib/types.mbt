@@ -4,7 +4,7 @@
 //   type_idx >= 0  -> index into WitWorld::types[]
 //   type_idx < 0   -> primitive: -(type_idx + 1) gives the WitPrim ordinal
 
-pub enum WitPrim {
+pub(all) enum WitPrim {
   Bool_
   U8
   S8
@@ -20,7 +20,7 @@ pub enum WitPrim {
   String_
 }
 
-pub enum WitTypeKind {
+pub(all) enum WitTypeKind {
   Record
   Variant
   Enum_
@@ -31,12 +31,12 @@ pub enum WitTypeKind {
   Tuple
 }
 
-pub struct WitNamedType {
+pub(all) struct WitNamedType {
   name : String
   type_idx : Int
 }
 
-pub struct WitTypeDef {
+pub(all) struct WitTypeDef {
   name : String
   kind : WitTypeKind
   fields : Array[WitNamedType]
@@ -44,19 +44,19 @@ pub struct WitTypeDef {
   error_type_idx : Int
 }
 
-pub struct WitFunc {
+pub(all) struct WitFunc {
   name : String
   params : Array[WitNamedType]
   results : Array[WitNamedType]
 }
 
-pub struct WitInterface {
+pub(all) struct WitInterface {
   name : String
   type_idxs : Array[Int]
   func_idxs : Array[Int]
 }
 
-pub struct WitWorld {
+pub(all) struct WitWorld {
   package_ : String
   name : String
   types : Array[WitTypeDef]

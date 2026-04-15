@@ -26,6 +26,15 @@ build.ninja
 *~
 .DS_Store
 
+# Certificates / keys
+certs/
+
+# Language-specific build caches
+_build/
+.zig-cache/
+__pycache__/
+*.pyc
+
 # Compiled objects
 *.o
 *.obj

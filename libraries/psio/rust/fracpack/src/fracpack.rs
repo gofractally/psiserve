@@ -50,7 +50,9 @@
 //! for the two types.
 
 use custom_error::custom_error;
-pub use fracpack_macros::{FracMutView, FracView, Pack, ToSchema, Unpack};
+pub use fracpack_macros::{
+    FracMutView, FracView, FromCanonicalJson, Pack, ToCanonicalJson, ToSchema, Unpack,
+};
 use std::{cell::RefCell, hash::Hash, mem, rc::Rc, sync::Arc};
 
 mod schema;
@@ -61,6 +63,8 @@ pub use nested::*;
 
 mod view;
 pub use view::*;
+
+pub mod json;
 
 custom_error! {pub Error
     ReadPastEnd         = "Read past end",
@@ -272,9 +276,14 @@ pub trait Pack {
     /// }
     /// ```
     fn packed(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
+        let mut bytes = Vec::with_capacity(self.packed_size());
         self.pack(&mut bytes);
         bytes
+    }
+
+    /// Compute the exact packed size in bytes without serializing
+    fn packed_size(&self) -> usize {
+        Self::FIXED_SIZE as usize
     }
 
     #[doc(hidden)]
@@ -285,6 +294,16 @@ pub trait Pack {
     #[doc(hidden)]
     fn is_empty_optional(&self) -> bool {
         false
+    }
+
+    /// Size of the variable (heap) portion when embedded in a parent struct
+    #[doc(hidden)]
+    fn embedded_variable_packed_size(&self) -> usize {
+        if Self::VARIABLE_SIZE && !self.is_empty_container() {
+            self.packed_size()
+        } else {
+            0
+        }
     }
 
     #[doc(hidden)]
@@ -563,6 +582,10 @@ macro_rules! pack_ptr {
                 self.$to_ref().pack(dest)
             }
 
+            fn packed_size(&self) -> usize {
+                self.$to_ref().packed_size()
+            }
+
             fn is_empty_container(&self) -> bool {
                 self.$to_ref().is_empty_container()
             }
@@ -680,6 +703,21 @@ impl<T: Pack> Pack for Option<T> {
         }
     }
 
+    fn packed_size(&self) -> usize {
+        // Option is always 4 bytes fixed (offset) + variable portion
+        match self {
+            Some(x) if !x.is_empty_container() => 4 + x.packed_size(),
+            _ => 4, // None or empty container: just the offset marker
+        }
+    }
+
+    fn embedded_variable_packed_size(&self) -> usize {
+        match self {
+            Some(x) if !x.is_empty_container() => x.packed_size(),
+            _ => 0,
+        }
+    }
+
     fn embedded_variable_pack(&self, dest: &mut Vec<u8>) {
         if let Some(x) = self {
             if !x.is_empty_container() {
@@ -782,6 +820,10 @@ macro_rules! bytes_impl {
                 dest.extend_from_slice(self.fracpack_as_bytes());
             }
 
+            fn packed_size(&self) -> usize {
+                4 + self.len()
+            }
+
             fn is_empty_container(&self) -> bool {
                 self.is_empty()
             }
@@ -841,6 +883,11 @@ impl<T: Pack> Pack for Vec<T> {
             T::embedded_fixed_repack(x, start as u32 + (i as u32) * T::FIXED_SIZE, heap_pos, dest);
             T::embedded_variable_pack(x, dest);
         }
+    }
+
+    fn packed_size(&self) -> usize {
+        4 + self.len() * T::FIXED_SIZE as usize
+            + self.iter().map(|x| x.embedded_variable_packed_size()).sum::<usize>()
     }
 
     fn is_empty_container(&self) -> bool {

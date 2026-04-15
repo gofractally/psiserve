@@ -7,6 +7,7 @@ export {
   // Core types
   FracType,
   StructType,
+  RawFieldResult,
   Infer,
   SchemaNode,
   FracpackError,
@@ -87,3 +88,11 @@ export {
   type ValidationResult,
   validate,
 } from './validate.js';
+
+export {
+  // In-place mutation
+  spliceBuffer,
+  patchOffset,
+  MutView,
+  type MutViewOptions,
+} from './mutation.js';

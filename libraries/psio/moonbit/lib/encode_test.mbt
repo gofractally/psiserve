@@ -4,176 +4,176 @@
 // the encoder produces an identical 708-byte binary.
 
 /// Build the InventoryApi test world.
-fn build_inventory_world() -> WitWorld {
+fn build_inventory_world() -> @lib.WitWorld {
   // Primitive index helpers
-  let bool_ = prim_idx(Bool_)   // -1
-  let u32_ = prim_idx(U32)      // -6
-  let s32_ = prim_idx(S32)      // -7
-  let u64_ = prim_idx(U64)      // -8
-  let string_ = prim_idx(String_) // -13
+  let bool_ = @lib.prim_idx(@lib.WitPrim::Bool_)   // -1
+  let u32_ = @lib.prim_idx(@lib.WitPrim::U32)      // -6
+  let s32_ = @lib.prim_idx(@lib.WitPrim::S32)      // -7
+  let u64_ = @lib.prim_idx(@lib.WitPrim::U64)      // -8
+  let string_ = @lib.prim_idx(@lib.WitPrim::String_) // -13
 
   // Type 0: record "item"
-  let type0 : WitTypeDef = {
+  let type0 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "item",
-    kind: Record,
+    kind: @lib.WitTypeKind::Record,
     fields: [
-      { name: "id", type_idx: u64_ },
-      { name: "name", type_idx: string_ },
-      { name: "category", type_idx: string_ },
-      { name: "price-cents", type_idx: u32_ },
-      { name: "in-stock", type_idx: bool_ },
-      { name: "tags", type_idx: 1 },         // list<string>
-      { name: "weight-grams", type_idx: 2 },  // option<u32>
+      @lib.WitNamedType::{ name: "id", type_idx: u64_ },
+      @lib.WitNamedType::{ name: "name", type_idx: string_ },
+      @lib.WitNamedType::{ name: "category", type_idx: string_ },
+      @lib.WitNamedType::{ name: "price-cents", type_idx: u32_ },
+      @lib.WitNamedType::{ name: "in-stock", type_idx: bool_ },
+      @lib.WitNamedType::{ name: "tags", type_idx: 1 },         // list<string>
+      @lib.WitNamedType::{ name: "weight-grams", type_idx: 2 },  // option<u32>
     ],
     element_type_idx: 0,
     error_type_idx: 0,
   }
 
   // Type 1: list<string> (anonymous)
-  let type1 : WitTypeDef = {
+  let type1 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "",
-    kind: List,
+    kind: @lib.WitTypeKind::List,
     fields: [],
     element_type_idx: string_,
     error_type_idx: 0,
   }
 
   // Type 2: option<u32> (anonymous)
-  let type2 : WitTypeDef = {
+  let type2 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "",
-    kind: Option_,
+    kind: @lib.WitTypeKind::Option_,
     fields: [],
     element_type_idx: u32_,
     error_type_idx: 0,
   }
 
   // Type 3: record "stock-result"
-  let type3 : WitTypeDef = {
+  let type3 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "stock-result",
-    kind: Record,
+    kind: @lib.WitTypeKind::Record,
     fields: [
-      { name: "item-id", type_idx: u32_ },
-      { name: "old-quantity", type_idx: u32_ },
-      { name: "new-quantity", type_idx: u32_ },
+      @lib.WitNamedType::{ name: "item-id", type_idx: u32_ },
+      @lib.WitNamedType::{ name: "old-quantity", type_idx: u32_ },
+      @lib.WitNamedType::{ name: "new-quantity", type_idx: u32_ },
     ],
     element_type_idx: 0,
     error_type_idx: 0,
   }
 
   // Type 4: record "search-query"
-  let type4 : WitTypeDef = {
+  let type4 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "search-query",
-    kind: Record,
+    kind: @lib.WitTypeKind::Record,
     fields: [
-      { name: "text", type_idx: string_ },
-      { name: "max-results", type_idx: u32_ },
-      { name: "min-price", type_idx: 2 },    // option<u32>
-      { name: "max-price", type_idx: 2 },    // option<u32>
-      { name: "categories", type_idx: 1 },   // list<string>
+      @lib.WitNamedType::{ name: "text", type_idx: string_ },
+      @lib.WitNamedType::{ name: "max-results", type_idx: u32_ },
+      @lib.WitNamedType::{ name: "min-price", type_idx: 2 },    // option<u32>
+      @lib.WitNamedType::{ name: "max-price", type_idx: 2 },    // option<u32>
+      @lib.WitNamedType::{ name: "categories", type_idx: 1 },   // list<string>
     ],
     element_type_idx: 0,
     error_type_idx: 0,
   }
 
   // Type 5: record "search-response"
-  let type5 : WitTypeDef = {
+  let type5 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "search-response",
-    kind: Record,
+    kind: @lib.WitTypeKind::Record,
     fields: [
-      { name: "items", type_idx: 6 },         // list<item>
-      { name: "total-count", type_idx: u64_ },
-      { name: "has-more", type_idx: bool_ },
+      @lib.WitNamedType::{ name: "items", type_idx: 6 },         // list<item>
+      @lib.WitNamedType::{ name: "total-count", type_idx: u64_ },
+      @lib.WitNamedType::{ name: "has-more", type_idx: bool_ },
     ],
     element_type_idx: 0,
     error_type_idx: 0,
   }
 
   // Type 6: list<item> (anonymous, element_type_idx = 0)
-  let type6 : WitTypeDef = {
+  let type6 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "",
-    kind: List,
+    kind: @lib.WitTypeKind::List,
     fields: [],
     element_type_idx: 0,
     error_type_idx: 0,
   }
 
   // Type 7: record "bulk-result"
-  let type7 : WitTypeDef = {
+  let type7 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "bulk-result",
-    kind: Record,
+    kind: @lib.WitTypeKind::Record,
     fields: [
-      { name: "inserted", type_idx: u32_ },
-      { name: "failed", type_idx: u32_ },
-      { name: "errors", type_idx: 1 },       // list<string>
+      @lib.WitNamedType::{ name: "inserted", type_idx: u32_ },
+      @lib.WitNamedType::{ name: "failed", type_idx: u32_ },
+      @lib.WitNamedType::{ name: "errors", type_idx: 1 },       // list<string>
     ],
     element_type_idx: 0,
     error_type_idx: 0,
   }
 
   // Type 8: option<item> (anonymous, element_type_idx = 0)
-  let type8 : WitTypeDef = {
+  let type8 : @lib.WitTypeDef = @lib.WitTypeDef::{
     name: "",
-    kind: Option_,
+    kind: @lib.WitTypeKind::Option_,
     fields: [],
     element_type_idx: 0,
     error_type_idx: 0,
   }
 
   // Functions
-  let func0 : WitFunc = {
+  let func0 : @lib.WitFunc = @lib.WitFunc::{
     name: "get-item",
-    params: [{ name: "item-id", type_idx: u32_ }],
-    results: [{ name: "", type_idx: 8 }],  // option<item>
+    params: [@lib.WitNamedType::{ name: "item-id", type_idx: u32_ }],
+    results: [@lib.WitNamedType::{ name: "", type_idx: 8 }],  // option<item>
   }
 
-  let func1 : WitFunc = {
+  let func1 : @lib.WitFunc = @lib.WitFunc::{
     name: "list-items",
-    params: [{ name: "category", type_idx: string_ }],
-    results: [{ name: "", type_idx: 6 }],  // list<item>
+    params: [@lib.WitNamedType::{ name: "category", type_idx: string_ }],
+    results: [@lib.WitNamedType::{ name: "", type_idx: 6 }],  // list<item>
   }
 
-  let func2 : WitFunc = {
+  let func2 : @lib.WitFunc = @lib.WitFunc::{
     name: "add-item",
-    params: [{ name: "item", type_idx: 0 }],  // item record
-    results: [{ name: "", type_idx: u64_ }],
+    params: [@lib.WitNamedType::{ name: "item", type_idx: 0 }],  // item record
+    results: [@lib.WitNamedType::{ name: "", type_idx: u64_ }],
   }
 
-  let func3 : WitFunc = {
+  let func3 : @lib.WitFunc = @lib.WitFunc::{
     name: "update-stock",
     params: [
-      { name: "item-id", type_idx: u32_ },
-      { name: "delta", type_idx: s32_ },
+      @lib.WitNamedType::{ name: "item-id", type_idx: u32_ },
+      @lib.WitNamedType::{ name: "delta", type_idx: s32_ },
     ],
-    results: [{ name: "", type_idx: 3 }],  // stock-result
+    results: [@lib.WitNamedType::{ name: "", type_idx: 3 }],  // stock-result
   }
 
-  let func4 : WitFunc = {
+  let func4 : @lib.WitFunc = @lib.WitFunc::{
     name: "search",
-    params: [{ name: "query", type_idx: 4 }],  // search-query
-    results: [{ name: "", type_idx: 5 }],       // search-response
+    params: [@lib.WitNamedType::{ name: "query", type_idx: 4 }],  // search-query
+    results: [@lib.WitNamedType::{ name: "", type_idx: 5 }],       // search-response
   }
 
-  let func5 : WitFunc = {
+  let func5 : @lib.WitFunc = @lib.WitFunc::{
     name: "bulk-import",
-    params: [{ name: "items", type_idx: 6 }],  // list<item>
-    results: [{ name: "", type_idx: 7 }],       // bulk-result
+    params: [@lib.WitNamedType::{ name: "items", type_idx: 6 }],  // list<item>
+    results: [@lib.WitNamedType::{ name: "", type_idx: 7 }],       // bulk-result
   }
 
-  let func6 : WitFunc = {
+  let func6 : @lib.WitFunc = @lib.WitFunc::{
     name: "ping",
     params: [],
     results: [],
   }
 
   // Export interface
-  let iface : WitInterface = {
+  let iface : @lib.WitInterface = @lib.WitInterface::{
     name: "inventory-api",
     type_idxs: [0, 3, 4, 5, 7],
     func_idxs: [0, 1, 2, 3, 4, 5, 6],
   }
 
   // World
-  {
+  @lib.WitWorld::{
     package_: "test:inventory@1.0.0",
     name: "inventory-api-world",
     types: [type0, type1, type2, type3, type4, type5, type6, type7, type8],
@@ -236,7 +236,7 @@ fn golden_binary() -> Array[Int] {
 
 test "encoder produces golden binary" {
   let world = build_inventory_world()
-  let result = encode(world)
+  let result = @lib.encode(world)
   let expected_ints = golden_binary()
 
   // Convert expected to bytes for comparison
@@ -277,44 +277,44 @@ test "encoder produces golden binary" {
 }
 
 test "prim_idx round-trip" {
-  assert_eq!(prim_idx(Bool_), -1)
-  assert_eq!(prim_idx(U8), -2)
-  assert_eq!(prim_idx(S8), -3)
-  assert_eq!(prim_idx(U16), -4)
-  assert_eq!(prim_idx(S16), -5)
-  assert_eq!(prim_idx(U32), -6)
-  assert_eq!(prim_idx(S32), -7)
-  assert_eq!(prim_idx(U64), -8)
-  assert_eq!(prim_idx(S64), -9)
-  assert_eq!(prim_idx(F32), -10)
-  assert_eq!(prim_idx(F64), -11)
-  assert_eq!(prim_idx(Char_), -12)
-  assert_eq!(prim_idx(String_), -13)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::Bool_), -1)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::U8), -2)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::S8), -3)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::U16), -4)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::S16), -5)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::U32), -6)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::S32), -7)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::U64), -8)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::S64), -9)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::F32), -10)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::F64), -11)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::Char_), -12)
+  assert_eq!(@lib.prim_idx(@lib.WitPrim::String_), -13)
 }
 
 test "is_prim_idx" {
-  assert_eq!(is_prim_idx(-1), true)
-  assert_eq!(is_prim_idx(-13), true)
-  assert_eq!(is_prim_idx(0), false)
-  assert_eq!(is_prim_idx(5), false)
+  assert_eq!(@lib.is_prim_idx(-1), true)
+  assert_eq!(@lib.is_prim_idx(-13), true)
+  assert_eq!(@lib.is_prim_idx(0), false)
+  assert_eq!(@lib.is_prim_idx(5), false)
 }
 
 test "uleb128 encoding" {
-  let buf = ByteBuffer::new()
+  let buf = @lib.ByteBuffer::new()
   buf.emit_uleb128(0)
   assert_eq!(buf.data[0], b'\x00')
 
-  let buf2 = ByteBuffer::new()
+  let buf2 = @lib.ByteBuffer::new()
   buf2.emit_uleb128(127)
   assert_eq!(buf2.data[0], b'\x7f')
 
-  let buf3 = ByteBuffer::new()
+  let buf3 = @lib.ByteBuffer::new()
   buf3.emit_uleb128(128)
   assert_eq!(buf3.data.length(), 2)
   assert_eq!(buf3.data[0], b'\x80')
   assert_eq!(buf3.data[1], b'\x01')
 
-  let buf4 = ByteBuffer::new()
+  let buf4 = @lib.ByteBuffer::new()
   buf4.emit_uleb128(624)
   // 624 = 0x270 = 0b10_0111_0000
   // LEB128: 0xF0 0x04
@@ -324,7 +324,7 @@ test "uleb128 encoding" {
 }
 
 test "string encoding" {
-  let buf = ByteBuffer::new()
+  let buf = @lib.ByteBuffer::new()
   buf.emit_string("item")
   // Length 4, then 'i', 't', 'e', 'm'
   assert_eq!(buf.data.length(), 5)
@@ -336,7 +336,7 @@ test "string encoding" {
 }
 
 test "component header" {
-  let world : WitWorld = {
+  let world : @lib.WitWorld = @lib.WitWorld::{
     package_: "test:empty@1.0.0",
     name: "empty-world",
     types: [],
@@ -344,7 +344,7 @@ test "component header" {
     exports: [],
     imports: [],
   }
-  let result = encode(world)
+  let result = @lib.encode(world)
   // Should at least have the 8-byte component header + custom section
   assert_eq!(result[0], b'\x00')
   assert_eq!(result[1], b'\x61')

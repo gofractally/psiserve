@@ -68,6 +68,20 @@ describe('view correctness', () => {
     assert.strictEqual(Person.readField(packed, 'age'), 30);
     assert.strictEqual(Person.readField(packed, 'active'), true);
   });
+
+  it('rawField returns offset+length for strings, value for fixed', () => {
+    const raw = Person.rawField(packed, 'name');
+    assert.ok('offset' in raw && 'length' in raw, 'string field should return {offset, length}');
+    assert.strictEqual((raw as any).length, 5); // 'Alice' = 5 bytes
+
+    const rawAge = Person.rawField(packed, 'age');
+    assert.ok('value' in rawAge, 'fixed field should return {value}');
+    assert.strictEqual((rawAge as any).value, 30);
+
+    const rawBool = Person.rawField(packed, 'active');
+    assert.ok('value' in rawBool, 'bool field should return {value}');
+    assert.strictEqual((rawBool as any).value, true);
+  });
 });
 
 describe('fixedStruct view correctness', () => {

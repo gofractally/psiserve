@@ -1648,6 +1648,15 @@ class vec_view<E, fb>
    }
 
    auto at(uint32_t i) const { return operator[](i); }
+
+   struct read_fn
+   {
+      auto operator()(const vec_view& v, uint32_t i) const { return v[i]; }
+   };
+   using iterator = index_iterator<vec_view, read_fn>;
+
+   iterator begin() const { return {this, 0}; }
+   iterator end() const { return {this, size()}; }
 };
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1692,6 +1701,15 @@ class set_view<K, fb> : public sorted_set_algo<set_view<K, fb>>
    uint32_t size() const { return data_ ? detail::fbs::read<uint32_t>(data_) : 0; }
    bool     empty() const { return size() == 0; }
    // contains(), find(), lower_bound() inherited from sorted_set_algo
+
+   struct read_fn
+   {
+      auto operator()(const set_view& v, uint32_t i) const { return v.read_key(i); }
+   };
+   using iterator = index_iterator<set_view, read_fn>;
+
+   iterator begin() const { return {this, 0}; }
+   iterator end() const { return {this, size()}; }
 };
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1769,13 +1787,22 @@ class map_view<K, V, fb> : public sorted_map_algo<map_view<K, V, fb>>
    uint32_t size() const { return data_ ? detail::fbs::read<uint32_t>(data_) : 0; }
    bool     empty() const { return size() == 0; }
 
-   /// Proxy for a single key-value entry.
+   /// Proxy for a single key-value entry.  Supports structured bindings.
    struct entry_view
    {
       const map_view* map_;
       uint32_t        idx_;
       auto            key() const { return map_->read_key(idx_); }
       auto            value() const { return map_->read_value(idx_); }
+
+      template <size_t I>
+      auto get() const
+      {
+         if constexpr (I == 0)
+            return key();
+         else
+            return value();
+      }
    };
 
    // contains(), find_index(), lower_bound() inherited from sorted_map_algo
@@ -1794,6 +1821,18 @@ class map_view<K, V, fb> : public sorted_map_algo<map_view<K, V, fb>>
          return read_value(idx);
       return decltype(read_value(0))(fallback);
    }
+
+   struct read_fn
+   {
+      auto operator()(const map_view& m, uint32_t i) const
+      {
+         return std::pair{m.read_key(i), m.read_value(i)};
+      }
+   };
+   using iterator = index_iterator<map_view, read_fn>;
+
+   iterator begin() const { return {this, 0}; }
+   iterator end() const { return {this, size()}; }
 };
 
 // ── Backward-compatible aliases ─────────────────────────────────────────

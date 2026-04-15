@@ -30,6 +30,10 @@ if(PSIO_ENABLE_BENCHMARKS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    target_link_libraries(psio_bench PRIVATE psio)
    target_compile_options(psio_bench PRIVATE -O2)
 
+   add_executable(psio_bench_cp benchmarks/bench_cp_view.cpp)
+   target_link_libraries(psio_bench_cp PRIVATE psio)
+   target_compile_options(psio_bench_cp PRIVATE -O2)
+
    find_package(CapnProto QUIET)
    if(CapnProto_FOUND)
       capnp_generate_cpp(CAPNP_SRCS CAPNP_HDRS benchmarks/bench_schemas.capnp)

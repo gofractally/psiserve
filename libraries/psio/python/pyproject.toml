@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "psio"
+version = "0.1.0"
+description = "Schema-first binary serialization with zero-copy views and multi-format support"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["serialization", "fracpack", "zero-copy", "binary", "wasm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-benchmark>=4.0"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "."
+module-name = "psio._ext"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

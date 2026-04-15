@@ -1,7 +1,7 @@
 .{
-    .name = .@"psio-wit",
+    .name = .psio,
     .version = "0.1.0",
-    .fingerprint = 0xdeadbeef00000000,
+    .fingerprint = 0x75fe05aed61befac,
     .minimum_zig_version = "0.14.0",
     .paths = .{
         "build.zig",

@@ -82,19 +82,19 @@ let result_named : Byte = b'\x01'
 
 // ---- ByteBuffer ----
 
-struct ByteBuffer {
+pub(all) struct ByteBuffer {
   data : Array[Byte]
 }
 
-fn ByteBuffer::new() -> ByteBuffer {
+pub fn ByteBuffer::new() -> ByteBuffer {
   { data: [] }
 }
 
-fn ByteBuffer::emit_byte(self : ByteBuffer, b : Byte) -> Unit {
+pub fn ByteBuffer::emit_byte(self : ByteBuffer, b : Byte) -> Unit {
   self.data.push(b)
 }
 
-fn ByteBuffer::emit_uleb128(self : ByteBuffer, value : Int) -> Unit {
+pub fn ByteBuffer::emit_uleb128(self : ByteBuffer, value : Int) -> Unit {
   let mut val = value
   while true {
     let mut b = val.land(0x7f)
@@ -109,7 +109,7 @@ fn ByteBuffer::emit_uleb128(self : ByteBuffer, value : Int) -> Unit {
   }
 }
 
-fn ByteBuffer::emit_string(self : ByteBuffer, s : String) -> Unit {
+pub fn ByteBuffer::emit_string(self : ByteBuffer, s : String) -> Unit {
   // Get UTF-8 bytes from string
   let utf8 = string_to_utf8(s)
   self.emit_uleb128(utf8.length())
@@ -155,9 +155,9 @@ fn string_to_utf8(s : String) -> Array[Byte] {
         }
       }
       // Lone surrogate -- encode as replacement char
-      result.push(0xEF.to_byte())
-      result.push(0xBF.to_byte())
-      result.push(0xBD.to_byte())
+      result.push(b'\xEF')
+      result.push(b'\xBF')
+      result.push(b'\xBD')
     } else {
       result.push((0xE0 | (c >> 12)).to_byte())
       result.push((0x80 | ((c >> 6) & 0x3F)).to_byte())

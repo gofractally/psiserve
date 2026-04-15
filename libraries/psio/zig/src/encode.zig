@@ -98,17 +98,18 @@ fn primToCmByte(p: WitPrim) u8 {
 /// Binary writer backed by an ArrayList(u8).
 const Writer = struct {
     buf: std.ArrayList(u8),
+    alloc: std.mem.Allocator,
 
     fn init(allocator: std.mem.Allocator) Writer {
-        return .{ .buf = std.ArrayList(u8).init(allocator) };
+        return .{ .buf = .empty, .alloc = allocator };
     }
 
     fn deinit(self: *Writer) void {
-        self.buf.deinit();
+        self.buf.deinit(self.alloc);
     }
 
     fn emitByte(self: *Writer, b: u8) !void {
-        try self.buf.append(b);
+        try self.buf.append(self.alloc, b);
     }
 
     fn emitUleb128(self: *Writer, val: u32) !void {
@@ -117,18 +118,18 @@ const Writer = struct {
             var b: u8 = @intCast(v & 0x7f);
             v >>= 7;
             if (v != 0) b |= 0x80;
-            try self.buf.append(b);
+            try self.buf.append(self.alloc, b);
             if (v == 0) break;
         }
     }
 
     fn emitString(self: *Writer, s: []const u8) !void {
         try self.emitUleb128(@intCast(s.len));
-        try self.buf.appendSlice(s);
+        try self.buf.appendSlice(self.alloc, s);
     }
 
     fn emitBytes(self: *Writer, data: []const u8) !void {
-        try self.buf.appendSlice(data);
+        try self.buf.appendSlice(self.alloc, data);
     }
 
     fn size(self: *const Writer) usize {
@@ -137,7 +138,7 @@ const Writer = struct {
 
     /// Transfer ownership of the buffer to the caller.
     fn toOwnedSlice(self: *Writer) ![]u8 {
-        return try self.buf.toOwnedSlice();
+        return try self.buf.toOwnedSlice(self.alloc);
     }
 
     /// Get a read-only view of the current buffer contents.

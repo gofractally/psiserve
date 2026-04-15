@@ -8,11 +8,17 @@
 #pragma once
 
 #include <psio/fracpack.hpp>
+#include <psio/view.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstring>
+#include <flat_map>
+#include <flat_set>
+#include <map>
+#include <optional>
+#include <set>
 #include <span>
 #include <string_view>
 #include <type_traits>
@@ -818,16 +824,7 @@ namespace psio
       }
    };
 
-   // ── Sorted container views with binary search ──────────────────────────────
-   //
-   // Zero-copy O(log n) lookup over fracpack-encoded flat_set / flat_map data.
-   //
-   // Construction: pass a span/pointer to the packed container bytes,
-   // i.e. the [u32 byte_count][entries...] region.
-   //
-   //   auto packed = psio::to_frac(my_struct);
-   //   auto s = psio::frac_sorted_set<int32_t>(packed_container_bytes);
-   //   if (s.contains(42)) { ... }
+   // ── Sorted container helper ─────────────────────────────────────────────────
 
    namespace frac_detail
    {
@@ -852,13 +849,162 @@ namespace psio
       }
    }  // namespace frac_detail
 
-   /// Zero-copy sorted view over a fracpack-encoded flat_set<K>.
-   /// Provides O(log n) contains/find/lower_bound via binary search.
-   template <typename K>
-   class frac_sorted_set
+   // ══════════════════════════════════════════════════════════════════════════
+   // Unified view<T, frac> — zero-copy read-only view over fracpack data
+   //
+   //   auto v = psio::view<Order, psio::frac>::from_buffer(packed.data());
+   //   v.id()                  // uint64_t
+   //   v.customer().name()     // string_view
+   //   v.items().size()        // vec_view
+   //   v.tags().contains(42)   // set_view
+   // ══════════════════════════════════════════════════════════════════════════
+
+   struct frac;  // Format tag for fracpack wire format
+
+   // ── Type detection traits ─────────────────────────────────────────────────
+
+   namespace frac_detail
    {
-      const char* data_;
-      uint32_t    count_;
+      template <typename T>
+      struct is_frac_set : std::false_type
+      {
+      };
+      template <typename K, typename... Rest>
+      struct is_frac_set<std::flat_set<K, Rest...>> : std::true_type
+      {
+         using key_type = K;
+      };
+      template <typename K, typename... Rest>
+      struct is_frac_set<std::set<K, Rest...>> : std::true_type
+      {
+         using key_type = K;
+      };
+
+      template <typename T>
+      struct is_frac_map : std::false_type
+      {
+      };
+      template <typename K, typename V, typename... Rest>
+      struct is_frac_map<std::flat_map<K, V, Rest...>> : std::true_type
+      {
+         using key_type    = K;
+         using mapped_type = V;
+      };
+      template <typename K, typename V, typename... Rest>
+      struct is_frac_map<std::map<K, V, Rest...>> : std::true_type
+      {
+         using key_type    = K;
+         using mapped_type = V;
+      };
+
+      template <typename T>
+      struct is_frac_vector : std::false_type
+      {
+      };
+      template <typename T>
+      struct is_frac_vector<std::vector<T>> : std::true_type
+      {
+         using value_type = T;
+      };
+
+      template <typename T>
+      struct is_frac_optional : std::false_type
+      {
+      };
+      template <typename T>
+      struct is_frac_optional<std::optional<T>> : std::true_type
+      {
+         using inner_type = T;
+      };
+   }  // namespace frac_detail
+
+   // ══════════════════════════════════════════════════════════════════════════
+   // vec_view<E, frac> — zero-copy vector view (fracpack format)
+   //
+   // Layout: [u32 byte_count][e0][e1]... for fixed-size elements.
+   // ══════════════════════════════════════════════════════════════════════════
+
+   template <typename E>
+   class vec_view<E, frac>
+   {
+      const char* data_ = nullptr;
+
+     public:
+      vec_view() = default;
+      explicit vec_view(const char* p) : data_(p) {}
+      explicit operator bool() const { return data_ != nullptr; }
+
+      uint32_t size() const
+      {
+         if (!data_)
+            return 0;
+         uint32_t byte_count = frac_detail::read_u32(data_);
+         return byte_count / is_packable<E>::fixed_size;
+      }
+
+      bool empty() const { return size() == 0; }
+
+      auto operator[](uint32_t i) const
+      {
+         const char* entry = data_ + 4 + i * is_packable<E>::fixed_size;
+         if constexpr (std::is_same_v<E, std::string>)
+            return frac_detail::read_frac_string(entry);
+         else if constexpr (std::is_same_v<E, bool>)
+            return *entry != 0;
+         else if constexpr (std::is_enum_v<E>)
+         {
+            using U = std::underlying_type_t<E>;
+            U val;
+            std::memcpy(&val, entry, sizeof(U));
+            return static_cast<E>(val);
+         }
+         else if constexpr (std::is_arithmetic_v<E>)
+         {
+            E val;
+            std::memcpy(&val, entry, sizeof(E));
+            return val;
+         }
+         else if constexpr (Reflected<E>)
+         {
+            if constexpr (is_packable<E>::is_variable_size)
+            {
+               uint32_t off = frac_detail::read_u32(entry);
+               return view<E, frac>(entry + off);
+            }
+            else
+               return view<E, frac>(entry);
+         }
+         else
+         {
+            static_assert(!sizeof(E*), "unsupported vec element type for frac view");
+         }
+      }
+
+      auto at(uint32_t i) const { return operator[](i); }
+
+      struct read_fn
+      {
+         auto operator()(const vec_view& v, uint32_t i) const { return v[i]; }
+      };
+      using iterator = index_iterator<vec_view, read_fn>;
+
+      iterator begin() const { return {this, 0}; }
+      iterator end() const { return {this, size()}; }
+   };
+
+   // ══════════════════════════════════════════════════════════════════════════
+   // set_view<K, frac> — zero-copy sorted set view with binary search
+   //
+   // Inherits sorted_set_algo for contains(), find(), lower_bound().
+   // ══════════════════════════════════════════════════════════════════════════
+
+   template <typename K>
+   class set_view<K, frac> : public sorted_set_algo<set_view<K, frac>>
+   {
+      friend class sorted_set_algo<set_view<K, frac>>;
+
+      const char* data_  = nullptr;
+      uint32_t    count_ = 0;
 
       static constexpr uint32_t entry_sz = is_packable<K>::fixed_size;
 
@@ -876,83 +1022,45 @@ namespace psio
       }
 
      public:
-      explicit frac_sorted_set(const char* data = nullptr)
+      set_view() = default;
+      explicit set_view(const char* data)
           : data_(data), count_(data ? frac_detail::read_u32(data) / entry_sz : 0)
       {
       }
-      explicit frac_sorted_set(std::span<const char> sp)
-          : frac_sorted_set(sp.empty() ? nullptr : sp.data())
+      explicit set_view(std::span<const char> sp)
+          : set_view(sp.empty() ? nullptr : sp.data())
       {
       }
-
       explicit operator bool() const { return data_ != nullptr; }
+
       uint32_t size() const { return count_; }
+      bool     empty() const { return count_ == 0; }
+      // contains(), find(), lower_bound() inherited from sorted_set_algo
 
-      auto operator[](uint32_t i) const { return read_key(i); }
-
-      bool contains(const auto& key) const
+      struct read_fn
       {
-         uint32_t lo = 0, hi = count_;
-         while (lo < hi)
-         {
-            uint32_t mid = lo + (hi - lo) / 2;
-            auto     mk  = read_key(mid);
-            if (mk < key)
-               lo = mid + 1;
-            else if (key < mk)
-               hi = mid;
-            else
-               return true;
-         }
-         return false;
-      }
+         auto operator()(const set_view& v, uint32_t i) const { return v.read_key(i); }
+      };
+      using iterator = index_iterator<set_view, read_fn>;
 
-      uint32_t find(const auto& key) const
-      {
-         uint32_t lo = 0, hi = count_;
-         while (lo < hi)
-         {
-            uint32_t mid = lo + (hi - lo) / 2;
-            auto     mk  = read_key(mid);
-            if (mk < key)
-               lo = mid + 1;
-            else if (key < mk)
-               hi = mid;
-            else
-               return mid;
-         }
-         return count_;
-      }
-
-      uint32_t lower_bound(const auto& key) const
-      {
-         uint32_t lo = 0, hi = count_;
-         while (lo < hi)
-         {
-            uint32_t mid = lo + (hi - lo) / 2;
-            if (read_key(mid) < key)
-               lo = mid + 1;
-            else
-               hi = mid;
-         }
-         return lo;
-      }
+      iterator begin() const { return {this, 0}; }
+      iterator end() const { return {this, size()}; }
    };
 
-   /// Zero-copy sorted view over a fracpack-encoded flat_map<K, V>.
-   /// Provides O(log n) lookup by key via binary search.
-   ///
-   /// Fracpack layout: pair<K,V> is always variable-size (no definitionWillNotChange),
-   /// so entries are indirected:
-   ///   [u32 total_fixed = count * 4][offset0, offset1, ...]
-   ///   [pair0: [u16 members_fixed][K_data][V_data][variable...]]
-   ///   [pair1: ...]
-   /// The key is the first field of the pair sub-object, after the u16 header.
+   // ══════════════════════════════════════════════════════════════════════════
+   // map_view<K, V, frac> — zero-copy sorted map view with O(log n) lookup
+   //
+   // Inherits sorted_map_algo for find_index(), contains(), lower_bound().
+   // Wire format: indirected pairs with u16 header per entry.
+   // ══════════════════════════════════════════════════════════════════════════
+
    template <typename K, typename V>
-   class frac_sorted_map
+   class map_view<K, V, frac> : public sorted_map_algo<map_view<K, V, frac>>
    {
-      const char* data_;
-      uint32_t    count_;
+      friend class sorted_map_algo<map_view<K, V, frac>>;
+
+      const char* data_  = nullptr;
+      uint32_t    count_ = 0;
 
       static constexpr uint32_t key_fixed = is_packable<K>::fixed_size;
       static constexpr uint32_t val_fixed = is_packable<V>::fixed_size;
@@ -986,65 +1094,233 @@ namespace psio
             return frac_detail::read_frac_string(pf);
          else if constexpr (std::is_same_v<V, bool>)
             return *pf != 0;
-         else
+         else if constexpr (std::is_arithmetic_v<V>)
          {
             V val;
             std::memcpy(&val, pf, sizeof(V));
             return val;
          }
-      }
-
-      uint32_t find_index(const auto& key) const
-      {
-         uint32_t lo = 0, hi = count_;
-         while (lo < hi)
+         else if constexpr (Reflected<V>)
          {
-            uint32_t mid = lo + (hi - lo) / 2;
-            auto     mk  = read_key(mid);
-            if (mk < key)
-               lo = mid + 1;
-            else if (key < mk)
-               hi = mid;
+            if constexpr (is_packable<V>::is_variable_size)
+            {
+               uint32_t off = frac_detail::read_u32(pf);
+               return view<V, frac>(pf + off);
+            }
             else
-               return mid;
+               return view<V, frac>(pf);
          }
-         return count_;
+         else
+         {
+            static_assert(!sizeof(V*), "unsupported map value type for frac view");
+            return V{};
+         }
       }
 
      public:
-      explicit frac_sorted_map(const char* data = nullptr)
+      map_view() = default;
+      explicit map_view(const char* data)
           : data_(data), count_(data ? frac_detail::read_u32(data) / 4 : 0)
       {
       }
-      explicit frac_sorted_map(std::span<const char> sp)
-          : frac_sorted_map(sp.empty() ? nullptr : sp.data())
+      explicit map_view(std::span<const char> sp)
+          : map_view(sp.empty() ? nullptr : sp.data())
       {
       }
-
       explicit operator bool() const { return data_ != nullptr; }
+
       uint32_t size() const { return count_; }
+      bool     empty() const { return count_ == 0; }
 
       struct entry_view
       {
-         const frac_sorted_map* map_;
-         uint32_t               idx_;
-         auto                   key() const { return map_->read_key(idx_); }
-         auto                   value() const { return map_->read_value(idx_); }
+         const map_view* map_;
+         uint32_t        idx_;
+         auto            key() const { return map_->read_key(idx_); }
+         auto            value() const { return map_->read_value(idx_); }
+
+         template <size_t I>
+         auto get() const
+         {
+            if constexpr (I == 0)
+               return key();
+            else
+               return value();
+         }
       };
 
-      entry_view operator[](uint32_t i) const { return {this, i}; }
+      // contains(), find_index(), lower_bound() inherited from sorted_map_algo
 
-      bool       contains(const auto& key) const { return find_index(key) < count_; }
-      entry_view find(const auto& key) const { return {this, find_index(key)}; }
+      entry_view find(const auto& key) const
+      {
+         return {this, sorted_map_algo<map_view>::find_index(key)};
+      }
 
-      /// Value lookup — returns default-constructed V if not found.
       auto value_or(const auto& key, const auto& fallback) const
       {
-         uint32_t idx = find_index(key);
+         uint32_t idx = sorted_map_algo<map_view>::find_index(key);
          if (idx < count_)
             return read_value(idx);
          return decltype(read_value(0))(fallback);
       }
+
+      struct read_fn
+      {
+         auto operator()(const map_view& m, uint32_t i) const
+         {
+            return std::pair{m.read_key(i), m.read_value(i)};
+         }
+      };
+      using iterator = index_iterator<map_view, read_fn>;
+
+      iterator begin() const { return {this, 0}; }
+      iterator end() const { return {this, size()}; }
    };
+
+   // ── Backward-compatible aliases ───────────────────────────────────────────
+
+   template <typename K>
+   using frac_sorted_set = set_view<K, frac>;
+   template <typename K, typename V>
+   using frac_sorted_map = map_view<K, V, frac>;
+
+   // ── frac_view_field: read field N from fracpack-encoded struct ─────────────
+
+   namespace frac_detail
+   {
+      template <typename T, size_t N>
+      auto frac_view_field(const char* struct_start)
+      {
+         using F      = nth_field_t<T, N>;
+         using layout = frac_layout<T>;
+
+         const char* fixed_start = struct_start + layout::hdr_size;
+         const char* field_pos   = fixed_start + layout::offset_of(N);
+
+         if constexpr (std::is_same_v<F, bool>)
+            return *field_pos != 0;
+         else if constexpr (std::is_enum_v<F>)
+         {
+            using U = std::underlying_type_t<F>;
+            U val;
+            std::memcpy(&val, field_pos, sizeof(U));
+            return static_cast<F>(val);
+         }
+         else if constexpr (std::is_arithmetic_v<F>)
+         {
+            F val;
+            std::memcpy(&val, field_pos, sizeof(F));
+            return val;
+         }
+         else if constexpr (std::is_same_v<F, std::string>)
+            return read_frac_string(field_pos);
+         else if constexpr (is_frac_optional<F>::value)
+         {
+            using Inner = typename is_frac_optional<F>::inner_type;
+            uint32_t off;
+            std::memcpy(&off, field_pos, 4);
+            if constexpr (std::is_same_v<Inner, bool>)
+               return off >= 4 ? std::optional<bool>(*(field_pos + off) != 0)
+                               : std::optional<bool>{};
+            else if constexpr (std::is_enum_v<Inner>)
+            {
+               using U = std::underlying_type_t<Inner>;
+               if (off < 4)
+                  return std::optional<Inner>{};
+               U val;
+               std::memcpy(&val, field_pos + off, sizeof(U));
+               return std::optional<Inner>(static_cast<Inner>(val));
+            }
+            else if constexpr (std::is_arithmetic_v<Inner>)
+            {
+               if (off < 4)
+                  return std::optional<Inner>{};
+               Inner val;
+               std::memcpy(&val, field_pos + off, sizeof(Inner));
+               return std::optional<Inner>(val);
+            }
+            else if constexpr (std::is_same_v<Inner, std::string>)
+            {
+               if (off < 4)
+                  return std::string_view{};
+               const char* str = field_pos + off;
+               uint32_t    len = read_u32(str);
+               return std::string_view{str + 4, len};
+            }
+            else
+               static_assert(!sizeof(Inner*), "unsupported optional inner type for frac view");
+         }
+         else if constexpr (is_frac_set<F>::value)
+         {
+            using K = typename is_frac_set<F>::key_type;
+            uint32_t off;
+            std::memcpy(&off, field_pos, 4);
+            if (off <= 1)
+               return set_view<K, frac>{};
+            return set_view<K, frac>(field_pos + off);
+         }
+         else if constexpr (is_frac_map<F>::value)
+         {
+            using K  = typename is_frac_map<F>::key_type;
+            using MV = typename is_frac_map<F>::mapped_type;
+            uint32_t off;
+            std::memcpy(&off, field_pos, 4);
+            if (off <= 1)
+               return map_view<K, MV, frac>{};
+            return map_view<K, MV, frac>(field_pos + off);
+         }
+         else if constexpr (is_frac_vector<F>::value)
+         {
+            using E = typename is_frac_vector<F>::value_type;
+            uint32_t off;
+            std::memcpy(&off, field_pos, 4);
+            if (off <= 1)
+               return vec_view<E, frac>{};
+            return vec_view<E, frac>(field_pos + off);
+         }
+         else if constexpr (Reflected<F>)
+         {
+            if constexpr (is_packable<F>::is_variable_size)
+            {
+               uint32_t off;
+               std::memcpy(&off, field_pos, 4);
+               if (off <= 1)
+                  return view<F, frac>{};
+               return view<F, frac>(field_pos + off);
+            }
+            else
+               return view<F, frac>(field_pos);
+         }
+         else
+            static_assert(!sizeof(F*), "unsupported field type for frac view");
+      }
+   }  // namespace frac_detail
+
+   // ══════════════════════════════════════════════════════════════════════════
+   // struct frac — fracpack format tag for view<T, frac>
+   //
+   // Satisfies the Format concept: ptr_t, root<T>(), field<T,N>().
+   // ══════════════════════════════════════════════════════════════════════════
+
+   struct frac
+   {
+      using ptr_t = const char*;
+
+      template <typename T>
+      static ptr_t root(const void* buf)
+      {
+         return static_cast<const char*>(buf);
+      }
+
+      template <typename T, size_t N>
+      static auto field(ptr_t data)
+      {
+         return frac_detail::frac_view_field<T, N>(data);
+      }
+   };
+
+   /// frac_view<T> — alias for view<T, frac>
+   template <typename T>
+   using frac_view = view<T, frac>;
 
 }  // namespace psio

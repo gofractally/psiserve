@@ -30,7 +30,9 @@
 
 #include <psio/reflect.hpp>
 
+#include <compare>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -53,6 +55,73 @@ struct view_type<std::string>
 
 template <typename T>
 using view_type_t = typename view_type<T>::type;
+
+// ── Index-based iterator for container views ────────────────────────────
+//
+// Container is the concrete container view (vec_view, set_view, map_view).
+// ReadFn(const Container&, uint32_t) returns the element at index i.
+// This is a random-access iterator so range-for, algorithms, and
+// structured bindings all work naturally.
+
+template <typename Container, typename ReadFn>
+class index_iterator
+{
+   const Container* c_ = nullptr;
+   uint32_t         i_ = 0;
+
+  public:
+   using iterator_category = std::random_access_iterator_tag;
+   using difference_type   = int32_t;
+   using value_type        = decltype(ReadFn{}(std::declval<const Container&>(), 0));
+   using reference         = value_type;
+   using pointer           = void;
+
+   index_iterator() = default;
+   index_iterator(const Container* c, uint32_t i) : c_(c), i_(i) {}
+
+   reference operator*() const { return ReadFn{}(*c_, i_); }
+   reference operator[](difference_type n) const { return ReadFn{}(*c_, i_ + n); }
+
+   index_iterator& operator++()
+   {
+      ++i_;
+      return *this;
+   }
+   index_iterator operator++(int)
+   {
+      auto tmp = *this;
+      ++i_;
+      return tmp;
+   }
+   index_iterator& operator--()
+   {
+      --i_;
+      return *this;
+   }
+   index_iterator operator--(int)
+   {
+      auto tmp = *this;
+      --i_;
+      return tmp;
+   }
+   index_iterator& operator+=(difference_type n)
+   {
+      i_ += n;
+      return *this;
+   }
+   index_iterator& operator-=(difference_type n)
+   {
+      i_ -= n;
+      return *this;
+   }
+
+   friend index_iterator operator+(index_iterator it, difference_type n) { return {it.c_, it.i_ + static_cast<uint32_t>(n)}; }
+   friend index_iterator operator+(difference_type n, index_iterator it) { return {it.c_, it.i_ + static_cast<uint32_t>(n)}; }
+   friend index_iterator operator-(index_iterator it, difference_type n) { return {it.c_, it.i_ - static_cast<uint32_t>(n)}; }
+   friend difference_type operator-(index_iterator a, index_iterator b) { return static_cast<difference_type>(a.i_) - static_cast<difference_type>(b.i_); }
+
+   auto operator<=>(const index_iterator& o) const = default;
+};
 
 // ── Forward declarations ────────────────────────────────────────────────
 
