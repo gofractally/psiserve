@@ -1,4 +1,4 @@
-// Differential fuzzer for psizam: interpreter vs JIT vs JIT2
+// Differential fuzzer for psizam: interpreter vs JIT vs JIT2 vs LLVM
 //
 // Usage:
 //   # Generate and test random WASM modules continuously:
@@ -7,8 +7,8 @@
 //   # Test a specific WASM file:
 //   ./psizam-fuzz-diff --file module.wasm
 //
-// Each iteration: wasm-smith generates a valid module, we run it on all
-// backends and assert identical results/trap behavior.
+// Uses wasm-gen (Rust helper) to bulk-generate valid WASM modules via pipe,
+// then runs each on all backends and asserts identical outcomes.
 
 #include <psizam/backend.hpp>
 #include <psizam/detail/watchdog.hpp>
@@ -18,24 +18,53 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <random>
 #include <string>
 #include <unistd.h>
 #include <vector>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 using namespace psizam;
 using namespace psizam::detail;
 
-// Locate wasm-tools binary — check common locations, then PATH
-static std::string find_wasm_tools() {
-   // Check explicit locations first
-   const char* home = getenv("HOME");
-   if (home) {
-      std::string cargo_path = std::string(home) + "/.cargo/bin/wasm-tools";
-      if (access(cargo_path.c_str(), X_OK) == 0) return cargo_path;
+// Get directory containing our own executable
+static std::string get_exe_dir() {
+   char self_path[4096];
+#if defined(__APPLE__)
+   uint32_t sz = sizeof(self_path);
+   if (_NSGetExecutablePath(self_path, &sz) == 0) {
+#else
+   ssize_t len = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
+   if (len > 0) { self_path[len] = 0;
+#endif
+      char* slash = strrchr(self_path, '/');
+      if (slash) { *slash = 0; return self_path; }
    }
-   // Fall back to PATH
-   if (system("wasm-tools --version >/dev/null 2>&1") == 0) return "wasm-tools";
+   return {};
+}
+
+// Locate wasm-gen binary — check build tree, Rust target, PATH
+static std::string find_wasm_gen() {
+   // 1. Next to our own binary (CMake bin/ directory)
+   auto dir = get_exe_dir();
+   if (!dir.empty()) {
+      std::string path = dir + "/wasm-gen";
+      if (access(path.c_str(), X_OK) == 0) return path;
+   }
+   // 2. Rust build output (relative to source tree)
+   // __FILE__ gives the source path at compile time
+   {
+      std::string src_dir = __FILE__;
+      auto pos = src_dir.rfind('/');
+      if (pos != std::string::npos) {
+         src_dir.resize(pos);
+         std::string path = src_dir + "/wasm-gen/target/release/wasm-gen";
+         if (access(path.c_str(), X_OK) == 0) return path;
+      }
+   }
+   // 3. PATH
+   if (system("wasm-gen --help >/dev/null 2>&1") == 0) return "wasm-gen";
    return {};
 }
 
@@ -43,6 +72,7 @@ static std::string find_wasm_tools() {
 struct run_result {
    int  outcome;       // 0=ok, 1=parse, 2=memory, 3=interp, 4=timeout, 5=other
    bool has_start;     // module had a start function
+   std::string what;   // exception message (for outcome 5)
 };
 
 template <typename Impl>
@@ -70,6 +100,7 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes) {
       r.outcome = 4;
    } catch (std::exception& e) {
       r.outcome = 5;
+      r.what = e.what();
    } catch (...) {
       r.outcome = 6;
    }
@@ -89,14 +120,21 @@ static const char* outcome_name(int o) {
    }
 }
 
+static void print_mismatch(const char* source, const char* b1_name, const run_result& r1,
+                           const char* b2_name, const run_result& r2) {
+   fprintf(stderr, "MISMATCH [%s]: %s=%s %s=%s\n",
+           source, b1_name, outcome_name(r1.outcome), b2_name, outcome_name(r2.outcome));
+   if (!r1.what.empty()) fprintf(stderr, "  %s what: %s\n", b1_name, r1.what.c_str());
+   if (!r2.what.empty()) fprintf(stderr, "  %s what: %s\n", b2_name, r2.what.c_str());
+}
+
 static bool test_module(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
    auto r_interp = run_backend<interpreter>(wasm);
 
 #if defined(__x86_64__) || defined(__aarch64__)
    auto r_jit = run_backend<jit>(wasm);
    if (r_interp.outcome != r_jit.outcome) {
-      fprintf(stderr, "MISMATCH [%s]: interpreter=%s jit=%s\n",
-              source, outcome_name(r_interp.outcome), outcome_name(r_jit.outcome));
+      print_mismatch(source, "interpreter", r_interp, "jit", r_jit);
       return false;
    }
 #endif
@@ -104,8 +142,7 @@ static bool test_module(const std::vector<uint8_t>& wasm, const char* source, bo
 #if defined(__x86_64__) || defined(__aarch64__)
    auto r_jit2 = run_backend<jit2>(wasm);
    if (r_interp.outcome != r_jit2.outcome) {
-      fprintf(stderr, "MISMATCH [%s]: interpreter=%s jit2=%s\n",
-              source, outcome_name(r_interp.outcome), outcome_name(r_jit2.outcome));
+      print_mismatch(source, "interpreter", r_interp, "jit2", r_jit2);
       return false;
    }
 #endif
@@ -113,8 +150,7 @@ static bool test_module(const std::vector<uint8_t>& wasm, const char* source, bo
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
    auto r_llvm = run_backend<jit_llvm>(wasm);
    if (r_interp.outcome != r_llvm.outcome) {
-      fprintf(stderr, "MISMATCH [%s]: interpreter=%s jit_llvm=%s\n",
-              source, outcome_name(r_interp.outcome), outcome_name(r_llvm.outcome));
+      print_mismatch(source, "interpreter", r_interp, "jit_llvm", r_llvm);
       return false;
    }
 #endif
@@ -136,39 +172,10 @@ static std::vector<uint8_t> read_file(const char* path) {
    return buf;
 }
 
-static std::vector<uint8_t> generate_wasm(const std::string& wasm_tools, uint64_t seed) {
-   // Write seed bytes to a temp file, pipe through wasm-smith
-   char cmd[512];
-   char seed_file[128], wasm_file[128];
-   snprintf(seed_file, sizeof(seed_file), "/tmp/psizam_fuzz_seed_%d.bin", getpid());
-   snprintf(wasm_file, sizeof(wasm_file), "/tmp/psizam_fuzz_out_%d.wasm", getpid());
-
-   // Write 32 bytes of PRNG output as seed material
-   std::mt19937_64 rng(seed);
-   FILE* sf = fopen(seed_file, "wb");
-   for (int i = 0; i < 4; i++) {
-      uint64_t v = rng();
-      fwrite(&v, 8, 1, sf);
-   }
-   fclose(sf);
-
-   snprintf(cmd, sizeof(cmd),
-            "%s smith --ensure-termination "
-            "--min-memories=0 --max-memories=1 "
-            "--min-tables=0 --max-tables=2 "
-            "--max-instructions=1000 "
-            "--max-memory32-bytes=655360 "
-            "-o %s %s 2>/dev/null",
-            wasm_tools.c_str(), wasm_file, seed_file);
-
-   int rc = system(cmd);
-   unlink(seed_file);
-
-   if (rc != 0) return {};
-
-   auto wasm = read_file(wasm_file);
-   unlink(wasm_file);
-   return wasm;
+// Read exactly n bytes from a FILE*, returns false on short read/EOF
+static bool read_exact(FILE* f, void* buf, size_t n) {
+   size_t got = fread(buf, 1, n, f);
+   return got == n;
 }
 
 int main(int argc, char* argv[]) {
@@ -180,9 +187,10 @@ int main(int argc, char* argv[]) {
       return ok ? 0 : 1;
    }
 
-   auto wasm_tools = find_wasm_tools();
-   if (wasm_tools.empty()) {
-      fprintf(stderr, "ERROR: wasm-tools not found. Install: cargo install wasm-tools\n");
+   auto wasm_gen = find_wasm_gen();
+   if (wasm_gen.empty()) {
+      fprintf(stderr, "ERROR: wasm-gen not found. Build it:\n");
+      fprintf(stderr, "  cd libraries/psizam/tests/fuzz/wasm-gen && cargo build --release\n");
       return 1;
    }
 
@@ -191,7 +199,7 @@ int main(int argc, char* argv[]) {
       static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
 
    fprintf(stderr, "psizam differential fuzzer: %u iterations, seed=%llu\n", iterations, (unsigned long long)seed);
-   fprintf(stderr, "Using: %s\n", wasm_tools.c_str());
+   fprintf(stderr, "Generator: %s\n", wasm_gen.c_str());
    fprintf(stderr, "Backends: interpreter");
 #if defined(__x86_64__) || defined(__aarch64__)
    fprintf(stderr, ", jit");
@@ -204,23 +212,40 @@ int main(int argc, char* argv[]) {
 #endif
    fprintf(stderr, "\n\n");
 
-   uint32_t tested = 0, passed = 0, gen_failed = 0;
+   // Launch wasm-gen as a pipe — it writes length-prefixed WASM modules to stdout
+   char cmd[512];
+   snprintf(cmd, sizeof(cmd), "%s %u %llu", wasm_gen.c_str(), iterations, (unsigned long long)seed);
+   FILE* gen = popen(cmd, "r");
+   if (!gen) {
+      fprintf(stderr, "ERROR: failed to launch wasm-gen\n");
+      return 1;
+   }
+
+   uint32_t tested = 0, passed = 0, mismatches = 0;
    auto t_start = std::chrono::steady_clock::now();
 
    for (uint32_t i = 0; i < iterations; i++) {
-      auto wasm = generate_wasm(wasm_tools, seed + i);
-      if (wasm.empty()) { gen_failed++; continue; }
+      // Read length-prefixed module: [u32le length][wasm bytes]
+      uint32_t len = 0;
+      if (!read_exact(gen, &len, 4)) break; // EOF or generator done
+
+      std::vector<uint8_t> wasm(len);
+      if (!read_exact(gen, wasm.data(), len)) {
+         fprintf(stderr, "ERROR: short read at module %u (expected %u bytes)\n", i, len);
+         break;
+      }
 
       tested++;
       char label[64];
-      snprintf(label, sizeof(label), "seed=%llu", (unsigned long long)(seed + i));
+      snprintf(label, sizeof(label), "module#%u", i);
 
       if (test_module(wasm, label, false)) {
          passed++;
       } else {
+         mismatches++;
          // Save failing module for reproduction
          char crash_path[256];
-         snprintf(crash_path, sizeof(crash_path), "crash_%llu.wasm", (unsigned long long)(seed + i));
+         snprintf(crash_path, sizeof(crash_path), "crash_%u_seed%llu.wasm", i, (unsigned long long)seed);
          FILE* cf = fopen(crash_path, "wb");
          if (cf) { fwrite(wasm.data(), 1, wasm.size(), cf); fclose(cf); }
          fprintf(stderr, "  Saved to %s (%zu bytes)\n", crash_path, wasm.size());
@@ -228,14 +253,16 @@ int main(int argc, char* argv[]) {
 
       if ((i + 1) % 100 == 0) {
          auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
-         fprintf(stderr, "\r  [%u/%u] %u passed, %u mismatches, %u gen_failed (%.1f modules/sec)",
-                 i + 1, iterations, passed, tested - passed, gen_failed, tested / elapsed);
+         fprintf(stderr, "\r  [%u/%u] %u passed, %u mismatches (%.1f modules/sec)",
+                 i + 1, iterations, passed, mismatches, tested / elapsed);
       }
    }
 
+   pclose(gen);
+
    auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
-   fprintf(stderr, "\n\nDone: %u tested, %u passed, %u MISMATCHES, %u gen_failed (%.1fs, %.1f/sec)\n",
-           tested, passed, tested - passed, gen_failed, elapsed, tested / elapsed);
+   fprintf(stderr, "\n\nDone: %u tested, %u passed, %u MISMATCHES (%.1fs, %.1f/sec)\n",
+           tested, passed, mismatches, elapsed, tested / elapsed);
 
    return (passed == tested) ? 0 : 1;
 }

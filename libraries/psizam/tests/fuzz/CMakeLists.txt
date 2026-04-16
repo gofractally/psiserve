@@ -3,9 +3,14 @@
 #   psizam-fuzz-diff  — standalone wasm-smith differential fuzzer (recommended)
 #   psizam-fuzz       — libFuzzer driver (requires clang with libFuzzer+ASan)
 
+# ── wasm-gen: bulk WASM module generator (Rust) ─────────────────────────────
+# Build separately: cd wasm-gen && cargo build --release
+# The fuzzer finds it automatically next to its own binary, in wasm-gen/target/release/,
+# or in PATH.
+
 # ── Standalone differential fuzzer (wasm-smith based) ────────────────────────
-# Generates valid WASM via wasm-tools smith, runs on all backends,
-# asserts identical outcomes. No libFuzzer/ASan dependency.
+# Uses wasm-gen to bulk-generate valid WASM modules via pipe, runs on all
+# backends, asserts identical outcomes.
 #
 # Usage:
 #   ./psizam-fuzz-diff [iterations] [seed]
