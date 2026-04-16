@@ -1125,6 +1125,10 @@ int main() {
          fprintf(stderr, "guest[%d] jit_llvm...\n", t); fflush(stderr);
          guest_results[t][RT_JIT_LLVM] = run_guest_typed.template operator()<jit_llvm>(nop_wasm, np);
 #endif
+#ifdef BENCH_HAS_WASMTIME
+         fprintf(stderr, "guest[%d] wasmtime...\n", t); fflush(stderr);
+         guest_results[t][RT_WASMTIME] = run_wasmtime_guest(nop_wasm, guest_tests[t].func, np, GUEST_N);
+#endif
       }
 
       char guest_title[128];

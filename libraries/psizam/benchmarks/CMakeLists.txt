@@ -417,6 +417,11 @@ endif()
 add_executable(bench-compare ${BENCH_SOURCES})
 target_link_libraries(bench-compare ${BENCH_LIBS})
 target_compile_definitions(bench-compare PRIVATE ${BENCH_DEFS})
+# Ensure our fetched wasmtime headers take priority over any system-installed
+# wasmtime (e.g. via Homebrew) that might be on -isystem /opt/homebrew/include.
+if(PSIZAM_ENABLE_BENCH_WASMTIME AND EXISTS "${WASMTIME_DIR}/include")
+   target_include_directories(bench-compare BEFORE PRIVATE "${WASMTIME_DIR}/include")
+endif()
 if(TARGET psizam-llvm)
    target_link_libraries(bench-compare psizam-llvm)
    target_compile_definitions(bench-compare PRIVATE PSIZAM_ENABLE_LLVM_BACKEND)
