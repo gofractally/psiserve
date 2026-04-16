@@ -58,6 +58,23 @@ namespace psizam {
    DECLARE_EXCEPTION( wasm_exit_exception,               4010002, "exit" )
    DECLARE_EXCEPTION( span_exception,                    4020000, "span exception" )
    DECLARE_EXCEPTION( profile_exception,                 4030000, "profile exception" )
+
+   // WASM exception payload — thrown by the WASM `throw` opcode.
+   // Used to propagate unhandled WASM exceptions to the host as C++ exceptions.
+   struct wasm_exception : public psizam::exception {
+      uint32_t tag_index;
+      uint64_t payload[16];
+      uint32_t payload_count;
+
+      wasm_exception(uint32_t tag, const uint64_t* values, uint32_t count)
+         : tag_index(tag), payload_count(count) {
+         if (count > 16) count = 16;
+         for (uint32_t i = 0; i < count; ++i) payload[i] = values[i];
+      }
+      wasm_exception() : tag_index(UINT32_MAX), payload_count(0) {}
+      const char* what() const throw() override { return "unhandled wasm exception"; }
+      const char* detail() const throw() override { return "unhandled wasm exception"; }
+   };
 } // namespace psizam
 
 #undef DECLARE_EXCEPTION

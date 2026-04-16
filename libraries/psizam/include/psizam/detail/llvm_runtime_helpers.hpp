@@ -82,6 +82,39 @@ extern "C" {
    [[noreturn]] void __psizam_trap(void* ctx, uint32_t trap_code);
    // trap codes: 0=unreachable, 1=div_by_zero, 2=int_overflow,
    //             3=invalid_conversion, 4=undefined_element
+
+   // ── WASM Exception Handling (try_table / throw / throw_ref) ──
+
+   // Push a try_table frame. Returns pointer to the frame's jmp_buf for setjmp.
+   // catch_data is an array of catch_count uint64_t values, each packed as (kind << 32) | tag_index.
+   void* __psizam_eh_enter(void* ctx, uint32_t catch_count, const uint64_t* catch_data);
+
+   // Pop a try_table frame (normal exit, no exception thrown).
+   void __psizam_eh_leave(void* ctx);
+
+   // Throw a WASM exception. Searches jit_eh_stack for a matching handler and
+   // longjmps to it. If no handler found, escapes via trap_jmp_ptr.
+   [[noreturn]] void __psizam_eh_throw(void* ctx, uint32_t tag_index,
+                                        const uint64_t* payload, uint32_t payload_count);
+
+   // Re-throw via exnref index. Looks up the caught exception and re-throws it.
+   [[noreturn]] void __psizam_eh_throw_ref(void* ctx, uint32_t exnref_idx);
+
+   // Get the matched catch clause index (called after longjmp returns to try_table).
+   uint32_t __psizam_eh_get_match(void* ctx);
+
+   // Get payload value at index i from the staged exception.
+   uint64_t __psizam_eh_get_payload(void* ctx, uint32_t i);
+
+   // Get payload count from the staged exception.
+   uint32_t __psizam_eh_get_payload_count(void* ctx);
+
+   // Get exnref index from the staged exception (for catch_*_ref kinds).
+   uint64_t __psizam_eh_get_exnref(void* ctx);
+
+   // Wrapper for setjmp callable from JIT-generated code via function pointer.
+   // setjmp may be a macro, so this wrapper provides a stable address.
+   int __psizam_setjmp(void* jmpbuf);
 }
 
 namespace psizam::detail {

@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cassert>
 #include <signal.h>
+#include <setjmp.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -1010,8 +1011,78 @@ namespace psizam::detail {
 
    public:
       inline void* get_host_ptr() const { return _host; }
+
+      // ── JIT Exception Handling (WASM EH v2 / try_table) ──
+
+      // A try_table frame in JIT code. Each try_table emits a setjmp; on throw,
+      // the runtime longjmps back to the matching frame's jmpbuf.
+      struct jit_eh_frame {
+         jmp_buf  jmpbuf;
+         uint32_t catch_count;
+         uint32_t first_catch_idx;  // index into _jit_eh_catches
+      };
+
+      struct jit_eh_catch {
+         uint8_t  kind;       // catch_kind (0=catch_tag, 1=catch_tag_ref, 2=catch_all, 3=catch_all_ref)
+         uint32_t tag_index;  // tag to match (only for kind 0,1)
+      };
+
+      // WASM exception payload (shared with interpreter's wasm_exception_t)
+      struct wasm_exception_t {
+         uint32_t tag_index = UINT32_MAX;
+         std::vector<uint64_t> values;
+      };
+
+      // Push a try_table frame. Returns pointer to the frame's jmpbuf for setjmp.
+      inline jmp_buf* jit_eh_enter(uint32_t catch_count, const uint64_t* catch_data) {
+         uint32_t first = static_cast<uint32_t>(_jit_eh_catches.size());
+         for (uint32_t i = 0; i < catch_count; ++i) {
+            uint64_t packed = catch_data[i];
+            _jit_eh_catches.push_back({
+               static_cast<uint8_t>(packed >> 32),
+               static_cast<uint32_t>(packed & 0xFFFFFFFF)
+            });
+         }
+         _jit_eh_stack.push_back(jit_eh_frame{{}, catch_count, first});
+         return &_jit_eh_stack.back().jmpbuf;
+      }
+
+      // Pop a try_table frame (normal exit, no exception thrown).
+      inline void jit_eh_leave() {
+         if (!_jit_eh_stack.empty()) {
+            auto& frame = _jit_eh_stack.back();
+            _jit_eh_catches.resize(frame.first_catch_idx);
+            _jit_eh_stack.pop_back();
+         }
+      }
+
+      // Store a caught exception for exnref. Returns the index.
+      inline uint32_t jit_push_caught_exception(uint32_t tag_index, const uint64_t* values, uint32_t count) {
+         uint32_t idx = static_cast<uint32_t>(_jit_eh_exn_stack.size());
+         wasm_exception_t exn;
+         exn.tag_index = tag_index;
+         exn.values.assign(values, values + count);
+         _jit_eh_exn_stack.push_back(std::move(exn));
+         return idx;
+      }
+
+      inline const wasm_exception_t& jit_get_caught_exception(uint32_t idx) const {
+         return _jit_eh_exn_stack.at(idx);
+      }
+
+      // Accessors for the staging area (written by throw, read after longjmp)
+      std::vector<jit_eh_frame>&  jit_eh_stack()   { return _jit_eh_stack; }
+      std::vector<jit_eh_catch>&  jit_eh_catches() { return _jit_eh_catches; }
+
+      uint32_t        jit_eh_matched_catch = 0;
+      wasm_exception  jit_eh_exception;       // staging: tag + payload from throw
+      uint32_t        jit_eh_exnref = 0;      // staging: exnref index for *_ref catch kinds
+
    protected:
       void* _host = nullptr;
+      std::vector<jit_eh_frame>      _jit_eh_stack;
+      std::vector<jit_eh_catch>      _jit_eh_catches;
+      std::vector<wasm_exception_t>  _jit_eh_exn_stack;
    };
 
    class execution_context : public execution_context_base<execution_context, false> {

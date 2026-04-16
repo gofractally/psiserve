@@ -228,6 +228,8 @@ namespace psizam {
       uint8_t  kind;       // catch_kind
       uint32_t tag_index;  // tag index (only for catch_tag/catch_tag_ref)
       uint32_t label;      // branch target (depth into pc_stack)
+      uint32_t depth_change;   // operand slots to pop: try_depth - target.operand_depth
+      uint32_t payload_count;  // number of values to push (tag params + optional exnref)
    };
 
    union import_type {

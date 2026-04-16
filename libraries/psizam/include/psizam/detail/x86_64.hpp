@@ -143,7 +143,7 @@ namespace psizam::detail {
          // uint32_t vector_result -> (RBP + 16)
          emit_push(rbp);
          emit_mov(rsp, rbp);
-         emit_sub(16, rsp);
+         emit_sub(24, rsp);
 
          // switch stack
          emit(TEST, r8, r8);
@@ -171,6 +171,12 @@ namespace psizam::detail {
          emit_mov(rbx, *(rbp - 16));
          emit_mov(*(rdi + 16), ebx);
 
+         // Save R12 and set R12 = context (callee-saved, preserved by longjmp).
+         // R12 = context is needed for WASM exception handling: after longjmp,
+         // RDI (caller-saved) is lost, but R12 (callee-saved) survives.
+         emit_mov(r12, *(rbp - 24));
+         emit_mov(rdi, r12);
+
          if (_enable_backtrace) {
             emit_mov(rbp, *(rdi + 8));
          }
@@ -180,6 +186,7 @@ namespace psizam::detail {
             emit_mov(rdx, *(rdi + 8));
          }
 
+         emit_mov(*(rbp - 24), r12);
          emit_mov(*(rbp - 16), rbx);
 
          emit(LDMXCSR, *(rbp - 4));
@@ -1137,28 +1144,200 @@ namespace psizam::detail {
          set_branch_target();
          return result;
       }
-      void emit_throw(uint32_t /*tag_index*/) {
-         COUNT_INSTR();
-         auto icount = fixed_size_instr(16);
-         emit_error_handler(&on_unreachable);
+      void emit_throw(uint32_t tag_index) {
+         // Get tag's payload count
+         uint32_t type_idx = _mod.tags[tag_index].type_index;
+         uint32_t payload_count = static_cast<uint32_t>(_mod.types[type_idx].param_types.size());
+
+         // Allocate payload buffer on stack (aligned to 16)
+         uint32_t buf_size = payload_count * 8;
+         uint32_t buf_aligned = (buf_size + 15) & ~15u;
+         if (buf_aligned < 16) buf_aligned = 16;
+
+         emit_sub(buf_aligned, rsp);
+
+         // Copy payload values from operand stack into buffer.
+         // Operand stack: param[0] deepest, param[N-1] on top (above buffer).
+         for (uint32_t i = 0; i < payload_count; ++i) {
+            uint32_t src_offset = buf_aligned + (payload_count - 1 - i) * 8;
+            emit_mov(*(rsp + static_cast<int32_t>(src_offset)), rax);
+            emit_mov(rax, *(rsp + static_cast<int32_t>(i * 8)));
+         }
+
+         // __psizam_eh_throw(ctx, tag_index, payload_ptr, payload_count)
+         // rdi=ctx, esi=tag_index, rdx=payload_ptr, ecx=payload_count
+         emit_mov(r12, rdi);
+         emit_mov(tag_index, esi);
+         emit_mov(rsp, rdx);
+         emit_mov(payload_count, ecx);
+         emit_mov(&__psizam_eh_throw, rax);
+         emit(CALL, rax);
+         // does not return
       }
       void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
-         COUNT_INSTR();
-         auto icount = fixed_size_instr(16);
          emit_error_handler(&on_unreachable);
       }
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
          // delegate acts as end of try — structural no-op in JIT
       }
-      std::vector<void*> emit_try_table(uint8_t, uint32_t, const std::vector<catch_clause>&) {
-         // try_table is structurally like block — catch clauses ignored in JIT1
-         // (throw traps, so handlers are never reached)
-         return {};
+      std::vector<void*> emit_try_table(uint8_t /*result_type*/, uint32_t /*result_count*/,
+                                        const std::vector<catch_clause>& clauses) {
+         uint32_t catch_count = static_cast<uint32_t>(clauses.size());
+         if (catch_count == 0) return {};
+
+         // ── 1. Pack catch_data array on stack ──
+         uint32_t data_size = catch_count * 8;
+         uint32_t data_aligned = (data_size + 15) & ~15u;
+         emit_sub(data_aligned, rsp);
+         for (uint32_t i = 0; i < catch_count; ++i) {
+            uint64_t packed = (static_cast<uint64_t>(clauses[i].kind) << 32) | clauses[i].tag_index;
+            emit_mov(packed, rax);
+            emit_mov(rax, *(rsp + static_cast<int32_t>(i * 8)));
+         }
+
+         // ── 2. Call __psizam_eh_enter(ctx, catch_count, catch_data) ──
+         // Save catch_data ptr before pushing ctx/mem
+         emit_mov(rsp, rdx);           // rdx = catch_data (arg3)
+         emit_push(rdi);
+         emit_push(rsi);
+         emit_mov(catch_count, esi);   // esi = catch_count (arg2)
+         // rdi = ctx (arg1, already set)
+         emit_mov(&__psizam_eh_enter, rax);
+         emit(CALL, rax);
+         emit_pop(rsi);
+         emit_pop(rdi);
+         // rax = jmpbuf pointer
+         emit_mov(rax, rcx);           // stash jmpbuf in rcx
+
+         // Free catch_data
+         emit_add(data_aligned, rsp);
+
+         // ── 3. Call __psizam_setjmp(jmpbuf) ──
+         // IMPORTANT: Call directly without push/pop wrapper. The naked tail-jump
+         // __psizam_setjmp means no wrapper stack frame exists to corrupt.
+         // After longjmp, R12 = context (callee-saved), RDI/RSI are lost.
+         emit_mov(rcx, rdi);           // rdi = jmpbuf (arg1)
+         emit_mov(&__psizam_setjmp, rax);
+         emit(CALL, rax);
+         // eax = 0 (normal) or non-zero (longjmp)
+
+         // ── 4. Branch: normal vs dispatch ──
+         emit(TEST, eax, eax);
+         void* jz_to_body = emit_branchcc32(JZ);
+
+         // ══════════════════════════════════════════════
+         // DISPATCH PATH (reached after longjmp)
+         // ══════════════════════════════════════════════
+         // R12 = context (callee-saved, preserved by longjmp)
+         // RDI, RSI are destroyed. Restore from R12.
+         emit_mov(r12, rdi);
+
+         // Reload memory base: __psizam_get_memory(ctx)
+         emit_push(rdi);
+         emit_mov(&__psizam_get_memory, rax);
+         emit(CALL, rax);
+         emit_pop(rdi);
+         emit_mov(rax, rsi);           // rsi = memory base
+
+         // Get matched catch clause index: __psizam_eh_get_match(ctx)
+         emit_push(rdi);
+         emit_push(rsi);
+         emit_mov(&__psizam_eh_get_match, rax);
+         emit(CALL, rax);
+         emit_pop(rsi);
+         emit_pop(rdi);
+         // eax = matched catch index
+
+         // Switch on catch index
+         std::vector<void*> catch_labels(catch_count, nullptr);
+         for (uint32_t i = 0; i < catch_count; ++i) {
+            if (i < catch_count - 1) {
+               emit_cmp(static_cast<int32_t>(i), eax);
+               catch_labels[i] = emit_branchcc32(JE);
+            }
+            // Last clause: fall through
+         }
+
+         // Emit each catch handler's dispatch code
+         std::vector<void*> clause_branches(catch_count);
+         for (uint32_t i = 0; i < catch_count; ++i) {
+            if (catch_labels[i]) {
+               fix_branch(catch_labels[i], code);
+            }
+
+            // Adjust stack to target operand depth (8 bytes per operand on x86_64)
+            if (clauses[i].depth_change > 0) {
+               emit_add(clauses[i].depth_change * 8, rsp);
+            }
+
+            // Push payload values
+            uint32_t tag_payload = 0;
+            if (clauses[i].kind == catch_kind::catch_tag || clauses[i].kind == catch_kind::catch_tag_ref) {
+               uint32_t tidx = _mod.tags[clauses[i].tag_index].type_index;
+               tag_payload = static_cast<uint32_t>(_mod.types[tidx].param_types.size());
+            }
+
+            for (uint32_t j = 0; j < tag_payload; ++j) {
+               // __psizam_eh_get_payload(ctx, j)
+               emit_push(rdi);
+               emit_push(rsi);
+               emit_mov(j, esi);
+               emit_mov(&__psizam_eh_get_payload, rax);
+               emit(CALL, rax);
+               emit_pop(rsi);
+               emit_pop(rdi);
+               emit_push(rax);  // push payload onto operand stack
+            }
+
+            // For _ref kinds: push exnref
+            if (clauses[i].kind == catch_kind::catch_tag_ref || clauses[i].kind == catch_kind::catch_all_ref) {
+               emit_push(rdi);
+               emit_push(rsi);
+               emit_mov(&__psizam_eh_get_exnref, rax);
+               emit(CALL, rax);
+               emit_pop(rsi);
+               emit_pop(rdi);
+               emit_push(rax);  // push exnref onto operand stack
+            }
+
+            // Forward JMP to catch target (patched by parser via handle_branch_target)
+            emit_bytes(0xe9);
+            clause_branches[i] = emit_branch_target32();
+         }
+
+         // ══════════════════════════════════════════════
+         // NORMAL PATH (setjmp returned 0)
+         // ══════════════════════════════════════════════
+         fix_branch(jz_to_body, code);
+
+         return clause_branches;
       }
+
+      void emit_eh_leave() {
+         // __psizam_eh_leave(ctx)
+         emit_push(rdi);
+         emit_push(rsi);
+         emit_mov(&__psizam_eh_leave, rax);
+         emit(CALL, rax);
+         emit_pop(rsi);
+         emit_pop(rdi);
+      }
+
       void emit_throw_ref() {
-         COUNT_INSTR();
-         auto icount = fixed_size_instr(16);
+         // Pop exnref from operand stack
+         emit_pop(rax);
+         // Null check: exnref == UINT32_MAX means null
+         emit_cmp(static_cast<int32_t>(UINT32_MAX), eax);
+         void* not_null = emit_branchcc32(JNE);
+         // Null exnref → trap
          emit_error_handler(&on_unreachable);
+         fix_branch(not_null, code);
+         // __psizam_eh_throw_ref(ctx, exnref_idx)
+         emit_mov(eax, esi);         // esi = exnref index (arg2)
+         emit_mov(r12, rdi);         // rdi = context (arg1, from R12)
+         emit_mov(&__psizam_eh_throw_ref, rax);
+         emit(CALL, rax);
+         // does not return
       }
 
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {

@@ -99,6 +99,7 @@ namespace psizam::detail {
          auto& instr = append_instr(throw_ref_t{});
          instr.data = 0;
       }
+      void emit_eh_leave() {} // interpreter handles EH in interpret_visitor
 
       struct br_table_parser;
       friend struct br_table_parser;

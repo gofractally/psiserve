@@ -111,6 +111,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
       src/runtime_helpers.cpp
       src/call_on_stack.cpp
       src/llvm_runtime_helpers.cpp
+      src/eh_runtime.cpp
    )
    target_link_libraries(psizam-exec PUBLIC psizam)
 endif()

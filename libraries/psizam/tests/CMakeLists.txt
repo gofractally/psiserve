@@ -227,6 +227,9 @@ add_executable(psizam_compliance_tests main.cpp
    exception_handling_tests.cpp
 )
 target_link_libraries(psizam_compliance_tests psizam psizam-exec Catch2::Catch2)
+if(PSIZAM_ENABLE_LLVM)
+   target_link_libraries(psizam_compliance_tests psizam-llvm)
+endif()
 target_include_directories(psizam_compliance_tests PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include

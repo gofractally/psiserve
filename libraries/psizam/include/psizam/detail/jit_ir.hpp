@@ -162,6 +162,26 @@ namespace psizam::detail {
       // Atomic operations (0xFE prefix)
       // simd.sub field carries atomic_sub, simd.offset carries memarg offset, simd.addr carries addr vreg
       atomic_op,
+      // Exception handling
+      // eh_enter: call __psizam_eh_enter, returns jmpbuf ptr.
+      //   dest = jmpbuf vreg (i64/ptr), ri.imm = eh_data_index, ri.src1 = catch_count
+      eh_enter,
+      // eh_setjmp: call __psizam_setjmp on jmpbuf. Returns 0 (normal) or non-zero (longjmp).
+      //   dest = result vreg (i32), rr.src1 = jmpbuf vreg
+      eh_setjmp,
+      // eh_leave: call __psizam_eh_leave (normal try_table exit)
+      eh_leave,
+      // eh_throw: throw WASM exception. Payload via preceding arg ops.
+      //   ri.imm = tag_index. Does not return.
+      eh_throw,
+      // eh_throw_ref: re-throw via exnref. rr.src1 = exnref vreg. Does not return.
+      eh_throw_ref,
+      // eh_get_match: get matched catch index after longjmp. dest = i32 result.
+      eh_get_match,
+      // eh_get_payload: get payload value at index. dest = i64 result, ri.imm = index.
+      eh_get_payload,
+      // eh_get_exnref: get exnref index. dest = i64 result.
+      eh_get_exnref,
    };
 
    static constexpr uint32_t ir_vreg_none = UINT32_MAX;
@@ -354,6 +374,7 @@ namespace psizam::detail {
       uint8_t  num_successors;
       uint8_t  is_loop;
       uint8_t  is_if;
+      uint8_t  branch_to_entry; // When set, br/br_if targeting this block go to entry, not exit
       uint32_t loop_depth;
    };
    static_assert(std::is_trivially_copyable_v<ir_basic_block>);
@@ -371,6 +392,17 @@ namespace psizam::detail {
    };
    static_assert(std::is_trivially_copyable_v<ir_live_interval>);
 
+   // Exception handling catch clause metadata for IR try_table.
+   // Stored in ir_function::eh_data side table, indexed by eh_enter's ri.imm.
+   struct ir_eh_catch_info {
+      uint8_t  kind;        // catch_kind (0=catch_tag, 1=catch_tag_ref, 2=catch_all, 3=catch_all_ref)
+      uint32_t tag_index;   // tag to match (for catch_tag/catch_tag_ref)
+   };
+   struct ir_eh_data {
+      uint32_t catch_count;
+      ir_eh_catch_info catches[16]; // max 16 catch clauses per try_table
+   };
+
    // Control stack entry for IR construction. POD.
    struct ir_control_entry {
       uint32_t block_idx;
@@ -383,6 +415,7 @@ namespace psizam::detail {
       uint32_t merge_vreg;  // For if/else with result: vreg that both branches write to
       uint8_t  result_count;       // Number of results (0 or 1 for single-value, >1 for multi-value)
       uint8_t  param_count;        // Number of block parameters (multi-value blocks)
+      uint8_t  is_try_table;      // true for try_table blocks (emit eh_leave at end)
       uint8_t  result_types[16];   // Types of each result (multi-value)
       uint32_t merge_vregs[16];    // One merge vreg per result (multi-value)
       uint32_t param_vregs[16];    // Saved parameter vregs (for else branch re-push)
@@ -437,6 +470,11 @@ namespace psizam::detail {
       uint32_t        callee_saved_used = 0;  // bitmask of callee-saved regs assigned by regalloc
       bool            has_simd = false;       // true if function contains v128_op instructions
 
+      // Exception handling data (indexed by eh_enter's ri.imm)
+      ir_eh_data*     eh_data       = nullptr;
+      uint32_t        eh_data_count = 0;
+      uint32_t        eh_data_cap   = 0;
+
       // Initialize with bounded capacity from scratch allocator.
       // source_bytes = size of this function's WASM bytecode.
       void init(jit_scratch_allocator& alloc, std::size_t source_bytes) {
@@ -464,6 +502,11 @@ namespace psizam::detail {
          ctrl_stack_cap = static_cast<uint32_t>(source_bytes + 4);
          ctrl_stack = alloc.alloc<ir_control_entry>(ctrl_stack_cap);
          ctrl_stack_top = 0;
+
+         // EH data: bounded by number of try_table instructions (at most source_bytes)
+         eh_data_cap = static_cast<uint32_t>(source_bytes / 2 + 4);
+         eh_data = alloc.alloc<ir_eh_data>(eh_data_cap);
+         eh_data_count = 0;
 
          next_vreg = 0;
          intervals = nullptr;
@@ -496,6 +539,7 @@ namespace psizam::detail {
          b.num_successors = 0;
          b.is_loop = 0;
          b.is_if = 0;
+         b.branch_to_entry = 0;
          b.loop_depth = 0;
          return idx;
       }
@@ -563,6 +607,19 @@ namespace psizam::detail {
       ir_control_entry& ctrl_at(uint32_t depth) {
          PSIZAM_ASSERT(depth < ctrl_stack_top, wasm_parse_exception, "IR control stack depth out of range");
          return ctrl_stack[ctrl_stack_top - 1 - depth];
+      }
+
+      // Add catch clause metadata for a try_table, returns index into eh_data.
+      uint32_t add_eh_data(uint32_t catch_count, const catch_clause* clauses) {
+         PSIZAM_ASSERT(eh_data_count < eh_data_cap, wasm_parse_exception, "EH data overflow");
+         uint32_t idx = eh_data_count++;
+         auto& d = eh_data[idx];
+         d.catch_count = catch_count < 16 ? catch_count : 16;
+         for (uint32_t i = 0; i < d.catch_count; i++) {
+            d.catches[i].kind = clauses[i].kind;
+            d.catches[i].tag_index = clauses[i].tag_index;
+         }
+         return idx;
       }
    };
 

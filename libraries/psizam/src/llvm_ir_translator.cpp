@@ -157,6 +157,16 @@ namespace psizam::detail {
       llvm::Function* rt_call_depth_inc = nullptr;
       llvm::Function* rt_get_memory     = nullptr;
 
+      // Exception handling runtime helpers
+      llvm::Function* rt_eh_enter       = nullptr;
+      llvm::Function* rt_eh_leave       = nullptr;
+      llvm::Function* rt_eh_throw       = nullptr;
+      llvm::Function* rt_eh_throw_ref   = nullptr;
+      llvm::Function* rt_eh_get_match   = nullptr;
+      llvm::Function* rt_eh_get_payload = nullptr;
+      llvm::Function* rt_eh_get_exnref  = nullptr;
+      llvm::Function* rt_setjmp         = nullptr;
+
       // Backtrace intrinsic
       llvm::Function* frameaddress_intrinsic = nullptr;
 
@@ -317,6 +327,43 @@ namespace psizam::detail {
          // void* __psizam_get_memory(void* ctx) — returns current linear memory base
          rt_get_memory = decl("__psizam_get_memory",
             llvm::FunctionType::get(ptr_ty, {ptr_ty}, false));
+
+         // ── Exception Handling runtime helpers ──
+
+         // void* __psizam_eh_enter(void* ctx, uint32_t catch_count, const uint64_t* catch_data)
+         rt_eh_enter = decl("__psizam_eh_enter",
+            llvm::FunctionType::get(ptr_ty, {ptr_ty, i32_ty, ptr_ty}, false));
+
+         // void __psizam_eh_leave(void* ctx)
+         rt_eh_leave = decl("__psizam_eh_leave",
+            llvm::FunctionType::get(void_ty, {ptr_ty}, false));
+
+         // void __psizam_eh_throw(void* ctx, uint32_t tag_index, const uint64_t* payload, uint32_t count)
+         rt_eh_throw = decl("__psizam_eh_throw",
+            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, ptr_ty, i32_ty}, false));
+         rt_eh_throw->setDoesNotReturn();
+
+         // void __psizam_eh_throw_ref(void* ctx, uint32_t exnref_idx)
+         rt_eh_throw_ref = decl("__psizam_eh_throw_ref",
+            llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty}, false));
+         rt_eh_throw_ref->setDoesNotReturn();
+
+         // uint32_t __psizam_eh_get_match(void* ctx)
+         rt_eh_get_match = decl("__psizam_eh_get_match",
+            llvm::FunctionType::get(i32_ty, {ptr_ty}, false));
+
+         // uint64_t __psizam_eh_get_payload(void* ctx, uint32_t index)
+         rt_eh_get_payload = decl("__psizam_eh_get_payload",
+            llvm::FunctionType::get(i64_ty, {ptr_ty, i32_ty}, false));
+
+         // uint64_t __psizam_eh_get_exnref(void* ctx)
+         rt_eh_get_exnref = decl("__psizam_eh_get_exnref",
+            llvm::FunctionType::get(i64_ty, {ptr_ty}, false));
+
+         // int __psizam_setjmp(void* jmpbuf) — wrapper for setjmp
+         rt_setjmp = decl("__psizam_setjmp",
+            llvm::FunctionType::get(i32_ty, {ptr_ty}, false));
+         rt_setjmp->addFnAttr(llvm::Attribute::ReturnsTwice);
       }
 
       void declare_softfloat_helpers() {
@@ -1027,7 +1074,7 @@ namespace psizam::detail {
                   if (target < func.block_count) {
                      // For loops: branch to block_entries (loop header)
                      // For blocks: branch to block_exits (continuation)
-                     auto* target_bb = (func.blocks[target].is_loop && block_entries[target])
+                     auto* target_bb = ((func.blocks[target].is_loop || func.blocks[target].branch_to_entry) && block_entries[target])
                         ? block_entries[target]
                         : block_exits[target];
                      auto* cur_bb = builder.GetInsertBlock();
@@ -1044,7 +1091,7 @@ namespace psizam::detail {
                   if (!cond || target >= func.block_count) break;
                   llvm::Value* cmp = builder.CreateICmpNE(cond,
                      llvm::Constant::getNullValue(cond->getType()));
-                  auto* target_bb = (func.blocks[target].is_loop && block_entries[target])
+                  auto* target_bb = ((func.blocks[target].is_loop || func.blocks[target].branch_to_entry) && block_entries[target])
                      ? block_entries[target]
                      : block_exits[target];
                   auto* cont_bb = llvm::BasicBlock::Create(*ctx, "br_if_cont", fn);
@@ -1061,7 +1108,7 @@ namespace psizam::detail {
                   // Helper to resolve br target to correct LLVM block
                   auto resolve_br_target = [&](uint32_t target) -> llvm::BasicBlock* {
                      if (target >= func.block_count) return nullptr;
-                     return (func.blocks[target].is_loop && block_entries[target])
+                     return ((func.blocks[target].is_loop || func.blocks[target].branch_to_entry) && block_entries[target])
                         ? block_entries[target]
                         : block_exits[target];
                   };
@@ -4154,6 +4201,111 @@ namespace psizam::detail {
                         builder.getInt32(inst.simd.offset), val1, val2});
                      store_vreg(inst.dest, result);
                   }
+                  break;
+               }
+
+               // ──── Exception Handling ────
+
+               case ir_op::eh_enter: {
+                  // ri.imm = eh_data_index, ri.src1 = catch_count
+                  uint32_t eh_idx = static_cast<uint32_t>(inst.ri.imm);
+                  uint32_t catch_count = inst.ri.src1;
+                  const auto& ehd = func.eh_data[eh_idx];
+
+                  // Build catch_data array on stack: each entry = (kind << 32) | tag_index
+                  auto* catch_data = builder.CreateAlloca(i64_ty,
+                     builder.getInt32(catch_count));
+                  for (uint32_t c = 0; c < catch_count; c++) {
+                     uint64_t packed = (static_cast<uint64_t>(ehd.catches[c].kind) << 32)
+                                     | ehd.catches[c].tag_index;
+                     auto* slot = builder.CreateGEP(i64_ty, catch_data, builder.getInt32(c));
+                     builder.CreateStore(builder.getInt64(packed), slot);
+                  }
+
+                  // Call __psizam_eh_enter(ctx, catch_count, catch_data) → jmpbuf ptr
+                  auto* jmpbuf = builder.CreateCall(rt_eh_enter,
+                     {ctx_ptr, builder.getInt32(catch_count), catch_data});
+                  // Convert ptr to i64 for vreg storage
+                  store_vreg(inst.dest, builder.CreatePtrToInt(jmpbuf, i64_ty));
+                  break;
+               }
+
+               case ir_op::eh_setjmp: {
+                  // rr.src1 = jmpbuf vreg (stored as i64, actually a pointer).
+                  // Call __psizam_setjmp(jmpbuf). Returns 0 on normal, non-zero after longjmp.
+                  auto* jmpbuf = load_vreg(inst.rr.src1);
+                  auto* jmpbuf_ptr = builder.CreateIntToPtr(jmpbuf, ptr_ty);
+                  auto* result = builder.CreateCall(rt_setjmp, {jmpbuf_ptr});
+                  store_vreg(inst.dest, result);
+                  break;
+               }
+
+               case ir_op::eh_leave: {
+                  builder.CreateCall(rt_eh_leave, {ctx_ptr});
+                  break;
+               }
+
+               case ir_op::eh_throw: {
+                  // Payload values accumulated in call_args via preceding arg ops.
+                  uint32_t tag_index = static_cast<uint32_t>(inst.ri.imm);
+                  uint32_t payload_count = static_cast<uint32_t>(call_args.size());
+
+                  llvm::Value* payload_ptr;
+                  if (payload_count > 0) {
+                     auto* payload = builder.CreateAlloca(i64_ty,
+                        builder.getInt32(payload_count));
+                     for (uint32_t p = 0; p < payload_count; p++) {
+                        llvm::Value* v = call_args[p];
+                        // Widen to i64
+                        if (v->getType() == i32_ty)
+                           v = builder.CreateZExt(v, i64_ty);
+                        else if (v->getType() == f32_ty)
+                           v = builder.CreateZExt(builder.CreateBitCast(v, i32_ty), i64_ty);
+                        else if (v->getType() == f64_ty)
+                           v = builder.CreateBitCast(v, i64_ty);
+                        auto* slot = builder.CreateGEP(i64_ty, payload, builder.getInt32(p));
+                        builder.CreateStore(v, slot);
+                     }
+                     payload_ptr = payload;
+                  } else {
+                     payload_ptr = llvm::Constant::getNullValue(ptr_ty);
+                  }
+                  call_args.clear();
+
+                  builder.CreateCall(rt_eh_throw,
+                     {ctx_ptr, builder.getInt32(tag_index),
+                      payload_ptr, builder.getInt32(payload_count)});
+                  builder.CreateUnreachable();
+                  break;
+               }
+
+               case ir_op::eh_throw_ref: {
+                  auto* exnref = load_vreg(inst.rr.src1);
+                  if (!exnref) break;
+                  // Truncate exnref to i32
+                  auto* idx = builder.CreateTrunc(exnref, i32_ty);
+                  builder.CreateCall(rt_eh_throw_ref, {ctx_ptr, idx});
+                  builder.CreateUnreachable();
+                  break;
+               }
+
+               case ir_op::eh_get_match: {
+                  auto* result = builder.CreateCall(rt_eh_get_match, {ctx_ptr});
+                  store_vreg(inst.dest, result);
+                  break;
+               }
+
+               case ir_op::eh_get_payload: {
+                  uint32_t idx = static_cast<uint32_t>(inst.ri.imm);
+                  auto* result = builder.CreateCall(rt_eh_get_payload,
+                     {ctx_ptr, builder.getInt32(idx)});
+                  store_vreg(inst.dest, result);
+                  break;
+               }
+
+               case ir_op::eh_get_exnref: {
+                  auto* result = builder.CreateCall(rt_eh_get_exnref, {ctx_ptr});
+                  store_vreg(inst.dest, result);
                   break;
                }
 

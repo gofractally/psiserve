@@ -195,6 +195,7 @@ namespace psizam::detail {
    PARSER_OPTION(enable_bulk_memory, true, bool)
    PARSER_OPTION(enable_sign_ext, true, bool)
    PARSER_OPTION(enable_nontrapping_fptoint, true, bool)
+   PARSER_OPTION(enable_exception_handling, true, bool)
    PARSER_OPTION(compile_threads, static_cast<std::uint32_t>(0), std::uint32_t)
 
 #undef MAX_ELEMENTS
@@ -966,6 +967,7 @@ namespace psizam::detail {
          uint32_t expected_result;   // single result for blocks (backward compat)
          uint32_t label_result;      // single label result for blocks
          bool is_if;
+         bool is_try_table = false;  // true for try_table blocks (emit_eh_leave at end)
          std::variant<label_t, std::vector<branch_t>> relocations;
          // For multi-value: non-empty when the block has >1 results
          std::vector<uint8_t> expected_results;
@@ -1175,6 +1177,11 @@ namespace psizam::detail {
                   PSIZAM_ASSERT(pc_stack.back().expected_result == types::pseudo,
                                 wasm_parse_exception, "type mismatch: if without else cannot have a return value");
                }
+            }
+            // For try_table blocks, emit eh_leave before the end label
+            // so the EH frame is popped on normal exit (before catch branches resolve)
+            if (pc_stack.back().is_try_table) {
+               code_writer.emit_eh_leave();
             }
             auto end_pos = code_writer.emit_end();
             if(auto* relocations = std::get_if<std::vector<branch_t>>(&pc_stack.back().relocations)) {
@@ -1454,6 +1461,7 @@ namespace psizam::detail {
                } break;
                case opcodes::throw_: {
                   check_in_bounds();
+                  PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
                   uint32_t tag_index = parse_varuint32(code);
                   PSIZAM_ASSERT(tag_index < _mod->tags.size(), wasm_parse_exception, "invalid tag index");
                   // Pop the tag's parameter types from the stack
@@ -1472,6 +1480,7 @@ namespace psizam::detail {
                } break;
                case opcodes::throw_ref_: {
                   check_in_bounds();
+                  PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
                   op_stack.pop(types::exnref);
                   code_writer.emit_throw_ref();
                   op_stack.start_unreachable();
@@ -1609,6 +1618,7 @@ namespace psizam::detail {
                } break;
                case opcodes::try_table_: {
                   check_in_bounds();
+                  PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
                   // Parse block type (same as block/if/try)
                   uint8_t first_byte = *code;
                   uint8_t single_type = types::pseudo;
@@ -1657,22 +1667,49 @@ namespace psizam::detail {
                   for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
                      op_stack.pop(bp[i]);
 
-                  auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses);
-
-                  // Push try_table onto pc_stack BEFORE resolving catch clause labels,
-                  // because catch clause label depths are relative to inside the try_table
-                  // (depth 0 = try_table, depth 1 = enclosing block, etc.)
+                  // Push try_table onto pc_stack BEFORE emit_try_table so we can
+                  // compute depth_change for each catch clause (labels are relative
+                  // to inside the try_table: depth 0 = try_table itself)
+                  uint32_t try_depth = op_stack.depth();
                   pc_element_t elem{};
-                  elem.operand_depth = op_stack.depth();
+                  elem.operand_depth = try_depth;
                   elem.expected_result = single_type;
                   elem.label_result = single_type;
                   elem.is_if = false;
+                  elem.is_try_table = true;
                   elem.relocations = std::vector<branch_t>{};
                   if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
-                  elem.block_params = std::move(bp);
+                  elem.block_params = bp; // copy, not move (need bp for push_scope below)
                   pc_stack.push_back(std::move(elem));
 
-                  // Now register catch clause PCs for branch target relocation
+                  // Compute depth_change and payload_count for each catch clause
+                  for (uint32_t i = 0; i < num_catches; ++i) {
+                     // Target block for this catch clause
+                     auto& target = pc_stack[pc_stack.size() - 1 - clauses[i].label];
+                     clauses[i].depth_change = try_depth - target.operand_depth;
+
+                     // Payload count depends on catch kind
+                     switch (clauses[i].kind) {
+                        case catch_kind::catch_tag:
+                           clauses[i].payload_count = static_cast<uint32_t>(
+                              _mod->types[_mod->tags[clauses[i].tag_index].type_index].param_types.size());
+                           break;
+                        case catch_kind::catch_tag_ref:
+                           clauses[i].payload_count = static_cast<uint32_t>(
+                              _mod->types[_mod->tags[clauses[i].tag_index].type_index].param_types.size()) + 1;
+                           break;
+                        case catch_kind::catch_all_:
+                           clauses[i].payload_count = 0;
+                           break;
+                        case catch_kind::catch_all_ref:
+                           clauses[i].payload_count = 1; // just exnref
+                           break;
+                     }
+                  }
+
+                  auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses);
+
+                  // Register catch clause PCs for branch target relocation
                   for (uint32_t i = 0; i < num_catches; ++i) {
                      handle_branch_target(clauses[i].label, clause_pcs[i]);
                   }

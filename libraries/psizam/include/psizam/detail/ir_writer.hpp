@@ -2341,12 +2341,9 @@ namespace psizam::detail {
 
       // ──── Exception handling ────
       void emit_try(uint8_t result_type = types::pseudo, uint32_t result_count = 0) {
-         // Treat as block
          emit_block(result_type, result_count);
       }
       branch_t emit_catch(uint32_t /*tag_index*/) {
-         // During normal flow, emit a jump to the end (like else)
-         // Then start a new basic block for the catch handler
          ir_inst inst{};
          inst.opcode = ir_op::br;
          inst.type = types::pseudo;
@@ -2362,11 +2359,33 @@ namespace psizam::detail {
       branch_t emit_catch_all() {
          return emit_catch(UINT32_MAX);
       }
-      void emit_throw(uint32_t /*tag_index*/) {
-         // Emit unreachable (trap)
+      void emit_throw(uint32_t tag_index) {
+         if (_unreachable) return;
+         // Pop payload values from vstack and emit as arg ops
+         const func_type& tag_ft = _mod.types[_mod.tags[tag_index].type_index];
+         uint32_t nparams = static_cast<uint32_t>(tag_ft.param_types.size());
+         uint32_t* param_vregs = _scratch.alloc<uint32_t>(nparams);
+         for (uint32_t i = 0; i < nparams; ++i) {
+            uint32_t pi = nparams - 1 - i;
+            param_vregs[pi] = _func->vpop();
+         }
+         for (uint32_t i = 0; i < nparams; ++i) {
+            ir_inst arg{};
+            arg.opcode = ir_op::arg;
+            arg.type = types::pseudo;
+            arg.flags = IR_NONE;
+            arg.dest = ir_vreg_none;
+            arg.rr.src1 = param_vregs[i];
+            arg.rr.src2 = ir_vreg_none;
+            _func->emit(arg);
+         }
          ir_inst inst{};
-         inst.opcode = ir_op::unreachable;
+         inst.opcode = ir_op::eh_throw;
+         inst.type = types::pseudo;
          inst.flags = IR_SIDE_EFFECT;
+         inst.dest = ir_vreg_none;
+         inst.ri.imm = static_cast<int32_t>(tag_index);
+         inst.ri.src1 = ir_vreg_none;
          _func->emit(inst);
       }
       void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
@@ -2376,21 +2395,275 @@ namespace psizam::detail {
          _func->emit(inst);
       }
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
-         // Structural no-op — the parser will call exit_scope() after this
+         // Structural no-op
       }
       std::vector<branch_t> emit_try_table(uint8_t result_type, uint32_t result_count, const std::vector<catch_clause>& clauses) {
-         // For JIT2, try_table is structurally like block. Exception dispatch will
-         // be handled via C++ exception propagation (throw calls a C function that
-         // throws a C++ exception, caught at the WASM entry boundary).
-         // TODO: Wire up proper try_table codegen for JIT2
-         emit_block(result_type, result_count);
-         return {};
+         if (_unreachable) {
+            emit_block(result_type, result_count);
+            return std::vector<branch_t>(clauses.size(), 0);
+         }
+
+         uint32_t num_catches = static_cast<uint32_t>(clauses.size());
+
+         // ── 1. Store catch clause data in EH side table ──
+         uint32_t eh_idx = _func->add_eh_data(num_catches, clauses.data());
+
+         // ── 2. Allocate the try body control entry (need merge vregs for dispatch) ──
+         ir_control_entry try_entry{};
+         try_entry.block_idx = _func->new_block(); // try body block
+         try_entry.stack_depth = _func->vstack_depth();
+         try_entry.result_type = result_type;
+         try_entry.is_loop = 0;
+         try_entry.is_function = 0;
+         try_entry.is_try_table = 1;
+         try_entry.entered_unreachable = 0;
+         try_entry.result_count = static_cast<uint8_t>(result_count);
+         std::memset(try_entry.result_types, 0, sizeof(try_entry.result_types));
+         std::memset(try_entry.merge_vregs, 0xFF, sizeof(try_entry.merge_vregs));
+         if (result_count > 1) {
+            for (uint32_t i = 0; i < result_count && i < 16; ++i) {
+               try_entry.merge_vregs[i] = _func->alloc_vreg(types::i64);
+               try_entry.result_types[i] = types::i64;
+            }
+            try_entry.merge_vreg = try_entry.merge_vregs[0];
+         } else if (result_type != types::pseudo) {
+            try_entry.merge_vreg = _func->alloc_vreg(result_type);
+            try_entry.merge_vregs[0] = try_entry.merge_vreg;
+            try_entry.result_types[0] = result_type;
+         } else {
+            try_entry.merge_vreg = ir_vreg_none;
+         }
+
+         // ── 3. Emit eh_enter: pushes try frame, returns jmpbuf pointer ──
+         uint32_t jmpbuf_vreg = _func->alloc_vreg(types::i64);
+         {
+            ir_inst inst{};
+            inst.opcode = ir_op::eh_enter;
+            inst.type = types::i64;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = jmpbuf_vreg;
+            inst.ri.imm = static_cast<int32_t>(eh_idx);
+            inst.ri.src1 = num_catches;
+            _func->emit(inst);
+         }
+
+         // ── 4. Emit eh_setjmp: returns 0 (normal) or non-zero (longjmp) ──
+         uint32_t sjresult = _func->alloc_vreg(types::i32);
+         {
+            ir_inst inst{};
+            inst.opcode = ir_op::eh_setjmp;
+            inst.type = types::i32;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = sjresult;
+            inst.rr.src1 = jmpbuf_vreg;
+            inst.rr.src2 = ir_vreg_none;
+            _func->emit(inst);
+         }
+
+         // ── 5. Invert setjmp result: is_normal = (sjresult == 0) ──
+         // Branch to try body on normal flow; fall through to dispatch on exception.
+         uint32_t is_normal = _func->alloc_vreg(types::i32);
+         {
+            ir_inst inst{};
+            inst.opcode = ir_op::i32_eqz;
+            inst.type = types::i32;
+            inst.flags = IR_NONE;
+            inst.dest = is_normal;
+            inst.rr.src1 = sjresult;
+            inst.rr.src2 = ir_vreg_none;
+            _func->emit(inst);
+         }
+
+         // Create a "try body gate" block that only serves as the entry point
+         // for normal flow. Separate from try_entry.block_idx so that WASM-level
+         // br to the try_table still targets the exit (non-loop semantics).
+         uint32_t try_body_gate = _func->new_block();
+         _func->blocks[try_body_gate].branch_to_entry = 1;
+
+         {
+            ir_inst inst{};
+            inst.opcode = ir_op::br_if;
+            inst.type = types::pseudo;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = ir_vreg_none;
+            inst.br.target = try_body_gate;
+            inst.br.src1 = is_normal;
+            _func->emit(inst);
+         }
+
+         // ── 6. Exception dispatch (fallthrough from br_if when sjresult != 0) ──
+         uint32_t match_vreg = _func->alloc_vreg(types::i32);
+         {
+            ir_inst inst{};
+            inst.opcode = ir_op::eh_get_match;
+            inst.type = types::i32;
+            inst.flags = IR_SIDE_EFFECT;
+            inst.dest = match_vreg;
+            _func->emit(inst);
+         }
+
+         // For multi-clause dispatch: compare match_vreg against each clause
+         // index and branch to the right handler. Last clause is the fallthrough.
+         std::vector<branch_t> result;
+
+         // Create handler blocks for each clause (except the last, which is fallthrough)
+         std::vector<uint32_t> handler_blocks;
+         for (uint32_t ci = 0; ci < num_catches; ++ci) {
+            handler_blocks.push_back(_func->new_block());
+            _func->blocks[handler_blocks.back()].branch_to_entry = 1;
+         }
+
+         // Emit dispatch comparisons for multi-clause
+         if (num_catches > 1) {
+            for (uint32_t ci = 0; ci < num_catches - 1; ++ci) {
+               // Compare match_vreg == ci
+               uint32_t cmp_result = _func->alloc_vreg(types::i32);
+               uint32_t const_vreg = _func->alloc_vreg(types::i32);
+               {
+                  ir_inst cinst{};
+                  cinst.opcode = ir_op::const_i32;
+                  cinst.type = types::i32;
+                  cinst.flags = IR_NONE;
+                  cinst.dest = const_vreg;
+                  cinst.imm64 = ci;
+                  _func->emit(cinst);
+               }
+               {
+                  ir_inst cinst{};
+                  cinst.opcode = ir_op::i32_eq;
+                  cinst.type = types::i32;
+                  cinst.flags = IR_NONE;
+                  cinst.dest = cmp_result;
+                  cinst.rr.src1 = match_vreg;
+                  cinst.rr.src2 = const_vreg;
+                  _func->emit(cinst);
+               }
+               // Branch to handler block if match
+               {
+                  ir_inst binst{};
+                  binst.opcode = ir_op::br_if;
+                  binst.type = types::pseudo;
+                  binst.flags = IR_SIDE_EFFECT;
+                  binst.dest = ir_vreg_none;
+                  binst.br.target = handler_blocks[ci];
+                  binst.br.src1 = cmp_result;
+                  _func->emit(binst);
+               }
+            }
+            // Fall through to last handler (default)
+         }
+
+         // Emit each handler block
+         for (uint32_t ci = 0; ci < num_catches; ++ci) {
+            auto& clause = clauses[ci];
+            bool has_exnref = (clause.kind == 1 || clause.kind == 3);
+            uint32_t tag_payload = has_exnref ? (clause.payload_count > 0 ? clause.payload_count - 1 : 0) : clause.payload_count;
+
+            // For non-last single-clause or last clause: inline. Others: start handler block.
+            if (num_catches > 1 && ci < num_catches - 1) {
+               // Non-last clause: br_if already targets this block
+               // The previous clause's br_if or the default fallthrough will reach here
+            }
+            // For multi-clause non-last handlers, start the block
+            if (num_catches > 1 && ci < num_catches - 1) {
+               _func->start_block(handler_blocks[ci]);
+            }
+            // For single-clause or last clause: the code is inline (fallthrough)
+
+            // Read payload values from staging area into temp vregs
+            std::vector<uint32_t> payload_vregs;
+            for (uint32_t pi = 0; pi < tag_payload; ++pi) {
+               uint32_t pv = _func->alloc_vreg(types::i64);
+               ir_inst inst{};
+               inst.opcode = ir_op::eh_get_payload;
+               inst.type = types::i64;
+               inst.flags = IR_SIDE_EFFECT;
+               inst.dest = pv;
+               inst.ri.imm = static_cast<int32_t>(pi);
+               inst.ri.src1 = ir_vreg_none;
+               _func->emit(inst);
+               payload_vregs.push_back(pv);
+            }
+            if (has_exnref) {
+               uint32_t ev = _func->alloc_vreg(types::i64);
+               ir_inst inst{};
+               inst.opcode = ir_op::eh_get_exnref;
+               inst.type = types::i64;
+               inst.flags = IR_SIDE_EFFECT;
+               inst.dest = ev;
+               _func->emit(inst);
+               payload_vregs.push_back(ev);
+            }
+
+            // Emit mov instructions to copy payload to target block's merge vregs
+            ir_control_entry* target = nullptr;
+            if (clause.label == 0) {
+               target = &try_entry;
+            } else if (clause.label <= _func->ctrl_stack_top) {
+               target = &_func->ctrl_stack[_func->ctrl_stack_top - clause.label];
+            }
+            if (target && !target->is_loop) {
+               uint32_t n = std::min<uint32_t>(
+                  static_cast<uint32_t>(payload_vregs.size()),
+                  target->result_count > 1 ? target->result_count : (target->merge_vreg != ir_vreg_none ? 1u : 0u));
+               for (uint32_t vi = 0; vi < n; ++vi) {
+                  uint32_t merge = (target->result_count > 1)
+                     ? target->merge_vregs[vi] : target->merge_vreg;
+                  if (merge != ir_vreg_none && payload_vregs[vi] != merge) {
+                     ir_inst mov{};
+                     mov.opcode = ir_op::mov;
+                     mov.type = types::i64;
+                     mov.flags = IR_NONE;
+                     mov.dest = merge;
+                     mov.rr.src1 = payload_vregs[vi];
+                     mov.rr.src2 = ir_vreg_none;
+                     _func->emit(mov);
+                  }
+               }
+            }
+
+            // Emit branch to catch target (unresolved — parser calls fix_branch)
+            ir_inst br{};
+            br.opcode = ir_op::br;
+            br.type = types::pseudo;
+            br.flags = IR_SIDE_EFFECT;
+            br.dest = ir_vreg_none;
+            br.br.target = UINT32_MAX;
+            br.br.src1 = ir_vreg_none;
+            result.push_back(_func->current_inst_index());
+            _func->emit(br);
+         }
+
+         // ── 7. Start try body gate block (only reachable via br_if on normal flow) ──
+         _func->start_block(try_body_gate);
+
+         // ── 8. Start try body block (falls through from gate) ──
+         _func->start_block(try_entry.block_idx);
+
+         // ── 9. Push control entry ──
+         _func->ctrl_push(try_entry);
+
+         return result;
       }
       void emit_throw_ref() {
-         // Emit unreachable (trap) — same as throw for now in JIT2
+         if (_unreachable) return;
+         uint32_t exnref = _func->vpop();
          ir_inst inst{};
-         inst.opcode = ir_op::unreachable;
+         inst.opcode = ir_op::eh_throw_ref;
+         inst.type = types::pseudo;
          inst.flags = IR_SIDE_EFFECT;
+         inst.dest = ir_vreg_none;
+         inst.rr.src1 = exnref;
+         inst.rr.src2 = ir_vreg_none;
+         _func->emit(inst);
+      }
+      void emit_eh_leave() {
+         if (_unreachable) return;
+         ir_inst inst{};
+         inst.opcode = ir_op::eh_leave;
+         inst.type = types::pseudo;
+         inst.flags = IR_SIDE_EFFECT;
+         inst.dest = ir_vreg_none;
          _func->emit(inst);
       }
 

@@ -5,8 +5,24 @@
 using namespace psizam;
 using namespace psizam::detail;
 
+// EH tests: interpreter + jit + llvm (jit2 EH codegen not yet implemented)
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+  #if defined(__x86_64__) || defined(__aarch64__)
+    #define EH_TEST_CASE(name, tags) \
+      TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit_llvm)
+  #else
+    #define EH_TEST_CASE(name, tags) \
+      TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit_llvm)
+  #endif
+#elif defined(__x86_64__) || defined(__aarch64__)
+  #define EH_TEST_CASE(name, tags) \
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit)
+#else
+  #define EH_TEST_CASE(name, tags) \
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter)
+#endif
+
 // Helper: build a minimal WASM module with EH
-// All tests use the interpreter backend since JIT backends trap on throw.
 
 /*
  * Module: simple throw + catch
@@ -27,7 +43,7 @@ using namespace psizam::detail;
  *
  * Expected: catch_simple() returns 42
  */
-TEST_CASE("EH: simple throw and catch via try_table", "[eh][interpreter]") {
+EH_TEST_CASE("EH: simple throw and catch via try_table", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,   // magic
       0x01, 0x00, 0x00, 0x00,   // version
@@ -67,7 +83,7 @@ TEST_CASE("EH: simple throw and catch via try_table", "[eh][interpreter]") {
       0x0b,                      // end (func)
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
    auto result = bkend.call_with_return("env", "catch_simple");
    CHECK(result->to_ui32() == 42u);
@@ -93,7 +109,7 @@ TEST_CASE("EH: simple throw and catch via try_table", "[eh][interpreter]") {
  *
  * Expected: catch_all_test() returns 1
  */
-TEST_CASE("EH: catch_all catches any exception", "[eh][interpreter]") {
+EH_TEST_CASE("EH: catch_all catches any exception", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,
       0x01, 0x00, 0x00, 0x00,
@@ -132,7 +148,7 @@ TEST_CASE("EH: catch_all catches any exception", "[eh][interpreter]") {
       0x0b,                      // end (func)
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
    auto result = bkend.call_with_return("env", "catch_all_test");
    CHECK(result->to_ui32() == 1u);
@@ -152,7 +168,7 @@ TEST_CASE("EH: catch_all catches any exception", "[eh][interpreter]") {
  *
  * Expected: unhandled() throws a wasm_interpreter_exception
  */
-TEST_CASE("EH: unhandled exception traps", "[eh][interpreter]") {
+EH_TEST_CASE("EH: unhandled exception traps", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,
       0x01, 0x00, 0x00, 0x00,
@@ -189,9 +205,9 @@ TEST_CASE("EH: unhandled exception traps", "[eh][interpreter]") {
       0x0b,                      // end
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
-   CHECK_THROWS_AS(bkend.call("env", "unhandled"), wasm_interpreter_exception);
+   CHECK_THROWS_AS(bkend.call("env", "unhandled"), psizam::exception);
 }
 
 /*
@@ -217,7 +233,7 @@ TEST_CASE("EH: unhandled exception traps", "[eh][interpreter]") {
  *
  * Expected: catch_ref_test() returns 77
  */
-TEST_CASE("EH: catch_tag_ref catches with payload and exnref", "[eh][interpreter]") {
+EH_TEST_CASE("EH: catch_tag_ref catches with payload and exnref", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,
       0x01, 0x00, 0x00, 0x00,
@@ -256,7 +272,7 @@ TEST_CASE("EH: catch_tag_ref catches with payload and exnref", "[eh][interpreter
       0x0b,                      // end (func)
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
    auto result = bkend.call_with_return("env", "catch_ref_test");
    CHECK(result->to_ui32() == 77u);
@@ -284,7 +300,7 @@ TEST_CASE("EH: catch_tag_ref catches with payload and exnref", "[eh][interpreter
  *
  * Expected: catch_all_ref_test() returns 1
  */
-TEST_CASE("EH: catch_all_ref catches with exnref", "[eh][interpreter]") {
+EH_TEST_CASE("EH: catch_all_ref catches with exnref", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,
       0x01, 0x00, 0x00, 0x00,
@@ -323,7 +339,7 @@ TEST_CASE("EH: catch_all_ref catches with exnref", "[eh][interpreter]") {
       0x0b,                      // end (func)
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
    auto result = bkend.call_with_return("env", "catch_all_ref_test");
    CHECK(result->to_ui32() == 1u);
@@ -356,7 +372,7 @@ TEST_CASE("EH: catch_all_ref catches with exnref", "[eh][interpreter]") {
  *
  * Expected: throw_ref_test() returns 99
  */
-TEST_CASE("EH: throw_ref re-throws caught exception", "[eh][interpreter]") {
+EH_TEST_CASE("EH: throw_ref re-throws caught exception", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,
       0x01, 0x00, 0x00, 0x00,
@@ -402,7 +418,7 @@ TEST_CASE("EH: throw_ref re-throws caught exception", "[eh][interpreter]") {
       0x0b,                      // end (func)
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
    auto result = bkend.call_with_return("env", "throw_ref_test");
    CHECK(result->to_ui32() == 99u);
@@ -440,7 +456,7 @@ TEST_CASE("EH: throw_ref re-throws caught exception", "[eh][interpreter]") {
  *
  * Expected: multi_catch() returns 100
  */
-TEST_CASE("EH: multiple catch clauses select correct handler", "[eh][interpreter]") {
+EH_TEST_CASE("EH: multiple catch clauses select correct handler", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,
       0x01, 0x00, 0x00, 0x00,
@@ -494,7 +510,7 @@ TEST_CASE("EH: multiple catch clauses select correct handler", "[eh][interpreter
       0x0b,                      // end (func)
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
    auto result = bkend.call_with_return("env", "multi_catch");
    CHECK(result->to_ui32() == 100u);
@@ -526,7 +542,7 @@ TEST_CASE("EH: multiple catch clauses select correct handler", "[eh][interpreter
  *
  * Expected: nested() returns 42
  */
-TEST_CASE("EH: nested try_table propagates to outer handler", "[eh][interpreter]") {
+EH_TEST_CASE("EH: nested try_table propagates to outer handler", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,
       0x01, 0x00, 0x00, 0x00,
@@ -602,7 +618,7 @@ TEST_CASE("EH: nested try_table propagates to outer handler", "[eh][interpreter]
       0x0b,                      // end (func)
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
    auto result = bkend.call_with_return("env", "nested");
    CHECK(result->to_ui32() == 42u);
@@ -626,7 +642,7 @@ TEST_CASE("EH: nested try_table propagates to outer handler", "[eh][interpreter]
  *
  * Expected: no_throw() returns 42
  */
-TEST_CASE("EH: try_table normal flow without exception", "[eh][interpreter]") {
+EH_TEST_CASE("EH: try_table normal flow without exception", "[eh]") {
    std::vector<uint8_t> code = {
       0x00, 0x61, 0x73, 0x6d,
       0x01, 0x00, 0x00, 0x00,
@@ -663,7 +679,7 @@ TEST_CASE("EH: try_table normal flow without exception", "[eh][interpreter]") {
       0x0b,                      // end (func)
    };
 
-   using backend_t = backend<std::nullptr_t, interpreter>;
+   using backend_t = backend<std::nullptr_t, TestType>;
    backend_t bkend(code, &wa);
    auto result = bkend.call_with_return("env", "no_throw");
    CHECK(result->to_ui32() == 42u);

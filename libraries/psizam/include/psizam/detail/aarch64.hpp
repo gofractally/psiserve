@@ -1336,20 +1336,219 @@ namespace psizam::detail {
          void* result = emit_br(0, types::pseudo);
          return result;
       }
-      void emit_throw(uint32_t /*tag_index*/) {
-         // Trap: call unreachable handler
-         emit_mov_imm64(X16, reinterpret_cast<uint64_t>(&on_unreachable));
-         emit32(0xD61F0200); // BR X16
+      void emit_throw(uint32_t tag_index) {
+         invalidate_recent_ops();
+         // Get tag's payload count from the module
+         uint32_t type_idx = _mod.tags[tag_index].type_index;
+         uint32_t payload_count = static_cast<uint32_t>(_mod.types[type_idx].param_types.size());
+
+         // Allocate payload buffer on stack (aligned to 16 bytes)
+         uint32_t buf_size = payload_count * 8;
+         uint32_t buf_aligned = (buf_size + 15) & ~15u;
+         if (buf_aligned < 16) buf_aligned = 16; // minimum 16 for alignment
+
+         // Pop payload values from operand stack into buffer
+         // Values are on the operand stack in order: param[0] deepest, param[N-1] on top
+         // Pop from top (reverse order), store into buffer in forward order
+         emit_add_imm_sp(-(int32_t)buf_aligned); // allocate buffer
+         for (uint32_t i = 0; i < payload_count; ++i) {
+            // Pop from operand stack (above the buffer): load from [SP + buf_aligned + (payload_count-1-i)*16]
+            uint32_t src_offset = buf_aligned + (payload_count - 1 - i) * 16;
+            emit_add_signed_imm(X8, SP, src_offset);
+            emit32(0xF9400108); // LDR X8, [X8]
+            // Store into buffer at [SP + i*8]
+            if (i * 8 < 32768) {
+               uint32_t offset12 = (i * 8) / 8;
+               emit32(0xF90003E8 | (offset12 << 10)); // STR X8, [SP, #i*8]
+            } else {
+               emit_add_signed_imm(X9, SP, i * 8);
+               emit32(0xF9000128); // STR X8, [X9]
+            }
+         }
+
+         // Set up args: __psizam_eh_throw(ctx, tag_index, payload_ptr, payload_count)
+         emit32(0xAA1303E0); // MOV X0, X19 (context)
+         emit_mov_imm32(X1, tag_index);
+         // X2 = payload buffer pointer = SP
+         emit32(0x910003E2); // MOV X2, SP
+         emit_mov_imm32(X3, payload_count);
+         emit_call_c_function(&__psizam_eh_throw);
+         // __psizam_eh_throw does not return (longjmp or trap)
       }
       void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
          emit_mov_imm64(X16, reinterpret_cast<uint64_t>(&on_unreachable));
          emit32(0xD61F0200); // BR X16
       }
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {}
-      std::vector<void*> emit_try_table(uint8_t, uint32_t, const std::vector<catch_clause>&) { return {}; }
+
+      std::vector<void*> emit_try_table(uint8_t /*result_type*/, uint32_t /*result_count*/,
+                                        const std::vector<catch_clause>& clauses) {
+         invalidate_recent_ops();
+         uint32_t catch_count = static_cast<uint32_t>(clauses.size());
+         if (catch_count == 0) return {};
+
+         // ── 1. Pack catch_data array on stack ──
+         // Each entry: (kind << 32) | tag_index as uint64_t
+         uint32_t data_size = catch_count * 8;
+         uint32_t data_aligned = (data_size + 15) & ~15u;
+         emit_add_imm_sp(-(int32_t)data_aligned);
+         for (uint32_t i = 0; i < catch_count; ++i) {
+            uint64_t packed = (static_cast<uint64_t>(clauses[i].kind) << 32) | clauses[i].tag_index;
+            emit_mov_imm64(X8, packed);
+            uint32_t offset = i * 8;
+            if (offset < 32768) {
+               uint32_t off12 = offset / 8;
+               emit32(0xF90003E8 | (off12 << 10)); // STR X8, [SP, #offset]
+            } else {
+               emit_add_signed_imm(X9, SP, offset);
+               emit32(0xF9000128); // STR X8, [X9]
+            }
+         }
+
+         // ── 2. Call __psizam_eh_enter(ctx, catch_count, catch_data) ──
+         emit32(0xAA1303E0); // MOV X0, X19 (context)
+         emit_mov_imm32(X1, catch_count);
+         emit32(0x910003E2); // MOV X2, SP (catch_data)
+         emit_call_c_function(&__psizam_eh_enter);
+         // X0 = jmpbuf pointer
+         emit32(0xAA0003E8); // MOV X8, X0 (save jmpbuf in X8)
+
+         // Free catch_data
+         emit_add_imm_sp(data_aligned);
+
+         // ── 3. Call __psizam_setjmp(jmpbuf) ──
+         // IMPORTANT: Do NOT use emit_call_c_function here. That pattern saves
+         // the old SP on the machine stack before the call. Between setjmp and
+         // longjmp, the try body's operand stack pushes overwrite that saved SP.
+         // When longjmp returns, the restore code loads corrupted data → crash.
+         //
+         // Instead, call __psizam_setjmp directly. SP is already 16-byte aligned
+         // (JIT operand stack uses 16-byte slots). After longjmp → setjmp return →
+         // __psizam_setjmp return, SP is restored to its pre-BLR value by the
+         // C function's epilogue. This value equals SP_try (the SP at try_table entry),
+         // which is exactly what we want for the dispatch path.
+         emit32(0xAA0803E0); // MOV X0, X8 (jmpbuf)
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_setjmp));
+         emit32(0xD63F0100); // BLR X8
+         // W0 = 0 (normal) or non-zero (longjmp return)
+         // SP = SP_try (preserved by callee-saved convention and longjmp)
+
+         // ── 4. Branch: normal path vs dispatch ──
+         // CBZ W0, try_body
+         void* cbz_to_body = code;
+         emit32(0x34000000 | X0); // CBZ W0, +0 (patched later)
+
+         // ══════════════════════════════════════════════
+         // DISPATCH PATH (reached after longjmp)
+         // ══════════════════════════════════════════════
+         // X19 = context (callee-saved, preserved by longjmp)
+         // X20 = memory base (callee-saved but may be stale after memory.grow in try body)
+
+         // Reload memory base
+         emit32(0xAA1303E0); // MOV X0, X19
+         emit_call_c_function(&__psizam_get_memory);
+         emit32(0xAA0003F4); // MOV X20, X0
+
+         // Get matched catch clause index
+         emit32(0xAA1303E0); // MOV X0, X19
+         emit_call_c_function(&__psizam_eh_get_match);
+         // W0 = matched catch index
+
+         // Switch on catch index — compare and branch to each handler
+         std::vector<void*> clause_branches(catch_count);
+         std::vector<void*> catch_labels(catch_count);
+
+         for (uint32_t i = 0; i < catch_count; ++i) {
+            if (i < catch_count - 1) {
+               // CMP W0, #i
+               emit32(0x7100001F | (i << 10) | (X0 << 5)); // CMP W0, #i
+               // B.EQ .catch_i
+               catch_labels[i] = code;
+               emit32(0x54000000 | COND_EQ); // B.EQ +0 (patched below)
+               emit32(0xD503201F); // NOP sentinel for long-form conversion
+            } else {
+               // Last clause: fall through (guaranteed to match)
+               catch_labels[i] = nullptr; // no branch needed
+            }
+         }
+
+         // Emit each catch handler's dispatch code
+         for (uint32_t i = 0; i < catch_count; ++i) {
+            // Patch the B.EQ to point here
+            if (catch_labels[i]) {
+               fix_branch(catch_labels[i], code);
+            }
+
+            // Adjust stack to target operand depth
+            // Current SP is at try_entry depth (restored by longjmp)
+            // Need to pop depth_change operand slots (each 16 bytes on aarch64)
+            if (clauses[i].depth_change > 0) {
+               emit_add_imm_sp(clauses[i].depth_change * 16);
+            }
+
+            // Push payload values onto operand stack
+            uint32_t tag_payload = 0;
+            if (clauses[i].kind == catch_kind::catch_tag || clauses[i].kind == catch_kind::catch_tag_ref) {
+               uint32_t type_idx = _mod.tags[clauses[i].tag_index].type_index;
+               tag_payload = static_cast<uint32_t>(_mod.types[type_idx].param_types.size());
+            }
+
+            for (uint32_t j = 0; j < tag_payload; ++j) {
+               emit32(0xAA1303E0); // MOV X0, X19 (context)
+               emit_mov_imm32(X1, j);
+               emit_call_c_function(&__psizam_eh_get_payload);
+               // X0 = payload value
+               emit_push_x(X0);
+            }
+
+            // For _ref kinds: push exnref
+            if (clauses[i].kind == catch_kind::catch_tag_ref || clauses[i].kind == catch_kind::catch_all_ref) {
+               emit32(0xAA1303E0); // MOV X0, X19
+               emit_call_c_function(&__psizam_eh_get_exnref);
+               emit_push_x(X0);
+            }
+
+            // Emit forward branch to catch target (patched by parser via handle_branch_target)
+            clause_branches[i] = code;
+            emit32(0x14000000); // B +0 (patched later)
+         }
+
+         // ══════════════════════════════════════════════
+         // NORMAL PATH (setjmp returned 0)
+         // ══════════════════════════════════════════════
+         // Patch CBZ to jump here
+         fix_branch(cbz_to_body, code);
+         // X19/X20 are callee-saved, still valid from before setjmp. Try body follows.
+
+         return clause_branches;
+      }
+
+      void emit_eh_leave() {
+         invalidate_recent_ops();
+         emit32(0xAA1303E0); // MOV X0, X19 (context)
+         emit_call_c_function(&__psizam_eh_leave);
+      }
+
       void emit_throw_ref() {
+         invalidate_recent_ops();
+         // Pop exnref from operand stack
+         emit_pop_x(X0);
+         // Null check: exnref == UINT32_MAX means null
+         emit_mov_imm64(X8, UINT32_MAX);
+         emit32(0xEB08001F); // CMP X0, X8
+         // If equal (null), trap
+         void* not_null = code;
+         emit32(0x54000000 | COND_NE); // B.NE skip
+         emit32(0xD503201F); // NOP sentinel
+         // Null exnref → trap
          emit_mov_imm64(X16, reinterpret_cast<uint64_t>(&on_unreachable));
          emit32(0xD61F0200); // BR X16
+         // Not null: call __psizam_eh_throw_ref(ctx, exnref_idx)
+         fix_branch(not_null, code);
+         emit32(0x2A0003E1); // MOV W1, W0 (exnref index, truncate to 32-bit)
+         emit32(0xAA1303E0); // MOV X0, X19 (context)
+         emit_call_c_function(&__psizam_eh_throw_ref);
+         // Does not return
       }
 
       void emit_table_init(std::uint32_t x, std::uint32_t table_idx = 0) {
