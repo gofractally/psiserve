@@ -427,6 +427,29 @@ namespace psizam::detail {
          this->emit(base::RET);
       }
 
+      // Call an EH runtime helper. Saves/restores ctx (rdi) and mem (rsi).
+      // Caller must set up args in rdi, rsi, rdx, rcx BEFORE calling this.
+      // This method saves the old rdi/rsi, aligns the stack, calls, and restores.
+      // Returns result in rax.
+      void emit_eh_runtime_call(void* fn_ptr) {
+         // Save ctx and mem
+         this->emit_push_raw(rdi);
+         this->emit_push_raw(rsi);
+         // Align stack to 16 bytes, saving old rsp
+         this->emit_mov(rsp, rax);
+         this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
+         this->emit_push_raw(rax); // save old rsp
+         // Call function
+         this->emit_bytes(0x48, 0xb8);              // movabs rax, imm64
+         this->emit_operand_ptr(fn_ptr);
+         this->emit_bytes(0xff, 0xd0);              // call *%rax
+         // Restore old rsp
+         this->emit_pop_raw(rsp);
+         // Restore mem and ctx
+         this->emit_pop_raw(rsi);
+         this->emit_pop_raw(rdi);
+      }
+
       void* emit_error_handler(void (*handler)(), reloc_symbol sym) {
          void* result = code;
          this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
@@ -1796,6 +1819,94 @@ namespace psizam::detail {
             }
             break;
          }
+
+         // ── Exception handling ──
+         case ir_op::eh_enter: {
+            // ri.imm = eh_data_index, ri.src1 = catch_count
+            uint32_t eh_idx = static_cast<uint32_t>(inst.ri.imm);
+            uint32_t catch_count = inst.ri.src1;
+            const auto& ehd = func.eh_data[eh_idx];
+            // Allocate catch_data array on native stack
+            if (catch_count > 0) {
+               this->emit_sub(static_cast<uint32_t>(catch_count * 8), rsp);
+               for (uint32_t c = 0; c < catch_count; c++) {
+                  uint64_t packed = (static_cast<uint64_t>(ehd.catches[c].kind) << 32)
+                                   | ehd.catches[c].tag_index;
+                  this->emit_mov(packed, rax);
+                  this->emit_mov(rax, *(rsp + static_cast<int32_t>(c * 8)));
+               }
+            }
+            // __psizam_eh_enter(ctx, catch_count, catch_data_ptr) → jmpbuf ptr
+            this->emit_mov(rsp, rdx);           // catch_data ptr → arg3
+            this->emit_mov(catch_count, esi);    // catch_count → arg2
+            // rdi already = ctx
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_enter));
+            if (catch_count > 0)
+               this->emit_add(static_cast<uint32_t>(catch_count * 8), rsp);
+            this->emit_push_raw(rax); // push jmpbuf ptr
+            break;
+         }
+         case ir_op::eh_setjmp: {
+            this->emit_pop_raw(rax); // jmpbuf ptr
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(rax, rdi); // jmpbuf → arg1
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_setjmp));
+            this->emit_bytes(0xff, 0xd0); // call *%rax
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            this->emit_push_raw(rax); // push result (0 or non-zero)
+            break;
+         }
+         case ir_op::eh_leave:
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
+            break;
+         case ir_op::eh_throw: {
+            uint32_t tag_index = static_cast<uint32_t>(inst.ri.imm);
+            uint32_t payload_count = 0;
+            for (uint32_t i = idx; i > 0; --i) {
+               if (func.insts[i - 1].opcode == ir_op::arg) payload_count++;
+               else break;
+            }
+            // Payload on native stack. __psizam_eh_throw(ctx, tag, payload, count)
+            this->emit_mov(rsp, rdx);                    // payload ptr
+            this->emit_mov(payload_count, ecx);           // payload count
+            this->emit_mov(tag_index, esi);               // tag index
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);   // andq $-16, %rsp
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_eh_throw));
+            this->emit_bytes(0xff, 0xd0);                // noreturn
+            break;
+         }
+         case ir_op::eh_throw_ref: {
+            this->emit_pop_raw(rax); // exnref
+            this->emit_mov(eax, esi); // exnref → arg2
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_eh_throw_ref));
+            this->emit_bytes(0xff, 0xd0); // noreturn
+            break;
+         }
+         case ir_op::eh_get_match:
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_get_match));
+            this->emit_push_raw(rax);
+            break;
+         case ir_op::eh_get_payload: {
+            uint32_t pidx = static_cast<uint32_t>(inst.ri.imm);
+            this->emit_mov(pidx, esi); // index → arg2
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_get_payload));
+            this->emit_push_raw(rax);
+            break;
+         }
+         case ir_op::eh_get_exnref:
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_get_exnref));
+            this->emit_push_raw(rax);
+            break;
 
          default:
             break;
@@ -3287,6 +3398,90 @@ namespace psizam::detail {
             store_rax_vreg(inst.dest);
             return true;
 
+         // ── Exception handling (register mode) ──
+         case ir_op::eh_enter: {
+            uint32_t eh_idx = static_cast<uint32_t>(inst.ri.imm);
+            uint32_t catch_count = inst.ri.src1;
+            const auto& ehd = func.eh_data[eh_idx];
+            if (catch_count > 0) {
+               this->emit_sub(static_cast<uint32_t>(catch_count * 8), rsp);
+               for (uint32_t c = 0; c < catch_count; c++) {
+                  uint64_t packed = (static_cast<uint64_t>(ehd.catches[c].kind) << 32)
+                                   | ehd.catches[c].tag_index;
+                  this->emit_mov(packed, rax);
+                  this->emit_mov(rax, *(rsp + static_cast<int32_t>(c * 8)));
+               }
+            }
+            this->emit_mov(rsp, rdx);
+            this->emit_mov(catch_count, esi);
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_enter));
+            if (catch_count > 0)
+               this->emit_add(static_cast<uint32_t>(catch_count * 8), rsp);
+            store_rax_vreg(inst.dest);
+            return true;
+         }
+         case ir_op::eh_setjmp: {
+            load_vreg_rax(inst.rr.src1); // jmpbuf ptr
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(rax, rdi);
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_setjmp));
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            store_rax_vreg(inst.dest);
+            return true;
+         }
+         case ir_op::eh_leave:
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
+            return true;
+         case ir_op::eh_throw: {
+            uint32_t tag_index = static_cast<uint32_t>(inst.ri.imm);
+            // Count preceding arg ops that pushed payload to native stack
+            uint32_t payload_count = 0;
+            for (uint32_t i = idx; i > 0; --i) {
+               if (func.insts[i - 1].opcode == ir_op::arg) payload_count++;
+               else break;
+            }
+            this->emit_mov(rsp, rdx);
+            this->emit_mov(payload_count, ecx);
+            this->emit_mov(tag_index, esi);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_eh_throw));
+            this->emit_bytes(0xff, 0xd0);
+            return true;
+         }
+         case ir_op::eh_throw_ref: {
+            load_vreg_rax(inst.rr.src1);
+            this->emit_mov(eax, esi);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_eh_throw_ref));
+            this->emit_bytes(0xff, 0xd0);
+            return true;
+         }
+         case ir_op::eh_get_match:
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_get_match));
+            store_rax_vreg(inst.dest);
+            return true;
+         case ir_op::eh_get_payload: {
+            uint32_t pidx = static_cast<uint32_t>(inst.ri.imm);
+            this->emit_mov(pidx, esi);
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_get_payload));
+            store_rax_vreg(inst.dest);
+            return true;
+         }
+         case ir_op::eh_get_exnref:
+            emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_get_exnref));
+            store_rax_vreg(inst.dest);
+            return true;
+
          default:
             // Unhandled in register mode — bridge to stack mode:
             // push source vregs, run stack-mode handler (uses push/pop), store result.
@@ -3618,6 +3813,14 @@ namespace psizam::detail {
       void mark_block_start(uint32_t block_idx) {
          if (block_idx < _num_blocks) {
             _block_addrs[block_idx] = code;
+            // For branch_to_entry blocks, patch pending fixups at block start
+            // (instead of at block_end). This handles the EH dispatch/gate blocks.
+            if (_cur_func && _cur_func->blocks[block_idx].branch_to_entry) {
+               for (auto* f = _block_fixups[block_idx]; f; f = f->next) {
+                  base::fix_branch(f->branch, code);
+               }
+               _block_fixups[block_idx] = nullptr;
+            }
          }
       }
 
@@ -3648,7 +3851,7 @@ namespace psizam::detail {
       void emit_branch_to_block(ir_function& func, uint32_t block_idx, uint32_t depth_change, uint8_t rt) {
          if (block_idx >= _num_blocks) return;
          emit_branch_multipop(depth_change, rt);
-         bool is_loop = func.blocks && func.blocks[block_idx].is_loop;
+         bool is_loop = func.blocks && (func.blocks[block_idx].is_loop || func.blocks[block_idx].branch_to_entry);
          if (is_loop && _block_addrs[block_idx] != nullptr) {
             void* branch = emit_jmp32();
             base::fix_branch(branch, _block_addrs[block_idx]);
@@ -3670,7 +3873,7 @@ namespace psizam::detail {
          // If no stack adjustment needed, emit simple conditional branch
          bool needs_multipop = (depth_change > 0);
          if (!needs_multipop) {
-            bool is_loop = func.blocks && func.blocks[block_idx].is_loop;
+            bool is_loop = func.blocks && (func.blocks[block_idx].is_loop || func.blocks[block_idx].branch_to_entry);
             if (is_loop && _block_addrs[block_idx] != nullptr) {
                void* branch = this->emit_branchcc32(base::JNZ);
                base::fix_branch(branch, _block_addrs[block_idx]);

@@ -118,6 +118,7 @@ namespace psizam::detail {
 
          jit_scratch_allocator scratch(_scratch_alloc);
 
+         _cur_func = &func;
          _block_addrs = scratch.alloc<void*>(func.block_count);
          _block_fixups = scratch.alloc<block_fixup*>(func.block_count);
          _num_blocks = func.block_count;
@@ -592,6 +593,19 @@ namespace psizam::detail {
 
       // ──────── Error handlers ────────
 
+      // Call an EH runtime helper on aarch64. Saves/restores X19 (ctx) and X20 (mem).
+      // Caller sets up X0=ctx and X1-X3 as needed BEFORE calling this.
+      // Returns result in X0.
+      void emit_eh_runtime_call_a64(void* fn_ptr) {
+         emit_push(X19);
+         emit_push(X20);
+         // X0 should already be ctx (X19) — caller sets up
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(fn_ptr));
+         emit32(0xD63F0100); // BLR X8
+         emit_pop(X20);
+         emit_pop(X19);
+      }
+
       void* emit_error_handler(void (*handler)(), reloc_symbol sym = reloc_symbol::unknown) {
          void* result = code;
          // Align SP
@@ -1042,14 +1056,22 @@ namespace psizam::detail {
       }
 
       void mark_block_start(uint32_t block_idx) {
-         if (block_idx < _num_blocks) _block_addrs[block_idx] = code;
+         if (block_idx < _num_blocks) {
+            _block_addrs[block_idx] = code;
+            // For branch_to_entry blocks, patch pending fixups at block start
+            if (_cur_func && _cur_func->blocks[block_idx].branch_to_entry) {
+               for (auto* f = _block_fixups[block_idx]; f; f = f->next) {
+                  fix_branch(f->branch, code);
+               }
+               _block_fixups[block_idx] = nullptr;
+            }
+         }
       }
 
       void mark_block_end(ir_function& func, uint32_t block_idx, bool is_if) {
          if (block_idx >= _num_blocks) return;
-         // For loop blocks, don't overwrite the start address — backward
-         // branches need it.  Forward fixups still resolve to code (the end).
-         bool is_loop = func.blocks && func.blocks[block_idx].is_loop;
+         // For loop/branch_to_entry blocks, don't overwrite the start address.
+         bool is_loop = func.blocks && (func.blocks[block_idx].is_loop || func.blocks[block_idx].branch_to_entry);
          if (!is_loop) _block_addrs[block_idx] = code;
          for (auto* f = _block_fixups[block_idx]; f; f = f->next) {
             fix_branch(f->branch, code);
@@ -1073,9 +1095,7 @@ namespace psizam::detail {
 
       void emit_branch_to_block(ir_function& func, uint32_t block_idx) {
          if (block_idx >= _num_blocks) return;
-         // Loop blocks: backward branch to block_start (address already known).
-         // Non-loop blocks: forward fixup to block_end (address set later).
-         bool is_loop = func.blocks && func.blocks[block_idx].is_loop;
+         bool is_loop = func.blocks && (func.blocks[block_idx].is_loop || func.blocks[block_idx].branch_to_entry);
          if (is_loop && _block_addrs[block_idx] != nullptr) {
             void* branch = emit_branch_placeholder();
             fix_branch(branch, _block_addrs[block_idx]);
@@ -1090,7 +1110,7 @@ namespace psizam::detail {
 
       void emit_cond_branch_to_block(ir_function& func, uint32_t block_idx, uint32_t cond) {
          if (block_idx >= _num_blocks) return;
-         bool is_loop = func.blocks && func.blocks[block_idx].is_loop;
+         bool is_loop = func.blocks && (func.blocks[block_idx].is_loop || func.blocks[block_idx].branch_to_entry);
          if (is_loop && _block_addrs[block_idx] != nullptr) {
             void* branch = emit_cond_branch_placeholder(cond);
             fix_branch(branch, _block_addrs[block_idx]);
@@ -2475,6 +2495,110 @@ namespace psizam::detail {
             }
             break;
          }
+
+         // ── Exception handling (aarch64) ──
+         case ir_op::eh_enter: {
+            uint32_t eh_idx = static_cast<uint32_t>(inst.ri.imm);
+            uint32_t catch_count = inst.ri.src1;
+            const auto& ehd = func.eh_data[eh_idx];
+            // Allocate catch_data array on stack
+            if (catch_count > 0) {
+               uint32_t alloc = ((catch_count * 8) + 15) & ~15u; // 16-byte aligned
+               emit_sub_imm(SP, SP, alloc);
+               for (uint32_t c = 0; c < catch_count; c++) {
+                  uint64_t packed = (static_cast<uint64_t>(ehd.catches[c].kind) << 32)
+                                   | ehd.catches[c].tag_index;
+                  emit_mov_imm64(X8, packed);
+                  emit_str_offset(X8, SP, static_cast<int32_t>(c * 8));
+               }
+            }
+            // __psizam_eh_enter(ctx, catch_count, catch_data)
+            emit_mov_reg(X0, X19);           // ctx
+            emit_mov_imm32(X1, catch_count); // catch_count
+            emit_mov_reg(X2, SP);            // catch_data ptr (hack: use add to get SP)
+            // X2 = SP: MOV X2, SP
+            emit32(0x910003E2);              // ADD X2, SP, #0
+            emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_enter));
+            if (catch_count > 0) {
+               uint32_t alloc = ((catch_count * 8) + 15) & ~15u;
+               emit_add_imm(SP, SP, alloc);
+            }
+            // Push jmpbuf ptr (X0)
+            if (inst.dest != ir_vreg_none)
+               store_x0_vreg(inst.dest);
+            else
+               emit_push(X0);
+            break;
+         }
+         case ir_op::eh_setjmp: {
+            // Load jmpbuf ptr
+            if (inst.rr.src1 != ir_vreg_none) load_vreg_x0(inst.rr.src1);
+            else { emit_pop(X0); }
+            // Save ctx/mem, call setjmp(jmpbuf)
+            emit_push(X19);
+            emit_push(X20);
+            // X0 already = jmpbuf (arg1)
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_setjmp));
+            emit32(0xD63F0100); // BLR X8
+            emit_pop(X20);
+            emit_pop(X19);
+            if (inst.dest != ir_vreg_none)
+               store_x0_vreg(inst.dest);
+            else
+               emit_push(X0);
+            break;
+         }
+         case ir_op::eh_leave:
+            emit_mov_reg(X0, X19); // ctx
+            emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_leave));
+            break;
+         case ir_op::eh_throw: {
+            uint32_t tag_index = static_cast<uint32_t>(inst.ri.imm);
+            uint32_t payload_count = 0;
+            for (uint32_t i = idx; i > 0; --i) {
+               if (func.insts[i - 1].opcode == ir_op::arg) payload_count++;
+               else break;
+            }
+            // __psizam_eh_throw(ctx, tag, payload_ptr, count) — noreturn
+            emit_mov_reg(X0, X19);
+            emit_mov_imm32(X1, tag_index);
+            emit32(0x910003E2); // MOV X2, SP (payload on stack)
+            emit_mov_imm32(X3, payload_count);
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_eh_throw));
+            emit32(0xD63F0100); // BLR X8
+            break;
+         }
+         case ir_op::eh_throw_ref: {
+            if (inst.rr.src1 != ir_vreg_none) load_vreg_x0(inst.rr.src1);
+            else { emit_pop(X0); }
+            // __psizam_eh_throw_ref(ctx, exnref_idx) — noreturn
+            emit_mov_reg(X1, X0);   // exnref → arg2
+            emit_mov_reg(X0, X19);  // ctx → arg1
+            emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_eh_throw_ref));
+            emit32(0xD63F0100);
+            break;
+         }
+         case ir_op::eh_get_match:
+            emit_mov_reg(X0, X19);
+            emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_get_match));
+            if (inst.dest != ir_vreg_none) store_x0_vreg(inst.dest);
+            else emit_push(X0);
+            break;
+         case ir_op::eh_get_payload: {
+            uint32_t pidx = static_cast<uint32_t>(inst.ri.imm);
+            emit_mov_reg(X0, X19);
+            emit_mov_imm32(X1, pidx);
+            emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_get_payload));
+            if (inst.dest != ir_vreg_none) store_x0_vreg(inst.dest);
+            else emit_push(X0);
+            break;
+         }
+         case ir_op::eh_get_exnref:
+            emit_mov_reg(X0, X19);
+            emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_get_exnref));
+            if (inst.dest != ir_vreg_none) store_x0_vreg(inst.dest);
+            else emit_push(X0);
+            break;
 
          default:
             break;
@@ -3891,6 +4015,7 @@ namespace psizam::detail {
       void** _block_addrs = nullptr;
       block_fixup** _block_fixups = nullptr;
       uint32_t _num_blocks = 0;
+      ir_function* _cur_func = nullptr;
       bool _in_br_table = false;
       uint32_t _br_table_case = 0;
       uint32_t _br_table_size = 0;

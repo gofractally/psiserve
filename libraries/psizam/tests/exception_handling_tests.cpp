@@ -5,16 +5,22 @@
 using namespace psizam;
 using namespace psizam::detail;
 
-// EH tests: interpreter + jit + llvm (jit2 EH codegen not yet implemented)
+// EH tests: interpreter + jit + jit2 + llvm
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-  #if defined(__x86_64__) || defined(__aarch64__)
+  #if defined(__x86_64__)
+    #define EH_TEST_CASE(name, tags) \
+      TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit2, psizam::jit_llvm)
+  #elif defined(__aarch64__)
     #define EH_TEST_CASE(name, tags) \
       TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit_llvm)
   #else
     #define EH_TEST_CASE(name, tags) \
       TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit_llvm)
   #endif
-#elif defined(__x86_64__) || defined(__aarch64__)
+#elif defined(__x86_64__)
+  #define EH_TEST_CASE(name, tags) \
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit2)
+#elif defined(__aarch64__)
   #define EH_TEST_CASE(name, tags) \
     TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit)
 #else
