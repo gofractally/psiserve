@@ -69,10 +69,18 @@ static std::string find_wasm_gen() {
 }
 
 // Result of running a module on one backend
+// Outcome codes:
+//   0 = ok (ran to completion)
+//   1 = rejected (parse error or resource allocation failure — module can't run)
+//   2 = memory trap (OOB access, guard page fault)
+//   3 = interpreter trap (unreachable, div-by-zero, etc.)
+//   4 = timeout (watchdog fired)
+//   5 = other std::exception
+//   6 = unknown (non-std::exception)
 struct run_result {
-   int  outcome;       // 0=ok, 1=parse, 2=memory, 3=interp, 4=timeout, 5=other
-   bool has_start;     // module had a start function
-   std::string what;   // exception message (for outcome 5)
+   int  outcome;
+   bool has_start;
+   std::string what;
 };
 
 template <typename Impl>
@@ -92,6 +100,9 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes) {
       r.outcome = 0;
    } catch (wasm_parse_exception&) {
       r.outcome = 1;
+   } catch (wasm_bad_alloc&) {
+      // Resource allocation failure (mmap, too-large memory) — module rejected
+      r.outcome = 1;
    } catch (wasm_memory_exception&) {
       r.outcome = 2;
    } catch (wasm_interpreter_exception&) {
@@ -110,7 +121,7 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes) {
 static const char* outcome_name(int o) {
    switch (o) {
       case 0: return "ok";
-      case 1: return "parse_error";
+      case 1: return "rejected";
       case 2: return "memory_trap";
       case 3: return "interp_trap";
       case 4: return "timeout";
