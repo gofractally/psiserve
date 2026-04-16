@@ -88,7 +88,7 @@ namespace psizam::detail {
    // Call an LLVM entry function on a dedicated stack.
    // The try/catch runs on the alternate stack, so C++ exceptions from
    // LLVM-generated code (runtime helpers like __psizam_trap) unwind correctly.
-   // Stack overflow hits the guard page → SIGSEGV → signal handler → siglongjmp.
+   // Stack overflow hits the guard page → SIGSEGV → signal handler → longjmp.
    //
    // stack_top: top of the mmap'd stack (stack grows down)
    // fn: LLVM entry wrapper: int64_t(*)(void* ctx, void* mem, native_value* args)

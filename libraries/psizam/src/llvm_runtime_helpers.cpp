@@ -4,7 +4,7 @@
 // Exception safety: These helpers are called FROM LLVM-generated code. When running
 // pre-compiled .pzam code, the LLVM frames lack .eh_frame data, so C++ exceptions
 // cannot unwind through them. Instead, we catch exceptions at this boundary and use
-// siglongjmp via the existing signal_dest mechanism (set up by invoke_with_signal_handler)
+// longjmp via trap_jmp_buf (set up by invoke_with_signal_handler / setjmp)
 // to bypass the LLVM frames entirely.
 
 #include <psizam/detail/llvm_runtime_helpers.hpp>
@@ -25,10 +25,9 @@ namespace {
    // Escape via longjmp with an existing exception_ptr.
    // Used when propagating exceptions from host calls or recursive WASM calls.
    [[noreturn]] void escape_exception(std::exception_ptr eptr) {
-      sigjmp_buf* dest = std::atomic_load(&signal_dest);
-      if (dest) {
+      if (trap_jmp_ptr) {
          saved_exception = std::move(eptr);
-         siglongjmp(*dest, -1);
+         longjmp(*trap_jmp_ptr, -1);
       }
       std::rethrow_exception(eptr);
    }
@@ -36,10 +35,9 @@ namespace {
    // Escape via longjmp with a new exception, or throw if no escape target.
    template<typename E>
    [[noreturn]] void escape_or_throw(const char* msg) {
-      sigjmp_buf* dest = std::atomic_load(&signal_dest);
-      if (dest) {
+      if (trap_jmp_ptr) {
          saved_exception = std::make_exception_ptr(E{msg});
-         siglongjmp(*dest, -1);
+         longjmp(*trap_jmp_ptr, -1);
       }
       throw E{msg};
    }
