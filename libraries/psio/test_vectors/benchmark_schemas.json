@@ -1,0 +1,165 @@
+{
+  "format_version": 1,
+  "description": "Benchmark schema definitions shared across all 7 fracpack language implementations",
+  "schemas": {
+    "Point": {
+      "tier": 1,
+      "fixed": true,
+      "fields": [
+        {"name": "x", "type": "f64"},
+        {"name": "y", "type": "f64"}
+      ]
+    },
+    "RGBA": {
+      "tier": 1,
+      "fixed": true,
+      "fields": [
+        {"name": "r", "type": "u8"},
+        {"name": "g", "type": "u8"},
+        {"name": "b", "type": "u8"},
+        {"name": "a", "type": "u8"}
+      ]
+    },
+    "Token": {
+      "tier": 2,
+      "fields": [
+        {"name": "kind", "type": "u16"},
+        {"name": "offset", "type": "u32"},
+        {"name": "length", "type": "u32"},
+        {"name": "text", "type": "string"}
+      ]
+    },
+    "UserProfile": {
+      "tier": 3,
+      "fields": [
+        {"name": "id", "type": "u64"},
+        {"name": "name", "type": "string"},
+        {"name": "email", "type": "string"},
+        {"name": "bio", "type": "optional[string]"},
+        {"name": "age", "type": "u32"},
+        {"name": "score", "type": "f64"},
+        {"name": "tags", "type": "vec[string]"},
+        {"name": "verified", "type": "bool"}
+      ]
+    },
+    "LineItem": {
+      "tier": 4,
+      "fields": [
+        {"name": "product", "type": "string"},
+        {"name": "qty", "type": "u32"},
+        {"name": "unit_price", "type": "f64"}
+      ]
+    },
+    "Order": {
+      "tier": 4,
+      "fields": [
+        {"name": "id", "type": "u64"},
+        {"name": "customer", "type": "UserProfile"},
+        {"name": "items", "type": "vec[LineItem]"},
+        {"name": "total", "type": "f64"},
+        {"name": "note", "type": "optional[string]"},
+        {"name": "status", "type": "variant", "cases": [
+          {"name": "pending", "type": "u32"},
+          {"name": "shipped", "type": "string"},
+          {"name": "delivered", "type": "u64"},
+          {"name": "cancelled", "type": "string"}
+        ]}
+      ]
+    },
+    "SensorReading": {
+      "tier": 5,
+      "fields": [
+        {"name": "timestamp", "type": "u64"},
+        {"name": "device_id", "type": "string"},
+        {"name": "temp", "type": "f64"},
+        {"name": "humidity", "type": "f64"},
+        {"name": "pressure", "type": "f64"},
+        {"name": "accel_x", "type": "f64"},
+        {"name": "accel_y", "type": "f64"},
+        {"name": "accel_z", "type": "f64"},
+        {"name": "gyro_x", "type": "f64"},
+        {"name": "gyro_y", "type": "f64"},
+        {"name": "gyro_z", "type": "f64"},
+        {"name": "mag_x", "type": "f64"},
+        {"name": "mag_y", "type": "f64"},
+        {"name": "mag_z", "type": "f64"},
+        {"name": "battery", "type": "f32"},
+        {"name": "signal_dbm", "type": "i16"},
+        {"name": "error_code", "type": "optional[u32]"},
+        {"name": "firmware", "type": "string"}
+      ]
+    },
+    "TreeNode": {
+      "tier": 7,
+      "fields": [
+        {"name": "value", "type": "u32"},
+        {"name": "label", "type": "string"},
+        {"name": "children", "type": "vec[TreeNode]"}
+      ]
+    },
+    "FuncParam": {
+      "tier": 8,
+      "fields": [
+        {"name": "name", "type": "string"},
+        {"name": "type_name", "type": "string"},
+        {"name": "doc", "type": "optional[string]"}
+      ]
+    },
+    "FuncDef": {
+      "tier": 8,
+      "fields": [
+        {"name": "name", "type": "string"},
+        {"name": "params", "type": "vec[FuncParam]"},
+        {"name": "returns", "type": "string"},
+        {"name": "doc", "type": "string"}
+      ]
+    },
+    "TypeField": {
+      "tier": 8,
+      "fields": [
+        {"name": "name", "type": "string"},
+        {"name": "type_name", "type": "string"},
+        {"name": "offset", "type": "u32"},
+        {"name": "doc", "type": "optional[string]"}
+      ]
+    },
+    "TypeDef": {
+      "tier": 8,
+      "fields": [
+        {"name": "name", "type": "string"},
+        {"name": "kind", "type": "variant", "cases": [
+          {"name": "struct_", "type": "vec[TypeField]"},
+          {"name": "enum_", "type": "vec[string]"},
+          {"name": "alias", "type": "string"}
+        ]},
+        {"name": "doc", "type": "string"}
+      ]
+    },
+    "ModuleDef": {
+      "tier": 8,
+      "fields": [
+        {"name": "name", "type": "string"},
+        {"name": "types", "type": "vec[TypeDef]"},
+        {"name": "functions", "type": "vec[FuncDef]"},
+        {"name": "doc", "type": "string"}
+      ]
+    },
+    "SystemCatalog": {
+      "tier": 8,
+      "fields": [
+        {"name": "version", "type": "u32"},
+        {"name": "modules", "type": "vec[ModuleDef]"},
+        {"name": "metadata", "type": "vec[string]"}
+      ]
+    }
+  },
+  "array_sizes": {
+    "small": 10,
+    "medium": 1000,
+    "large": 100000
+  },
+  "tree_depth": 10,
+  "catalog_modules": 10,
+  "catalog_types_per_module": 20,
+  "catalog_functions_per_module": 5
+}

@@ -145,7 +145,7 @@ namespace psio {
                world.types.push_back(wit_type_def{});
 
                wit_type_def td;
-               td.name = std::string(reflect<U>::name);
+               td.name = to_kebab_case(std::string(reflect<U>::name));
                td.kind = static_cast<uint8_t>(wit_type_kind::record_);
 
                // Iterate data members
@@ -158,7 +158,7 @@ namespace psio {
                         using ValType = std::remove_cvref_t<typename MType::ValueType>;
                         const char* name = reflect<U>::data_member_names[field_i];
                         int32_t type_idx = resolve_type<ValType>();
-                        td.fields.push_back({std::string(name), type_idx});
+                        td.fields.push_back({to_kebab_case(std::string(name)), type_idx});
                         field_i++;
                      };
                      (process(ptrs), ...);
@@ -374,24 +374,35 @@ namespace psio {
    // =========================================================================
 
    /// Generate a wit_world from PSIO_REFLECT-annotated C++ types.
-   /// Exports are methods of the Exports type.
-   /// Imports (if provided) are methods of the Imports type.
+   ///
+   /// @param package   WIT package name, e.g. "test:inventory@1.0.0"
+   /// @param world_name  World name (defaults to kebab-case of Exports type name + "-world")
    template<typename Exports, typename Imports = void>
-   wit_world generate_wit(const std::string& world_name = "") {
+   wit_world generate_wit(const std::string& package,
+                          const std::string& world_name = "") {
       detail::wit_gen_ctx ctx;
-      ctx.world.name = world_name.empty() ? std::string(reflect<Exports>::name) : world_name;
+      ctx.world.package = package;
 
-      // Generate exports
+      auto exports_name = detail::wit_gen_ctx::to_kebab_case(std::string(reflect<Exports>::name));
+      ctx.world.name = world_name.empty() ? exports_name + "-world" : world_name;
+
+      // Generate exports as a named interface
       wit_interface exp_iface;
-      exp_iface.name = "";
+      exp_iface.name = exports_name;
       ctx.generate_functions<Exports>(exp_iface);
+      // Track which types are used by this interface
+      for (size_t i = 0; i < ctx.world.types.size(); i++) {
+         if (!ctx.world.types[i].name.empty())
+            exp_iface.type_idxs.push_back(static_cast<uint32_t>(i));
+      }
       if (!exp_iface.func_idxs.empty())
          ctx.world.exports.push_back(std::move(exp_iface));
 
-      // Generate imports
+      // Generate imports as a named interface
       if constexpr (!std::is_void_v<Imports>) {
+         auto imports_name = detail::wit_gen_ctx::to_kebab_case(std::string(reflect<Imports>::name));
          wit_interface imp_iface;
-         imp_iface.name = "";
+         imp_iface.name = imports_name;
          ctx.generate_functions<Imports>(imp_iface);
          if (!imp_iface.func_idxs.empty())
             ctx.world.imports.push_back(std::move(imp_iface));
@@ -400,44 +411,72 @@ namespace psio {
       return ctx.world;
    }
 
-   /// Generate WIT text from a wit_world.
+   /// Emit a WIT interface block (types + functions).
+   namespace detail {
+      inline void wit_emit_interface(std::ostringstream& os, const wit_world& world,
+                                      const wit_interface& iface, const std::string& indent) {
+         os << indent << "interface " << iface.name << " {\n";
+         auto inner = indent + "  ";
+
+         // Emit types owned by this interface
+         for (auto type_idx : iface.type_idxs) {
+            if (type_idx < world.types.size() && !world.types[type_idx].name.empty()) {
+               wit_emit_type(os, world, world.types[type_idx], inner);
+               os << "\n";
+            }
+         }
+
+         // Emit functions
+         for (auto func_idx : iface.func_idxs) {
+            if (func_idx < world.funcs.size()) {
+               wit_emit_func(os, world, world.funcs[func_idx], inner);
+            }
+         }
+
+         os << indent << "}\n";
+      }
+   } // namespace detail
+
+   /// Generate standards-compliant WIT text from a wit_world.
+   ///
+   /// Output format:
+   ///   package namespace:name@version;
+   ///
+   ///   interface iface-name {
+   ///       record ... { ... }
+   ///       func-name: func(...) -> ...;
+   ///   }
+   ///
+   ///   world world-name {
+   ///       export iface-name;
+   ///   }
    inline std::string wit_to_text(const wit_world& world) {
       std::ostringstream os;
 
-      // Emit named types
-      for (auto& td : world.types) {
-         if (!td.name.empty()) {
-            detail::wit_emit_type(os, world, td, "  ");
-         }
+      // Package declaration
+      if (!world.package.empty())
+         os << "package " << world.package << ";\n\n";
+
+      // Emit each export interface definition
+      for (auto& iface : world.exports) {
+         detail::wit_emit_interface(os, world, iface, "");
+         os << "\n";
       }
 
+      // Emit each import interface definition
+      for (auto& iface : world.imports) {
+         detail::wit_emit_interface(os, world, iface, "");
+         os << "\n";
+      }
+
+      // Emit world block
       os << "world " << (world.name.empty() ? "unnamed" : world.name) << " {\n";
 
-      // Emit types used by this world
-      for (auto& td : world.types) {
-         if (!td.name.empty()) {
-            detail::wit_emit_type(os, world, td, "  ");
-         }
-      }
-
-      // Emit imports
       for (auto& iface : world.imports) {
-         for (auto func_idx : iface.func_idxs) {
-            if (func_idx < world.funcs.size()) {
-               os << "  import ";
-               detail::wit_emit_func(os, world, world.funcs[func_idx], "");
-            }
-         }
+         os << "  import " << iface.name << ";\n";
       }
-
-      // Emit exports
       for (auto& iface : world.exports) {
-         for (auto func_idx : iface.func_idxs) {
-            if (func_idx < world.funcs.size()) {
-               os << "  export ";
-               detail::wit_emit_func(os, world, world.funcs[func_idx], "");
-            }
-         }
+         os << "  export " << iface.name << ";\n";
       }
 
       os << "}\n";
@@ -446,8 +485,9 @@ namespace psio {
 
    /// Generate WIT text directly from PSIO_REFLECT-annotated C++ types.
    template<typename Exports, typename Imports = void>
-   std::string generate_wit_text(const std::string& world_name = "") {
-      auto world = generate_wit<Exports, Imports>(world_name);
+   std::string generate_wit_text(const std::string& package,
+                                 const std::string& world_name = "") {
+      auto world = generate_wit<Exports, Imports>(package, world_name);
       return wit_to_text(world);
    }
 

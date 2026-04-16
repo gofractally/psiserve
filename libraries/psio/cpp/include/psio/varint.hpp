@@ -56,7 +56,7 @@ namespace psio
    template <typename S>
    void to_key(const varuint32& obj, S& stream)
    {
-      return to_key_varuint32(obj.value, stream);
+      to_key(obj.value, stream);
    }
 
    /**
@@ -100,6 +100,6 @@ namespace psio
    template <typename S>
    void to_key(const varint32& obj, S& stream)
    {
-      to_key_varint32(obj.value, stream);
+      to_key(obj.value, stream);
    }
 }  // namespace psio

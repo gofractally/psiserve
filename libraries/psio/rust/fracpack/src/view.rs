@@ -135,8 +135,8 @@ impl<'a> FracViewType<'a> for String {
     fn view_at(data: &'a [u8], pos: u32) -> &'a str {
         let p = pos as usize;
         let len = read_u32_at(data, p) as usize;
-        // Safety: data was validated, UTF-8 was checked during verify
-        std::str::from_utf8(&data[p + 4..p + 4 + len]).unwrap()
+        // Safety: UTF-8 was checked during verify_no_extra / verify
+        unsafe { std::str::from_utf8_unchecked(&data[p + 4..p + 4 + len]) }
     }
 
     fn view_embedded(data: &'a [u8], fixed_pos: &mut u32) -> &'a str {
@@ -148,7 +148,8 @@ impl<'a> FracViewType<'a> for String {
         }
         let start = p + offset as usize;
         let len = read_u32_at(data, start) as usize;
-        std::str::from_utf8(&data[start + 4..start + 4 + len]).unwrap()
+        // Safety: UTF-8 was checked during verify_no_extra / verify
+        unsafe { std::str::from_utf8_unchecked(&data[start + 4..start + 4 + len]) }
     }
 
     fn view_empty() -> &'a str {

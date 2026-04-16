@@ -17,14 +17,18 @@
 //   - PSIO_REFLECT for the class
 //   - WIT embedded in component-type custom section
 //   - cabi_realloc export
-//   - Typed extern "C" exports for each method (16-wide flat signature)
+//   - Typed extern "C" exports for each method
+//   - Canonical ABI lift/lower for all parameter and return types
 
 #include <psio/reflect.hpp>
 #include <psio/wit_gen.hpp>
-#include <psio/ctype.hpp>
+#include <psio/wit_encode.hpp>
+#include <psio/wview.hpp>
+#include <psizam/canonical_dispatch.hpp>
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -33,160 +37,124 @@
 
 namespace psizam {
 
-   // ── Canonical ABI flat value type ─────────────────────────────────────────
-   // All flat ABI values are passed as int64_t (widest scalar).
-   // The template extracts the actual type from the member function pointer.
-
+   // ── Flat ABI slot type ────────────────────────────────────────────────────
+   // All flat ABI values are passed as int64_t (widest scalar) in our convention.
+   // The canonical ABI specifies i32/i64/f32/f64, but since we control both
+   // host and guest, we use int64_t as a universal envelope.
    using flat_val = int64_t;
 
-   // ── Type classification for dispatch ──────────────────────────────────────
+   // ── Lift policy for component export args ─────────────────────────────────
+   // Reads canonical ABI flat values from an int64_t array (the 16 export params).
+   // Satisfies LiftPolicy. For memory access (strings, vectors), resolves offsets
+   // through a configurable base pointer:
+   //   - mem_base != nullptr: offsets are relative to mem_base (native testing)
+   //   - mem_base == nullptr: offsets treated as native pointers (WASM context)
 
-   namespace detail {
+   struct export_lift_policy {
+      const int64_t* slots;
+      size_t         idx = 0;
+      const uint8_t* mem_base;
 
-      // Count flat values needed for a type in Canonical ABI
-      template <typename T>
-      struct flat_count {
-         static constexpr size_t value = 1;  // scalars = 1 slot
-      };
+      explicit export_lift_policy(const int64_t* s, const uint8_t* mem = nullptr)
+         : slots(s), mem_base(mem) {}
 
-      template <>
-      struct flat_count<std::string> {
-         static constexpr size_t value = 2;  // ptr + len
-      };
+      uint32_t next_i32() { return static_cast<uint32_t>(slots[idx++]); }
+      uint64_t next_i64() { return static_cast<uint64_t>(slots[idx++]); }
 
-      template <typename U>
-      struct flat_count<std::vector<U>> {
-         static constexpr size_t value = 2;  // ptr + len
-      };
-
-      // Sum flat counts for a parameter pack
-      template <typename... Args>
-      constexpr size_t total_flat_count() {
-         return (0 + ... + flat_count<std::remove_cvref_t<Args>>::value);
+      float next_f32() {
+         union { int32_t i; float f; } u;
+         u.i = static_cast<int32_t>(slots[idx++]);
+         return u.f;
       }
 
-      // Can this function use flat args (<=16 flat values)?
-      template <typename... Args>
-      constexpr bool can_use_flat_args() {
-         return total_flat_count<Args...>() <= 16;
+      double next_f64() {
+         union { int64_t i; double f; } u;
+         u.i = slots[idx++];
+         return u.f;
       }
 
-      // ── Flat arg extraction ────────────────────────────────────────────────
-      // Read a C++ value from flat ABI slots.
+      const uint8_t* resolve(uint32_t off) const {
+         return mem_base ? (mem_base + off)
+                         : reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(off));
+      }
+
+      uint8_t  load_u8(uint32_t off)  { return resolve(off)[0]; }
+      uint16_t load_u16(uint32_t off) { uint16_t v; std::memcpy(&v, resolve(off), 2); return v; }
+      uint32_t load_u32(uint32_t off) { uint32_t v; std::memcpy(&v, resolve(off), 4); return v; }
+      uint64_t load_u64(uint32_t off) { uint64_t v; std::memcpy(&v, resolve(off), 8); return v; }
+      float    load_f32(uint32_t off) { float v; std::memcpy(&v, resolve(off), 4); return v; }
+      double   load_f64(uint32_t off) { double v; std::memcpy(&v, resolve(off), 8); return v; }
+      const char* load_bytes(uint32_t off, uint32_t) {
+         return reinterpret_cast<const char*>(resolve(off));
+      }
+   };
+
+   // ── Lower policy for component export results ─────────────────────────────
+   // Writes canonical ABI flat values to a psio::native_value array.
+   // Satisfies LowerPolicy. For memory allocation (string/vector data in results),
+   // uses a bump allocator into an internal buffer.
+
+   struct export_lower_policy {
+      psio::native_value results[16] = {};
+      size_t       result_count = 0;
+
+      // Bump allocator for result data (string/vector contents)
+      std::vector<uint8_t> result_buf;
+      uint32_t             bump = 0;
+
+      uint32_t alloc(uint32_t align, uint32_t size) {
+         bump = (bump + align - 1) & ~(align - 1);
+         uint32_t ptr = bump;
+         bump += size;
+         if (result_buf.size() < bump)
+            result_buf.resize(bump);
+         return ptr;
+      }
+
+      void store_u8(uint32_t off, uint8_t v)   { result_buf[off] = v; }
+      void store_u16(uint32_t off, uint16_t v)  { std::memcpy(&result_buf[off], &v, 2); }
+      void store_u32(uint32_t off, uint32_t v)  { std::memcpy(&result_buf[off], &v, 4); }
+      void store_u64(uint32_t off, uint64_t v)  { std::memcpy(&result_buf[off], &v, 8); }
+      void store_f32(uint32_t off, float v)     { std::memcpy(&result_buf[off], &v, 4); }
+      void store_f64(uint32_t off, double v)    { std::memcpy(&result_buf[off], &v, 8); }
+      void store_bytes(uint32_t off, const char* data, uint32_t len) {
+         if (len > 0) std::memcpy(&result_buf[off], data, len);
+      }
+
+      void emit_i32(uint32_t v) { psio::native_value nv; nv.i64 = 0; nv.i32 = v; results[result_count++] = nv; }
+      void emit_i64(uint64_t v) { psio::native_value nv; nv.i64 = v; results[result_count++] = nv; }
+      void emit_f32(float v)    { psio::native_value nv; nv.i64 = 0; nv.f32 = v; results[result_count++] = nv; }
+      void emit_f64(double v)   { psio::native_value nv; nv.f64 = v; results[result_count++] = nv; }
+   };
+
+   // ── Method flat count computation ─────────────────────────────────────────
+
+   namespace detail_component {
+
+      template <typename... Args>
+      constexpr size_t param_flat_count(psio::TypeList<Args...>) {
+         return (0 + ... + psio::canonical_flat_count_v<std::remove_cvref_t<Args>>);
+      }
 
       template <typename T>
-      struct flat_extract {
-         static T get(const flat_val* args, size_t& idx) {
-            if constexpr (std::is_same_v<T, float>) {
-               union { int32_t i; float f; } u;
-               u.i = static_cast<int32_t>(args[idx++]);
-               return u.f;
-            } else if constexpr (std::is_same_v<T, double>) {
-               union { int64_t i; double f; } u;
-               u.i = args[idx++];
-               return u.f;
-            } else if constexpr (std::is_integral_v<T> || std::is_enum_v<T>) {
-               return static_cast<T>(args[idx++]);
-            } else {
-               // Complex type — shouldn't reach here in flat mode
-               static_assert(sizeof(T) == 0, "Cannot flat-extract this type");
-               return T{};
-            }
-         }
-      };
+      constexpr size_t result_flat_count() {
+         if constexpr (std::is_void_v<T>)
+            return 0;
+         else
+            return psio::canonical_flat_count_v<T>;
+      }
 
-      // String: ptr + len from flat args (pointing into linear memory)
-      template <>
-      struct flat_extract<std::string> {
-         static std::string get(const flat_val* args, size_t& idx) {
-            auto ptr = reinterpret_cast<const char*>(static_cast<uintptr_t>(args[idx++]));
-            auto len = static_cast<size_t>(args[idx++]);
-            return std::string(ptr, len);
-         }
-      };
+   } // namespace detail_component
 
-      // ── Flat result storage ────────────────────────────────────────────────
+   // ── ComponentProxy<T> — canonical ABI dispatch ────────────────────────────
+   //
+   // Dispatches a flat-arg call to a specific method on T using canonical
+   // lift/lower. The template parameter MemPtr carries all type information.
 
-      template <typename T>
-      struct flat_store {
-         static flat_val put(const T& val) {
-            if constexpr (std::is_same_v<T, float>) {
-               union { float f; int32_t i; } u;
-               u.f = val;
-               return static_cast<flat_val>(u.i);
-            } else if constexpr (std::is_same_v<T, double>) {
-               union { double f; int64_t i; } u;
-               u.f = val;
-               return u.i;
-            } else if constexpr (std::is_integral_v<T> || std::is_enum_v<T>) {
-               return static_cast<flat_val>(val);
-            } else {
-               static_assert(sizeof(T) == 0, "Cannot flat-store this type");
-               return 0;
-            }
-         }
-      };
-
-      // ── Method invocation with flat args ───────────────────────────────────
-
-      template <typename Class, auto MemPtr>
-      struct MethodInvoker {
-         using MType = psio::MemberPtrType<decltype(MemPtr)>;
-         using ReturnType = typename MType::ReturnType;
-
-         // Extract all args from flat slots and call the method
-         template <typename... Args>
-         static flat_val invoke_flat(Class* impl, const flat_val* args, psio::TypeList<Args...>) {
-            size_t idx = 0;
-            // Use a tuple to hold extracted args (evaluation order guaranteed)
-            auto arg_tuple = std::tuple{
-               flat_extract<std::remove_cvref_t<Args>>::get(args, idx)...
-            };
-            return call_with_tuple(impl, arg_tuple, std::index_sequence_for<Args...>{});
-         }
-
-         template <typename Tuple, size_t... Is>
-         static flat_val call_with_tuple(Class* impl, Tuple& args, std::index_sequence<Is...>) {
-            if constexpr (std::is_void_v<ReturnType>) {
-               (impl->*MemPtr)(std::get<Is>(args)...);
-               return 0;
-            } else if constexpr (std::is_arithmetic_v<ReturnType> || std::is_enum_v<ReturnType>) {
-               auto result = (impl->*MemPtr)(std::get<Is>(args)...);
-               return flat_store<ReturnType>::put(result);
-            } else {
-               // Complex return type — allocate in linear memory and return pointer
-               // For now, handle string specially
-               auto result = (impl->*MemPtr)(std::get<Is>(args)...);
-               return store_result(result);
-            }
-         }
-
-         // Store a complex result and return a pointer
-         // For string: allocate, copy, return (ptr, len) packed or via retptr
-         static flat_val store_result(const std::string& s) {
-            // In WASM context, this would use cabi_realloc
-            // For native testing, just return the pointer (caller must handle lifetime)
-            // TODO: proper WASM linear memory integration
-            auto* buf = static_cast<char*>(std::malloc(s.size()));
-            std::memcpy(buf, s.data(), s.size());
-            // Pack ptr and len into a struct at a known location
-            // For now, return ptr — full implementation needs retptr convention
-            return reinterpret_cast<flat_val>(buf);
-         }
-      };
-
-   } // namespace detail
-
-   // ── ComponentProxy<T> — type-driven dispatch ──────────────────────────────
-
-   /// Dispatches a flat-arg call to a specific method on T.
-   /// The template parameter MemPtr carries all type information.
    template <typename T>
    struct ComponentProxy {
 
-      /// Call a method given 16 flat args.
-      /// The template deduces parameter types from the member pointer
-      /// and extracts only the slots it needs.
+      /// Call a method given 16 flat args (no memory context — scalar methods only).
       template <auto MemPtr>
       static flat_val call(T* impl,
                            flat_val a0,  flat_val a1,  flat_val a2,  flat_val a3,
@@ -194,23 +162,66 @@ namespace psizam {
                            flat_val a8,  flat_val a9,  flat_val a10, flat_val a11,
                            flat_val a12, flat_val a13, flat_val a14, flat_val a15)
       {
-         using MType = psio::MemberPtrType<decltype(MemPtr)>;
+         flat_val slots[16] = {a0, a1, a2, a3, a4, a5, a6, a7,
+                               a8, a9, a10, a11, a12, a13, a14, a15};
+         return call_with_memory<MemPtr>(impl, slots, nullptr);
+      }
+
+      /// Call with explicit memory base (for dispatching methods with complex types).
+      /// The memory parameter provides the base for resolving i32 offsets to string/
+      /// vector data (as produced by buffer_lower_policy).
+      template <auto MemPtr>
+      static flat_val call_with_memory(T* impl, const flat_val* slots, const uint8_t* memory) {
+         using MType    = psio::MemberPtrType<decltype(MemPtr)>;
          using ArgTypes = typename MType::SimplifiedArgTypes;
 
-         flat_val args[16] = {a0, a1, a2, a3, a4, a5, a6, a7,
-                              a8, a9, a10, a11, a12, a13, a14, a15};
+         constexpr size_t pcnt = detail_component::param_flat_count(ArgTypes{});
+         static_assert(pcnt <= psio::MAX_FLAT_PARAMS,
+            "Method exceeds psio::MAX_FLAT_PARAMS (16). Spilled args not yet supported.");
 
-         return detail::MethodInvoker<T, MemPtr>::invoke_flat(impl, args, ArgTypes{});
+         // Lift all args from flat values using canonical ABI rules
+         export_lift_policy lift_p(slots, memory);
+         auto arg_tuple = lift_args(lift_p, ArgTypes{});
+
+         // Call method and lower the result
+         return invoke_and_lower<MemPtr>(impl, arg_tuple,
+            std::make_index_sequence<std::tuple_size_v<decltype(arg_tuple)>>{});
+      }
+
+   private:
+      template <psizam::LiftPolicy Policy, typename... Args>
+      static auto lift_args(Policy& p, psio::TypeList<Args...>) {
+         return std::tuple{psizam::canonical_lift_flat<std::remove_cvref_t<Args>>(p)...};
+      }
+
+      template <auto MemPtr, typename Tuple, size_t... Is>
+      static flat_val invoke_and_lower(T* impl, Tuple& args, std::index_sequence<Is...>) {
+         using MType      = psio::MemberPtrType<decltype(MemPtr)>;
+         using ReturnType = typename MType::ReturnType;
+
+         if constexpr (std::is_void_v<ReturnType>) {
+            (impl->*MemPtr)(std::get<Is>(args)...);
+            return 0;
+         } else {
+            auto result = (impl->*MemPtr)(std::get<Is>(args)...);
+            export_lower_policy lower_p;
+            psizam::canonical_lower_flat(result, lower_p);
+            return static_cast<flat_val>(lower_p.results[0].i64);
+         }
       }
    };
 
    // ── WIT section generation ────────────────────────────────────────────────
 
-   // Generate WIT text for embedding in a custom section.
-   // Not constexpr yet (uses std::string at runtime), but produces the right output.
    template <typename T>
-   std::string generate_component_wit() {
-      return psio::generate_wit_text<T>();
+   std::string generate_component_wit(const std::string& package) {
+      return psio::generate_wit_text<T>(package);
+   }
+
+   // Generate Component Model binary for embedding as a component-type custom section.
+   template <typename T>
+   std::vector<uint8_t> generate_component_wit_binary(const std::string& package) {
+      return psio::generate_wit_binary<T>(package);
    }
 
 } // namespace psizam
@@ -244,7 +255,7 @@ namespace psizam {
    }
 
 // ── Preprocessor iteration over variadic method specs ────────────────────────
-// Supports up to 32 methods. Uses a counting trick to iterate.
+// Supports up to 16 methods. Uses a counting trick to iterate.
 
 #define _PZAM_FOREACH_1(Class, m)       _PZAM_EXPORT_ONE(Class, m)
 #define _PZAM_FOREACH_2(Class, m, ...)  _PZAM_EXPORT_ONE(Class, m) _PZAM_FOREACH_1(Class, __VA_ARGS__)

@@ -6,7 +6,7 @@
 #include <psiber/spin_lock.hpp>
 
 #include <boost/context/continuation.hpp>
-#include <boost/context/protected_fixedsize_stack.hpp>
+#include <boost/context/fixedsize_stack.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -36,19 +36,22 @@ static void report(const char* name, int ops, double us)
    std::fflush(stdout);
 }
 
-// ── Benchmarks ───────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Comparison benchmarks — structurally parallel to boost_fiber_bench.cpp.
+// Same tests, same iteration counts, same labels.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── 1. Raw context switch (control) ─────────────────────────────────────────
 
 static void bench_raw_context_switch()
 {
    constexpr int N = 1'000'000;
 
-   // Two continuations ping-ponging — no scheduler, no kqueue, no queues.
-   // This measures pure Boost.Context assembly cost.
    int count = 0;
 
    ctx::continuation fiber = ctx::callcc(
        std::allocator_arg,
-       ctx::protected_fixedsize_stack(64 * 1024),
+       ctx::fixedsize_stack(64 * 1024),
        [&](ctx::continuation&& main) {
           for (int i = 0; i < N; ++i)
           {
@@ -69,28 +72,70 @@ static void bench_raw_context_switch()
    report("raw boost.context switch", count, elapsed_us(start, end));
 }
 
-static void bench_fiber_create_destroy()
+// ── 2. Fiber create + run + join ────────────────────────────────────────────
+//
+// Equivalent: spawn a lightweight fiber and run it to completion.
+//
+// psiber:      sched.spawnFiber(fn); sched.run();
+// boost.fiber: boost::fibers::fiber f(fn); f.join();
+//
+// Both create a userspace fiber on a pre-allocated stack and execute
+// a callable.  psiber's public entry point (psiber::thread) creates
+// an OS thread per instance — a deliberate design choice for the
+// thread-per-task architecture (see notes below).  For apples-to-apples
+// fiber lifecycle cost, we use the scheduler's spawnFiber() directly.
+//
+// ── API design note ──────────────────────────────────────────────────
+// psiber uses dedicated OS threads (psiber::thread) rather than
+// multiplexing N fibers onto one thread.  Each thread owns its own
+// scheduler, kqueue/epoll engine, and fiber pool.  Fibers are spawned
+// *within* a thread, not as standalone objects.  This means:
+//   - psiber::thread ≈ std::thread + scheduler (heavy, one-time setup)
+//   - spawnFiber()   ≈ boost::fibers::fiber   (lightweight, per-task)
+// The trade-off: no global fiber scheduler to configure, but fiber
+// creation requires an existing thread context.
+
+static void bench_fiber_create_join()
 {
-   constexpr int N = 10'000;   auto sched = scheduler_access::make(1000);
-
-   auto start = Clock::now();
-
-   for (int i = 0; i < N; ++i)
-      sched.spawnFiber([]() {});
-
-   sched.run();
-   auto end = Clock::now();
-
-   report("fiber create+run+destroy", N, elapsed_us(start, end));
-}
-
-static void bench_context_switch()
-{
-   constexpr int N = 100'000;   auto sched = scheduler_access::make(1001);
+   constexpr int N = 10'000;
+   auto sched = scheduler_access::make(1002);
 
    int count = 0;
 
-   // Two fibers ping-ponging via yield
+   sched.spawnFiber([&]() {
+      auto start = Clock::now();
+      for (int i = 0; i < N; ++i)
+      {
+         fiber_promise<void> done;
+         sched.spawnFiber([&done]() {
+            done.set_value();
+         });
+
+         // Park if the spawned fiber hasn't completed yet
+         if (!done.is_ready())
+         {
+            if (done.try_register_waiter(sched.currentFiber()))
+               sched.parkCurrentFiber();
+         }
+         done.get();
+         ++count;
+      }
+      auto end = Clock::now();
+      report("fiber create+run+join", count, elapsed_us(start, end));
+   });
+
+   sched.run();
+}
+
+// ── 3. Context switch (yield) ───────────────────────────────────────────────
+
+static void bench_context_switch()
+{
+   constexpr int N = 100'000;
+   auto sched = scheduler_access::make(1001);
+
+   int count = 0;
+
    sched.spawnFiber([&]() {
       for (int i = 0; i < N; ++i)
       {
@@ -114,136 +159,16 @@ static void bench_context_switch()
    report("context switch (yield)", count, elapsed_us(start, end));
 }
 
-static void bench_cross_thread_wake()
-{
-   constexpr int N = 10'000;   auto sched = scheduler_access::make(1002);
-
-   Fiber*           fiber_ptr = nullptr;
-   std::atomic<int> parked{0};
-   int              wakes = 0;
-
-   sched.spawnFiber([&]() {
-      fiber_ptr = sched.currentFiber();
-      for (int i = 0; i < N; ++i)
-      {
-         parked.store(i + 1, std::memory_order_release);
-         sched.parkCurrentFiber();
-         ++wakes;
-      }
-   });
-
-   std::thread sender([&]() {
-      for (int i = 0; i < N; ++i)
-      {
-         while (parked.load(std::memory_order_acquire) != i + 1)
-            ;
-         Scheduler::wake(fiber_ptr);
-      }
-   });
-
-   auto start = Clock::now();
-   sched.run();
-   auto end = Clock::now();
-   sender.join();
-
-   report("cross-thread wake (park+wake)", wakes, elapsed_us(start, end));
-}
-
-static void bench_cross_thread_pingpong()
-{
-   constexpr int N = 10'000;
-
-   // Two schedulers on separate threads, ping-ponging wake signals.
-   // Measures true round-trip cross-thread call latency.
-   auto sched_a = scheduler_access::make(2000);
-   auto sched_b = scheduler_access::make(2001);
-
-   Fiber*           fiber_a = nullptr;
-   Fiber*           fiber_b = nullptr;
-   std::atomic<int> ready{0};
-   int              round_trips = 0;
-
-   // Fiber on scheduler A: parks, gets woken by B, wakes B back
-   sched_a.spawnFiber([&]() {
-      fiber_a = sched_a.currentFiber();
-      ready.fetch_add(1, std::memory_order_release);
-
-      // Wait for fiber_b to be set
-      while (!fiber_b)
-         sched_a.yieldCurrentFiber();
-
-      for (int i = 0; i < N; ++i)
-      {
-         sched_a.parkCurrentFiber();
-         // Woken by B — wake B back
-         Scheduler::wake(fiber_b);
-         ++round_trips;
-      }
-   });
-
-   // Fiber on scheduler B: initiates the ping, parks, gets woken by A
-   sched_b.spawnFiber([&]() {
-      fiber_b = sched_b.currentFiber();
-      ready.fetch_add(1, std::memory_order_release);
-
-      // Wait for fiber_a to be set
-      while (!fiber_a)
-         sched_b.yieldCurrentFiber();
-
-      for (int i = 0; i < N; ++i)
-      {
-         // Initiate: wake A
-         Scheduler::wake(fiber_a);
-         // Wait for A to wake us back
-         sched_b.parkCurrentFiber();
-      }
-   });
-
-   // Run both schedulers on separate threads
-   auto start = Clock::now();
-   std::thread thread_b([&]() { sched_b.run(); });
-   sched_a.run();
-   auto end = Clock::now();
-   thread_b.join();
-
-   report("cross-thread ping-pong (round trip)", round_trips, elapsed_us(start, end));
-}
-
-static void bench_thread_call()
-{
-   constexpr int N = 10'000;
-
-   // Clean API: psiber::thread a, b — b.call() dispatches to a and gets result
-   psiber::thread worker("worker");
-   int            round_trips = 0;
-
-   psiber::thread caller([&]() {
-      auto start = Clock::now();
-
-      for (int i = 0; i < N; ++i)
-      {
-         int r = worker.call([&]() { return i + 1; });
-         (void)r;
-         ++round_trips;
-      }
-
-      auto end = Clock::now();
-      report("thread::call() round trip", round_trips, elapsed_us(start, end));
-   });
-
-   // Must quit explicitly — keepalive fiber blocks until quit()
-   caller.quit();
-   worker.quit();
-}
+// ── 4. Fiber mutex (uncontended) ────────────────────────────────────────────
 
 static void bench_fiber_mutex()
 {
-   constexpr int N = 500'000;   auto sched = scheduler_access::make(1003);
+   constexpr int N = 500'000;
+   auto sched = scheduler_access::make(1003);
 
    fiber_mutex mtx;
-   int         count = 0;
+   int count = 0;
 
-   // Single fiber: uncontended lock/unlock
    sched.spawnFiber([&]() {
       for (int i = 0; i < N; ++i)
       {
@@ -257,8 +182,129 @@ static void bench_fiber_mutex()
    sched.run();
    auto end = Clock::now();
 
-   report("fiber_mutex lock+unlock (uncontended)", count, elapsed_us(start, end));
+   report("fiber_mutex (uncontended)", count, elapsed_us(start, end));
 }
+
+// ── 5. Fiber mutex (contended) ──────────────────────────────────────────────
+
+static void bench_fiber_mutex_contended()
+{
+   constexpr int N           = 100'000;
+   constexpr int num_fibers  = 10;
+   auto sched = scheduler_access::make(1011);
+
+   fiber_mutex mtx;
+   int count = 0;
+
+   for (int f = 0; f < num_fibers; ++f)
+   {
+      sched.spawnFiber([&]() {
+         for (int i = 0; i < N; ++i)
+         {
+            mtx.lock(sched);
+            ++count;
+            mtx.unlock();
+         }
+      });
+   }
+
+   auto start = Clock::now();
+   sched.run();
+   auto end = Clock::now();
+
+   report("fiber_mutex (10-way contended)", count, elapsed_us(start, end));
+}
+
+// ── 6. Async + future (same thread) ────────────────────────────────────────
+//
+// Equivalent: spawn a producer fiber, return result via future.
+//
+// psiber:      spawnFiber → fiber_promise/fiber_future
+// boost.fiber: boost::fibers::async() → future.get()
+//
+// Both spawn a lightweight fiber to compute a value and return it
+// to a waiting fiber via a future.  psiber's public thread::async()
+// dispatches across OS threads (its primary use case — see note
+// below), so for a same-thread comparison we use spawnFiber with
+// a fiber_promise, which is the same mechanism async() uses internally.
+//
+// ── API design note ──────────────────────────────────────────────────
+// psiber::thread::async() always crosses an OS thread boundary
+// because psiber's concurrency model is thread-per-task: the caller
+// lives on one OS thread, the async work runs on another.  There is
+// no same-thread async() because fibers within one scheduler already
+// share state and can communicate via fiber_promise directly.
+// Boost.Fiber's async() runs in the same thread's fiber scheduler
+// because Boost.Fiber multiplexes all fibers onto one thread by
+// default.
+
+static void bench_async_future()
+{
+   constexpr int N = 10'000;
+   auto sched = scheduler_access::make(1006);
+
+   int count = 0;
+
+   sched.spawnFiber([&]() {
+      auto start = Clock::now();
+      for (int i = 0; i < N; ++i)
+      {
+         fiber_promise<int> promise;
+
+         sched.spawnFiber([&promise, i]() {
+            promise.set_value(i);
+         });
+
+         // Park if the spawned fiber hasn't completed yet
+         if (!promise.is_ready())
+         {
+            if (promise.try_register_waiter(sched.currentFiber()))
+               sched.parkCurrentFiber();
+         }
+         int v = promise.get();
+         (void)v;
+         ++count;
+      }
+      auto end = Clock::now();
+      report("async + future (same thread)", count, elapsed_us(start, end));
+   });
+
+   sched.run();
+}
+
+// ── 7. Cross-thread round-trip ──────────────────────────────────────────────
+//
+// psiber:      int r = worker.call([&]{ return compute(); });
+// boost.fiber: channel + future round-trip (no single-call API exists)
+
+static void bench_cross_thread_call()
+{
+   constexpr int N = 10'000;
+
+   psiber::thread worker("worker");
+   int round_trips = 0;
+
+   psiber::thread caller([&]() {
+      auto start = Clock::now();
+
+      for (int i = 0; i < N; ++i)
+      {
+         int r = worker.call([i]() { return i + 1; });
+         (void)r;
+         ++round_trips;
+      }
+
+      auto end = Clock::now();
+      report("cross-thread call", round_trips, elapsed_us(start, end));
+   });
+
+   caller.quit();
+   worker.quit();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// psiber-only benchmarks — no Boost.Fiber equivalent.
+// ══════════════════════════════════════════════════════════════════════════════
 
 static void bench_spin_lock()
 {
@@ -276,18 +322,18 @@ static void bench_spin_lock()
    }
    auto end = Clock::now();
 
-   report("spin_lock lock+unlock (uncontended)", count, elapsed_us(start, end));
+   report("spin_lock (uncontended)", count, elapsed_us(start, end));
 }
 
 static void bench_tcp_echo_throughput()
 {
    constexpr int    iterations  = 50'000;
-   constexpr size_t msg_size    = 64;   auto sched = scheduler_access::make(1004);
+   constexpr size_t msg_size    = 64;
+   auto sched = scheduler_access::make(1004);
 
    fiber_promise<uint16_t> port_promise;
    ssize_t                 total_bytes = 0;
 
-   // Server
    sched.spawnFiber([&]() {
       auto listener = tcp_listener::bind(0);
       port_promise.set_value(listener.port());
@@ -307,7 +353,6 @@ static void bench_tcp_echo_throughput()
       listener.close();
    });
 
-   // Client
    sched.spawnFiber([&]() {
       sched.yieldCurrentFiber();
       auto sock = tcp_socket::connect(sched, "127.0.0.1", port_promise.get());
@@ -342,14 +387,14 @@ static void bench_tcp_throughput_bulk()
 {
    constexpr size_t chunk_size  = 64 * 1024;
    constexpr size_t total_size  = 64 * 1024 * 1024;  // 64 MB
-   constexpr int    num_chunks  = total_size / chunk_size;   auto sched = scheduler_access::make(1005);
+   constexpr int    num_chunks  = total_size / chunk_size;
+   auto sched = scheduler_access::make(1005);
 
    fiber_promise<uint16_t> port_promise;
    ssize_t                 total_received = 0;
 
    std::vector<char> data(chunk_size, 'B');
 
-   // Server: just read everything
    sched.spawnFiber([&]() {
       auto listener = tcp_listener::bind(0);
       port_promise.set_value(listener.port());
@@ -367,7 +412,6 @@ static void bench_tcp_throughput_bulk()
       listener.close();
    });
 
-   // Client: write total_size bytes
    sched.spawnFiber([&]() {
       sched.yieldCurrentFiber();
       auto sock = tcp_socket::connect(sched, "127.0.0.1", port_promise.get());
@@ -391,137 +435,9 @@ static void bench_tcp_throughput_bulk()
                total_received, us / 1000.0);
 }
 
-static void bench_fiber_spawn_rate()
-{
-   constexpr int N = 10'000;   auto sched = scheduler_access::make(1006);
-
-   // Measure just spawn (no run) — minimal captures (SBO-fits)
-   auto start = Clock::now();
-   for (int i = 0; i < N; ++i)
-      sched.spawnFiber([]() {});
-   auto end = Clock::now();
-
-   report("fiber spawn (empty)", N, elapsed_us(start, end));
-
-   sched.run();  // drain
-}
-
-static void bench_fiber_spawn_captures()
-{
-   constexpr int N = 10'000;
-
-   // Simulate realistic captures: 48 bytes (shared_ptr + refs + ints)
-   // This exceeds libc++ std::function SBO (24 bytes).
-   auto dummy = std::make_shared<int>(42);
-   int  a = 1, b = 2, c = 3;
-   volatile int sink = 0;
-
-   // ── Template path (no std::function, no heap alloc) ──
-   {      auto sched = scheduler_access::make(1008);
-
-      auto start = Clock::now();
-      for (int i = 0; i < N; ++i)
-      {
-         sched.spawnFiber([dummy, &sched, &a, &b, &c, i]() {
-            (void)dummy; (void)sched; (void)a; (void)b; (void)c; (void)i;
-         });
-      }
-      auto end = Clock::now();
-      report("fiber spawn (48B, template)", N, elapsed_us(start, end));
-      sched.run();
-   }
-
-   // ── std::function path (forces heap alloc for >24B captures) ──
-   {      auto sched = scheduler_access::make(1009);
-
-      auto start = Clock::now();
-      for (int i = 0; i < N; ++i)
-      {
-         std::function<void()> fn = [dummy, &sched, &a, &b, &c, i]() {
-            (void)dummy; (void)sched; (void)a; (void)b; (void)c; (void)i;
-         };
-         sched.spawnFiber(std::move(fn));
-      }
-      auto end = Clock::now();
-      report("fiber spawn (48B, std::function)", N, elapsed_us(start, end));
-      sched.run();
-   }
-
-   sink = a + b + c;
-   (void)sink;
-}
-
-static void bench_fiber_spawn_pooled()
-{
-   constexpr int N = 10'000;   auto sched = scheduler_access::make(1010);
-
-   // Measure the full lifecycle with pooling: spawn, run, recycle, repeat.
-   // A driver fiber spawns child fibers one at a time, yielding after each
-   // so the child runs and recycles before the next spawn.
-   // After warmup, all spawns hit the freelist (no mmap).
-   sched.spawnFiber([&]() {
-      // Warmup: fill the pool with 1 fiber
-      sched.spawnFiber([]() {});
-      sched.yieldCurrentFiber();
-
-      // Measure: spawn from the pool
-      auto start = Clock::now();
-      for (int i = 0; i < N; ++i)
-      {
-         sched.spawnFiber([]() {});
-         sched.yieldCurrentFiber();  // let it run and recycle
-      }
-      auto end = Clock::now();
-      report("fiber spawn+run (pooled)", N, elapsed_us(start, end));
-   });
-   sched.run();
-}
-
-static void bench_tcp_connection_rate()
-{
-   constexpr int N = 1'000;   auto sched = scheduler_access::make(1007);
-
-   fiber_promise<uint16_t> port_promise;
-   int                     accepted = 0;
-
-   // Server: accept N connections
-   sched.spawnFiber([&]() {
-      auto listener = tcp_listener::bind(0);
-      port_promise.set_value(listener.port());
-
-      for (int i = 0; i < N; ++i)
-      {
-         auto conn = listener.accept(sched);
-         ++accepted;
-         conn.close();
-      }
-      listener.close();
-   });
-
-   // Client: connect N times
-   sched.spawnFiber([&]() {
-      sched.yieldCurrentFiber();
-      uint16_t port = port_promise.get();
-
-      for (int i = 0; i < N; ++i)
-      {
-         auto sock = tcp_socket::connect(sched, "127.0.0.1", port);
-         sock.close();
-      }
-   });
-
-   auto start = Clock::now();
-   sched.run();
-   auto end = Clock::now();
-
-   report("tcp connect+accept+close", accepted, elapsed_us(start, end));
-}
-
-// ── post() saturation benchmark ─────────────────────────────────────────────
-
 static void bench_post_saturation()
 {
-   std::printf("\n  post() saturation: N producers → 1 receiver (5ms sleep, empty callable)\n");
+   std::printf("\n  post() saturation: N producers -> 1 receiver (5ms sleep, empty callable)\n");
    std::printf("  %4s  %10s  %10s  %10s  %6s\n",
                "N", "posts/sec", "per-prod", "theoretical", "effic");
 
@@ -574,10 +490,9 @@ static void run_bench(const char* name, void (*fn)())
    std::printf("  [running: %s]\n", name);
    std::fflush(stdout);
 
-   // Watchdog: kill the whole process if a benchmark hangs
    auto done = std::make_shared<std::atomic<bool>>(false);
    std::thread watchdog([done, name]() {
-      for (int i = 0; i < 600; ++i)  // 60 seconds max (saturation bench takes ~14s)
+      for (int i = 0; i < 600; ++i)
       {
          std::this_thread::sleep_for(std::chrono::milliseconds{100});
          if (done->load(std::memory_order_relaxed))
@@ -597,21 +512,22 @@ int main()
 {
    std::printf("\n=== psiber benchmarks ===\n\n");
 
-   run_bench("raw_context_switch",     bench_raw_context_switch);
-   run_bench("fiber_spawn_rate",      bench_fiber_spawn_rate);
-   run_bench("fiber_spawn_captures", bench_fiber_spawn_captures);
-   run_bench("fiber_spawn_pooled",   bench_fiber_spawn_pooled);
-   run_bench("fiber_create_destroy",  bench_fiber_create_destroy);
-   run_bench("context_switch",        bench_context_switch);
-   run_bench("cross_thread_wake",     bench_cross_thread_wake);
-   run_bench("cross_thread_pingpong", bench_cross_thread_pingpong);
-   run_bench("thread_call",           bench_thread_call);
-   run_bench("spin_lock",             bench_spin_lock);
-   run_bench("fiber_mutex",           bench_fiber_mutex);
-   run_bench("tcp_connection_rate",   bench_tcp_connection_rate);
-   run_bench("tcp_echo_throughput",   bench_tcp_echo_throughput);
-   run_bench("tcp_throughput_bulk",   bench_tcp_throughput_bulk);
-   run_bench("post_saturation",      bench_post_saturation);
+   // ── Comparison benchmarks (match boost_fiber_bench.cpp) ──
+   std::printf("  ── vs Boost.Fiber ──\n\n");
+   run_bench("raw_context_switch",      bench_raw_context_switch);
+   run_bench("fiber_create_join",       bench_fiber_create_join);
+   run_bench("context_switch",          bench_context_switch);
+   run_bench("fiber_mutex",             bench_fiber_mutex);
+   run_bench("fiber_mutex_contended",   bench_fiber_mutex_contended);
+   run_bench("async_future",            bench_async_future);
+   run_bench("cross_thread_call",       bench_cross_thread_call);
+
+   // ── psiber-only benchmarks ──
+   std::printf("\n  ── psiber only ──\n\n");
+   run_bench("spin_lock",               bench_spin_lock);
+   run_bench("tcp_echo_throughput",     bench_tcp_echo_throughput);
+   run_bench("tcp_throughput_bulk",     bench_tcp_throughput_bulk);
+   run_bench("post_saturation",         bench_post_saturation);
 
    std::printf("\n");
    return 0;

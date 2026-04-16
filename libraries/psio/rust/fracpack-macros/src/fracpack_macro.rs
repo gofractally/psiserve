@@ -315,12 +315,16 @@ fn process_struct(
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let fields = struct_fields(data);
 
+    let used_fields: Vec<_> = fields.iter().filter(use_field).collect();
+    let num_used_fields = used_fields.len();
+    let last_field_ty = used_fields.last().map(|f| &f.ty);
+
     let optional_fields = fields.iter().filter(use_field).map(|field| {
         let ty = &field.ty;
         quote! {<#ty as #fracpack_mod::Pack>::IS_OPTIONAL}
     });
 
-    let check_optional_fields = fields.iter().filter(use_field).map(|field| {
+    let check_optional_fields: Vec<_> = fields.iter().filter(use_field).map(|field| {
         let name = &field.name;
         let ty = &field.ty;
         if opts.definition_will_not_change {
@@ -328,7 +332,7 @@ fn process_struct(
         } else {
             quote! {!<#ty as #fracpack_mod::Pack>::is_empty_optional(&self.#name)}
         }
-    });
+    }).collect();
 
     let use_heap = if !opts.definition_will_not_change {
         quote! {true}
@@ -397,10 +401,17 @@ fn process_struct(
                 #[allow(non_snake_case)]
                 let #pos = dest.len() as u32;
             };
-            quote! {
-                #pos_quote
-                if trailing_empty_index > #i {
+            if opts.definition_will_not_change {
+                quote! {
+                    #pos_quote
                     <#ty as #fracpack_mod::Pack>::embedded_fixed_pack(&self.#name, dest);
+                }
+            } else {
+                quote! {
+                    #pos_quote
+                    if trailing_empty_index > #i {
+                        <#ty as #fracpack_mod::Pack>::embedded_fixed_pack(&self.#name, dest);
+                    }
                 }
             }
         })
@@ -414,10 +425,17 @@ fn process_struct(
             let name = &field.name;
             let ty = &field.ty;
             let pos = &positions[i];
-            quote! {
-                if trailing_empty_index > #i {
+            if opts.definition_will_not_change {
+                quote! {
                     <#ty as #fracpack_mod::Pack>::embedded_fixed_repack(&self.#name, #pos, dest.len() as u32, dest);
                     <#ty as #fracpack_mod::Pack>::embedded_variable_pack(&self.#name, dest);
+                }
+            } else {
+                quote! {
+                    if trailing_empty_index > #i {
+                        <#ty as #fracpack_mod::Pack>::embedded_fixed_repack(&self.#name, #pos, dest.len() as u32, dest);
+                        <#ty as #fracpack_mod::Pack>::embedded_variable_pack(&self.#name, dest);
+                    }
                 }
             }
         })
@@ -486,24 +504,92 @@ fn process_struct(
         .fold(quote! {}, |acc, new| quote! {#acc #new});
 
     let pack_impl = if impl_pack {
-        quote! {
-            impl #impl_generics #fracpack_mod::Pack for #name #ty_generics #where_clause {
-                const VARIABLE_SIZE: bool = #use_heap;
-                const FIXED_SIZE: u32 =
-                    if <Self as #fracpack_mod::Pack>::VARIABLE_SIZE { 4 } else { #fixed_size };
-                fn pack(&self, dest: &mut Vec<u8>) {
-                    let non_empty_fields = vec![
-                        #(#check_optional_fields),*
-                    ];
-                    let trailing_empty_index = non_empty_fields.iter().rposition(|&is_non_empty| is_non_empty).map_or(0, |idx| idx + 1);
+        if opts.definition_will_not_change {
+            // definition_will_not_change: no trailing optional logic, no u16 heap header,
+            // no per-field branching — all fields are always packed
+            let packed_size_body = fields
+                .iter()
+                .filter(use_field)
+                .map(|field| {
+                    let name = &field.name;
+                    let ty = &field.ty;
+                    quote! {
+                        + <#ty as #fracpack_mod::Pack>::FIXED_SIZE as usize
+                        + <#ty as #fracpack_mod::Pack>::embedded_variable_packed_size(&self.#name)
+                    }
+                })
+                .fold(quote! { 0usize }, |acc, new| quote! { #acc #new });
 
-                    let heap = #fixed_data_size;
-                    assert!(heap as u16 as u32 == heap); // TODO: return error
+            quote! {
+                impl #impl_generics #fracpack_mod::Pack for #name #ty_generics #where_clause {
+                    const VARIABLE_SIZE: bool = #use_heap;
+                    const FIXED_SIZE: u32 =
+                        if <Self as #fracpack_mod::Pack>::VARIABLE_SIZE { 4 } else { #fixed_size };
+                    fn pack(&self, dest: &mut Vec<u8>) {
+                        #pack_fixed_members
+                        #pack_variable_members
+                    }
+                    fn packed_size(&self) -> usize {
+                        #packed_size_body
+                    }
+                }
+            }
+        } else {
+            // Extensible struct: needs trailing optional detection and u16 heap header
+            let packed_size_body = fields
+                .iter()
+                .filter(use_field)
+                .enumerate()
+                .map(|(i, field)| {
+                    let name = &field.name;
+                    let ty = &field.ty;
+                    quote! {
+                        + if trailing_empty_index > #i {
+                            <#ty as #fracpack_mod::Pack>::FIXED_SIZE as usize
+                            + <#ty as #fracpack_mod::Pack>::embedded_variable_packed_size(&self.#name)
+                        } else { 0 }
+                    }
+                })
+                .fold(quote! { 2usize }, |acc, new| quote! { #acc #new });
 
+            // When the last field is non-optional, trailing_empty_index is always
+            // num_fields. Emit a compile-time branch so the optimizer can constant-fold
+            // the index, eliminate the array scan + rposition, and remove all per-field
+            // `if trailing_empty_index > i` branches.
+            let last_ty = last_field_ty.expect("extensible struct must have fields");
+            let num = num_used_fields;
 
-                    #pack_heap
-                    #pack_fixed_members
-                    #pack_variable_members
+            quote! {
+                impl #impl_generics #fracpack_mod::Pack for #name #ty_generics #where_clause {
+                    const VARIABLE_SIZE: bool = #use_heap;
+                    const FIXED_SIZE: u32 =
+                        if <Self as #fracpack_mod::Pack>::VARIABLE_SIZE { 4 } else { #fixed_size };
+                    fn pack(&self, dest: &mut Vec<u8>) {
+                        let trailing_empty_index = if <#last_ty as #fracpack_mod::Pack>::IS_OPTIONAL {
+                            [
+                                #(#check_optional_fields),*
+                            ].iter().rposition(|&is_non_empty| is_non_empty).map_or(0, |idx| idx + 1)
+                        } else {
+                            #num
+                        };
+
+                        let heap = #fixed_data_size;
+                        assert!(heap as u16 as u32 == heap); // TODO: return error
+
+                        #pack_heap
+                        #pack_fixed_members
+                        #pack_variable_members
+                    }
+                    fn packed_size(&self) -> usize {
+                        let trailing_empty_index = if <#last_ty as #fracpack_mod::Pack>::IS_OPTIONAL {
+                            [
+                                #(#check_optional_fields),*
+                            ].iter().rposition(|&is_non_empty| is_non_empty).map_or(0, |idx| idx + 1)
+                        } else {
+                            #num
+                        };
+                        #packed_size_body
+                    }
                 }
             }
         }
@@ -950,11 +1036,16 @@ fn process_struct_view(
             quote! {
                 pub fn #field_name(&self) -> <#field_ty as #fracpack_mod::FracViewType<'a>>::View {
                     let field_offset: u32 = #offset_expr;
-                    let trailing_opt_idx = [#(#all_is_optional),*]
-                        .iter()
-                        .rposition(|&x| !x)
-                        .map_or(0, |idx| idx + 1);
-                    if #i >= trailing_opt_idx && field_offset >= self.heap_size as u32 {
+                    const TRAILING_OPT_IDX: usize = {
+                        let flags: &[bool] = &[#(#all_is_optional),*];
+                        let mut i = flags.len();
+                        loop {
+                            if i == 0 { break 0; }
+                            i -= 1;
+                            if !flags[i] { break i + 1; }
+                        }
+                    };
+                    if #i >= TRAILING_OPT_IDX && field_offset >= self.heap_size as u32 {
                         return <#field_ty as #fracpack_mod::FracViewType<'a>>::view_empty();
                     }
                     let mut pos = self.base + field_offset;

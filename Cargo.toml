@@ -3,4 +3,6 @@ resolver = "2"
 members = [
     "libraries/psio/rust/fracpack-macros",
     "libraries/psio/rust/fracpack",
+    "libraries/wit-macro",
+    "libraries/wit-test-component",
 ]

@@ -1,0 +1,60 @@
+syntax = "proto3";
+package pb;
+
+message Point {
+   double x = 1;
+   double y = 2;
+}
+
+message Token {
+   uint32 kind = 1;     // proto3 has no uint16, use uint32
+   uint32 offset = 2;
+   uint32 length = 3;
+   string text = 4;
+}
+
+message UserProfile {
+   uint64 id = 1;
+   string name = 2;
+   string email = 3;
+   string bio = 4;
+   uint32 age = 5;
+   double score = 6;
+   repeated string tags = 7;
+   bool verified = 8;
+}
+
+message LineItem {
+   string product = 1;
+   uint32 qty = 2;
+   double unit_price = 3;
+}
+
+message Order {
+   uint64 id = 1;
+   UserProfile customer = 2;
+   repeated LineItem items = 3;
+   double total = 4;
+   string note = 5;
+}
+
+message SensorReading {
+   uint64 timestamp = 1;
+   string device_id = 2;
+   double temp = 3;
+   double humidity = 4;
+   double pressure = 5;
+   double accel_x = 6;
+   double accel_y = 7;
+   double accel_z = 8;
+   double gyro_x = 9;
+   double gyro_y = 10;
+   double gyro_z = 11;
+   double mag_x = 12;
+   double mag_y = 13;
+   double mag_z = 14;
+   float battery = 15;
+   int32 signal_dbm = 16;  // proto3 has no int16
+   uint32 error_code = 17;
+   string firmware = 18;
+}

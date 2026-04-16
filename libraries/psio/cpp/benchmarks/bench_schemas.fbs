@@ -1,0 +1,59 @@
+namespace fb;
+
+table Point {
+   x: double;
+   y: double;
+}
+
+table Token {
+   kind: uint16;
+   offset: uint32;
+   length: uint32;
+   text: string;
+}
+
+table UserProfile {
+   id: uint64;
+   name: string;
+   email: string;
+   bio: string;
+   age: uint32;
+   score: double;
+   tags: [string];
+   verified: bool;
+}
+
+table LineItem {
+   product: string;
+   qty: uint32;
+   unit_price: double;
+}
+
+table Order {
+   id: uint64;
+   customer: UserProfile;
+   items: [LineItem];
+   total: double;
+   note: string;
+}
+
+table SensorReading {
+   timestamp: uint64;
+   device_id: string;
+   temp: double;
+   humidity: double;
+   pressure: double;
+   accel_x: double;
+   accel_y: double;
+   accel_z: double;
+   gyro_x: double;
+   gyro_y: double;
+   gyro_z: double;
+   mag_x: double;
+   mag_y: double;
+   mag_z: double;
+   battery: float;
+   signal_dbm: int16;
+   error_code: uint32;
+   firmware: string;
+}

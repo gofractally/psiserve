@@ -46,6 +46,10 @@ namespace psio {
    /// True if the type index refers to a primitive (negative).
    constexpr bool is_prim_idx(int32_t idx) { return idx < 0; }
 
+   /// Sentinel: "no type" for variant cases without payloads
+   /// and result types without ok/err.
+   constexpr int32_t WIT_NO_TYPE = INT32_MIN;
+
    // ---- Compound type definitions ----
 
    enum class wit_type_kind : uint8_t {
@@ -104,14 +108,15 @@ namespace psio {
    /// Contains both the raw .wit source text and pre-parsed structures
    /// for efficient runtime query.
    struct wit_world {
-      std::string                   name;
+      std::string                   package;     // e.g. "test:inventory@1.0.0"
+      std::string                   name;        // world name
       std::string                   wit_source;  // raw .wit text for tooling
       std::vector<wit_type_def>     types;       // all type definitions
       std::vector<wit_func>         funcs;       // all function signatures
       std::vector<wit_interface>    exports;
       std::vector<wit_interface>    imports;
    };
-   PSIO_REFLECT(wit_world, name, wit_source, types, funcs, exports, imports)
+   PSIO_REFLECT(wit_world, package, name, wit_source, types, funcs, exports, imports)
 
    // Backward-compat alias for psizam consumers
    using pzam_wit_world = wit_world;

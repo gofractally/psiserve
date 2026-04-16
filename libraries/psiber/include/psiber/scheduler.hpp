@@ -1,6 +1,9 @@
 #pragma once
 
+#include <psiber/detail/bitset_pool.hpp>
+#include <psiber/detail/bounded_counter.hpp>
 #include <psiber/detail/fiber.hpp>
+#include <psiber/detail/mpsc_stack.hpp>
 #include <psiber/detail/send_queue.hpp>
 #include <psiber/io_engine.hpp>
 #include <psiber/spin_lock.hpp>
@@ -14,27 +17,106 @@
 
 #include <boost/context/continuation.hpp>
 #include <boost/context/detail/exception.hpp>
-#include <boost/context/fixedsize_stack.hpp>
+
+#include <sys/mman.h>
 
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
 namespace psiber
 {
-   /// Thrown when a post()/invoke() callable attempts to yield.
-   /// The callable should use spawn()/async() instead.
-   struct drain_yield_error : std::runtime_error
+   /// mmap-based stack allocator for Boost.Context fibers.
+   ///
+   /// Uses anonymous mmap/munmap instead of malloc/free.  This isolates
+   /// fiber stacks from the heap entirely.  Boost.Context's fixedsize_stack
+   /// (which uses malloc) causes sporadic heap metadata corruption when
+   /// stacks are freed — confirmed on macOS ARM64, other platforms not
+   /// yet tested.  The Boost.Context assembly and C++ code are correct by
+   /// inspection (no out-of-bounds access), so the root cause appears to
+   /// be in the interaction between the system malloc and having sp point
+   /// into a malloc'd region during context switches.  The mmap approach
+   /// sidesteps the issue because mmap regions are separate VM mappings
+   /// with no adjacent heap metadata.
+   ///
+   /// Stack sizes are rounded up to the system page size.
+   struct mmap_stack
    {
-      drain_yield_error()
-         : std::runtime_error("post()/invoke() callable attempted to yield — "
-                              "use spawn()/async() for work that may suspend") {}
+      std::size_t size_;
+
+      explicit mmap_stack(std::size_t size = 65536) noexcept
+         : size_((size + 4095) & ~std::size_t(4095))
+      {
+      }
+
+      boost::context::stack_context allocate()
+      {
+         void* vp = ::mmap(nullptr, size_, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANON, -1, 0);
+         if (vp == MAP_FAILED)
+            throw std::bad_alloc();
+         boost::context::stack_context sctx;
+         sctx.size = size_;
+         sctx.sp   = static_cast<char*>(vp) + size_;
+         return sctx;
+      }
+
+      void deallocate(boost::context::stack_context& sctx) noexcept
+      {
+         void* vp = static_cast<char*>(sctx.sp) - sctx.size;
+         ::munmap(vp, sctx.size);
+      }
    };
 
+   /// Policy for handling WorkItem pool exhaustion in post().
+   ///
+   /// The scheduler maintains a fixed pool of 256 WorkItem slots plus
+   /// a configurable heap overflow limit (default 256, adjustable via
+   /// `setWorkHeapLimit()`).
+   ///
+   /// **When to use each policy:**
+   ///
+   ///   - `fail` — Default.  Throws immediately when the pool is full.
+   ///     Use when the caller has a natural way to push back (reject
+   ///     the request, close the connection, return an error upstream).
+   ///
+   ///   - `heap` — Overflow to the heap up to the heap limit.  Use
+   ///     for bursty workloads where transient spikes are expected and
+   ///     the burst will drain quickly.  Throws `pool_exhausted` when
+   ///     the heap limit is reached.
+   ///
+   ///   - `block` — Preferred for backpressure.  Tries pool, then heap
+   ///     overflow, then parks the fiber with a timeout until a slot
+   ///     frees.  The caller naturally slows down when capacity is
+   ///     saturated.  The timeout (default 1 s) acts as deadlock
+   ///     detection — if no slot frees within the deadline, a
+   ///     `pool_exhausted` exception is thrown.
+   enum class post_overflow
+   {
+      fail,   ///< Throw pool_exhausted immediately
+      heap,   ///< Heap overflow up to limit; throw when exhausted
+      block   ///< Pool → heap → park with timeout; throw on likely deadlock
+   };
+
+   /// Controls whether try_post() may heap-allocate on pool exhaustion.
+   enum class try_post_overflow
+   {
+      pool_only,   ///< Only use the fixed pool; return false if full
+      allow_heap   ///< Overflow to heap (up to limit) before returning false
+   };
+
+   /// Thrown when post() pool is exhausted and policy is `fail`, or
+   /// when `block` policy times out (likely deadlock).
+   struct pool_exhausted : std::runtime_error
+   {
+      pool_exhausted()
+         : std::runtime_error("post() pool exhausted — all 256 WorkItem slots in use") {}
+   };
    /// Cooperative fiber scheduler (single OS thread).
    ///
    /// Manages a set of fibers on one thread.  Fibers yield on I/O
@@ -54,14 +136,14 @@ namespace psiber
    /// kevent trigger is only sent when the receiver is blocked in poll,
    /// not when it's spinning or running fibers.
    ///
-   /// **Work item execution:** post() callables are executed by a
-   /// dedicated daemon drain fiber, giving them full fiber context
-   /// (can call post, sleep, yield, spawn).  The drain fiber runs at
-   /// priority 0 (high) and is poked awake when items arrive.  A
-   /// pre-allocated pool of 256 WorkItems (128-byte inline storage
-   /// each) provides zero-allocation post() on the hot path.  Pool
-   /// exhaustion triggers fiber-aware back-pressure (park + wake)
-   /// rather than unbounded spin.
+   /// **Work item execution:** post() callables are each assigned to
+   /// their own fiber, giving them full fiber context (can call post,
+   /// sleep, yield, spawn, block on I/O).  A pre-allocated pool of
+   /// 256 WorkItems (128-byte inline storage each) provides
+   /// zero-allocation post() on the hot path.  Concurrency self-sizes:
+   /// when a work item blocks, the scheduler picks up the next ready
+   /// item on another fiber.  Fiber pool reuse keeps the common case
+   /// (short non-blocking callables) cheap.
    // Forward declarations for friend access
    class thread;
    class reactor;
@@ -79,7 +161,7 @@ namespace psiber
       friend struct scheduler_access;
 
      public:
-      ~basic_scheduler() = default;
+      ~basic_scheduler();
 
       /// Thread-local access.  Returns the Scheduler running on this
       /// OS thread, or nullptr if none.
@@ -139,52 +221,35 @@ namespace psiber
       /// Zero heap allocation — the callable is placement-new'd into a
       /// pre-allocated pool of WorkItems (256 slots, 128 bytes each).
       ///
-      /// **Execution model:** Callables run **serially** on a single
-      /// dedicated drain fiber (high priority, FIFO order).  The drain
-      /// fiber has full fiber context — callables can call post(),
-      /// sleep(), yield(), spawnFiber(), and use fiber-aware locks.
-      /// However, each callable blocks the drain pipeline while it
-      /// runs, so keep callables short.
-      ///
-      /// **post() vs spawnFiber():**
-      ///   - `post()` — short coordination: counters, state updates,
-      ///     spawning fibers, posting follow-ups.  Runs on the shared
-      ///     drain fiber.  Blocks the drain while running.
-      ///   - `spawnFiber()` — independent work that may block on I/O,
-      ///     locks, or anything long-running.  Gets its own fiber and
-      ///     stack, can suspend without affecting other work.
+      /// **Execution model:** Each callable gets its own fiber with
+      /// full fiber context — callables can call post(), sleep(),
+      /// yield(), spawnFiber(), do I/O, and use fiber-aware locks.
+      /// If a callable blocks, the scheduler picks up the next ready
+      /// work item on another fiber.  Concurrency self-sizes to the
+      /// blocking depth.
       ///
       /// **Requirements:**
-      ///   - `sizeof(F) <= 128` — must fit in WorkItem inline storage
       ///   - `alignof(F) <= 16`
-      ///   - `F` must be `noexcept`-invocable — fire-and-forget has no
-      ///     error channel; mark your callable `noexcept` or ensure the
-      ///     lambda's body is noexcept
       ///
-      /// **Back-pressure (pool exhaustion):**
-      ///   - Fiber caller: parks until the drain fiber returns items to
-      ///     the freelist, then retries.  No spin, no busy-wait.
-      ///   - Non-fiber caller (plain OS thread): spin-pauses until space
-      ///     is available (no fiber to park).
+      /// **Size tiers (compile-time dispatch):**
+      ///   - `sizeof(F) <= 48` — single slot, zero allocation
+      ///   - `sizeof(F) > 48`  — single slot + heap-allocated callable
       ///
-      /// **Common patterns:**
-      /// ```
-      ///   // Fire-and-forget coordination
-      ///   sched.post([&]() noexcept { counter++; });
-      ///
-      ///   // Chaining: post → work → post follow-up
-      ///   sched.post([&]() noexcept {
-      ///      do_setup();
-      ///      sched.post([&]() noexcept { do_followup(); });
-      ///   });
-      ///
-      ///   // Spawn a fiber for long-running work
-      ///   sched.post([&]() noexcept {
-      ///      sched.spawnFiber([&]() { handle_request(); });
-      ///   });
-      /// ```
+      /// **Pool exhaustion (controlled by `policy`):**
+      ///   - `fail` — throw `pool_exhausted`
+      ///   - `heap` — heap overflow up to limit, then throw
+      ///   - `block` — pool → heap → park with timeout, then throw
       template <typename F>
-      void post(F&& fn);
+      void post(F&& fn, post_overflow policy = post_overflow::block,
+                std::chrono::milliseconds timeout = std::chrono::milliseconds{1000});
+
+      /// Non-throwing post.  Returns true if the callable was enqueued,
+      /// false if capacity is exhausted.  Never blocks, never throws.
+      /// Default `allow_heap` overflows to the heap (up to limit)
+      /// before returning false.  `pool_only` skips heap allocation.
+      template <typename F>
+      bool try_post(F&& fn,
+                    try_post_overflow overflow = try_post_overflow::allow_heap) noexcept;
 
       /// Post a task slot to this scheduler's intake queue.
       /// Thread-safe.  The slot must have been allocated from a SendQueue.
@@ -202,6 +267,14 @@ namespace psiber
          return (_current && _current->name) ? _current->name : "?";
       }
 
+      /// Set the maximum number of heap-overflow work items allowed.
+      /// When the 256-slot pool is full, `heap` and `block` policies
+      /// heap-allocate overflow items up to this limit.  Default: 256.
+      void setWorkHeapLimit(uint32_t max_items) { _work_heap_overflow.set_max(max_items); }
+
+      /// Current number of heap-allocated overflow work items.
+      uint32_t workHeapCount() const { return _work_heap_overflow.count(); }
+
      private:
       explicit basic_scheduler(uint32_t index = 0);
 
@@ -212,7 +285,6 @@ namespace psiber
       void pollAndUnblock(bool blocking);
       Fiber* popFromReadyQueues();
       void addToReadyQueue(Fiber* fiber);
-      void checkNotDrainFiber() const;
 
       // ── LIFO slot (Tokio pattern) ───────────────────────────────────
       Fiber*   _lifo_slot        = nullptr;
@@ -228,56 +300,53 @@ namespace psiber
 
       // (padding kept for cache-line alignment of wake_head below)
 
-      // ── Cross-thread wake list (MPSC, cache-line padded) ────────────
-      alignas(cache_line_size) std::atomic<Fiber*> _wake_head{nullptr};
-
-      // ── Cross-thread task intake (MPSC, cache-line padded) ──────────
-      alignas(cache_line_size) std::atomic<TaskSlotHeader*> _task_head{nullptr};
+      // ── Cross-thread MPSC queues (cache-line padded) ────────────────
+      detail::mpsc_stack<Fiber, &Fiber::next_wake>              _wake_list;
+      detail::mpsc_stack<TaskSlotHeader, &TaskSlotHeader::next> _task_list;
 
       // ── Cross-thread callable work list (MPSC, inline storage) ──────
       //
-      // Same CAS-push / exchange-drain topology as wake list.
       // WorkItems use type-erased inline storage (no std::function heap).
-      // Items come from a pre-allocated pool with a lock-free freelist
-      // (CAS-pop to acquire, CAS-push to release).  Zero heap allocation
-      // after warmup.  Back-pressure: pool exhaustion → fiber-aware park
-      // until drain returns items to freelist.
-      //
-      // Work items are executed by a dedicated daemon drain fiber, giving
-      // posted callables full fiber context (can call post, sleep, yield).
-      static constexpr size_t work_payload_size = 128;
-      static constexpr uint32_t work_pool_size  = 256;
+      // Zero heap allocation on the hot path.  Pool exhaustion falls back
+      // to heap allocation (configurable).
+      static constexpr size_t   work_payload_size = 48;
+      static constexpr uint32_t work_pool_size    = 256;
 
       struct WorkItem
       {
-         WorkItem*  next = nullptr;           // intrusive list pointer
+         WorkItem*  next = nullptr;           // intrusive list pointer (work queue)
          void (*run)(void*)  = nullptr;       // type-erased invoke
          void (*dtor)(void*) = nullptr;       // type-erased destructor
          alignas(16) char payload[work_payload_size];
       };
 
-      alignas(cache_line_size) std::atomic<WorkItem*> _work_head{nullptr};
+      /// Return a work item to the pool (or free if heap-allocated).
+      void return_work_slots(WorkItem* item);
 
-      // Freelist protected by spin lock — CAS-only pop has an ABA problem
-      // when multiple producer threads race (item recycled by drain fiber
-      // between load and CAS, stale next pointer corrupts the list).
-      spin_lock  _work_free_lock;
-      WorkItem*  _work_free = nullptr;
+      /// Place a type-erased callable into a WorkItem's payload.
+      /// Inline if sizeof(Decay) <= 48, else heap-allocated with pointer indirection.
+      template <typename Decay>
+      void place_callable_in_item(WorkItem* item, Decay&& fn, bool pool_slot);
 
-      // Pool storage (constructed in constructor)
-      std::unique_ptr<WorkItem[]> _work_pool;
+      detail::mpsc_stack<WorkItem, &WorkItem::next> _work_list;
+      detail::bitset_pool<work_pool_size>           _work_slots;
+      std::unique_ptr<WorkItem[]>                   _work_pool;
+      detail::bounded_counter                       _work_heap_overflow;
 
-      // ── Drain fiber ────────────────────────────────────────────────
-      // Dedicated daemon fiber that executes work items in fiber context.
-      // drainWorkList() pokes it when items arrive on _work_head.
-      Fiber* _drain_fiber      = nullptr;
-      bool   _drain_executing  = false;  // true while a work item callable is running
+      // ── Pool wait list (fibers waiting for a free slot) ──────────────
+      // FIFO queue of fibers parked on post(block).  Scheduler-local —
+      // only accessed from the scheduler thread.  Uses next_blocked for
+      // linkage (a fiber can only be in one wait state at a time).
+      Fiber*   _pool_wait_head = nullptr;
+      Fiber*   _pool_wait_tail = nullptr;
 
-      // ── Pool-exhaustion wait list ──────────────────────────────────
-      // Fibers waiting for WorkItem pool space.  Protected by _work_space_lock.
-      // Drain fiber wakes waiters after returning items to freelist.
-      spin_lock _work_space_lock;
-      Fiber*    _work_space_wait_head = nullptr;
+      /// Wake one waiter (if any) after a pool slot is freed.
+      /// Skips fibers whose timer already fired (state != Sleeping).
+      void wakePoolWaiter();
+
+      /// Remove a fiber from the pool wait list (O(n) scan).
+      /// Called on resume from the block path — no-op if already removed.
+      void removeFromPoolWait(Fiber* fiber);
 
       // ── Priority ready queues (3 levels, FIFO within each) ──────────
       std::deque<Fiber*> _ready_queues[3];
@@ -364,12 +433,7 @@ namespace psiber
 
       fp->cont = ctx::callcc(
          std::allocator_arg,
-         // fixedsize_stack (malloc-based) instead of protected_fixedsize_stack
-         // (mmap + guard page): protected_fixedsize_stack triggers sporadic heap
-         // corruption on macOS ARM64 during stack deallocation — affects both
-         // forced_unwind and clean callcc returns.  Guard pages are a debugging
-         // aid; production stack sizes will be computed from the WASM call graph.
-         ctx::fixedsize_stack(stack_size),
+         mmap_stack(stack_size),
          [this, fp](ctx::continuation&& sched) mutable
          {
             fp->sched_cont = &sched;
@@ -412,81 +476,207 @@ namespace psiber
       registerFiber(std::move(fiber));
    }
 
+   // ── return_work_slots ──────────────────────────────────────────────
+
+   template <typename Engine>
+   void basic_scheduler<Engine>::return_work_slots(WorkItem* item)
+   {
+      // Range check: pool item or heap overflow?
+      if (item < &_work_pool[0] || item >= &_work_pool[work_pool_size])
+      {
+         delete[] reinterpret_cast<char*>(item);
+         _work_heap_overflow.decrement();
+         return;
+      }
+
+      uint32_t idx = static_cast<uint32_t>(item - &_work_pool[0]);
+      _work_slots.push(idx);
+   }
+
+   // ── Callable placement helper (shared by post / try_post) ──────────
+
+   template <typename Engine>
+   template <typename Decay>
+   void basic_scheduler<Engine>::place_callable_in_item(
+      WorkItem* item, Decay&& fn, bool pool_slot)
+   {
+      if constexpr (sizeof(Decay) <= work_payload_size)
+      {
+         // Inline — callable fits in the 48-byte payload
+         new (item->payload) Decay(std::forward<Decay>(fn));
+         item->run  = [](void* p) { (*static_cast<Decay*>(p))(); };
+         item->dtor = [](void* p) { static_cast<Decay*>(p)->~Decay(); };
+      }
+      else
+      {
+         // Heap — callable too large for inline storage.
+         // Allocate on the heap, store a pointer in the payload.
+         auto* heap = static_cast<Decay*>(::operator new(sizeof(Decay)));
+         new (heap) Decay(std::forward<Decay>(fn));
+         *reinterpret_cast<Decay**>(item->payload) = heap;
+         item->run  = [](void* p) { (**static_cast<Decay**>(p))(); };
+         item->dtor = [](void* p) {
+            auto* obj = *static_cast<Decay**>(p);
+            obj->~Decay();
+            ::operator delete(obj);
+         };
+      }
+   }
+
    // ── post() template implementation ─────────────────────────────────
 
    template <typename Engine>
    template <typename F>
-   void basic_scheduler<Engine>::post(F&& fn)
+   void basic_scheduler<Engine>::post(F&& fn, post_overflow policy,
+                                      std::chrono::milliseconds timeout)
    {
       using Decay = std::decay_t<F>;
-      static_assert(sizeof(Decay) <= work_payload_size,
-                    "Callable too large for WorkItem inline storage");
       static_assert(alignof(Decay) <= 16,
                     "Callable alignment too large for WorkItem");
-      static_assert(std::is_nothrow_invocable_v<Decay>,
-                    "post() callables must be noexcept — fire-and-forget has no error channel");
 
-      // Pop a WorkItem from the freelist (spin-locked, zero alloc)
-      WorkItem* item;
-      while (true)
-      {
-         _work_free_lock.lock();
-         item = _work_free;
-         if (item)
+      WorkItem* item     = nullptr;
+      bool      pool_slot = false;
+
+      // Try to claim a pool slot
+      auto try_pool = [&]() -> bool {
+         auto idx = _work_slots.try_pop();
+         if (idx)
          {
-            _work_free = item->next;
-            _work_free_lock.unlock();
-            break;
+            item      = &_work_pool[*idx];
+            pool_slot = true;
+            return true;
          }
-         _work_free_lock.unlock();
+         return false;
+      };
 
-         // Pool exhausted — fiber-aware wait if possible
-         basic_scheduler* caller = basic_scheduler::current();
-         if (caller && caller->currentFiber())
+      if (!try_pool())
+      {
+         // Pool exhausted — apply caller's overflow policy
+         switch (policy)
          {
-            Fiber* me = caller->currentFiber();
-            _work_space_lock.lock();
-            // Double-check under lock (items may have been returned)
-            _work_free_lock.lock();
-            item = _work_free;
-            if (item)
+            case post_overflow::fail:
+               throw pool_exhausted{};
+
+            case post_overflow::heap:
             {
-               _work_free = item->next;
-               _work_free_lock.unlock();
-               _work_space_lock.unlock();
+               if (!_work_heap_overflow.try_increment())
+                  throw pool_exhausted{};
+               auto* raw = new char[sizeof(WorkItem)];
+               item = new (raw) WorkItem{};
                break;
             }
-            _work_free_lock.unlock();
-            // Enqueue and park
-            me->next_wake = _work_space_wait_head;
-            _work_space_wait_head = me;
-            _work_space_lock.unlock();
-            caller->parkCurrentFiber();
-            continue;  // retry after wake
-         }
 
-         // Non-fiber caller — spin-pause
-#if defined(__x86_64__)
-         __builtin_ia32_pause();
-#elif defined(__aarch64__)
-         asm volatile("yield" ::: "memory");
-#endif
+            case post_overflow::block:
+            {
+               // Try heap overflow before parking
+               if (_work_heap_overflow.try_increment())
+               {
+                  auto* raw = new char[sizeof(WorkItem)];
+                  item = new (raw) WorkItem{};
+                  break;
+               }
+
+               // Both pool and heap exhausted — park with timeout.
+               // Fiber joins the pool wait list and sets a wake_time.
+               // Either a slot frees (wakePoolWaiter sets state to
+               // Ready, "cancelling" the timer) or the timer fires
+               // (pollAndUnblock sets state to Ready).
+               auto* sched = basic_scheduler::current();
+               if (sched == this && sched->currentFiber())
+               {
+                  Fiber* fiber = sched->currentFiber();
+
+                  // Add to pool wait list (FIFO)
+                  fiber->next_blocked = nullptr;
+                  if (_pool_wait_tail)
+                     _pool_wait_tail->next_blocked = fiber;
+                  else
+                     _pool_wait_head = fiber;
+                  _pool_wait_tail = fiber;
+
+                  // Park with timeout — pollAndUnblock will wake us
+                  // if the timer expires before a slot frees
+                  fiber->state     = FiberState::Sleeping;
+                  fiber->wake_time = std::chrono::steady_clock::now() + timeout;
+
+                  auto& sc = *fiber->sched_cont;
+                  sc = sc.resume();
+
+                  if (_interrupted)
+                     throw shutdown_exception{};
+
+                  // Remove from wait list if still there (timer path)
+                  removeFromPoolWait(fiber);
+
+                  // Slot-free wake: try_pool succeeds.
+                  // Timer wake: try_pool fails → throw.
+                  if (!try_pool())
+                     throw pool_exhausted{};
+               }
+               else
+               {
+                  // Cross-scheduler or non-fiber: spin with timeout
+                  auto deadline = std::chrono::steady_clock::now() + timeout;
+                  while (!try_pool())
+                  {
+                     if (std::chrono::steady_clock::now() >= deadline)
+                        throw pool_exhausted{};
+                     std::this_thread::yield();
+                  }
+               }
+               break;
+            }
+         }
       }
 
-      // Placement-new callable into inline storage
-      new (item->payload) Decay(std::forward<F>(fn));
-      item->run  = [](void* p) noexcept { (*static_cast<Decay*>(p))(); };
-      item->dtor = [](void* p) noexcept { static_cast<Decay*>(p)->~Decay(); };
+      place_callable_in_item<Decay>(item, std::forward<F>(fn), pool_slot);
 
-      // CAS-push onto the work list
-      WorkItem* old_head = _work_head.load(std::memory_order_relaxed);
-      do
-      {
-         item->next = old_head;
-      } while (!_work_head.compare_exchange_weak(
-         old_head, item, std::memory_order_release, std::memory_order_relaxed));
-
+      _work_list.push(item);
       notifyIfPolling();
+   }
+
+   // ── try_post() template implementation ────────────────────────────────
+
+   template <typename Engine>
+   template <typename F>
+   bool basic_scheduler<Engine>::try_post(F&& fn, try_post_overflow overflow) noexcept
+   {
+      using Decay = std::decay_t<F>;
+      static_assert(alignof(Decay) <= 16,
+                    "Callable alignment too large for WorkItem");
+
+      WorkItem* item     = nullptr;
+      bool      pool_slot = false;
+
+      // Try pool first
+      auto idx = _work_slots.try_pop();
+      if (idx)
+      {
+         item      = &_work_pool[*idx];
+         pool_slot = true;
+      }
+      else
+      {
+         if (overflow == try_post_overflow::pool_only)
+            return false;
+
+         if (!_work_heap_overflow.try_increment())
+            return false;
+
+         auto* raw = new (std::nothrow) char[sizeof(WorkItem)];
+         if (!raw)
+         {
+            _work_heap_overflow.decrement();
+            return false;
+         }
+         item = new (raw) WorkItem{};
+      }
+
+      place_callable_in_item<Decay>(item, std::forward<F>(fn), pool_slot);
+
+      _work_list.push(item);
+      notifyIfPolling();
+      return true;
    }
 
 }  // namespace psiber

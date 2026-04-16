@@ -25,8 +25,10 @@ namespace psiber
    /// reactor's ready queue.
    ///
    /// Each strand owns a private arena for zero-allocation task storage.
-   /// Free is lock-free (CAS push onto return stack).  Alloc uses a
-   /// spin_lock to drain returned blocks, scan the free list, or bump.
+   /// Free is lock-free (CAS push onto return stack).  Alloc is
+   /// single-caller (strand serialization guarantees at most one fiber
+   /// runs at a time), so it needs no lock — it drains the atomic
+   /// return stack, coalesces, and bumps without contention.
    class strand
    {
       friend class reactor;
@@ -47,7 +49,7 @@ namespace psiber
 
       /// Allocate `bytes` from the per-strand arena.
       /// Returns nullptr if the arena is exhausted.
-      /// Thread-safe (spin_lock protected).
+      /// Single-caller only (strand serialization guarantees this).
       void* alloc(uint32_t bytes);
 
       /// Free a pointer previously returned by alloc().
@@ -110,9 +112,8 @@ namespace psiber
       // Lock-free return stack: any thread can free() via CAS push
       alignas(cache_line_size) std::atomic<Block*> _returned{nullptr};
 
-      // Protected alloc state
-      Block*    _free_list = nullptr;
-      spin_lock _alloc_lock;
+      // Alloc-side state (single-caller under strand serialization)
+      Block* _free_list = nullptr;
 
       // ── Scheduling internals ────────────────────────────────────
 

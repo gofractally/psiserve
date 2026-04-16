@@ -884,3 +884,110 @@ namespace psio::reflection_impl
    using std::pair;
    PSIO_REFLECT(template(typename, typename) pair, first, second)
 }  // namespace psio::reflection_impl
+
+// ══════════════════════════════════════════════════════════════════════════
+// Compile-time FNV-1a hash for enum name lookup
+// ══════════════════════════════════════════════════════════════════════════
+
+namespace psio {
+
+constexpr uint64_t fnv1a(const char* s, size_t len)
+{
+   uint64_t h = 14695981039346656037ULL;
+   for (size_t i = 0; i < len; ++i)
+   {
+      h ^= static_cast<uint8_t>(s[i]);
+      h *= 1099511628211ULL;
+   }
+   return h;
+}
+
+constexpr uint64_t fnv1a(std::string_view s)
+{
+   return fnv1a(s.data(), s.size());
+}
+
+constexpr uint64_t fnv1a(const char* s)
+{
+   size_t len = 0;
+   for (const char* p = s; *p; ++p)
+      ++len;
+   return fnv1a(s, len);
+}
+
+}  // namespace psio
+
+// ══════════════════════════════════════════════════════════════════════════
+// PSIO_REFLECT_ENUM — compile-time enum reflection with fast conversion
+//
+// Usage:
+//   enum class Color : uint8_t { Red = 0, Green = 1, Blue = 2 };
+//   PSIO_REFLECT_ENUM(Color, Red, Green, Blue)
+//
+// Provides:
+//   psio::reflect<Color>::name           → "Color"
+//   psio::reflect<Color>::is_enum        → true
+//   psio::reflect<Color>::count          → 3
+//   psio::reflect<Color>::labels[]       → {"Red", "Green", "Blue"}
+//   psio::reflect<Color>::values[]       → {Color::Red, Color::Green, Color::Blue}
+//   psio::reflect<Color>::to_string(e)   → "Red" | nullptr  (switch)
+//   psio::reflect<Color>::from_string(s) → Color::Red | nullopt  (hash+switch)
+// ══════════════════════════════════════════════════════════════════════════
+
+// Helper: stringify one enum value name for the labels array
+#define PSIO_ENUM_LABEL(r, data, elem) BOOST_PP_STRINGIZE(elem),
+
+// Helper: qualify one enum value for the values array
+#define PSIO_ENUM_VALUE(r, ENUM, elem) ENUM::elem,
+
+// Helper: generate a to_string switch case
+#define PSIO_ENUM_TO_CASE(r, ENUM, elem) \
+   case ENUM::elem: return BOOST_PP_STRINGIZE(elem);
+
+// Helper: generate a from_string hash-switch case
+#define PSIO_ENUM_FROM_CASE(r, ENUM, elem)                                   \
+   case ::psio::fnv1a(BOOST_PP_STRINGIZE(elem)):                             \
+      if (s == BOOST_PP_STRINGIZE(elem)) return ENUM::elem;                  \
+      break;
+
+#define PSIO_REFLECT_ENUM(ENUM, ...)                                                                                  \
+   template <typename>                                                                                                \
+   struct BOOST_PP_CAT(psio_reflect_enum_impl_, ENUM)                                                                 \
+   {                                                                                                                  \
+      static constexpr bool             is_defined              = true;                                               \
+      static constexpr bool             is_struct               = false;                                              \
+      static constexpr bool             is_enum                 = true;                                               \
+      static constexpr bool             definitionWillNotChange = false;                                              \
+      static constexpr ::psio::FixedString name                 = BOOST_PP_STRINGIZE(ENUM);                           \
+      using underlying_type                                     = std::underlying_type_t<ENUM>;                       \
+                                                                                                                      \
+      static constexpr size_t count = BOOST_PP_VARIADIC_SIZE(__VA_ARGS__);                                            \
+                                                                                                                      \
+      static constexpr const char* labels[] = {                                                                       \
+          BOOST_PP_SEQ_FOR_EACH(PSIO_ENUM_LABEL, ~, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))};                          \
+                                                                                                                      \
+      static constexpr ENUM values[] = {                                                                              \
+          BOOST_PP_SEQ_FOR_EACH(PSIO_ENUM_VALUE, ENUM, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))};                       \
+                                                                                                                      \
+      /* int → string: switch (compiler turns contiguous cases into table) */                                         \
+      static constexpr const char* to_string(ENUM e)                                                                  \
+      {                                                                                                               \
+         switch (e)                                                                                                   \
+         {                                                                                                            \
+            BOOST_PP_SEQ_FOR_EACH(PSIO_ENUM_TO_CASE, ENUM, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))                     \
+            default: return nullptr;                                                                                  \
+         }                                                                                                            \
+      }                                                                                                               \
+                                                                                                                      \
+      /* string → int: FNV-1a hash + switch (one strcmp per case) */                                                  \
+      static constexpr std::optional<ENUM> from_string(std::string_view s)                                            \
+      {                                                                                                               \
+         switch (::psio::fnv1a(s))                                                                                    \
+         {                                                                                                            \
+            BOOST_PP_SEQ_FOR_EACH(PSIO_ENUM_FROM_CASE, ENUM, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))                   \
+            default: break;                                                                                           \
+         }                                                                                                            \
+         return std::nullopt;                                                                                         \
+      }                                                                                                               \
+   };                                                                                                                 \
+   BOOST_PP_CAT(psio_reflect_enum_impl_, ENUM)<ENUM> psio_get_reflect_impl(ENUM*, ::psio::ReflectDummyParam*);

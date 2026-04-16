@@ -1,5 +1,6 @@
 #pragma once
 
+#include <psiber/detail/sentinel_stack.hpp>
 #include <psiber/scheduler.hpp>
 #include <psiber/strand.hpp>
 
@@ -55,13 +56,7 @@ namespace psiber
       Scheduler& scheduler(uint32_t i) { return *_schedulers[i]; }
 
      private:
-      static strand* locked_sentinel()
-      {
-         return reinterpret_cast<strand*>(static_cast<uintptr_t>(1));
-      }
-
-      // Lock-free ready-strand queue
-      alignas(cache_line_size) std::atomic<strand*> _ready_head{nullptr};
+      detail::sentinel_stack<strand, &strand::next_ready> _ready_strands;
 
       std::vector<std::unique_ptr<Scheduler>> _schedulers;
       std::vector<std::thread>                _threads;

@@ -32,9 +32,12 @@ namespace psiber
 
    void* strand::alloc(uint32_t bytes)
    {
-      uint32_t total = (sizeof(Block) + bytes + 15) & ~15u;
+      // Single-caller: strand serialization guarantees at most one fiber
+      // runs at a time, so alloc() is never called concurrently.  The only
+      // cross-thread interaction is free() CAS-pushing onto _returned,
+      // which we drain atomically below.  No lock needed.
 
-      _alloc_lock.lock();
+      uint32_t total = (sizeof(Block) + bytes + 15) & ~15u;
 
       // 1. Drain returned blocks into the free list
       Block* ret = _returned.exchange(nullptr, std::memory_order_acquire);
@@ -83,7 +86,6 @@ namespace psiber
             {
                cur->size += cur->next->size;
                cur->next  = cur->next->next;
-               // Don't advance — check if we can merge with the next one too
             }
             else
             {
@@ -101,24 +103,19 @@ namespace psiber
          {
             *prev = b->next;
             b->next = nullptr;
-            _alloc_lock.unlock();
             return reinterpret_cast<char*>(b) + sizeof(Block);
          }
       }
 
       // 4. Bump pointer
       if (_bump + total > _capacity)
-      {
-         _alloc_lock.unlock();
          return nullptr;
-      }
 
       auto* b = reinterpret_cast<Block*>(_region + _bump);
       b->size = total;
       b->next = nullptr;
       _bump += total;
 
-      _alloc_lock.unlock();
       return reinterpret_cast<char*>(b) + sizeof(Block);
    }
 

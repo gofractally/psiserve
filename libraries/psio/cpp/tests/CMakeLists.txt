@@ -2,6 +2,10 @@ add_executable(psio_tests
    main.cpp
    frac_ref_tests.cpp
    json_tests.cpp
+   multiformat_tests.cpp
+   view_tests.cpp
+   capnp_view_tests.cpp
+   capnp_schema_tests.cpp
 )
 
 target_link_libraries(psio_tests PRIVATE psio)

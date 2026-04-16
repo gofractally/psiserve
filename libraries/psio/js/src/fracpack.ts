@@ -152,12 +152,19 @@ export interface FracType<T> {
   view(data: Uint8Array): T;
 }
 
+/** Result of rawField(): byte range within packed data (variable-size) or decoded value (fixed-size). */
+export type RawFieldResult = { offset: number; length: number } | { value: any };
+
 /** Struct type with zero-allocation field access and in-place mutation. */
 export interface StructType<T> extends FracType<T> {
   /** Read a single field directly from packed data. Zero allocation beyond the decode itself. */
   readField<K extends keyof T & string>(data: Uint8Array, name: K): T[K];
   /** Update a single field in packed data. Returns new buffer (copies for fixed-size, repacks for variable-size). */
   setField<K extends keyof T & string>(data: Uint8Array, name: K, value: T[K]): Uint8Array;
+  /** Navigate to a field without decoding variable-size data. Returns {offset, length} for
+   *  variable-size fields (strings, bytes, vecs) or {value} for fixed-size fields.
+   *  This measures pure buffer navigation cost without string/array decode overhead. */
+  rawField(data: Uint8Array, name: string): RawFieldResult;
 }
 
 /** Extract the TypeScript type from a FracType. */
@@ -946,6 +953,30 @@ export function struct<F extends Record<string, FracType<any>>>(
     return fi._viewAt(data, dv, fp);
   };
 
+  // Zero-copy field navigation: returns {offset, length} for variable-size fields,
+  // {value} for fixed-size fields. Never decodes strings or allocates arrays.
+  (stype as any).rawField = (data: Uint8Array, name: string): RawFieldResult => {
+    const idx = fieldLookup.get(name);
+    if (idx === undefined) throw new FracpackError(`Unknown field: ${name}`);
+    const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const fs = dv.getUint16(0, true);
+    const fixedStart = 2;
+    const heapPos = fixedStart + fs;
+    const fi = impls[idx];
+    const fp = fixedStart + fieldOffsets[idx];
+    if (fp + fi.fixedSize > heapPos) return { value: null };
+    if (fi.isVariableSize) {
+      const off = dv.getUint32(fp, true);
+      if (off === 0) return { offset: fp, length: 0 };
+      if (off === 1 && fi.isOptional) return { value: null };
+      // Follow the pointer to the data; for str/bytes the first 4 bytes are the length prefix
+      const dataPos = fp + off;
+      const dataLen = dv.getUint32(dataPos, true);
+      return { offset: dataPos + 4, length: dataLen };
+    }
+    return { value: fi._viewAt(data, dv, fp) };
+  };
+
   // In-place field mutation
   (stype as any).setField = (data: Uint8Array, name: string, value: any): Uint8Array => {
     const idx = fieldLookup.get(name);
@@ -1083,6 +1114,23 @@ export function fixedStruct<F extends Record<string, FracType<any>>>(
       return fi._viewAt(data, dv, fp + off);
     }
     return fi._viewAt(data, dv, fp);
+  };
+
+  // Zero-copy field navigation (fixedStruct variant)
+  (stype as any).rawField = (data: Uint8Array, name: string): RawFieldResult => {
+    const idx = fieldLookup.get(name);
+    if (idx === undefined) throw new FracpackError(`Unknown field: ${name}`);
+    const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const fi = impls[idx];
+    const fp = fieldOffsets[idx];
+    if (fi.isVariableSize) {
+      const off = dv.getUint32(fp, true);
+      if (off === 0) return { offset: fp, length: 0 };
+      const dataPos = fp + off;
+      const dataLen = dv.getUint32(dataPos, true);
+      return { offset: dataPos + 4, length: dataLen };
+    }
+    return { value: fi._viewAt(data, dv, fp) };
   };
 
   // In-place field mutation
