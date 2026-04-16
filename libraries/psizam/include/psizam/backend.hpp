@@ -49,8 +49,8 @@
 // MUTABLE GLOBALS IMPORT/EXPORT
 //   mutable global import        🟢     🟢       🟢        🟢       🟢      🟢
 //
-// EXCEPTION HANDLING
-//   try/catch/throw              🟢     🟢       🟢        🟢       🟢      🟢
+// EXCEPTION HANDLING (v2)
+//   try_table/throw/throw_ref    🟢     🟢       🟢        🟢       🟢      🟢
 //
 // THREADS / ATOMICS
 //   atomic ops                   🟢     🟢       🟢        🟢       🟢      🟢
