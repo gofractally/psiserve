@@ -16,7 +16,8 @@ using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <global_0_wasm>", "[global_0_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "global.0.wasm");
    backend_t bkend( code, &wa );
 

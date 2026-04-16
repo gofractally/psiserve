@@ -5,6 +5,7 @@
 
 #include <psizam/detail/llvm_jit_compiler.hpp>
 #include <psizam/detail/llvm_runtime_helpers.hpp>
+#include <psizam/detail/softfloat.hpp>
 
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
@@ -86,9 +87,55 @@ namespace psizam::detail {
       add_sym("__psizam_elem_drop",      reinterpret_cast<void*>(&__psizam_elem_drop));
       add_sym("__psizam_table_copy",     reinterpret_cast<void*>(&__psizam_table_copy));
       add_sym("__psizam_call_indirect",  reinterpret_cast<void*>(&__psizam_call_indirect));
+      add_sym("__psizam_get_memory",    reinterpret_cast<void*>(&__psizam_get_memory));
+      add_sym("__psizam_table_get",    reinterpret_cast<void*>(&__psizam_table_get));
+      add_sym("__psizam_table_set",    reinterpret_cast<void*>(&__psizam_table_set));
+      add_sym("__psizam_table_grow",   reinterpret_cast<void*>(&__psizam_table_grow));
+      add_sym("__psizam_table_size",   reinterpret_cast<void*>(&__psizam_table_size));
+      add_sym("__psizam_table_fill",   reinterpret_cast<void*>(&__psizam_table_fill));
       add_sym("__psizam_call_depth_dec", reinterpret_cast<void*>(&__psizam_call_depth_dec));
       add_sym("__psizam_call_depth_inc", reinterpret_cast<void*>(&__psizam_call_depth_inc));
       add_sym("__psizam_trap",           reinterpret_cast<void*>(&__psizam_trap));
+
+      // Softfloat helpers — map __psizam_sf_* symbols to inline _psizam_* functions
+      add_sym("__psizam_sf_f32_add",       reinterpret_cast<void*>(&_psizam_f32_add));
+      add_sym("__psizam_sf_f32_sub",       reinterpret_cast<void*>(&_psizam_f32_sub));
+      add_sym("__psizam_sf_f32_mul",       reinterpret_cast<void*>(&_psizam_f32_mul));
+      add_sym("__psizam_sf_f32_div",       reinterpret_cast<void*>(&_psizam_f32_div));
+      add_sym("__psizam_sf_f32_min",       reinterpret_cast<void*>(&_psizam_f32_min<true>));
+      add_sym("__psizam_sf_f32_max",       reinterpret_cast<void*>(&_psizam_f32_max<true>));
+      add_sym("__psizam_sf_f32_copysign",  reinterpret_cast<void*>(&_psizam_f32_copysign));
+      add_sym("__psizam_sf_f32_abs",       reinterpret_cast<void*>(&_psizam_f32_abs));
+      add_sym("__psizam_sf_f32_neg",       reinterpret_cast<void*>(&_psizam_f32_neg));
+      add_sym("__psizam_sf_f32_sqrt",      reinterpret_cast<void*>(&_psizam_f32_sqrt));
+      add_sym("__psizam_sf_f32_ceil",      reinterpret_cast<void*>(&_psizam_f32_ceil<true>));
+      add_sym("__psizam_sf_f32_floor",     reinterpret_cast<void*>(&_psizam_f32_floor<true>));
+      add_sym("__psizam_sf_f32_trunc",     reinterpret_cast<void*>(&_psizam_f32_trunc<true>));
+      add_sym("__psizam_sf_f32_nearest",   reinterpret_cast<void*>(&_psizam_f32_nearest<true>));
+      add_sym("__psizam_sf_f64_add",       reinterpret_cast<void*>(&_psizam_f64_add));
+      add_sym("__psizam_sf_f64_sub",       reinterpret_cast<void*>(&_psizam_f64_sub));
+      add_sym("__psizam_sf_f64_mul",       reinterpret_cast<void*>(&_psizam_f64_mul));
+      add_sym("__psizam_sf_f64_div",       reinterpret_cast<void*>(&_psizam_f64_div));
+      add_sym("__psizam_sf_f64_min",       reinterpret_cast<void*>(&_psizam_f64_min<true>));
+      add_sym("__psizam_sf_f64_max",       reinterpret_cast<void*>(&_psizam_f64_max<true>));
+      add_sym("__psizam_sf_f64_copysign",  reinterpret_cast<void*>(&_psizam_f64_copysign));
+      add_sym("__psizam_sf_f64_abs",       reinterpret_cast<void*>(&_psizam_f64_abs));
+      add_sym("__psizam_sf_f64_neg",       reinterpret_cast<void*>(&_psizam_f64_neg));
+      add_sym("__psizam_sf_f64_sqrt",      reinterpret_cast<void*>(&_psizam_f64_sqrt));
+      add_sym("__psizam_sf_f64_ceil",      reinterpret_cast<void*>(&_psizam_f64_ceil<true>));
+      add_sym("__psizam_sf_f64_floor",     reinterpret_cast<void*>(&_psizam_f64_floor<true>));
+      add_sym("__psizam_sf_f64_trunc",     reinterpret_cast<void*>(&_psizam_f64_trunc<true>));
+      add_sym("__psizam_sf_f64_nearest",   reinterpret_cast<void*>(&_psizam_f64_nearest<true>));
+      add_sym("__psizam_sf_f32_convert_i32s", reinterpret_cast<void*>(&_psizam_i32_to_f32));
+      add_sym("__psizam_sf_f32_convert_i32u", reinterpret_cast<void*>(&_psizam_ui32_to_f32));
+      add_sym("__psizam_sf_f32_convert_i64s", reinterpret_cast<void*>(&_psizam_i64_to_f32));
+      add_sym("__psizam_sf_f32_convert_i64u", reinterpret_cast<void*>(&_psizam_ui64_to_f32));
+      add_sym("__psizam_sf_f64_convert_i32s", reinterpret_cast<void*>(&_psizam_i32_to_f64));
+      add_sym("__psizam_sf_f64_convert_i32u", reinterpret_cast<void*>(&_psizam_ui32_to_f64));
+      add_sym("__psizam_sf_f64_convert_i64s", reinterpret_cast<void*>(&_psizam_i64_to_f64));
+      add_sym("__psizam_sf_f64_convert_i64u", reinterpret_cast<void*>(&_psizam_ui64_to_f64));
+      add_sym("__psizam_sf_f32_demote_f64",   reinterpret_cast<void*>(&_psizam_f64_demote));
+      add_sym("__psizam_sf_f64_promote_f32",  reinterpret_cast<void*>(&_psizam_f32_promote));
 
       if (auto err = jd.define(llvm::orc::absoluteSymbols(std::move(runtime_syms)))) {
          std::string msg;
