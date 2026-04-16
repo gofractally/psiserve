@@ -185,6 +185,13 @@ if(PSIZAM_ENABLE_LLVM)
          src/llvm_jit_compiler.cpp
          src/llvm_compile.cpp
       )
+      # llvm_compile.cpp uses llvm_ir_translator (in per-arch AOT targets).
+      # Link the host-platform AOT target so the translator symbols resolve.
+      if(TARGET psizam-llvm-x86 AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+         target_link_libraries(psizam-llvm-jit PUBLIC psizam-llvm-x86)
+      elseif(TARGET psizam-llvm-arm)
+         target_link_libraries(psizam-llvm-jit PUBLIC psizam-llvm-arm)
+      endif()
       target_link_libraries(psizam-llvm-jit PUBLIC psizam psizam-exec ${_LLVM_JIT_LIBS})
       target_include_directories(psizam-llvm-jit PUBLIC ${LLVM_INCLUDE_DIRS})
       target_compile_definitions(psizam-llvm-jit PUBLIC PSIZAM_ENABLE_LLVM_BACKEND)

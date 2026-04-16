@@ -193,7 +193,7 @@ namespace psizam::detail {
 
       // Look up the target
       std::string error;
-      auto* target = llvm::TargetRegistry::lookupTarget(triple, error);
+      auto* target = llvm::TargetRegistry::lookupTarget(triple.str(), error);
       if (!target) {
          return llvm_aot_result{.error = "LLVM target lookup failed: " + error};
       }
@@ -210,14 +210,14 @@ namespace psizam::detail {
       // We keep the linux-gnu triple for ELF output but must not clobber x18.
       std::string features = is_x86_64 ? "" : "+reserve-x18";
       auto tm = std::unique_ptr<llvm::TargetMachine>(
-         target->createTargetMachine(triple, cpu, features, opts, rm, cm,
+         target->createTargetMachine(triple.str(), cpu, features, opts, rm, cm,
                                      llvm::CodeGenOptLevel::Default));
       if (!tm) {
          return llvm_aot_result{.error = "Failed to create LLVM TargetMachine"};
       }
 
       llvm_mod->setDataLayout(tm->createDataLayout());
-      llvm_mod->setTargetTriple(triple);
+      llvm_mod->setTargetTriple(target_triple);
 
       // Emit object code to memory buffer
       llvm::SmallVector<char, 0> obj_buf;

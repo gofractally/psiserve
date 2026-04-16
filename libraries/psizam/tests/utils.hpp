@@ -192,7 +192,7 @@ extern template class psizam::backend<psizam::standalone_function_t, psizam::jit
 
 // Spectest host: provides the standard spectest module imports
 // (tables, memories, globals) required by WASM spec test modules.
-struct spectest_host_t;
+struct spectest_host_t {};
 using spectest_rhf = psizam::registered_host_functions<spectest_host_t>;
 
 inline void register_spectest_imports() {

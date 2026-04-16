@@ -320,14 +320,13 @@ namespace psizam {
          if constexpr (Impl::is_jit) {
             assert(mod->allocator._base == nullptr);
          }
-         if (ctx.owns) {
-            ctx->initialize_globals();
-         }
-         // Build the host_function_table and wire it into the execution context.
-         // Even for standalone_function_t (nullptr_t), we need a valid (empty) table
-         // so that call_indirect to unresolved imports throws instead of crashing.
+         // Resolve host imports (globals, tables, functions) before initializing
+         // globals — imported global values must be set before evaluate().
          if constexpr (!std::is_same_v<HostFunctions, std::nullptr_t>) {
             HostFunctions::resolve(*mod);
+         }
+         if (ctx.owns) {
+            ctx->initialize_globals();
          }
          _host_table = build_host_table();
          ctx->set_host_table(&_host_table);

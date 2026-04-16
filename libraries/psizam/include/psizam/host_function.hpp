@@ -839,7 +839,16 @@ namespace psizam {
                         }
                      }
                      if (global_idx < mod.globals.size()) {
+                        // Set the init value and change the opcode so evaluate()
+                        // returns the value directly instead of doing global.get.
                         mod.globals[global_idx].init.value.i64 = it->second.value;
+                        switch (it->second.content_type) {
+                           case types::i32: mod.globals[global_idx].init.opcode = opcodes::i32_const; break;
+                           case types::i64: mod.globals[global_idx].init.opcode = opcodes::i64_const; break;
+                           case types::f32: mod.globals[global_idx].init.opcode = opcodes::f32_const; break;
+                           case types::f64: mod.globals[global_idx].init.opcode = opcodes::f64_const; break;
+                           default: break;  // ref types etc. — leave as-is
+                        }
                      }
                   }
                   break;

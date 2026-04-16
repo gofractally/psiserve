@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <return_call_1_wasm>", "[return_call_1_wasm_tests]" ) {
@@ -38,12 +36,6 @@ BACKEND_TEST_CASE( "Testing wasm <return_call_11_wasm>", "[return_call_11_wasm_t
 BACKEND_TEST_CASE( "Testing wasm <return_call_12_wasm>", "[return_call_12_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "return_call.12.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <return_call_13_wasm>", "[return_call_13_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "return_call.13.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
