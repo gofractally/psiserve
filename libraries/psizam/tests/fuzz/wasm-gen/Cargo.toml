@@ -1,0 +1,11 @@
+[package]
+name = "wasm-gen"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+wasm-smith = "0.246"
+arbitrary = "1"
+rand = "0.8"
