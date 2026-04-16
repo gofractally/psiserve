@@ -711,8 +711,15 @@ static double run_wamr_compute(const std::vector<uint8_t>& wasm, const char* fun
 // Main
 // ============================================================================
 
-int main() {
+int main(int argc, char* argv[]) {
    setbuf(stdout, nullptr);
+
+   // Optional section filter: bench-compare [section]
+   // Sections: host, abi, guest, compute, compile, all (default)
+   const char* section_filter = (argc > 1) ? argv[1] : "all";
+   auto run_section = [&](const char* name) {
+      return strcmp(section_filter, "all") == 0 || strcmp(section_filter, name) == 0;
+   };
 
    register_eosvm_hosts();
 
@@ -856,6 +863,7 @@ int main() {
    };
 
    // --- Host-call benchmarks ---
+   if (run_section("host") || run_section("abi")) {
    const int num_host_tests = sizeof(benches) / sizeof(benches[0]);
    double host_results[6][RT_COUNT] = {};
    const char* host_labels[6];
@@ -960,11 +968,12 @@ int main() {
    }
 #endif
 
-   fprintf(stderr, "host-call done, starting guest-call...\n"); fflush(stderr);
+   } // end host/abi section
 
    // =========================================================================
    // Guest-call benchmark: host -> guest invocation overhead
    // =========================================================================
+   if (run_section("guest")) {
    {
       // Build a WASM module with no-op exported functions at 0,1,2,4,8 i64 params
       // Each function just returns its first param (or 0 for 0-param).
@@ -1129,6 +1138,10 @@ int main() {
          fprintf(stderr, "guest[%d] wasmtime...\n", t); fflush(stderr);
          guest_results[t][RT_WASMTIME] = run_wasmtime_guest(nop_wasm, guest_tests[t].func, np, GUEST_N);
 #endif
+#ifdef BENCH_HAS_WASMER
+         fprintf(stderr, "guest[%d] wasmer...\n", t); fflush(stderr);
+         guest_results[t][RT_WASMER] = run_wasmer_guest(nop_wasm, guest_tests[t].func, np, GUEST_N);
+#endif
       }
 
       char guest_title[128];
@@ -1139,8 +1152,10 @@ int main() {
                   num_guest, guest_labels, guest_results);
    }
 
-   fprintf(stderr, "guest-call done, starting compute...\n"); fflush(stderr);
+   } // end guest section
+
    // --- Compute benchmarks ---
+   if (run_section("compute") || run_section("compile")) {
 #ifdef BENCH_HAS_COMPUTE
    // Enable native column for compute benchmarks
    runtimes[RT_NATIVE].enabled = true;
@@ -1375,6 +1390,7 @@ int main() {
       set_llvm_opt_level(2);
    }
 #endif
+   } // end compute/compile section
 
    printf("\n");
    return 0;

@@ -132,6 +132,76 @@ double compile_wasmer(const std::vector<uint8_t>& wasm) {
    return std::chrono::duration<double, std::milli>(t2 - t1).count();
 }
 
+double run_wasmer_guest(const std::vector<uint8_t>& wasm, const char* func, int num_params, uint32_t n) {
+   wasm_engine_t* engine = wasm_engine_new();
+   wasm_store_t* store = wasm_store_new(engine);
+
+   wasm_byte_vec_t binary = {wasm.size(), const_cast<wasm_byte_t*>(reinterpret_cast<const wasm_byte_t*>(wasm.data()))};
+   wasm_module_t* module = wasm_module_new(store, &binary);
+   if (!module) { fprintf(stderr, "wasmer guest module error\n"); wasm_store_delete(store); wasm_engine_delete(engine); return -1; }
+
+   // No imports — nop module is self-contained
+   wasm_extern_vec_t imports = {0, nullptr};
+   wasm_instance_t* instance = wasm_instance_new(store, module, &imports, nullptr);
+   if (!instance) {
+      fprintf(stderr, "wasmer guest instantiate error\n");
+      wasm_module_delete(module); wasm_store_delete(store); wasm_engine_delete(engine);
+      return -1;
+   }
+
+   wasm_extern_vec_t exports;
+   wasm_instance_exports(instance, &exports);
+
+   // Find function by name
+   wasm_exporttype_vec_t export_types;
+   wasm_module_exports(module, &export_types);
+   int func_idx = -1;
+   for (size_t i = 0; i < export_types.size; i++) {
+      const wasm_name_t* name = wasm_exporttype_name(export_types.data[i]);
+      if (name->size == strlen(func) && memcmp(name->data, func, name->size) == 0) {
+         func_idx = static_cast<int>(i);
+         break;
+      }
+   }
+   wasm_exporttype_vec_delete(&export_types);
+
+   if (func_idx < 0 || static_cast<size_t>(func_idx) >= exports.size) {
+      fprintf(stderr, "wasmer guest: export %s not found\n", func);
+      wasm_extern_vec_delete(&exports); wasm_instance_delete(instance);
+      wasm_module_delete(module); wasm_store_delete(store); wasm_engine_delete(engine);
+      return -1;
+   }
+
+   const wasm_func_t* run_func = wasm_extern_as_func(exports.data[func_idx]);
+
+   // Build args array (all i64)
+   wasm_val_t args[8];
+   for (int i = 0; i < num_params && i < 8; i++)
+      args[i] = WASM_I64_VAL(static_cast<int64_t>(i + 1));
+   wasm_val_t result;
+   wasm_val_vec_t args_vec = {static_cast<size_t>(num_params), args};
+   wasm_val_vec_t res_vec = {1, &result};
+
+   // Warm-up
+   wasm_trap_t* trap = wasm_func_call(run_func, &args_vec, &res_vec);
+   if (trap) { wasm_trap_delete(trap); }
+
+   auto t1 = std::chrono::high_resolution_clock::now();
+   for (uint32_t i = 0; i < n; i++) {
+      args[0].of.i64 = static_cast<int64_t>(i);
+      trap = wasm_func_call(run_func, &args_vec, &res_vec);
+      if (trap) { wasm_trap_delete(trap); break; }
+   }
+   auto t2 = std::chrono::high_resolution_clock::now();
+
+   wasm_extern_vec_delete(&exports);
+   wasm_instance_delete(instance);
+   wasm_module_delete(module);
+   wasm_store_delete(store);
+   wasm_engine_delete(engine);
+   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+}
+
 double run_wasmer_compute(const std::vector<uint8_t>& wasm, const char* func, uint32_t n) {
    wasm_engine_t* engine = wasm_engine_new();
    wasm_store_t* store = wasm_store_new(engine);
