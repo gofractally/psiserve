@@ -673,6 +673,153 @@ namespace psizam {
          });
       }
 
+      // =====================================================================
+      // Typed function API — compile-time signature, minimal per-call cost
+      // =====================================================================
+
+      /// A lightweight callable that invokes a JIT-compiled WASM function with
+      /// minimal overhead.  The signal handler and alternate stack must be set
+      /// up externally (via scoped_execution) — this does only arg marshaling
+      /// and the native call.
+      template<typename Sig> class typed_function;
+
+      template<typename R, typename... Args>
+      class typed_function<R(Args...)> {
+         using jit_ctx = detail::jit_execution_context<>;
+         jit_ctx*  _ctx;
+         void*     _linear_memory;
+         bool      _is_llvm;      // true  → entry is int64_t(*)(void*,void*,native_value*)
+                                   // false → use the code_base trampoline
+         // For LLVM: absolute fn pointer.  For native JIT: offset-relative fn pointer.
+         void*     _fn;
+         void*     _code_base;
+         // Cached trampoline (code_base) for native JIT
+         native_value_extended (*_trampoline)(jit_ctx*, void*, native_value*,
+                                                      native_value(*)(void*,void*),
+                                                      void*, uint64_t, uint32_t);
+         void*     _stack;
+      public:
+         typed_function() : _ctx(nullptr) {}
+
+         typed_function(jit_ctx* ctx, module& mod, uint32_t func_index, void* stack)
+            : _ctx(ctx), _linear_memory(ctx->linear_memory()), _stack(stack)
+         {
+            _is_llvm = (mod.allocator._code_base == nullptr);
+            uint32_t code_idx = func_index - mod.get_imported_functions_size();
+            if (_is_llvm) {
+               _fn = reinterpret_cast<void*>(mod.code[code_idx].jit_code_offset);
+               _code_base = nullptr;
+               _trampoline = nullptr;
+            } else {
+               _fn = reinterpret_cast<void*>(
+                  mod.code[code_idx].jit_code_offset + mod.allocator._code_base);
+               _code_base = mod.allocator._code_base;
+               _trampoline = reinterpret_cast<decltype(_trampoline)>(mod.allocator._code_base);
+            }
+         }
+
+         R operator()(Args... args) {
+            constexpr std::size_t args_count = sizeof...(Args);
+            constexpr std::size_t buf_count = args_count < 2 ? 2 : args_count;
+            native_value args_raw[buf_count];
+            {
+               native_value* p = args_raw;
+               ((pack_arg(args, p)), ...);
+            }
+
+            native_value_extended result;
+            if (_is_llvm) {
+               using llvm_fn_t = int64_t(*)(void*, void*, native_value*);
+               auto entry = reinterpret_cast<llvm_fn_t>(_fn);
+               result.scalar.i64 = entry(_ctx, _linear_memory, args_raw);
+            } else {
+               auto fn = reinterpret_cast<native_value(*)(void*, void*)>(_fn);
+               void* stack = _stack;
+#ifdef __x86_64__
+               if (stack) stack = static_cast<char*>(stack) - 24;
+#endif
+               result = _trampoline(_ctx, _linear_memory, args_raw, fn, stack,
+                                    static_cast<uint64_t>(args_count), false);
+            }
+
+            if constexpr (std::is_void_v<R>) {
+               return;
+            } else if constexpr (std::is_same_v<R, int32_t> || std::is_same_v<R, uint32_t>) {
+               return static_cast<R>(result.scalar.i32);
+            } else if constexpr (std::is_same_v<R, int64_t> || std::is_same_v<R, uint64_t>) {
+               return static_cast<R>(result.scalar.i64);
+            } else if constexpr (std::is_same_v<R, float>) {
+               float f;
+               std::memcpy(&f, &result.scalar.f32, sizeof(f));
+               return f;
+            } else if constexpr (std::is_same_v<R, double>) {
+               double d;
+               std::memcpy(&d, &result.scalar.f64, sizeof(d));
+               return d;
+            } else {
+               static_assert(sizeof(R) == 0, "Unsupported return type");
+            }
+         }
+
+      private:
+         template<typename T>
+         static void pack_arg(T value, native_value*& out) {
+            std::memset(out, 0, sizeof(*out));
+            if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
+               out->i32 = static_cast<uint32_t>(value);
+            } else if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t>) {
+               out->i64 = static_cast<uint64_t>(value);
+            } else if constexpr (std::is_same_v<T, float>) {
+               std::memcpy(&out->f32, &value, sizeof(value));
+            } else if constexpr (std::is_same_v<T, double>) {
+               std::memcpy(&out->f64, &value, sizeof(value));
+            } else {
+               static_assert(sizeof(T) == 0, "Unsupported arg type");
+            }
+            ++out;
+         }
+      };
+
+      /// Get a typed function handle for an exported WASM function.
+      /// The returned callable has minimal per-call overhead — arg marshaling
+      /// and a direct native call.  Must be called within a scoped_execution().
+      template<typename Sig>
+      typed_function<Sig> get_typed_function(const std::string_view& name) {
+         uint32_t fi = mod->get_exported_function(name);
+         stack_allocator alt_stack(ctx->get_maximum_stack_size());
+         return typed_function<Sig>(ctx.get(), *mod, fi, alt_stack.top());
+      }
+
+      /// Execute a callable within a signal-handler session.  Sets up the
+      /// signal handler once, allocates an alternate stack once, and lets F
+      /// make arbitrarily many typed_function calls within.
+      template<typename F>
+      auto scoped_execution(F&& f) {
+         stack_allocator alt_stack(ctx->get_maximum_stack_size());
+
+         // Register the stack guard page
+         if (alt_stack.guard_base()) {
+            detail::stack_guard_range = std::span<std::byte>(
+               static_cast<std::byte*>(alt_stack.guard_base()), alt_stack.guard_size());
+         }
+
+         return detail::invoke_with_signal_handler(
+            std::forward<F>(f),
+            &context_t::handle_signal,
+            mod->allocator,
+            memory_alloc);
+      }
+
+      /// Convenience: get a typed function that captures its own stack allocation.
+      /// Returns a pair of (typed_function, stack_allocator) — the stack_allocator
+      /// must outlive the typed_function.
+      template<typename Sig>
+      typed_function<Sig> get_typed_function(const std::string_view& name,
+                                             stack_allocator& alt_stack) {
+         uint32_t fi = mod->get_exported_function(name);
+         return typed_function<Sig>(ctx.get(), *mod, fi, alt_stack.top());
+      }
+
       inline void set_wasm_allocator(wasm_allocator* alloc) {
          memory_alloc = alloc;
          ctx->set_wasm_allocator(memory_alloc);
