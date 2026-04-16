@@ -884,6 +884,8 @@ namespace psizam::detail {
                break;
             case types::i64:
             case types::f64:
+            case types::funcref:
+            case types::externref:
                // LDR X0, [X8]
                emit32(0xF9400100);
                emit_push_x(X0);
@@ -916,6 +918,8 @@ namespace psizam::detail {
                break;
             case types::i64:
             case types::f64:
+            case types::funcref:
+            case types::externref:
                emit_pop_x(X0);
                // STR X0, [X8]
                emit32(0xF9000100);

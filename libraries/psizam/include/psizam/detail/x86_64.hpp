@@ -676,6 +676,8 @@ namespace psizam::detail {
                emit_push(rax);
                break;
             case types::i64:
+            case types::funcref:
+            case types::externref:
                emit_mov(loc, rax);
                emit_push(rax);
                break;
@@ -709,6 +711,8 @@ namespace psizam::detail {
          switch(gl.type.content_type) {
             case types::i32: emit_mov(eax, loc); break;
             case types::i64: emit_mov(rax, loc); break;
+            case types::funcref: emit_mov(rax, loc); break;
+            case types::externref: emit_mov(rax, loc); break;
             case types::f32: emit_mov(eax, loc); break;
             case types::f64: emit_mov(rax, loc); break;
             case types::v128: emit_vmovdqu(xmm0, loc); break;
