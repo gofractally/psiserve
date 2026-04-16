@@ -1260,9 +1260,10 @@ namespace psizam::detail {
                   elem.is_if = false;
                   elem.relocations = std::vector<branch_t>{};
                   if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
+                  uint32_t param_count = static_cast<uint32_t>(bp.size());
                   elem.block_params = std::move(bp);
                   pc_stack.push_back(std::move(elem));
-                  code_writer.emit_block(single_type, static_cast<uint32_t>(br.size()));
+                  code_writer.emit_block(single_type, static_cast<uint32_t>(br.size()), param_count);
                   op_stack.push_scope();
                   // Push params back inside the block scope
                   for (auto p : pc_stack.back().block_params)
@@ -1300,7 +1301,7 @@ namespace psizam::detail {
                   for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
                      op_stack.pop(bp[i]);
 
-                  auto pos = code_writer.emit_loop(single_type, static_cast<uint32_t>(br.size()));
+                  auto pos = code_writer.emit_loop(single_type, static_cast<uint32_t>(br.size()), static_cast<uint32_t>(bp.size()));
                   pc_element_t elem{};
                   elem.operand_depth = op_stack.depth();
                   elem.expected_result = single_type;
@@ -1345,7 +1346,7 @@ namespace psizam::detail {
                      single_type = ft.return_count ? ft.return_type : types::pseudo;
                   }
 
-                  auto branch = code_writer.emit_if(single_type, static_cast<uint32_t>(br.size()));
+                  auto branch = code_writer.emit_if(single_type, static_cast<uint32_t>(br.size()), static_cast<uint32_t>(bp.size()));
                   op_stack.pop(types::i32);  // condition
 
                   // Pop params from outer stack

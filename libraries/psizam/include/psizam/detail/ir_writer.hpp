@@ -583,10 +583,10 @@ namespace psizam::detail {
          return UINT32_MAX; // return doesn't need branch fixup
       }
 
-      void emit_block(uint8_t result_type = types::pseudo, uint32_t result_count = 0) {
+      void emit_block(uint8_t result_type = types::pseudo, uint32_t result_count = 0, uint32_t param_count = 0) {
          ir_control_entry entry{};
          entry.block_idx = _func->new_block();
-         entry.stack_depth = _func->vstack_depth();
+         entry.stack_depth = _func->vstack_depth() - param_count;
          entry.result_type = result_type;
          entry.is_loop = 0;
          entry.is_function = 0;
@@ -612,11 +612,11 @@ namespace psizam::detail {
          _func->ctrl_push(entry);
       }
 
-      label_t emit_loop(uint8_t result_type = types::pseudo, uint32_t result_count = 0) {
+      label_t emit_loop(uint8_t result_type = types::pseudo, uint32_t result_count = 0, uint32_t param_count = 0) {
          ir_control_entry entry{};
          entry.block_idx = _func->new_block();
          _func->blocks[entry.block_idx].is_loop = 1;
-         entry.stack_depth = _func->vstack_depth();
+         entry.stack_depth = _func->vstack_depth() - param_count;
          entry.result_type = result_type;
          entry.is_loop = 1;
          entry.is_function = 0;
@@ -630,7 +630,7 @@ namespace psizam::detail {
          return entry.block_idx;
       }
 
-      branch_t emit_if(uint8_t result_type = types::pseudo, uint32_t result_count = 0) {
+      branch_t emit_if(uint8_t result_type = types::pseudo, uint32_t result_count = 0, uint32_t param_count = 0) {
          ir_control_entry entry{};
          entry.block_idx = _func->new_block();
          _func->blocks[entry.block_idx].is_if = 1;
@@ -657,7 +657,7 @@ namespace psizam::detail {
          uint32_t inst_idx = UINT32_MAX;
          if (!_unreachable) {
             uint32_t cond = _func->vpop();
-            entry.stack_depth = _func->vstack_depth(); // after popping condition
+            entry.stack_depth = _func->vstack_depth() - param_count; // after popping condition
             ir_inst inst{};
             inst.opcode = ir_op::if_;
             inst.type = types::pseudo;
@@ -671,7 +671,7 @@ namespace psizam::detail {
             inst_idx = _func->current_inst_index();
             _func->emit(inst);
          } else {
-            entry.stack_depth = _func->vstack_depth();
+            entry.stack_depth = _func->vstack_depth() - param_count;
          }
          _func->ctrl_push(entry);
          return inst_idx;

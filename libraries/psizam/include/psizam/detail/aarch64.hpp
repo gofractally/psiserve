@@ -478,14 +478,14 @@ namespace psizam::detail {
          return emit_br(depth_change, rt, UINT32_MAX, result_count);
       }
 
-      void emit_block(uint8_t = 0x40, uint32_t = 0) {}
+      void emit_block(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {}
 
-      void* emit_loop(uint8_t = 0x40, uint32_t = 0) {
+      void* emit_loop(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {
          invalidate_recent_ops();
          return code;
       }
 
-      void* emit_if(uint8_t = 0x40, uint32_t = 0) {
+      void* emit_if(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {
          // Try condition folding
          if (auto cond = try_pop_recent_op<condition_op>()) {
             // B.!cond target (branch if condition is false)
