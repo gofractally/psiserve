@@ -472,8 +472,13 @@ namespace psizam {
             enable_code(IsJit);
             _is_jit = true;
             _offset = (char*)code_base - _base;
-            // Register .eh_frame so C++ exceptions can unwind through JIT frames
+            // Register .eh_frame so C++ exceptions can unwind through JIT frames.
+            // Only x86_64: macOS aarch64 uses compact unwind (__unwind_info),
+            // not DWARF .eh_frame, so __register_frame doesn't work there.
+            // aarch64 uses longjmp_on_exception in call_host_function instead.
+#if defined(__x86_64__) || (defined(__aarch64__) && defined(__linux__))
             register_jit_eh_frame();
+#endif
          }
 #endif
       }

@@ -5133,25 +5133,31 @@ namespace psizam::detail {
       // Static helper functions
       // ===================================================================
 
-      // Host call with longjmp_on_exception wrapping + fast trampoline dispatch.
-      // Args are already in forward order (packed by the JIT stub).
-      // Depth tracking is handled by the caller's inline depth dec/inc;
-      // remaining_stack is synced to context for recursive host→WASM calls.
+      // Host call with fast trampoline dispatch.
+      // On platforms with .eh_frame support (x86_64, Linux aarch64), exceptions
+      // propagate naturally. On macOS aarch64 (compact unwind, no .eh_frame),
+      // longjmp_on_exception is needed to safely unwind through JIT frames.
       static native_value call_host_function(void* ctx, native_value* args, uint32_t idx, uint32_t remaining_stack) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
          auto saved = context->_remaining_call_depth;
          context->_remaining_call_depth = remaining_stack;
          native_value result;
-         if (context->_host_trampoline_ptrs) {
-            auto trampoline = context->_host_trampoline_ptrs[idx];
-            if (trampoline) {
-               result = trampoline(context->get_host_ptr(), args, context->linear_memory());
-               context->_remaining_call_depth = saved;
-               return result;
+         auto do_call = [&]() {
+            if (context->_host_trampoline_ptrs) {
+               auto trampoline = context->_host_trampoline_ptrs[idx];
+               if (trampoline) {
+                  result = trampoline(context->get_host_ptr(), args, context->linear_memory());
+                  return;
+               }
             }
-         }
-         uint32_t mapped_index = context->_mod->import_functions[idx];
-         result = context->_table->call(context->get_host_ptr(), mapped_index, args, context->linear_memory());
+            uint32_t mapped_index = context->_mod->import_functions[idx];
+            result = context->_table->call(context->get_host_ptr(), mapped_index, args, context->linear_memory());
+         };
+#if defined(__APPLE__) && defined(__aarch64__)
+         longjmp_on_exception(do_call);
+#else
+         do_call();
+#endif
          context->_remaining_call_depth = saved;
          return result;
       }
