@@ -1,23 +1,34 @@
-set(CMAKE_CXX_FLAGS "-g -O1 -fsanitize-coverage=trace-pc-guard,indirect-calls,trace-cmp,trace-div,trace-gep -gline-tables-only")
+# Fuzz testing for psizam
+# Two targets:
+#   psizam-fuzz-diff  — standalone wasm-smith differential fuzzer (recommended)
+#   psizam-fuzz       — libFuzzer driver (requires clang with libFuzzer+ASan)
 
-find_package( LLVM REQUIRED CONFIG )
-message( STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}" )
-message( STATUS "Using LLVMConfig.cmake at: ${LLVM_DIR}" )
+# ── Standalone differential fuzzer (wasm-smith based) ────────────────────────
+# Generates valid WASM via wasm-tools smith, runs on all backends,
+# asserts identical outcomes. No libFuzzer/ASan dependency.
+#
+# Usage:
+#   ./psizam-fuzz-diff [iterations] [seed]
+#   ./psizam-fuzz-diff --file module.wasm
 
-function(add_libfuzzer_test name)
- set(multi_arg_options "SOURCES")
- cmake_parse_arguments(
-     "add_libfuzzer_test" "" "" "${multi_arg_options}" ${ARGN})
- if ("${add_libfuzzer_test_SOURCES}" STREQUAL "")
-     message(FATAL_ERROR "Source files must be specified")
- endif()
- add_executable(LLVMFuzzer-${name}
-    ${add_libfuzzer_test_SOURCES}
- )
- target_compile_options(LLVMFuzzer-${name} PUBLIC "-fsanitize=fuzzer,address")
- target_link_libraries(LLVMFuzzer-${name} PUBLIC psizam "-fsanitize=fuzzer,address")
-endfunction()
+add_executable(psizam-fuzz-diff fuzz_differential.cpp)
+target_link_libraries(psizam-fuzz-diff PRIVATE psizam psizam-exec)
 
-add_libfuzzer_test(wasm_fuzz_test SOURCES fuzz_driver.cpp)
+# Quick smoke test: 20 iterations
+add_test(NAME psizam_fuzz_diff_smoke
+   COMMAND psizam-fuzz-diff 20)
 
-add_test(wasm_libfuzzer COMMAND ${CMAKE_CURRENT_BINARY_DIR}/LLVMFuzzer-wasm_fuzz_test -jobs=40 ${CMAKE_CURRENT_SOURCE_DIR}/corpus)
+# ── libFuzzer driver (optional) ──────────────────────────────────────────────
+# Requires clang with libFuzzer support. Known ASan issues on macOS ARM64.
+
+option(PSIZAM_FUZZ_LIBFUZZER "Build libFuzzer-based fuzz target" OFF)
+if(PSIZAM_FUZZ_LIBFUZZER)
+   add_executable(psizam-fuzz fuzz_driver.cpp)
+   target_link_libraries(psizam-fuzz PRIVATE psizam psizam-exec)
+   target_compile_options(psizam-fuzz PRIVATE -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer)
+   target_link_options(psizam-fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
+
+   set(FUZZ_CORPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+   add_test(NAME psizam_fuzz_smoke
+      COMMAND psizam-fuzz -max_total_time=10 -jobs=4 ${FUZZ_CORPUS_DIR})
+endif()
