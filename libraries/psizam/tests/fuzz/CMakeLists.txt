@@ -13,6 +13,10 @@
 
 add_executable(psizam-fuzz-diff fuzz_differential.cpp)
 target_link_libraries(psizam-fuzz-diff PRIVATE psizam psizam-exec)
+if(PSIZAM_ENABLE_LLVM)
+   target_link_libraries(psizam-fuzz-diff PRIVATE psizam-llvm)
+   target_compile_definitions(psizam-fuzz-diff PRIVATE PSIZAM_ENABLE_LLVM_BACKEND)
+endif()
 
 # Quick smoke test: 20 iterations
 add_test(NAME psizam_fuzz_diff_smoke

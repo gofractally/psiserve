@@ -110,6 +110,15 @@ static bool test_module(const std::vector<uint8_t>& wasm, const char* source, bo
    }
 #endif
 
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+   auto r_llvm = run_backend<jit_llvm>(wasm);
+   if (r_interp.outcome != r_llvm.outcome) {
+      fprintf(stderr, "MISMATCH [%s]: interpreter=%s jit_llvm=%s\n",
+              source, outcome_name(r_interp.outcome), outcome_name(r_llvm.outcome));
+      return false;
+   }
+#endif
+
    if (verbose) {
       fprintf(stderr, "  OK [%s]: %s (%zu bytes)\n",
               source, outcome_name(r_interp.outcome), wasm.size());
@@ -189,6 +198,9 @@ int main(int argc, char* argv[]) {
 #endif
 #if defined(__x86_64__) || defined(__aarch64__)
    fprintf(stderr, ", jit2");
+#endif
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+   fprintf(stderr, ", jit_llvm");
 #endif
    fprintf(stderr, "\n\n");
 
