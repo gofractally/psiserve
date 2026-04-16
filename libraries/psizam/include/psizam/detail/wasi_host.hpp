@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <dirent.h>
@@ -161,7 +162,13 @@ namespace psizam::detail {
          preopens.push_back({guest, host});
       }
 
-      // Helper: get wasm memory pointer
+      // Helper: validate iov offset arithmetic won't overflow (guard pages handle actual OOB)
+      static void check_iov_bounds(uint32_t iovs_ptr, uint32_t iovs_len) {
+         PSIZAM_ASSERT(uint64_t(iovs_ptr) + uint64_t(iovs_len) * 8 <= UINT32_MAX,
+                       wasm_memory_exception, "WASI: iov offset overflow");
+      }
+
+      // Helper: get wasm memory pointer (guard pages protect OOB)
       template<typename T = char>
       T* mem(uint32_t offset) { return reinterpret_cast<T*>(memory + offset); }
 
@@ -190,7 +197,8 @@ namespace psizam::detail {
          return fd < fds.size() && fds[fd].host_fd >= 0;
       }
 
-      // Resolve a guest path to a host path using preopens
+      // Resolve a guest path to a host path using preopens.
+      // Returns empty string on invalid fd or path traversal attempt.
       std::string resolve_path(uint32_t dir_fd, const char* path, uint32_t path_len) const {
          if (dir_fd < 3 || dir_fd >= fds.size() || !fds[dir_fd].is_preopen)
             return "";
@@ -198,9 +206,51 @@ namespace psizam::detail {
          if (preopen_idx >= preopens.size()) return "";
          std::string guest(path, path_len);
          const auto& po = preopens[preopen_idx];
-         // Simple path resolution: prepend host path
          if (guest.empty() || guest == ".") return po.host_path;
-         return po.host_path + "/" + guest;
+
+         // Reject path traversal: no ".." components allowed
+         if (guest.find("..") != std::string::npos)
+            return "";
+         // Reject absolute paths
+         if (!guest.empty() && guest[0] == '/')
+            return "";
+
+         std::string resolved = po.host_path + "/" + guest;
+
+         // Resolve the real path and verify it stays under the preopen root
+         char real[PATH_MAX];
+         // First resolve the preopen root
+         char real_root[PATH_MAX];
+         if (!::realpath(po.host_path.c_str(), real_root))
+            return "";
+         std::string root_prefix(real_root);
+
+         // Try to resolve the full path; if the file doesn't exist yet,
+         // resolve the parent directory instead
+         if (::realpath(resolved.c_str(), real)) {
+            std::string real_str(real);
+            if (real_str.compare(0, root_prefix.size(), root_prefix) != 0)
+               return "";
+            // Must be exactly the root or followed by '/'
+            if (real_str.size() > root_prefix.size() && real_str[root_prefix.size()] != '/')
+               return "";
+         } else {
+            // File doesn't exist — resolve parent to check containment
+            auto last_slash = resolved.rfind('/');
+            if (last_slash != std::string::npos) {
+               std::string parent = resolved.substr(0, last_slash);
+               if (parent.empty()) parent = "/";
+               if (!::realpath(parent.c_str(), real))
+                  return "";
+               std::string real_parent(real);
+               if (real_parent.compare(0, root_prefix.size(), root_prefix) != 0)
+                  return "";
+               if (real_parent.size() > root_prefix.size() && real_parent[root_prefix.size()] != '/')
+                  return "";
+            }
+         }
+
+         return resolved;
       }
 
       // ── WASI functions ──────────────────────────────────────────────
@@ -330,6 +380,7 @@ namespace psizam::detail {
       // fd_read: scatter read
       uint32_t fd_read(uint32_t fd, uint32_t iovs_ptr, uint32_t iovs_len, uint32_t nread_ptr) {
          if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         check_iov_bounds(iovs_ptr, iovs_len);
          uint32_t total = 0;
          for (uint32_t i = 0; i < iovs_len; i++) {
             uint32_t buf = read_u32(iovs_ptr + i * 8);
@@ -350,6 +401,7 @@ namespace psizam::detail {
       uint32_t fd_pread(uint32_t fd, uint32_t iovs_ptr, uint32_t iovs_len,
                         uint64_t offset, uint32_t nread_ptr) {
          if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         check_iov_bounds(iovs_ptr, iovs_len);
          uint32_t total = 0;
          for (uint32_t i = 0; i < iovs_len; i++) {
             uint32_t buf = read_u32(iovs_ptr + i * 8);
@@ -369,6 +421,7 @@ namespace psizam::detail {
       // fd_write: gather write
       uint32_t fd_write(uint32_t fd, uint32_t iovs_ptr, uint32_t iovs_len, uint32_t nwritten_ptr) {
          if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         check_iov_bounds(iovs_ptr, iovs_len);
          uint32_t total = 0;
          for (uint32_t i = 0; i < iovs_len; i++) {
             uint32_t buf = read_u32(iovs_ptr + i * 8);
@@ -488,6 +541,8 @@ namespace psizam::detail {
             flags = O_RDONLY | O_DIRECTORY;
          }
 
+         // Prevent symlink-following sandbox escapes
+         flags |= O_NOFOLLOW;
          int hfd = ::open(host_path.c_str(), flags, 0666);
          if (hfd < 0) return errno_to_wasi(errno);
 
@@ -677,6 +732,7 @@ namespace psizam::detail {
       uint32_t fd_pwrite(uint32_t fd, uint32_t iovs_ptr, uint32_t iovs_len,
                          uint64_t offset, uint32_t nwritten_ptr) {
          if (fd >= fds.size() || fds[fd].host_fd < 0) return WASI_EBADF;
+         check_iov_bounds(iovs_ptr, iovs_len);
          uint32_t total = 0;
          for (uint32_t i = 0; i < iovs_len; i++) {
             uint32_t buf = read_u32(iovs_ptr + i * 8);
@@ -696,6 +752,9 @@ namespace psizam::detail {
       // fd_renumber: renumber file descriptor
       uint32_t fd_renumber(uint32_t from, uint32_t to) {
          if (from >= fds.size() || fds[from].host_fd < 0) return WASI_EBADF;
+         // Cap target fd to prevent DoS via massive vector allocation
+         static constexpr uint32_t max_fds = 65536;
+         if (to >= max_fds) return WASI_EBADF;
          if (to >= fds.size()) {
             fds.resize(to + 1);
          }

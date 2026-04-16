@@ -236,9 +236,14 @@ namespace psizam {
          check(offset, 8); double v; std::memcpy(&v, base + offset, 8); return v;
       }
 
+      void check_range(uint32_t offset, uint64_t size) const {
+         if (static_cast<uint64_t>(offset) + size > length)
+            throw std::runtime_error("canonical_abi: out of bounds memory access");
+      }
+
     private:
       void check(uint32_t offset, uint32_t size) const {
-         if (offset + size > length)
+         if (static_cast<uint64_t>(offset) + size > length)
             throw std::runtime_error("canonical_abi: out of bounds memory access");
       }
    };
@@ -527,6 +532,7 @@ namespace psizam {
             case wit_prim::string_: {
                uint32_t ptr = mem.load_u32(offset);
                uint32_t len = mem.load_u32(offset + 4);
+               mem.check_range(ptr, len);
                return dynamic_value::make_string(
                   std::string(reinterpret_cast<const char*>(mem.base + ptr), len));
             }
@@ -563,7 +569,10 @@ namespace psizam {
             uint32_t ptr = mem.load_u32(offset);
             uint32_t len = mem.load_u32(offset + 4);
             auto el = layout_of(world, td.element_type_idx);
+            if (el.size > 0)
+               mem.check_range(ptr, uint64_t(len) * el.size);
             std::vector<dynamic_value> elems;
+            elems.reserve(std::min(len, uint32_t(4096)));
             for (uint32_t i = 0; i < len; i++) {
                elems.push_back(canonical_load(world, td.element_type_idx, mem,
                                                ptr + i * el.size));
@@ -745,6 +754,7 @@ namespace psizam {
                if (results.size() >= 2) {
                   uint32_t ptr = results[0].i32;
                   uint32_t len = results[1].i32;
+                  mem.check_range(ptr, len);
                   return dynamic_value::make_string(
                      std::string(reinterpret_cast<const char*>(mem.base + ptr), len));
                }
@@ -752,6 +762,7 @@ namespace psizam {
                uint32_t ret_ptr = nv.i32;
                uint32_t str_ptr = mem.load_u32(ret_ptr);
                uint32_t str_len = mem.load_u32(ret_ptr + 4);
+               mem.check_range(str_ptr, str_len);
                return dynamic_value::make_string(
                   std::string(reinterpret_cast<const char*>(mem.base + str_ptr), str_len));
             }

@@ -37,7 +37,10 @@ namespace psizam::detail {
          _store[_index++] = std::move(e);
       }
 
-      ElemT pop() { return _store[--_index]; }
+      ElemT pop() {
+         PSIZAM_ASSERT(_index > 0, wasm_interpreter_exception, "operand stack underflow");
+         return _store[--_index];
+      }
 
       ElemT& get(uint32_t index) const {
          PSIZAM_ASSERT(index <= _index, wasm_interpreter_exception, "invalid stack index");

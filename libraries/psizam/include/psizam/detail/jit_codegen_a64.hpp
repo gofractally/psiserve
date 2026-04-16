@@ -1828,8 +1828,15 @@ namespace psizam::detail {
                emit32(0xD63F0100); // BLR X8
             } else {
                // Bounds check
-               uint32_t table_size = _mod.tables[0].limits.initial;
-               emit_cmp_imm32(X0, table_size);
+               if (_mod.indirect_table(0)) {
+                  // Growable or large table: load runtime size (32-bit)
+                  emit_add_signed_imm(X8, X20, wasm_allocator::table0_size_offset());
+                  emit32(0xB9400108); // LDR W8, [X8]
+                  emit32(0x6B08001F); // CMP W0, W8 = SUBS WZR, W0, W8
+               } else {
+                  uint32_t table_size = _mod.tables[0].limits.initial;
+                  emit_cmp_imm32(X0, table_size);
+               }
                emit_branch_to_handler(COND_HS, call_indirect_handler);
                // Table entry: index * 16
                emit32(0xD37CEC00); // LSL X0, X0, #4
@@ -1920,8 +1927,14 @@ namespace psizam::detail {
                emit_call_depth_dec();
                emit32(0xD63F0100);
             } else {
-               uint32_t table_size = _mod.tables[0].limits.initial;
-               emit_cmp_imm32(X0, table_size);
+               if (_mod.indirect_table(0)) {
+                  emit_add_signed_imm(X8, X20, wasm_allocator::table0_size_offset());
+                  emit32(0xB9400108); // LDR W8, [X8]
+                  emit32(0x6B08001F); // CMP W0, W8
+               } else {
+                  uint32_t table_size = _mod.tables[0].limits.initial;
+                  emit_cmp_imm32(X0, table_size);
+               }
                emit_branch_to_handler(COND_HS, call_indirect_handler);
                emit32(0xD37CEC00);
                if (_mod.indirect_table(0)) {

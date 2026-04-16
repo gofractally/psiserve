@@ -118,7 +118,7 @@ namespace psizam {
             unsigned shift = 0;
             uint8_t b;
             do {
-               assert(pos < raw_expr.size());
+               PSIZAM_ASSERT(pos < raw_expr.size(), wasm_interpreter_exception, "init_expr: read past end");
                b = raw_expr[pos++];
                v |= static_cast<int32_t>(b & 0x7f) << shift;
                shift += 7;
@@ -132,7 +132,7 @@ namespace psizam {
             unsigned shift = 0;
             uint8_t b;
             do {
-               assert(pos < raw_expr.size());
+               PSIZAM_ASSERT(pos < raw_expr.size(), wasm_interpreter_exception, "init_expr: read past end");
                b = raw_expr[pos++];
                v |= static_cast<uint32_t>(b & 0x7f) << shift;
                shift += 7;
@@ -144,7 +144,7 @@ namespace psizam {
             unsigned shift = 0;
             uint8_t b;
             do {
-               assert(pos < raw_expr.size());
+               PSIZAM_ASSERT(pos < raw_expr.size(), wasm_interpreter_exception, "init_expr: read past end");
                b = raw_expr[pos++];
                v |= static_cast<int64_t>(b & 0x7f) << shift;
                shift += 7;
@@ -153,8 +153,8 @@ namespace psizam {
                v |= -(static_cast<int64_t>(1) << shift);
             return v;
          };
-         auto push = [&](int64_t v) { assert(sp < max_stack); stack[sp++] = v; };
-         auto pop  = [&]() -> int64_t { assert(sp > 0); return stack[--sp]; };
+         auto push = [&](int64_t v) { PSIZAM_ASSERT(sp < max_stack, wasm_interpreter_exception, "init_expr: stack overflow"); stack[sp++] = v; };
+         auto pop  = [&]() -> int64_t { PSIZAM_ASSERT(sp > 0, wasm_interpreter_exception, "init_expr: stack underflow"); return stack[--sp]; };
          while (pos < raw_expr.size()) {
             uint8_t op = raw_expr[pos++];
             switch (op) {
@@ -162,7 +162,7 @@ namespace psizam {
                case opcodes::i64_const: push(read_leb_i64()); break;
                case opcodes::get_global: {
                   uint32_t idx = read_leb_u32();
-                  assert(idx < globals.size());
+                  PSIZAM_ASSERT(idx < globals.size(), wasm_interpreter_exception, "init_expr: global index out of range");
                   push(globals[idx].value.i64);
                   break;
                }
@@ -456,7 +456,14 @@ namespace psizam {
          // In compile-only mode, table allocation layout doesn't matter
          return false;
 #else
-         return i < mod.tables.size() && (mod.tables[i].limits.initial * sizeof(table_entry) > (wasm_allocator::table_size()) - sizeof(void*));
+         if (i >= mod.tables.size()) return false;
+         // Large tables that don't fit in the prefix area need heap allocation + pointer
+         bool large = mod.tables[i].limits.initial * sizeof(table_entry) > (wasm_allocator::table_size()) - sizeof(void*);
+         // Growable table 0 needs indirect because table.grow moves entries to the heap.
+         // The JIT must use pointer indirection so the updated pointer is followed.
+         bool growable = (i == 0) &&
+            (mod.tables[i].limits.flags == 0 || mod.tables[i].limits.maximum > mod.tables[i].limits.initial);
+         return large || growable;
 #endif
       }
    };

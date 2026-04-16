@@ -513,8 +513,14 @@ namespace psizam::detail {
             fix_branch(emit_branchcc32(JE), call_indirect_handler);
             emit(CALL, rax);
          } else {
-            std::uint32_t table_size = _mod.tables[0].limits.initial;
-            emit_cmp(table_size, eax);
+            if (_mod.indirect_table(0)) {
+               // Growable or large table: load runtime size from stored offset
+               emit_mov(*(rsi + wasm_allocator::table0_size_offset()), ecx);
+               emit_cmp(ecx, eax);
+            } else {
+               std::uint32_t table_size = _mod.tables[0].limits.initial;
+               emit_cmp(table_size, eax);
+            }
             fix_branch(emit_branchcc32(JAE), call_indirect_handler);
             emit(SHL_imm8, imm8{4}, rax);
             if (_mod.indirect_table(0))
@@ -4712,7 +4718,12 @@ namespace psizam::detail {
          emit_pop(rdi);
 
          // Check bounds
-         emit_mov(_mod.tables[0].limits.initial, eax);
+         if (_mod.indirect_table(0)) {
+            // Load runtime table 0 size (growable or large)
+            emit_mov(*(r8 + wasm_allocator::table0_size_offset()), eax);
+         } else {
+            emit_mov(_mod.tables[0].limits.initial, eax);
+         }
          emit_sub(rcx, rax);
          emit_cmp(rax, rsi);
          fix_branch(emit_branchcc32(JG), memory_handler);

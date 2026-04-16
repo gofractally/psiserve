@@ -563,6 +563,8 @@ namespace psizam {
       static std::int32_t table_offset() { return -static_cast<std::int32_t>(2 * page_size_val); }
       static std::size_t table_size() { return page_size_val; }
       static std::int32_t globals_end() { return -static_cast<std::int32_t>(page_size_val); }
+      // Runtime table 0 size, stored at end of table page (before globals pointer)
+      static std::int32_t table0_size_offset() { return globals_end() - 12; }
       template <typename T>
       void alloc(size_t = 1) {}
       template <typename T>
@@ -611,6 +613,10 @@ namespace psizam {
       static std::size_t prefix_size() {
          return table_size() + syspagesize();
       }
+      // Safety invariant: for 32-bit WASM, the maximum effective address is
+      // addr(u32_max) + offset(u32_max) + access_size(16 for v128) = 8GB + 14.
+      // Since max_memory = 8GB and suffix_size >= 4096, all OOB accesses land
+      // in PROT_NONE guard pages. This holds because max_memory >= 2 * max_useable_memory.
       static std::size_t suffix_size() {
          return syspagesize();
       }
@@ -624,6 +630,11 @@ namespace psizam {
       }
       static std::int32_t globals_end() {
          return -static_cast<std::int32_t>(syspagesize());
+      }
+      // Runtime table 0 size, stored at end of table page (before globals pointer).
+      // Used by JIT to bounds-check call_indirect after table.grow.
+      static std::int32_t table0_size_offset() {
+         return globals_end() - 12;
       }
       template <typename T>
       void alloc(size_t size = 1 /*in pages*/) {
