@@ -16,6 +16,9 @@ target_link_libraries(psio PUBLIC Boost::headers)
 
 target_compile_features(psio PUBLIC cxx_std_23)
 
+add_executable(psio_tool tools/psio_tool.cpp)
+target_link_libraries(psio_tool PRIVATE psio)
+
 option(PSIO_ENABLE_TESTS "Build psio tests" OFF)
 if(PSIO_ENABLE_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    add_subdirectory(tests)

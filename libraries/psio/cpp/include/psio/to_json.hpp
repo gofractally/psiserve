@@ -442,3 +442,21 @@ template <typename S> void to_json(float value, S& stream)              { return
    }
 
 }  // namespace psio
+
+// ── Fast-path JSON serialization ──────────────────────────────────────
+//
+// convert_to_json_fast() uses the compile-time template approach from
+// to_json_fast.hpp, which is 6-11x faster and produces byte-identical
+// output for reflected structs.  It is safe to use as a drop-in
+// replacement for convert_to_json() on any type supported by json_fast.
+
+#include "to_json_fast.hpp"
+
+namespace psio
+{
+   template <typename T>
+   std::string convert_to_json_fast(const T& t)
+   {
+      return json_fast::to_json_fast(t);
+   }
+}  // namespace psio

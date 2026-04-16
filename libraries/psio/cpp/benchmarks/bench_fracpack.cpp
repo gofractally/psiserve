@@ -18,6 +18,7 @@
 #include <psio/from_avro.hpp>
 #include <psio/reflect.hpp>
 #include <psio/to_json.hpp>
+#include <psio/to_json_fast.hpp>
 #include <psio/to_bin.hpp>
 #include <psio/to_bincode.hpp>
 #include <psio/to_avro.hpp>
@@ -839,6 +840,63 @@ void bench_json()
    bench("json-read/SensorReading", sensor_json_in.size(), [&] {
       auto r = psio::convert_from_json<SensorReading>(std::string(sensor_json_in));
       do_not_optimize(r.timestamp);
+      return r;
+   });
+}
+
+void bench_json_fast()
+{
+   print_header("JSON Fast (compile-time template serialization)");
+
+   auto point  = make_point();
+   auto user   = make_user();
+   auto order  = make_order();
+   auto sensor = make_sensor();
+
+   auto point_json_fast  = psio::to_json_fast(point);
+   auto user_json_fast   = psio::to_json_fast(user);
+   auto order_json_fast  = psio::to_json_fast(order);
+   auto sensor_json_fast = psio::to_json_fast(sensor);
+
+   // Verify output matches original (convert_to_json produces compact JSON too)
+   auto point_json_old  = psio::convert_to_json(point);
+   auto user_json_old   = psio::convert_to_json(user);
+   auto order_json_old  = psio::convert_to_json(order);
+   auto sensor_json_old = psio::convert_to_json(sensor);
+
+   auto check = [](const char* name, const std::string& a, const std::string& b) {
+      if (a == b)
+         std::printf("  [PASS] %s: output matches (%zu bytes)\n", name, a.size());
+      else
+      {
+         std::printf("  [FAIL] %s: output MISMATCH\n", name);
+         std::printf("    old: %s\n", a.c_str());
+         std::printf("    new: %s\n", b.c_str());
+      }
+   };
+   check("BPoint",        point_json_old,  point_json_fast);
+   check("UserProfile",   user_json_old,   user_json_fast);
+   check("Order",         order_json_old,  order_json_fast);
+   check("SensorReading", sensor_json_old, sensor_json_fast);
+
+   bench("json-fast-write/BPoint", point_json_fast.size(), [&] {
+      auto r = psio::to_json_fast(point);
+      do_not_optimize(r.data());
+      return r;
+   });
+   bench("json-fast-write/UserProfile", user_json_fast.size(), [&] {
+      auto r = psio::to_json_fast(user);
+      do_not_optimize(r.data());
+      return r;
+   });
+   bench("json-fast-write/Order", order_json_fast.size(), [&] {
+      auto r = psio::to_json_fast(order);
+      do_not_optimize(r.data());
+      return r;
+   });
+   bench("json-fast-write/SensorReading", sensor_json_fast.size(), [&] {
+      auto r = psio::to_json_fast(sensor);
+      do_not_optimize(r.data());
       return r;
    });
 }
@@ -1820,9 +1878,17 @@ void print_summary()
    auto mut_rp_n = find("mutate-repack/Order.customer.age (full round-trip)");
    print_comparison("Mutate Order.customer.age", "in-place", mut_ip_n, "repack", mut_rp_n);
 
+   // JSON vs JSON-fast
+   auto json_u = find("json-write/UserProfile");
+   auto json_fast_u = find("json-fast-write/UserProfile");
+   print_comparison("JSON UserProfile", "json-fast", json_fast_u, "json-old", json_u);
+
+   auto json_fast_s = find("json-fast-write/SensorReading");
+   auto json_s = find("json-write/SensorReading");
+   print_comparison("JSON SensorReading", "json-fast", json_fast_s, "json-old", json_s);
+
    // Pack vs JSON
    auto pack_u = find("pack/UserProfile");
-   auto json_u = find("json-write/UserProfile");
    print_comparison("Serialize UserProfile", "fracpack", pack_u, "json", json_u);
 
    auto unpack_u = find("unpack/UserProfile");
@@ -1842,6 +1908,7 @@ int main()
    bench_view();
    bench_validate();
    bench_json();
+   bench_json_fast();
    bench_mutation();
    bench_array_scaling();
    bench_view_vs_unpack();

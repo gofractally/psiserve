@@ -1,0 +1,135 @@
+{
+  "description": "Cross-language wire format test vectors. Each entry contains binary encodings in multiple formats (fracpack, WIT, Cap'n Proto, FlatBuffers) and expected field values. All implementations must produce identical packed bytes and decode to identical field values.",
+  "types": {
+    "Point": {
+      "description": "Fixed struct with two i32 fields (definition_will_not_change)",
+      "fields": {"x": "i32", "y": "i32"},
+      "cases": [
+        {
+          "name": "zeros",
+          "fracpack_hex": "0000000000000000",
+          "wit_hex": "0000000000000000",
+          "capnp_hex": "000000000200000000000000010000000000000000000000",
+          "flatbuf_hex": "080000000400040004000000",
+          "values": {"x": 0, "y": 0}
+        },
+        {
+          "name": "positive",
+          "fracpack_hex": "2A00000064000000",
+          "wit_hex": "2A00000064000000",
+          "capnp_hex": "000000000200000000000000010000002A00000064000000",
+          "flatbuf_hex": "0C00000008000C000800040008000000640000002A000000",
+          "values": {"x": 42, "y": 100}
+        },
+        {
+          "name": "negative",
+          "fracpack_hex": "FFFFFFFF00000080",
+          "wit_hex": "FFFFFFFF00000080",
+          "capnp_hex": "00000000020000000000000001000000FFFFFFFF00000080",
+          "flatbuf_hex": "0C00000008000C00080004000800000000000080FFFFFFFF",
+          "values": {"x": -1, "y": -2147483648}
+        },
+        {
+          "name": "max",
+          "fracpack_hex": "FFFFFF7FFFFFFF7F",
+          "wit_hex": "FFFFFF7FFFFFFF7F",
+          "capnp_hex": "00000000020000000000000001000000FFFFFF7FFFFFFF7F",
+          "flatbuf_hex": "0C00000008000C000800040008000000FFFFFF7FFFFFFF7F",
+          "values": {"x": 2147483647, "y": 2147483647}
+        }
+      ]
+    },
+    "SingleU32": {
+      "description": "Fixed struct with one u32 field (definition_will_not_change)",
+      "fields": {"value": "u32"},
+      "cases": [
+        {
+          "name": "zero",
+          "fracpack_hex": "00000000",
+          "values": {"value": 0}
+        },
+        {
+          "name": "one",
+          "fracpack_hex": "01000000",
+          "values": {"value": 1}
+        },
+        {
+          "name": "max",
+          "fracpack_hex": "FFFFFFFF",
+          "values": {"value": 4294967295}
+        },
+        {
+          "name": "deadbeef",
+          "fracpack_hex": "EFBEADDE",
+          "values": {"value": 3735928559}
+        }
+      ]
+    },
+    "SingleBool": {
+      "description": "Fixed struct with one bool field (definition_will_not_change)",
+      "fields": {"value": "bool"},
+      "cases": [
+        {
+          "name": "false",
+          "fracpack_hex": "00",
+          "values": {"value": false}
+        },
+        {
+          "name": "true",
+          "fracpack_hex": "01",
+          "values": {"value": true}
+        }
+      ]
+    },
+    "FixedMixed": {
+      "description": "Fixed struct with bool, u8, u16, u32, u64 (definition_will_not_change)",
+      "fields": {"b": "bool", "u8": "u8", "u16": "u16", "u32": "u32", "u64": "u64"},
+      "cases": [
+        {
+          "name": "zeros",
+          "fracpack_hex": "00000000000000000000000000000000",
+          "values": {"b": false, "u8": 0, "u16": 0, "u32": 0, "u64": "0"}
+        },
+        {
+          "name": "ones",
+          "fracpack_hex": "01010100010000000100000000000000",
+          "values": {"b": true, "u8": 1, "u16": 1, "u32": 1, "u64": "1"}
+        },
+        {
+          "name": "max",
+          "fracpack_hex": "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+          "values": {"b": true, "u8": 255, "u16": 65535, "u32": 4294967295, "u64": "18446744073709551615"}
+        }
+      ]
+    },
+    "SingleString": {
+      "description": "Extensible struct with one string field",
+      "fields": {"value": "string"},
+      "cases": [
+        {
+          "name": "empty",
+          "fracpack_hex": "040000000000",
+          "values": {"value": ""}
+        },
+        {
+          "name": "hello",
+          "fracpack_hex": "0400040000000500000068656C6C6F",
+          "values": {"value": "hello"}
+        },
+        {
+          "name": "unicode",
+          "fracpack_hex": "04000400000013000000636166C3A920E2989520E697A5E69CACE8AA9E",
+          "values": {"value": "caf\u00e9 \u2615 \u65e5\u672c\u8a9e"}
+        }
+      ]
+    }
+  },
+  "schema_export": {
+    "Point": {
+      "description": "Golden file outputs for schema export of Point {x: i32, y: i32}",
+      "capnp": "struct Point {\n  x @0 :Int32;\n  y @1 :Int32;\n}\n",
+      "fbs": "table Point {\n  x:int;\n  y:int;\n}\n",
+      "wit": "record point {\n  x: s32,\n  y: s32,\n}\n"
+    }
+  }
+}

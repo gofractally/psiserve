@@ -19,6 +19,7 @@
 //   float/double       → f32/f64
 //   bool               → bool
 
+#include <psio/wit_resource.hpp>
 #include <psio/wit_types.hpp>
 
 #include <psio/reflect.hpp>
@@ -78,6 +79,18 @@ namespace psio {
       template<typename T> struct optional_element {};
       template<typename T> struct optional_element<std::optional<T>> { using type = T; };
 
+      // ── Detect psio::own<T> ──
+      template<typename T> struct is_own : std::false_type {};
+      template<typename T> struct is_own<psio::own<T>> : std::true_type {};
+      template<typename T> struct own_element {};
+      template<typename T> struct own_element<psio::own<T>> { using type = T; };
+
+      // ── Detect psio::borrow<T> ──
+      template<typename T> struct is_borrow : std::false_type {};
+      template<typename T> struct is_borrow<psio::borrow<T>> : std::true_type {};
+      template<typename T> struct borrow_element {};
+      template<typename T> struct borrow_element<psio::borrow<T>> { using type = T; };
+
       // ── Detect PSIO_REFLECT-ed struct ──
       template<typename T>
       concept WitReflected = Reflected<T> && reflect<T>::is_struct;
@@ -133,7 +146,39 @@ namespace psio {
                type_cache[key] = idx;
                return idx;
             }
-            // 5. PSIO_REFLECT struct → record
+            // 5. own<T> → own handle wrapping a resource type
+            else if constexpr (is_own<U>::value) {
+               auto key = std::type_index(typeid(U));
+               auto it = type_cache.find(key);
+               if (it != type_cache.end()) return it->second;
+
+               using Res = typename own_element<U>::type;
+               int32_t res_idx = resolve_type<Res>();
+
+               wit_type_def td;
+               td.kind = static_cast<uint8_t>(wit_type_kind::own_);
+               td.element_type_idx = res_idx;
+               int32_t idx = add_type(std::move(td));
+               type_cache[key] = idx;
+               return idx;
+            }
+            // 6. borrow<T> → borrow handle wrapping a resource type
+            else if constexpr (is_borrow<U>::value) {
+               auto key = std::type_index(typeid(U));
+               auto it = type_cache.find(key);
+               if (it != type_cache.end()) return it->second;
+
+               using Res = typename borrow_element<U>::type;
+               int32_t res_idx = resolve_type<Res>();
+
+               wit_type_def td;
+               td.kind = static_cast<uint8_t>(wit_type_kind::borrow_);
+               td.element_type_idx = res_idx;
+               int32_t idx = add_type(std::move(td));
+               type_cache[key] = idx;
+               return idx;
+            }
+            // 7. PSIO_REFLECT struct — resource (opaque with methods) or record (transparent with fields)
             else if constexpr (WitReflected<U>) {
                auto key = std::type_index(typeid(U));
                auto it = type_cache.find(key);
@@ -146,24 +191,33 @@ namespace psio {
 
                wit_type_def td;
                td.name = to_kebab_case(std::string(reflect<U>::name));
-               td.kind = static_cast<uint8_t>(wit_type_kind::record_);
 
-               // Iterate data members
-               size_t field_i = 0;
-               apply_members(
-                  (typename reflect<U>::data_members*)nullptr,
-                  [&](auto... ptrs) {
-                     auto process = [&](auto ptr) {
-                        using MType = MemberPtrType<decltype(ptr)>;
-                        using ValType = std::remove_cvref_t<typename MType::ValueType>;
-                        const char* name = reflect<U>::data_member_names[field_i];
-                        int32_t type_idx = resolve_type<ValType>();
-                        td.fields.push_back({to_kebab_case(std::string(name)), type_idx});
-                        field_i++;
-                     };
-                     (process(ptrs), ...);
-                  }
-               );
+               if constexpr (is_wit_resource_v<U>) {
+                  // Resource type: emit methods, ignore data members.
+                  // Resources are opaque — their internal state does not
+                  // cross the WASM boundary.
+                  td.kind = static_cast<uint8_t>(wit_type_kind::resource_);
+                  generate_resource_methods<U>(td);
+               } else {
+                  // Record type: emit data members as fields.
+                  td.kind = static_cast<uint8_t>(wit_type_kind::record_);
+
+                  size_t field_i = 0;
+                  apply_members(
+                     (typename reflect<U>::data_members*)nullptr,
+                     [&](auto... ptrs) {
+                        auto process = [&](auto ptr) {
+                           using MType = MemberPtrType<decltype(ptr)>;
+                           using ValType = std::remove_cvref_t<typename MType::ValueType>;
+                           const char* name = reflect<U>::data_member_names[field_i];
+                           int32_t type_idx = resolve_type<ValType>();
+                           td.fields.push_back({to_kebab_case(std::string(name)), type_idx});
+                           field_i++;
+                        };
+                        (process(ptrs), ...);
+                     }
+                  );
+               }
 
                world.types[idx] = std::move(td);
                return idx;
@@ -223,6 +277,58 @@ namespace psio {
                      world.funcs.push_back(std::move(func));
                      uint32_t func_idx = static_cast<uint32_t>(world.funcs.size() - 1);
                      iface.func_idxs.push_back(func_idx);
+                     method_i++;
+                  };
+                  (process(ptrs), ...);
+               }
+            );
+         }
+
+         // ── Generate resource methods from a reflected resource type ──
+         // Populates td.method_func_idxs with indices into world.funcs[].
+         // Each reflected method becomes a WIT resource method. Unlike free
+         // functions, resource methods have an implicit borrow<self> first
+         // parameter in the canonical ABI — but in the WIT text they appear
+         // without it (the `resource { ... }` block implies self).
+
+         template<typename T>
+         void generate_resource_methods(wit_type_def& td) {
+            using R = reflect<T>;
+            size_t method_i = 0;
+            apply_members(
+               (typename R::member_functions*)nullptr,
+               [&](auto... ptrs) {
+                  auto process = [&](auto ptr) {
+                     using MType = MemberPtrType<decltype(ptr)>;
+
+                     auto& names = R::member_function_names[method_i];
+                     auto it = names.begin();
+                     std::string func_name(*it);
+                     ++it;
+
+                     wit_func func;
+                     func.name = to_kebab_case(func_name);
+
+                     // Process parameters with names
+                     forEachType(typename MType::ArgTypes{},
+                        [&](auto* type_ptr) {
+                           using ArgType = std::remove_cvref_t<std::remove_pointer_t<decltype(type_ptr)>>;
+                           const char* pname = (it != names.end()) ? *it++ : "";
+                           int32_t type_idx = resolve_type<ArgType>();
+                           func.params.push_back({to_kebab_case(std::string(pname)), type_idx});
+                        }
+                     );
+
+                     // Return type
+                     if constexpr (!std::is_void_v<typename MType::ReturnType>) {
+                        using RetType = std::remove_cvref_t<typename MType::ReturnType>;
+                        int32_t type_idx = resolve_type<RetType>();
+                        func.results.push_back({"", type_idx});
+                     }
+
+                     world.funcs.push_back(std::move(func));
+                     uint32_t func_idx = static_cast<uint32_t>(world.funcs.size() - 1);
+                     td.method_func_idxs.push_back(func_idx);
                      method_i++;
                   };
                   (process(ptrs), ...);
@@ -295,6 +401,13 @@ namespace psio {
                s += ">";
                return s;
             }
+            case wit_type_kind::own_:
+               return "own<" + wit_type_name(world, td.element_type_idx) + ">";
+            case wit_type_kind::borrow_:
+               return "borrow<" + wit_type_name(world, td.element_type_idx) + ">";
+            case wit_type_kind::resource_:
+               // Resource names are referenced directly (not inline type constructors)
+               return td.name.empty() ? "u32" : td.name;
             default:
                return td.name.empty() ? "u32" : td.name;
          }
@@ -362,8 +475,25 @@ namespace psio {
                   os << indent << "  " << f.name << ",\n";
                os << indent << "}\n";
                break;
+            case wit_type_kind::resource_:
+               if (td.method_func_idxs.empty()) {
+                  // Resource with no methods — emit as a bare declaration
+                  os << indent << "resource " << td.name << ";\n";
+               } else {
+                  os << indent << "resource " << td.name << " {\n";
+                  for (auto func_idx : td.method_func_idxs) {
+                     if (func_idx < world.funcs.size()) {
+                        // Resource methods use the same syntax as free functions
+                        // but appear inside the resource block. The implicit
+                        // borrow<self> parameter is not written — WIT convention.
+                        wit_emit_func(os, world, world.funcs[func_idx], indent + "  ");
+                     }
+                  }
+                  os << indent << "}\n";
+               }
+               break;
             default:
-               break; // list/option/result/tuple are inline, not emitted as declarations
+               break; // list/option/result/tuple/own/borrow are inline, not emitted as declarations
          }
       }
 
@@ -400,11 +530,17 @@ namespace psio {
 
       // Generate imports as a named interface
       if constexpr (!std::is_void_v<Imports>) {
+         size_t types_before = ctx.world.types.size();
          auto imports_name = detail::wit_gen_ctx::to_kebab_case(std::string(reflect<Imports>::name));
          wit_interface imp_iface;
          imp_iface.name = imports_name;
          ctx.generate_functions<Imports>(imp_iface);
-         if (!imp_iface.func_idxs.empty())
+         // Track types discovered while processing imports
+         for (size_t i = types_before; i < ctx.world.types.size(); i++) {
+            if (!ctx.world.types[i].name.empty())
+               imp_iface.type_idxs.push_back(static_cast<uint32_t>(i));
+         }
+         if (!imp_iface.func_idxs.empty() || !imp_iface.type_idxs.empty())
             ctx.world.imports.push_back(std::move(imp_iface));
       }
 
