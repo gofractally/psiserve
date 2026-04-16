@@ -101,7 +101,7 @@ static bool test_module(const std::vector<uint8_t>& wasm, const char* source, bo
    }
 #endif
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__aarch64__)
    auto r_jit2 = run_backend<jit2>(wasm);
    if (r_interp.outcome != r_jit2.outcome) {
       fprintf(stderr, "MISMATCH [%s]: interpreter=%s jit2=%s\n",
@@ -187,7 +187,7 @@ int main(int argc, char* argv[]) {
 #if defined(__x86_64__) || defined(__aarch64__)
    fprintf(stderr, ", jit");
 #endif
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__aarch64__)
    fprintf(stderr, ", jit2");
 #endif
    fprintf(stderr, "\n\n");
