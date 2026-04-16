@@ -312,7 +312,9 @@ namespace psizam::detail {
 
       void validate_utf8_string(wasm_code_ptr& code, uint32_t bytes) {
          while(bytes != 0) {
-            bytes -= validate_utf8_code_point(code);
+            uint32_t cp_size = validate_utf8_code_point(code);
+            PSIZAM_ASSERT(cp_size <= bytes, wasm_parse_exception, "UTF-8 code point extends past string boundary");
+            bytes -= cp_size;
          }
       }
 
@@ -467,6 +469,7 @@ namespace psizam::detail {
             ++code;
             auto subsection_guard = code.scoped_consume_items(parse_varuint32(code));
             uint32_t size = parse_varuint32(code);
+            PSIZAM_ASSERT(size <= code.bounds() - code.offset(), wasm_parse_exception, "name count exceeds section");
             _mod->names->function_names.emplace(size);
             parse_name_map(code, *_mod->names->function_names);
          }
@@ -475,11 +478,13 @@ namespace psizam::detail {
             ++code;
             auto subsection_guard = code.scoped_consume_items(parse_varuint32(code));
             uint32_t size = parse_varuint32(code);
+            PSIZAM_ASSERT(size <= code.bounds() - code.offset(), wasm_parse_exception, "local name count exceeds section");
             _mod->names->local_names.emplace(size);
             for(uint32_t i = 0; i < size; ++i) {
                auto& [idx,namemap] = (*_mod->names->local_names)[i];
                idx = parse_varuint32(code);
                uint32_t local_size = parse_varuint32(code);
+               PSIZAM_ASSERT(local_size <= code.bounds() - code.offset(), wasm_parse_exception, "local name count exceeds section");
                namemap = std::vector<name_assoc>(local_size);
                parse_name_map(code, namemap);
             }
@@ -495,10 +500,13 @@ namespace psizam::detail {
          // The section may appear before the code section, so buffer into _branch_hints_temp.
          // Applied to _mod->code[] in the code section parser.
          uint32_t num_funcs = parse_varuint32(code);
+         PSIZAM_ASSERT(num_funcs <= code.bounds() - code.offset(), wasm_parse_exception, "branch hint func count exceeds section");
          for (uint32_t i = 0; i < num_funcs; ++i) {
             uint32_t func_idx = parse_varuint32(code);
             uint32_t num_hints = parse_varuint32(code);
+            PSIZAM_ASSERT(num_hints <= code.bounds() - code.offset(), wasm_parse_exception, "branch hint count exceeds section");
             auto& hints = _branch_hints_temp[func_idx];
+            hints.reserve(num_hints);
             for (uint32_t j = 0; j < num_hints; ++j) {
                uint32_t offset = parse_varuint32(code);
                uint8_t  value  = *code++;
@@ -660,7 +668,10 @@ namespace psizam::detail {
       void parse_func_type(wasm_code_ptr& code, func_type& ft) {
          ft.form                              = *code++;
          PSIZAM_ASSERT(ft.form == 0x60, wasm_parse_exception, "invalid function type");
-         decltype(ft.param_types) param_types(parse_varuint32(code));
+         uint32_t param_count = parse_varuint32(code);
+         // Each param is at least 1 byte, so count can't exceed remaining bytes
+         PSIZAM_ASSERT(param_count <= code.bounds() - code.offset(), wasm_parse_exception, "param count exceeds section");
+         decltype(ft.param_types) param_types(param_count);
          for (size_t i = 0; i < param_types.size(); i++) {
             uint8_t pt        = *code++;
             param_types.at(i) = pt;
@@ -671,6 +682,7 @@ namespace psizam::detail {
          }
          ft.param_types  = std::move(param_types);
          uint32_t return_count = parse_varuint32(code);
+         PSIZAM_ASSERT(return_count <= code.bounds() - code.offset(), wasm_parse_exception, "return count exceeds section");
          ft.return_types.resize(return_count);
          for (uint32_t i = 0; i < return_count; ++i) {
             uint8_t rt = *code++;
@@ -685,14 +697,24 @@ namespace psizam::detail {
 
       void normalize_types() {
          type_aliases.resize(_mod->types.size());
+         // Use sig_hash for O(n) expected-time type deduplication.
+         // Map from sig_hash → first type index with that hash.
+         // On collision, fall back to equality check against the chain.
+         std::unordered_multimap<uint64_t, uint32_t> hash_to_idx;
+         hash_to_idx.reserve(_mod->types.size());
          for (uint32_t i = 0; i < _mod->types.size(); ++i) {
-            uint32_t j = 0;
-            for (; j < i; ++j) {
-               if (_mod->types[j] == _mod->types[i]) {
+            auto& ti = _mod->types[i];
+            uint32_t alias = i; // default: self
+            auto [begin, end] = hash_to_idx.equal_range(ti.sig_hash);
+            for (auto it = begin; it != end; ++it) {
+               if (_mod->types[it->second] == ti) {
+                  alias = it->second;
                   break;
                }
             }
-            type_aliases[i] = j;
+            type_aliases[i] = alias;
+            if (alias == i)
+               hash_to_idx.emplace(ti.sig_hash, i);
          }
 
          uint32_t imported_functions_size = _mod->get_imported_functions_size();
@@ -709,8 +731,8 @@ namespace psizam::detail {
       void parse_elem_segment(wasm_code_ptr& code, elem_segment& es) {
          table_type* tt = nullptr;
          std::uint32_t flags = parse_varuint32(code);
-         PSIZAM_ASSERT(es.index == 0 || get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
-         PSIZAM_ASSERT(es.index <= 7, wasm_parse_exception, "Illegal flags for elem");
+         PSIZAM_ASSERT(flags == 0 || get_enable_bulk_memory(_options), wasm_parse_exception, "Bulk memory not enabled");
+         PSIZAM_ASSERT(flags <= 7, wasm_parse_exception, "Illegal flags for elem");
          if (flags == 2 || flags == 6) {
             es.index = parse_varuint32(code);
          } else {
@@ -743,6 +765,7 @@ namespace psizam::detail {
          }
          uint32_t           size  = parse_varuint32(code);
          PSIZAM_ASSERT(size <= get_max_element_segment_elements(_options), wasm_parse_exception, "elem segment too large");
+         PSIZAM_ASSERT(size <= code.bounds() - code.offset(), wasm_parse_exception, "elem count exceeds remaining bytes");
          decltype(es.elems) elems(size);
          if (flags & 4) {
             for (uint32_t i = 0; i < size; i++) {
@@ -1609,6 +1632,8 @@ namespace psizam::detail {
 
                   // Parse catch clauses
                   uint32_t num_catches = parse_varuint32(code);
+                  // Each catch clause is at least 2 bytes (kind + label), so cap against remaining
+                  PSIZAM_ASSERT(num_catches <= (code.bounds() - code.offset()) / 2, wasm_parse_exception, "catch count exceeds function body");
                   std::vector<catch_clause> clauses(num_catches);
                   for (uint32_t i = 0; i < num_catches; ++i) {
                      clauses[i].kind = *code++;
@@ -2810,6 +2835,7 @@ namespace psizam::detail {
       inline void parse_section_impl(wasm_code_ptr& code, vec<Elem>& elems, std::uint32_t max_elements, ParseFunc&& elem_parse) {
          auto count = parse_varuint32(code);
          PSIZAM_ASSERT(count <= max_elements, wasm_parse_exception, "number of section elements exceeded limit");
+         PSIZAM_ASSERT(count <= code.bounds() - code.offset(), wasm_parse_exception, "element count exceeds remaining section bytes");
          elems      = vec<Elem>{ _allocator, count };
          for (size_t i = 0; i < count; i++) { elem_parse(code, elems.at(i), i); }
       }
@@ -2818,6 +2844,7 @@ namespace psizam::detail {
       inline void parse_section_impl(wasm_code_ptr& code, std::vector<Elem>& elems, std::uint32_t max_elements, ParseFunc&& elem_parse) {
          auto count = parse_varuint32(code);
          PSIZAM_ASSERT(count <= max_elements, wasm_parse_exception, "number of section elements exceeded limit");
+         PSIZAM_ASSERT(count <= code.bounds() - code.offset(), wasm_parse_exception, "element count exceeds remaining section bytes");
          elems.resize(count);
          for (size_t i = 0; i < count; i++) { elem_parse(code, elems.at(i), i); }
       }
@@ -2849,6 +2876,7 @@ namespace psizam::detail {
                                 std::vector<table_type>& elems) {
          auto count = parse_varuint32(code);
          PSIZAM_ASSERT(count <= get_max_section_elements(_options), wasm_parse_exception, "number of section elements exceeded limit");
+         PSIZAM_ASSERT(count <= code.bounds() - code.offset(), wasm_parse_exception, "element count exceeds remaining section bytes");
          auto base = elems.size(); // imported tables already present
          elems.resize(base + count);
          for (size_t i = 0; i < count; i++) { parse_table_type(code, elems.at(base + i)); }
@@ -2870,6 +2898,7 @@ namespace psizam::detail {
                                 std::vector<global_variable>& elems) {
          auto count = parse_varuint32(code);
          PSIZAM_ASSERT(count <= get_max_global_section_elements(_options), wasm_parse_exception, "number of section elements exceeded limit");
+         PSIZAM_ASSERT(count <= code.bounds() - code.offset(), wasm_parse_exception, "element count exceeds remaining section bytes");
          auto base = elems.size(); // imported globals already present
          elems.resize(base + count);
          for (size_t i = 0; i < count; i++) { parse_global_variable(code, elems.at(base + i)); }

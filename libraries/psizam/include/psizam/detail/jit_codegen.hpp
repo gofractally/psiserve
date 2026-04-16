@@ -797,8 +797,14 @@ namespace psizam::detail {
                this->emit_bytes(0xff, 0xd0); // call rax
             } else {
                // Table 0 fast path: inline bounds + type check
-               uint32_t table_size = _mod.tables[0].limits.initial;
-               this->emit_cmp(table_size, eax);
+               if (_mod.indirect_table(0)) {
+                  // Growable or large table: load runtime size
+                  this->emit_mov(*(rsi + wasm_allocator::table0_size_offset()), ecx);
+                  this->emit_cmp(ecx, eax);
+               } else {
+                  uint32_t table_size = _mod.tables[0].limits.initial;
+                  this->emit_cmp(table_size, eax);
+               }
                base::fix_branch(this->emit_branchcc32(base::JAE), call_indirect_handler);
                // Compute table entry: each entry is 16 bytes {type_idx(4), pad(4), code_ptr(8)}
                // shlq $4, %rax
@@ -2203,8 +2209,13 @@ namespace psizam::detail {
                this->emit_bytes(0xff, 0xd0); // call rax
             } else {
                // Table 0 fast path
-               uint32_t table_size = _mod.tables[0].limits.initial;
-               this->emit_cmp(table_size, eax);
+               if (_mod.indirect_table(0)) {
+                  this->emit_mov(*(rsi + wasm_allocator::table0_size_offset()), ecx);
+                  this->emit_cmp(ecx, eax);
+               } else {
+                  uint32_t table_size = _mod.tables[0].limits.initial;
+                  this->emit_cmp(table_size, eax);
+               }
                base::fix_branch(this->emit_branchcc32(base::JAE), call_indirect_handler);
                this->emit_bytes(0x48, 0xc1, 0xe0, 0x04); // shlq $4, %rax
                if (_mod.indirect_table(0)) {
@@ -6288,8 +6299,13 @@ namespace psizam::detail {
             // don't know the target at compile time
             this->emit_bytes(0xff, 0xd0); // call rax
          } else {
-            uint32_t table_size = _mod.tables[0].limits.initial;
-            this->emit_cmp(table_size, eax);
+            if (_mod.indirect_table(0)) {
+               this->emit_mov(*(rsi + wasm_allocator::table0_size_offset()), ecx);
+               this->emit_cmp(ecx, eax);
+            } else {
+               uint32_t table_size = _mod.tables[0].limits.initial;
+               this->emit_cmp(table_size, eax);
+            }
             base::fix_branch(this->emit_branchcc32(base::JAE), call_indirect_handler);
             this->emit_bytes(0x48, 0xc1, 0xe0, 0x04); // shlq $4, %rax
             if (_mod.indirect_table(0)) {

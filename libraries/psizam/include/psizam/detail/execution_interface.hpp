@@ -41,7 +41,8 @@ namespace psizam::detail {
       }
 
       inline void validate_null_terminated_pointer(const void* ptr) const {
-         volatile auto check_addr = std::strlen(static_cast<const char*>(ptr));
+         // Use strnlen with max_useable_memory as upper bound to prevent unbounded scan
+         volatile auto check_addr = strnlen(static_cast<const char*>(ptr), constants::max_useable_memory);
          ignore_unused_variable_warning(check_addr);
       }
       char* memory;

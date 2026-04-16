@@ -259,6 +259,7 @@ namespace psizam::detail {
                char* table_location = _linear_memory + wasm_allocator::table_offset();
                table_entry* table_start;
                if (_mod->indirect_table(0)) {
+                  // Heap allocation + pointer for large or growable tables
                   _alt_table.reset(new table_entry[tsize]);
                   table_start = _alt_table.get();
                   std::memcpy(table_location, &table_start, sizeof(table_start));
@@ -268,6 +269,8 @@ namespace psizam::detail {
                }
                std::memset(table_start, 0xff, tsize * sizeof(table_entry));
                _table_data[0] = table_start;
+               // Store runtime table 0 size for JIT bounds checks
+               std::memcpy(_linear_memory + wasm_allocator::table0_size_offset(), &tsize, sizeof(tsize));
             } else {
                // Additional tables use heap allocation
                _extra_tables.emplace_back(std::make_unique<table_entry[]>(tsize));
@@ -317,16 +320,14 @@ namespace psizam::detail {
 
       table_entry* get_table_base(uint32_t table_idx = 0) {
          if (table_idx == 0) {
-            if (_mod->indirect_table(0)) {
-               return (*reinterpret_cast<table_entry**>(linear_memory() + wasm_allocator::table_offset()));
-            } else {
-               return reinterpret_cast<table_entry*>(linear_memory() + wasm_allocator::table_offset());
-            }
+            return _table_data[0];
          }
+         PSIZAM_ASSERT(table_idx < _table_data.size(), wasm_interpreter_exception, "table index out of range");
          return _table_data[table_idx];
       }
 
       uint32_t get_table_size(uint32_t table_idx) const {
+         PSIZAM_ASSERT(table_idx < _table_sizes.size(), wasm_interpreter_exception, "table index out of range");
          return _table_sizes[table_idx];
       }
 
@@ -381,6 +382,9 @@ namespace psizam::detail {
             char* table_location = _linear_memory + wasm_allocator::table_offset();
             table_entry* ptr = _alt_table.get();
             std::memcpy(table_location, &ptr, sizeof(ptr));
+            // Update runtime table 0 size for JIT bounds checks
+            uint32_t ns32 = static_cast<uint32_t>(new_size);
+            std::memcpy(_linear_memory + wasm_allocator::table0_size_offset(), &ns32, sizeof(ns32));
          } else {
             // Find and replace the extra_tables entry
             for (auto& et : _extra_tables) {
@@ -899,42 +903,52 @@ namespace psizam::detail {
       static constexpr bool async_backtrace() { return EnableBacktrace; }
 
       inline int32_t get_global_i32(uint32_t index) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          return _globals[index].value.i32;
       }
 
       inline int64_t get_global_i64(uint32_t index) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          return _globals[index].value.i64;
       }
 
       inline uint32_t get_global_f32(uint32_t index) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          return _globals[index].value.f32;
       }
 
       inline uint64_t get_global_f64(uint32_t index) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          return _globals[index].value.f64;
       }
 
       inline v128_t get_global_v128(uint32_t index) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          return _globals[index].value.v128;
       }
 
       inline void set_global_i32(uint32_t index, int32_t value) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          _globals[index].value.i32 = value;
       }
 
       inline void set_global_i64(uint32_t index, int64_t value) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          _globals[index].value.i64 = value;
       }
 
       inline void set_global_f32(uint32_t index, uint32_t value) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
           _globals[index].value.f32 = value;
       }
 
       inline void set_global_f64(uint32_t index, uint64_t value) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          _globals[index].value.f64 = value;
       }
 
       inline void set_global_v128(uint32_t index, v128_t value) {
+         PSIZAM_ASSERT(index < _globals.size(), wasm_interpreter_exception, "global index out of range");
          _globals[index].value.v128 = value;
       }
 
