@@ -281,6 +281,64 @@ double compile_wasmtime(const std::vector<uint8_t>& wasm) {
    return std::chrono::duration<double, std::milli>(t2 - t1).count();
 }
 
+double run_wasmtime_guest(const std::vector<uint8_t>& wasm, const char* func, int num_params, uint32_t n) {
+   wasm_engine_t* engine = wasm_engine_new();
+   wasmtime_store_t* store = wasmtime_store_new(engine, nullptr, nullptr);
+   wasmtime_context_t* ctx = wasmtime_store_context(store);
+
+   wasmtime_module_t* module = nullptr;
+   wasmtime_error_t* err = wasmtime_module_new(engine, wasm.data(), wasm.size(), &module);
+   if (err) { print_wt_error("wasmtime guest module", err); wasmtime_store_delete(store); wasm_engine_delete(engine); return -1; }
+
+   // No imports needed — nop module is self-contained
+   wasmtime_instance_t instance;
+   wasm_trap_t* trap = nullptr;
+   err = wasmtime_instance_new(ctx, module, nullptr, 0, &instance, &trap);
+   if (err || trap) {
+      if (err) print_wt_error("wasmtime guest instantiate", err);
+      if (trap) wasm_trap_delete(trap);
+      wasmtime_module_delete(module); wasmtime_store_delete(store); wasm_engine_delete(engine);
+      return -1;
+   }
+
+   wasmtime_extern_t exp;
+   bool found = wasmtime_instance_export_get(ctx, &instance, func, strlen(func), &exp);
+   if (!found || exp.kind != WASMTIME_EXTERN_FUNC) {
+      fprintf(stderr, "wasmtime guest: export %s not found\n", func);
+      wasmtime_module_delete(module); wasmtime_store_delete(store); wasm_engine_delete(engine);
+      return -1;
+   }
+
+   // Use unchecked call path (wasmtime_func_call_unchecked) for a fair
+   // comparison against psizam's typed_function — both resolve types once,
+   // not per-call.  wasmtime_val_raw_t is a plain 16-byte union without the
+   // kind discriminator; results overwrite args starting at index 0.
+   size_t buf_len = static_cast<size_t>(num_params > 1 ? num_params : 1);
+   wasmtime_val_raw_t buf[8] = {};
+   for (int i = 0; i < num_params && i < 8; i++)
+      buf[i].i64 = static_cast<int64_t>(i + 1);
+
+   // Warm-up
+   err = wasmtime_func_call_unchecked(ctx, &exp.of.func, buf, buf_len, &trap);
+   if (err) { wasmtime_error_delete(err); }
+   if (trap) { wasm_trap_delete(trap); trap = nullptr; }
+
+   auto t1 = std::chrono::high_resolution_clock::now();
+   for (uint32_t i = 0; i < n; i++) {
+      buf[0].i64 = static_cast<int64_t>(i);
+      trap = nullptr;
+      err = wasmtime_func_call_unchecked(ctx, &exp.of.func, buf, buf_len, &trap);
+      if (err) { wasmtime_error_delete(err); break; }
+      if (trap) { wasm_trap_delete(trap); break; }
+   }
+   auto t2 = std::chrono::high_resolution_clock::now();
+
+   wasmtime_module_delete(module);
+   wasmtime_store_delete(store);
+   wasm_engine_delete(engine);
+   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+}
+
 double run_wasmtime_compute(const std::vector<uint8_t>& wasm, const char* func, uint32_t n) {
    wasm_engine_t* engine = wasm_engine_new();
    wasmtime_store_t* store = wasmtime_store_new(engine, nullptr, nullptr);

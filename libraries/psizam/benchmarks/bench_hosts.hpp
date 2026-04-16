@@ -52,10 +52,12 @@ using bench_runner_t = double (*)(const std::vector<uint8_t>&, const char*, uint
 #ifdef BENCH_HAS_WASMTIME
 double run_wasmtime(const std::vector<uint8_t>& wasm, const char* func, uint32_t n);
 double run_wasmtime_abi(const std::vector<uint8_t>& wasm, const char* func, uint32_t n);
+double run_wasmtime_guest(const std::vector<uint8_t>& wasm, const char* func, int num_params, uint32_t n);
 #endif
 
 #ifdef BENCH_HAS_WASMER
 double run_wasmer(const std::vector<uint8_t>& wasm, const char* func, uint32_t n);
+double run_wasmer_guest(const std::vector<uint8_t>& wasm, const char* func, int num_params, uint32_t n);
 #endif
 
 // Compute benchmark runners (zero-import WASM modules)
