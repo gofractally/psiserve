@@ -144,11 +144,11 @@ namespace psizam::detail {
 
          // Emit host function stubs
          const uint32_t num_imported = mod.get_imported_functions_size();
-         // Base: ~80 bytes per stub + 8 bytes per param (for arg repacking) + backtrace overhead
+         // Base: ~140 bytes per stub + 16 bytes per param (for stack args + reg loads) + backtrace
          std::size_t host_functions_size = 0;
          for(uint32_t i = 0; i < num_imported; ++i) {
             uint32_t nparams = mod.get_function_type(i).param_types.size();
-            host_functions_size += 140 + nparams * 12 + 8 * _enable_backtrace;
+            host_functions_size += 200 + nparams * 16 + 8 * _enable_backtrace;
          }
          if (num_imported > 0) {
             _code_start = _allocator.alloc<unsigned char>(host_functions_size);
@@ -655,6 +655,8 @@ namespace psizam::detail {
       }
 
       void emit_call(const func_type& ft, uint32_t funcnum) {
+         // Depth dec/inc around ALL calls (host + WASM).
+         // Host calls: call_host_function saves/restores depth for recursive host→WASM.
          emit_check_call_depth();
          // BL target (patched later)
          void* branch = code;
@@ -4446,75 +4448,62 @@ namespace psizam::detail {
       // ===================================================================
 
       void emit_host_call(uint32_t funcnum) {
-         // Host function stub: called from WASM code via BL.
-         // WASM args are on the native stack in 16-byte stride slots.
-         // Must call: static call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack)
-         //
-         // Stack layout on entry (from caller's perspective):
-         //   [SP + 0]:          arg[0]         (16 bytes per slot)
-         //   [SP + 16]:         arg[1]
-         //   ...
-         //   [SP + (n-1)*16]:   arg[n-1]
-         //   return address is in LR (X30)
-         //
-         // BLR clobbers LR, so we must save it.
-
          // Save FP/LR (BLR will clobber LR)
          emit32(0xA9BF7BFD); // STP X29, X30, [SP, #-16]!
          emit32(0x910003FD); // MOV X29, SP
 
          if (_enable_backtrace) {
-            emit32(0xF9000273); // STR X19, [X19] (store frame info)
+            emit32(0xF9000273); // STR X19, [X19]
          }
 
-         // Save callee-saved regs we use (X19/X20 for context)
-         emit32(0xA9BF53F3); // STP X19, X20, [SP, #-16]!
+         // All host calls go through call_host_function which wraps in
+         // longjmp_on_exception. Direct C ABI calls from JIT code are unsafe
+         // because JIT frames lack .eh_frame data — exceptions from the host
+         // function cannot unwind through them, causing std::terminate.
+         emit_legacy_host_call_body(funcnum);
+      }
 
+      void emit_legacy_host_call_body(uint32_t funcnum) {
          const auto& ft = _mod.get_function_type(funcnum);
          uint32_t num_params = ft.param_types.size();
 
-         // Repack WASM stack args (16-byte stride) into contiguous 8-byte stride buffer.
-         // The WASM args start past saved regs: +16 (X19/X20) + 16 (FP/LR) = +32
-         // Allocate buffer on stack: round up to 16-byte alignment.
+         // Save X19/X20
+         emit32(0xA9BF53F3); // STP X19, X20, [SP, #-16]!
+
+         // Repack WASM stack args (16-byte stride, reverse order) into
+         // contiguous 8-byte stride buffer in forward order.
          uint32_t buf_size = num_params > 0 ? ((num_params * 8 + 15) / 16) * 16 : 0;
          if (buf_size > 0) {
-            // SUB SP, SP, #buf_size
             emit32(0xD1000000 | ((buf_size & 0xFFF) << 10) | (SP << 5) | SP);
          }
 
-         // X1 = buffer pointer
-         emit32(0x910003E1); // MOV X1, SP
-         // Copy args from 16-byte stride to 8-byte stride
-         uint32_t extra_on_stack = buf_size + 32; // buf + saved X19/X20 + saved FP/LR
+         emit32(0x910003E1); // MOV X1, SP (buffer pointer)
+         uint32_t extra_on_stack = buf_size + 32;
          for (uint32_t i = 0; i < num_params; ++i) {
-            uint32_t src_offset = extra_on_stack + i * 16;
+            // Read param_i from reverse position on stack
+            uint32_t src_offset = extra_on_stack + (num_params - 1 - i) * 16;
             uint32_t dst_offset = i * 8;
             emit_ldr_uimm64(X8, SP, src_offset);
             emit_str_uimm64(X8, X1, dst_offset);
          }
 
-         // Set up remaining call args
-         emit_mov_imm32(X2, funcnum); // W2 = host function index
+         emit_mov_imm32(X2, funcnum);
          emit32(0x2A1503E3); // MOV W3, W21 (remaining call depth)
          emit32(0xAA1303E0); // MOV X0, X19 (context)
 
-         // Call call_host_function. SP is already 16-byte aligned.
          emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&call_host_function));
          emit32(0xD63F0100); // BLR X8
 
-         // Restore stack: undo buffer allocation
          if (buf_size > 0) {
-            emit32(0x91000000 | ((buf_size & 0xFFF) << 10) | (SP << 5) | SP); // ADD SP, SP, #buf_size
+            emit32(0x91000000 | ((buf_size & 0xFFF) << 10) | (SP << 5) | SP);
          }
 
-         // Restore X19/X20
          emit32(0xA8C153F3); // LDP X19, X20, [SP], #16
 
          if (_enable_backtrace) {
-            emit32(0xF900027F); // STR XZR, [X19] (clear backtrace)
+            emit32(0xF900027F); // STR XZR, [X19]
          }
 
-         // Restore FP/LR and return
          emit32(0xA8C17BFD); // LDP X29, X30, [SP], #16
          emit32(0xD65F03C0); // RET
       }
@@ -5144,15 +5133,26 @@ namespace psizam::detail {
       // Static helper functions
       // ===================================================================
 
-      static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+      // Host call with longjmp_on_exception wrapping + fast trampoline dispatch.
+      // Args are already in forward order (packed by the JIT stub).
+      // Depth tracking is handled by the caller's inline depth dec/inc;
+      // remaining_stack is synced to context for recursive host→WASM calls.
+      static native_value call_host_function(void* ctx, native_value* args, uint32_t idx, uint32_t remaining_stack) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         auto saved = context->_remaining_call_depth;
+         context->_remaining_call_depth = remaining_stack;
          native_value result;
-         longjmp_on_exception([&]() {
-            auto saved = context->_remaining_call_depth;
-            context->_remaining_call_depth = remaining_stack;
-            scope_guard g{[&](){ context->_remaining_call_depth = saved; }};
-            result = context->call_host_function(stack, idx);
-         });
+         if (context->_host_trampoline_ptrs) {
+            auto trampoline = context->_host_trampoline_ptrs[idx];
+            if (trampoline) {
+               result = trampoline(context->get_host_ptr(), args, context->linear_memory());
+               context->_remaining_call_depth = saved;
+               return result;
+            }
+         }
+         uint32_t mapped_index = context->_mod->import_functions[idx];
+         result = context->_table->call(context->get_host_ptr(), mapped_index, args, context->linear_memory());
+         context->_remaining_call_depth = saved;
          return result;
       }
 

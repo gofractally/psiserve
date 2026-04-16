@@ -522,7 +522,18 @@ namespace psizam::detail {
       uint32_t _remaining_call_depth;             // offset 16
       uint32_t _multi_return_count = 0;           // offset 20: number of return values stored
       native_value _multi_return[16] = {};        // offset 24: buffer for multi-value returns (up to 16 values)
+      void** _host_direct_ptrs = nullptr;         // offset 152: raw C function pointers for direct JIT calls
+      host_trampoline_t* _host_trampoline_ptrs = nullptr; // offset 160: trampoline function pointers for JIT slow path
+      void* _host_ptr = nullptr;                  // offset 168: host object pointer for inline JIT trampoline calls
    };
+
+   // JIT codegen embeds these offsets as immediates — verify they don't silently change.
+   static_assert(offsetof(frame_info_holder<false>, _host_direct_ptrs) == 152,
+                 "frame_info_holder layout changed — update direct_ptrs_offset in JIT codegen");
+   static_assert(offsetof(frame_info_holder<false>, _host_trampoline_ptrs) == 160,
+                 "frame_info_holder layout changed — update trampoline_ptrs_offset in JIT codegen");
+   static_assert(offsetof(frame_info_holder<false>, _host_ptr) == 168,
+                 "frame_info_holder layout changed — update host_ptr_offset in JIT codegen");
 
    template<bool EnableBacktrace = false>
    class jit_execution_context : public frame_info_holder<EnableBacktrace>, public execution_context_base<jit_execution_context<EnableBacktrace>, true> {
@@ -611,9 +622,10 @@ namespace psizam::detail {
       {
          auto saved_host = _host;
          auto saved_os_size = get_operand_stack().size();
-         auto g = scope_guard([&](){ _host = saved_host; get_operand_stack().eat(saved_os_size); });
+         auto g = scope_guard([&](){ _host = saved_host; this->_host_ptr = saved_host; get_operand_stack().eat(saved_os_size); });
 
          _host = host;
+         this->_host_ptr = host;
 
          const auto& ft = _mod->get_function_type(func_index);
          native_value_extended result;
@@ -709,9 +721,10 @@ namespace psizam::detail {
       inline std::optional<operand_stack_elem> execute(stack_allocator& alt_stack, void* host, jit_visitor, uint32_t func_index, Args... args) {
          auto saved_host = _host;
          auto saved_os_size = get_operand_stack().size();
-         auto g = scope_guard([&](){ _host = saved_host; get_operand_stack().eat(saved_os_size); });
+         auto g = scope_guard([&](){ _host = saved_host; this->_host_ptr = saved_host; get_operand_stack().eat(saved_os_size); });
 
          _host = host;
+         this->_host_ptr = host;
 
          const auto& ft = _mod->get_function_type(func_index);
          this->template type_check_args<TC>(ft, std::forward<Args>(args)... ); // args not modified by type_check_args

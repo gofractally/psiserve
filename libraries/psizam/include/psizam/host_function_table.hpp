@@ -35,6 +35,16 @@ namespace psizam {
             std::make_index_sequence<std::tuple_size_v<Args>>{});
       }
 
+      /// Reverse-order trampoline: args[0] = last WASM stack slot (paramN-1).
+      /// Used by JIT backends to avoid the reverse→forward copy — they pass the
+      /// WASM stack pointer directly.
+      template<auto Func, typename Cls, typename R, typename Args>
+      native_value fast_void_trampoline_rev(void* host, native_value* args, char* memory) {
+         return fast_trampoline_rev_impl<Func, Cls, R, Args>(
+            static_cast<Cls*>(host), args, memory,
+            std::make_index_sequence<std::tuple_size_v<Args>>{});
+      }
+
       /// Slow trampoline: constructs a type_converter, dispatches through the full
       /// type conversion pipeline. Used for functions with custom from_wasm/to_wasm
       /// conversions or preconditions.
@@ -73,7 +83,8 @@ namespace psizam {
    class host_function_table {
    public:
       struct entry {
-         host_trampoline_t  trampoline = nullptr;
+         host_trampoline_t  trampoline = nullptr;     ///< Forward-order trampoline (interpreter, LLVM)
+         host_trampoline_t  rev_trampoline = nullptr;  ///< Reverse-order trampoline (JIT — zero-copy stack pass)
          /// Slow-path dispatch for non-fast-eligible functions (those with custom
          /// type converters, preconditions, or pointer/reference parameters).
          /// Used when trampoline is null.
@@ -81,6 +92,7 @@ namespace psizam {
          host_function      signature;
          std::string        module_name;
          std::string        func_name;
+         void*              raw_func_ptr = nullptr; ///< Raw C function address for direct JIT calls
       };
 
       host_function_table() = default;
@@ -173,12 +185,22 @@ namespace psizam {
          e.signature = function_types_provider<TypeConverter, ret, args>(
             std::make_index_sequence<std::tuple_size_v<args>>{});
 
-         // Generate the trampoline
+         // Generate trampolines (forward for interpreter/LLVM, reverse for JIT zero-copy)
          if constexpr (detail::all_fast_eligible_v<args> &&
                        detail::is_simple_wasm_return_v<ret>) {
             e.trampoline = &detail::fast_void_trampoline<Func, host_cls, ret, args>;
+            e.rev_trampoline = &detail::fast_void_trampoline_rev<Func, host_cls, ret, args>;
          } else {
             e.trampoline = &detail::slow_void_trampoline<Func, host_cls, ret, args>;
+         }
+
+         // Store raw function pointer for direct JIT calls.
+         // Only safe when all params are direct-call-safe (no bool, no pointers, no type
+         // conversion needed) and the return is a direct-call-safe scalar.
+         if constexpr (std::is_same_v<host_cls, standalone_function_t> &&
+                       detail::all_direct_call_safe_v<args> &&
+                       detail::is_direct_call_safe_return_v<ret>) {
+            e.raw_func_ptr = reinterpret_cast<void*>(Func);
          }
 
          uint32_t idx = static_cast<uint32_t>(_entries.size());

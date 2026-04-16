@@ -23,6 +23,15 @@ extern "C" {
    // Returns the result as i64. args_buf points to a native_value array.
    int64_t  __psizam_call_host(void* ctx, uint32_t func_idx,
                                 void* args_buf, uint32_t nargs);
+   // Nothrow variant for LLVM JIT path (has .eh_frame, exceptions propagate naturally)
+   int64_t  __psizam_call_host_nothrow(void* ctx, uint32_t func_idx,
+                                        void* args_buf, uint32_t nargs);
+
+   // Combined: call_depth_dec + call_host + call_depth_inc + get_memory in one call.
+   // Reduces 4 extern calls to 1. *mem_out receives the updated memory pointer.
+   int64_t  __psizam_call_host_full(void* ctx, uint32_t func_idx,
+                                     void* args_buf, uint32_t nargs,
+                                     void** mem_out);
 
    // Bulk memory operations
    void     __psizam_memory_init(void* ctx, uint32_t seg_idx,
@@ -42,6 +51,9 @@ extern "C" {
    // Indirect call — returns result as i64
    int64_t  __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
                                     uint32_t table_elem, void* args_buf, uint32_t nargs);
+   // Nothrow variant for LLVM JIT path
+   int64_t  __psizam_call_indirect_nothrow(void* ctx, void* mem, uint32_t type_idx,
+                                            uint32_t table_elem, void* args_buf, uint32_t nargs);
 
    // Table element operations
    uint32_t __psizam_table_get(void* ctx, uint32_t table_idx, uint32_t elem_idx);

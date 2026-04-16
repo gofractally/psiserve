@@ -266,6 +266,7 @@ namespace psizam {
                entries[idx].func_name   = key.second;
                entries[idx].signature   = mappings.host_functions[idx];
                auto fwd = mappings.fast_fwd[idx];
+               entries[idx].raw_func_ptr = (idx < mappings.raw_ptrs.size()) ? mappings.raw_ptrs[idx] : nullptr;
                if (fwd) {
                   entries[idx].trampoline = reinterpret_cast<host_trampoline_t>(fwd);
                } else {
@@ -330,6 +331,27 @@ namespace psizam {
          }
          _host_table = build_host_table();
          ctx->set_host_table(&_host_table);
+
+         // Build direct C function pointer and trampoline pointer arrays for JIT host calls.
+         // Only JIT contexts (which inherit frame_info_holder) have these fields.
+         if constexpr (requires { ctx->_host_direct_ptrs; }) {
+            uint32_t num_imports = mod->get_imported_functions_size();
+            _direct_ptrs.resize(num_imports, nullptr);
+            _trampoline_ptrs.resize(num_imports, nullptr);
+            for (uint32_t i = 0; i < num_imports; i++) {
+               uint32_t mapped = mod->import_functions[i];
+               if (mapped < _host_table.size()) {
+                  auto& entry = _host_table.get_entry(mapped);
+                  _direct_ptrs[i] = entry.raw_func_ptr;
+                  // Prefer reverse-order trampoline for JIT (zero-copy stack pass).
+                  // Fall back to forward-order trampoline for functions with custom type converters.
+                  _trampoline_ptrs[i] = entry.rev_trampoline ? entry.rev_trampoline : entry.trampoline;
+               }
+            }
+            ctx->_host_direct_ptrs = _direct_ptrs.data();
+            ctx->_host_trampoline_ptrs = _trampoline_ptrs.data();
+         }
+
          // FIXME: should not hard code knowledge of null_backend here
          if (ctx.owns) {
             if constexpr (!std::is_same_v<Impl, null_backend>)
@@ -668,6 +690,8 @@ namespace psizam {
       DebugInfo       debug;
       maybe_unique_ptr<context_t> ctx = nullptr;
       host_function_table _host_table;
+      std::vector<void*>  _direct_ptrs;   // raw C function pointers indexed by import number
+      std::vector<host_trampoline_t> _trampoline_ptrs; // trampoline pointers indexed by import number
       bool            mod_sharable = false; // true if mod is sharable (compiled by the backend)
       uint32_t        initial_max_call_depth = 0;
       uint32_t        initial_max_pages = 0;

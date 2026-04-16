@@ -503,6 +503,28 @@ namespace psizam {
       inline constexpr bool all_fast_eligible_v =
          all_fast_eligible_impl<Tuple>(std::make_index_sequence<std::tuple_size_v<Tuple>>{});
 
+      // Direct C ABI call safety: a type is safe for raw function pointer calls
+      // when it can be passed as a register-width integer without conversion.
+      // bool is excluded: C ABI passes bool as 1 byte, but WASM passes i32.
+      // A value like 0x10000 has low byte 0, so C++ reads it as false.
+      template<typename T>
+      inline constexpr bool is_direct_call_safe_v =
+         is_simple_wasm_type_v<T> && !std::is_same_v<std::decay_t<T>, bool>;
+
+      template<typename T>
+      inline constexpr bool is_direct_call_safe_return_v =
+         std::is_void_v<T> || is_direct_call_safe_v<T>;
+
+      template<typename Tuple, std::size_t... Is>
+      constexpr bool all_direct_call_safe_impl(std::index_sequence<Is...>) {
+         return (is_direct_call_safe_v<std::tuple_element_t<Is, Tuple>> && ...);
+      }
+      template<typename Tuple>
+      constexpr bool all_direct_call_safe_impl(std::index_sequence<>) { return true; }
+      template<typename Tuple>
+      inline constexpr bool all_direct_call_safe_v =
+         all_direct_call_safe_impl<Tuple>(std::make_index_sequence<std::tuple_size_v<Tuple>>{});
+
       // Read a native_value as the appropriate C++ type (scalars only)
       template<typename T>
       inline std::decay_t<T> read_native_arg(const native_value& v) {
@@ -738,6 +760,7 @@ namespace psizam {
          std::vector<host_function>                                        host_functions;
          std::vector<fast_host_trampoline_t<Cls>>                          fast_fwd;  // forward order (interpreter)
          std::vector<fast_host_trampoline_t<Cls>>                          fast_rev;  // reverse order (JIT)
+         std::vector<void*>                                                raw_ptrs;  // raw C function pointers for direct JIT calls
          size_t                                                            current_index = 0;
          std::unordered_map<host_func_pair, host_table_import, host_func_pair_hash>  table_imports;
          std::unordered_map<host_func_pair, host_global_import, host_func_pair_hash> global_imports;
@@ -760,6 +783,16 @@ namespace psizam {
             } else {
                fast_fwd.push_back(nullptr);
                fast_rev.push_back(nullptr);
+            }
+            // Store raw function pointer for direct JIT calls.
+            // Only safe when all params are direct-call-safe (no bool, no pointers, no type conversion).
+            if constexpr (std::is_same_v<Cls, standalone_function_t> &&
+                          detail::all_direct_call_safe_v<Args> &&
+                          detail::is_direct_call_safe_return_v<R> &&
+                          std::tuple_size_v<Preconditions> == 0) {
+               raw_ptrs.push_back(reinterpret_cast<void*>(F));
+            } else {
+               raw_ptrs.push_back(nullptr);
             }
          }
 

@@ -240,9 +240,11 @@ namespace psizam::detail {
          memory_handler = emit_error_handler(&on_memory_error, reloc_symbol::on_memory_error);
 
          // Host function thunks
+         // Fast-path stubs vary in size: base ~160 bytes + ~14 bytes per stack arg.
+         // For up to 16 params, that's ~300 bytes worst case. Use 384 for safety.
          const uint32_t num_imported = _mod.get_imported_functions_size();
          if (num_imported > 0) {
-            const std::size_t host_functions_size = (42 + 10 * _enable_backtrace) * num_imported;
+            const std::size_t host_functions_size = 384 * num_imported;
             buf = _allocator.alloc<unsigned char>(host_functions_size);
             code = buf;
             for (uint32_t i = 0; i < num_imported; ++i) {
@@ -442,24 +444,49 @@ namespace psizam::detail {
             this->emit_bytes(0x48, 0x89, 0x27); // movq %rsp, (%rdi)
             extra = 8;
          }
-         this->emit_bytes(0xba);
-         this->emit_operand32(funcnum);     // mov $funcnum, %edx
-         this->emit_bytes(0x57);             // pushq %rdi
-         this->emit_bytes(0x56);             // pushq %rsi
-         this->emit_bytes(0x48, 0x8d, 0x74, 0x24, 0x18 + extra); // lea 24(%rsp), %rsi
-         // align stack
-         this->emit_bytes(0x48, 0x89, 0xe1); // mov %rsp, %rcx
+
+         emit_inline_host_call(funcnum, extra);
+      }
+
+      // Inline trampoline dispatch — calls trampoline directly without call_host_function.
+      // Trampoline signature: native_value(*)(void* host, native_value* args, char* memory)
+      // SysV ABI: rdi=host_ptr, rsi=args_buf, rdx=linear_memory
+      static constexpr int32_t trampoline_ptrs_offset() { return 160; }
+      static constexpr int32_t host_ptr_offset() { return 168; }
+
+      void emit_inline_host_call(uint32_t funcnum, uint32_t extra) {
+         // Zero-copy host call: pass WASM stack pointer directly to reverse-order trampoline.
+         // Trampoline signature: native_value(*)(void* host, native_value* args, char* memory)
+         // SysV ABI: rdi=host_ptr, rsi=stack_args, rdx=linear_memory
+
+         this->emit_bytes(0x57);             // pushq %rdi  (save ctx)
+         this->emit_bytes(0x56);             // pushq %rsi  (save mem_base)
+
+         // Load trampoline and host_ptr from context while rdi is still valid.
+         // r8=trampoline, r9=host_ptr, r10=mem_base (all caller-saved).
+         this->emit_mov(*(rdi + trampoline_ptrs_offset()), rax);  // rax = _host_trampoline_ptrs
+         this->emit_mov(*(rax + static_cast<int32_t>(funcnum * 8)), rax); // rax = trampoline[funcnum]
+         this->emit_mov(rax, r8);            // r8 = trampoline
+         this->emit_mov(*(rdi + host_ptr_offset()), r9);   // r9 = host_ptr
+         this->emit_mov(rsi, r10);           // r10 = mem_base
+
+         // rsi = pointer to args on WASM stack (already in reverse order).
+         // Stack layout: [rsp]=saved_rsi, [rsp+8]=saved_rdi, [rsp+16]=ret_addr,
+         //               [rsp+24+extra]=paramN-1, [rsp+32+extra]=paramN-2, ...
+         this->emit_bytes(0x48, 0x8d, 0x74, 0x24); // lea N(%rsp), %rsi
+         this->emit_bytes(static_cast<uint8_t>(24 + extra)); // rsi = &args[0] (reverse order)
+
+         // Set up remaining SysV args
+         this->emit_mov(r10, rdx);           // rdx = memory (SysV arg 3)
+         this->emit_mov(r9, rdi);            // rdi = host_ptr (SysV arg 1)
+
+         // Align stack and call trampoline
+         this->emit_bytes(0x48, 0x89, 0xe0); // mov %rsp, %rax (save rsp)
          this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
-         this->emit_bytes(0x51);             // push %rcx
-         this->emit_bytes(0x51);             // push %rcx
-         // Load call depth from context memory (rdi) into ecx for call_host_function
-         // _remaining_call_depth is always at offset 16 in unified frame_info_holder
-         this->emit_mov(*(rdi + 16), ecx);
-         this->emit_bytes(0x48, 0xb8);
-         emit_reloc(reloc_symbol::call_host_function);
-         this->emit_operand_ptr(&call_host_function);
-         this->emit_bytes(0xff, 0xd0);       // callq *%rax
-         // restore stack
+         this->emit_bytes(0x50);             // push %rax (save restore point)
+         this->emit_bytes(0x50);             // push %rax
+         this->emit_bytes(0x41, 0xff, 0xd0); // callq *%r8
+         // Restore stack
          this->emit_bytes(0x48, 0x8b, 0x24, 0x24); // mov (%rsp), %rsp
          this->emit_bytes(0x5e);             // popq %rsi
          this->emit_bytes(0x5f);             // popq %rdi
@@ -755,11 +782,13 @@ namespace psizam::detail {
          case ir_op::call: {
             uint32_t funcnum = inst.call.index;  // absolute index (includes imports)
             const func_type& ft = _mod.get_function_type(funcnum);
+            // Depth dec/inc around ALL calls (host + WASM).
+            // Host calls: call_host_function saves/restores depth for recursive host→WASM.
+            // call_indirect also does inline depth tracking, so host calls through
+            // call_indirect work correctly without double-decrement.
             emit_call_depth_dec();
-            // Emit call (may need relocation)
             void* branch = this->emit_call32();
             register_call(branch, funcnum);
-            // Pop params, push result
             emit_call_multipop(ft);
             emit_call_depth_inc();
             break;
@@ -6483,17 +6512,31 @@ namespace psizam::detail {
       }
 
       // ──────── Static callbacks (same as machine_code_writer) ────────
-      static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+
+      // Host call with fast trampoline dispatch. .eh_frame is registered for JIT
+      // code, so C++ exceptions propagate naturally through JIT frames.
+      // Args are already in forward order (packed by the JIT stub).
+      // remaining_stack is synced to context for recursive host→WASM calls.
+      static native_value call_host_function(void* ctx, native_value* args, uint32_t idx, uint32_t remaining_stack) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         auto saved = context->_remaining_call_depth;
+         context->_remaining_call_depth = remaining_stack;
+
          native_value result;
-         longjmp_on_exception([&]() {
-            auto saved = context->_remaining_call_depth;
-            context->_remaining_call_depth = remaining_stack;
-            scope_guard g{[&](){ context->_remaining_call_depth = saved; }};
-            result = context->call_host_function(stack, idx);
-         });
+         if (context->_host_trampoline_ptrs) {
+            auto trampoline = context->_host_trampoline_ptrs[idx];
+            if (trampoline) {
+               result = trampoline(context->get_host_ptr(), args, context->linear_memory());
+               context->_remaining_call_depth = saved;
+               return result;
+            }
+         }
+         uint32_t mapped_index = context->_mod->import_functions[idx];
+         result = context->_table->call(context->get_host_ptr(), mapped_index, args, context->linear_memory());
+         context->_remaining_call_depth = saved;
          return result;
       }
+
 
       static int32_t current_memory(void* ctx) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);

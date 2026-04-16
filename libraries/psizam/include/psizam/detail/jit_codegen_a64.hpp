@@ -100,7 +100,7 @@ namespace psizam::detail {
          // Host function stubs
          const uint32_t num_imported = _mod.get_imported_functions_size();
          if (num_imported > 0) {
-            const std::size_t host_functions_size = 256 * num_imported;
+            const std::size_t host_functions_size = 384 * num_imported;
             buf = _allocator.alloc<unsigned char>(host_functions_size);
             code = buf;
             for (uint32_t i = 0; i < num_imported; ++i) {
@@ -659,13 +659,20 @@ namespace psizam::detail {
             emit32(0xF9000273); // STR X19, [X19]
          }
 
-         // Save X19/X20
-         emit32(0xA9BF53F3); // STP X19, X20, [SP, #-16]!
+         // All host calls go through call_host_function which wraps in
+         // longjmp_on_exception. Direct C ABI calls from JIT code are unsafe
+         // because JIT frames lack .eh_frame data — exceptions from the host
+         // function cannot unwind through them, causing std::terminate.
+         emit_legacy_host_call_body(funcnum);
+      }
 
+      void emit_legacy_host_call_body(uint32_t funcnum) {
          const auto& ft = _mod.get_function_type(funcnum);
          uint32_t num_params = ft.param_types.size();
 
-         // Repack args from 16-byte stride to 8-byte stride buffer
+         // Save X19/X20
+         emit32(0xA9BF53F3); // STP X19, X20, [SP, #-16]!
+
          uint32_t buf_size = num_params > 0 ? ((num_params * 8 + 15) / 16) * 16 : 0;
          if (buf_size > 0) {
             emit_sub_imm(SP, SP, buf_size);
@@ -673,18 +680,17 @@ namespace psizam::detail {
 
          emit32(0x910003E1); // MOV X1, SP (buffer pointer)
 
-         uint32_t extra = buf_size + 32; // buf + saved X19/X20 + saved FP/LR
+         // Copy args from reverse stack order (16-byte stride) to forward order (8-byte stride)
+         uint32_t extra = buf_size + 32;
          for (uint32_t i = 0; i < num_params; ++i) {
-            uint32_t src_off = extra + i * 16;
+            uint32_t src_off = extra + (num_params - 1 - i) * 16;
             uint32_t dst_off = i * 8;
-            // LDR X8, [SP, #src_off]
             if (src_off % 8 == 0 && src_off / 8 <= 4095) {
                emit32(0xF9400000 | ((src_off / 8) << 10) | (SP << 5) | X8);
             } else {
                emit_mov_imm32(X8, src_off);
                emit32(0xF8686BE8); // LDR X8, [SP, X8]
             }
-            // STR X8, [X1, #dst_off]
             if (dst_off % 8 == 0 && dst_off / 8 <= 4095) {
                emit32(0xF9000000 | ((dst_off / 8) << 10) | (X1 << 5) | X8);
             } else {
@@ -693,9 +699,9 @@ namespace psizam::detail {
             }
          }
 
-         emit_mov_imm32(X2, funcnum);       // W2 = host function index
-         emit32(0x2A1503E3);                // MOV W3, W21 (remaining call depth)
-         emit32(0xAA1303E0);                // MOV X0, X19 (context)
+         emit_mov_imm32(X2, funcnum);
+         emit32(0x2A1503E3);                // MOV W3, W21
+         emit32(0xAA1303E0);                // MOV X0, X19
 
          emit_reloc_mov_imm64(X8, reloc_symbol::call_host_function,
             reinterpret_cast<uint64_t>(&call_host_function));
@@ -1780,6 +1786,8 @@ namespace psizam::detail {
          case ir_op::call: {
             uint32_t funcnum = inst.call.index;
             const func_type& ft = _mod.get_function_type(funcnum);
+            // Depth dec/inc around ALL calls (host + WASM).
+            // Host calls: call_host_function saves/restores depth for recursive host→WASM.
             emit_call_depth_dec();
             void* branch = emit_bl_placeholder();
             register_call(branch, funcnum);
@@ -3742,15 +3750,26 @@ namespace psizam::detail {
    public:
       // ──────── Static callbacks (public for relocation resolution) ────────
 
-      static native_value call_host_function(void* ctx, native_value* stack, uint32_t idx, uint32_t remaining_stack) {
+      // Host call with longjmp_on_exception wrapping + fast trampoline dispatch.
+      // Args are already in forward order (packed by the JIT stub).
+      // Depth tracking is handled by the caller's inline depth dec/inc;
+      // remaining_stack is synced to context for recursive host→WASM calls.
+      static native_value call_host_function(void* ctx, native_value* args, uint32_t idx, uint32_t remaining_stack) {
          auto* context = static_cast<jit_execution_context<false>*>(ctx);
+         auto saved = context->_remaining_call_depth;
+         context->_remaining_call_depth = remaining_stack;
          native_value result;
-         longjmp_on_exception([&]() {
-            auto saved = context->_remaining_call_depth;
-            context->_remaining_call_depth = remaining_stack;
-            scope_guard g{[&](){ context->_remaining_call_depth = saved; }};
-            result = context->call_host_function(stack, idx);
-         });
+         if (context->_host_trampoline_ptrs) {
+            auto trampoline = context->_host_trampoline_ptrs[idx];
+            if (trampoline) {
+               result = trampoline(context->get_host_ptr(), args, context->linear_memory());
+               context->_remaining_call_depth = saved;
+               return result;
+            }
+         }
+         uint32_t mapped_index = context->_mod->import_functions[idx];
+         result = context->_table->call(context->get_host_ptr(), mapped_index, args, context->linear_memory());
+         context->_remaining_call_depth = saved;
          return result;
       }
 

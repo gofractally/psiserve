@@ -10,7 +10,7 @@ set(BENCH_SOURCES
    ${CMAKE_CURRENT_SOURCE_DIR}/bench_wasmtime.cpp
    ${CMAKE_CURRENT_SOURCE_DIR}/bench_wasmer.cpp
 )
-set(BENCH_LIBS psizam)
+set(BENCH_LIBS psizam-exec)
 set(BENCH_DEFS "")
 
 # ##################################################################################################
@@ -363,7 +363,29 @@ if(PSIZAM_ENABLE_BENCH_COMPUTE)
       COMMENT "Compiling bench_misc.c -> WASM"
    )
 
-   add_custom_target(compute-wasm ALL DEPENDS "${SHA256_WASM}" "${ECDSA_WASM}" "${MISC_WASM}")
+   # --- Canonical ABI benchmark WASM module ---
+   set(ABI_WASM "${CMAKE_CURRENT_BINARY_DIR}/bench_abi.wasm")
+   add_custom_command(
+      OUTPUT "${ABI_WASM}"
+      COMMAND "${WASM_CC}" ${WASM_CFLAGS}
+              -Wl,--export=bench_noop
+              -Wl,--export=bench_string_pass
+              -Wl,--export=bench_record_flat
+              -Wl,--export=bench_record_mem
+              -Wl,--export=bench_resource_call
+              -Wl,--export=bench_resource_lifecycle
+              -Wl,--export=bench_struct_2str
+              -Wl,--export=bench_struct_mixed
+              -Wl,--export=bench_nested
+              -Wl,--export=bench_vec_records
+              -Wl,--export=bench_many_params
+              -o "${ABI_WASM}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/compute/bench_abi.c"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/compute/bench_abi.c"
+      COMMENT "Compiling bench_abi.c -> WASM"
+   )
+
+   add_custom_target(compute-wasm ALL DEPENDS "${SHA256_WASM}" "${ECDSA_WASM}" "${MISC_WASM}" "${ABI_WASM}")
 
    # --- Native baseline: compile the same C code as a native static library ---
    add_library(bench-native STATIC
@@ -405,5 +427,7 @@ if(PSIZAM_ENABLE_BENCH_COMPUTE)
       BENCH_SHA256_WASM="${SHA256_WASM}"
       BENCH_ECDSA_WASM="${ECDSA_WASM}"
       BENCH_MISC_WASM="${MISC_WASM}"
+      BENCH_ABI_WASM="${ABI_WASM}"
+      BENCH_HAS_ABI
    )
 endif()
