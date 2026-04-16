@@ -382,8 +382,10 @@ namespace psizam::detail {
       uint32_t merge_block;
       uint32_t merge_vreg;  // For if/else with result: vreg that both branches write to
       uint8_t  result_count;       // Number of results (0 or 1 for single-value, >1 for multi-value)
+      uint8_t  param_count;        // Number of block parameters (multi-value blocks)
       uint8_t  result_types[16];   // Types of each result (multi-value)
       uint32_t merge_vregs[16];    // One merge vreg per result (multi-value)
+      uint32_t param_vregs[16];    // Saved parameter vregs (for else branch re-push)
    };
    static_assert(std::is_trivially_copyable_v<ir_control_entry>);
 

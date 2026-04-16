@@ -587,6 +587,12 @@ namespace psizam::detail {
          ir_control_entry entry{};
          entry.block_idx = _func->new_block();
          entry.stack_depth = _func->vstack_depth() - param_count;
+         entry.param_count = static_cast<uint8_t>(param_count);
+         // Save param vregs so emit_else can re-push them for the else branch
+         std::memset(entry.param_vregs, 0xFF, sizeof(entry.param_vregs));
+         for (uint32_t i = 0; i < param_count && i < 16; ++i) {
+            entry.param_vregs[i] = _func->vstack[entry.stack_depth + i];
+         }
          entry.result_type = result_type;
          entry.is_loop = 0;
          entry.is_function = 0;
@@ -617,6 +623,11 @@ namespace psizam::detail {
          entry.block_idx = _func->new_block();
          _func->blocks[entry.block_idx].is_loop = 1;
          entry.stack_depth = _func->vstack_depth() - param_count;
+         entry.param_count = static_cast<uint8_t>(param_count);
+         std::memset(entry.param_vregs, 0xFF, sizeof(entry.param_vregs));
+         for (uint32_t i = 0; i < param_count && i < 16; ++i) {
+            entry.param_vregs[i] = _func->vstack[entry.stack_depth + i];
+         }
          entry.result_type = result_type;
          entry.is_loop = 1;
          entry.is_function = 0;
@@ -639,8 +650,10 @@ namespace psizam::detail {
          entry.is_function = 0;
          entry.entered_unreachable = _unreachable ? 1 : 0;
          entry.result_count = static_cast<uint8_t>(result_count);
+         entry.param_count = static_cast<uint8_t>(param_count);
          std::memset(entry.result_types, 0, sizeof(entry.result_types));
          std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs));
+         std::memset(entry.param_vregs, 0xFF, sizeof(entry.param_vregs));
          if (result_count > 1) {
             for (uint32_t i = 0; i < result_count && i < 16; ++i) {
                entry.merge_vregs[i] = _func->alloc_vreg(types::i64);
@@ -658,6 +671,10 @@ namespace psizam::detail {
          if (!_unreachable) {
             uint32_t cond = _func->vpop();
             entry.stack_depth = _func->vstack_depth() - param_count; // after popping condition
+            // Save param vregs so emit_else can re-push them for the else branch
+            for (uint32_t i = 0; i < param_count && i < 16; ++i) {
+               entry.param_vregs[i] = _func->vstack[entry.stack_depth + i];
+            }
             ir_inst inst{};
             inst.opcode = ir_op::if_;
             inst.type = types::pseudo;
@@ -741,6 +758,10 @@ namespace psizam::detail {
                _func->blocks[entry.block_idx].is_if = 0;
             }
             _func->vstack_resize(entry.stack_depth);
+            // Re-push parameter vregs so the else branch has them available
+            for (uint32_t i = 0; i < entry.param_count && i < 16; ++i) {
+               _func->vpush(entry.param_vregs[i]);
+            }
          }
          // Only become reachable if the if was entered in reachable code.
          // If the if was in dead code, the else body is also unreachable.
