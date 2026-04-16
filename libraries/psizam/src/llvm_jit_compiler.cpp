@@ -78,7 +78,9 @@ namespace psizam::detail {
       add_sym("__psizam_global_set_v128",  reinterpret_cast<void*>(&__psizam_global_set_v128));
       add_sym("__psizam_memory_size",    reinterpret_cast<void*>(&__psizam_memory_size));
       add_sym("__psizam_memory_grow",    reinterpret_cast<void*>(&__psizam_memory_grow));
-      add_sym("__psizam_call_host",      reinterpret_cast<void*>(&__psizam_call_host));
+      add_sym("__psizam_call_host",          reinterpret_cast<void*>(&__psizam_call_host));
+      add_sym("__psizam_call_host_nothrow",  reinterpret_cast<void*>(&__psizam_call_host_nothrow));
+      add_sym("__psizam_call_host_full",     reinterpret_cast<void*>(&__psizam_call_host_full));
       add_sym("__psizam_memory_init",    reinterpret_cast<void*>(&__psizam_memory_init));
       add_sym("__psizam_data_drop",      reinterpret_cast<void*>(&__psizam_data_drop));
       add_sym("__psizam_memory_copy",    reinterpret_cast<void*>(&__psizam_memory_copy));
@@ -86,7 +88,8 @@ namespace psizam::detail {
       add_sym("__psizam_table_init",     reinterpret_cast<void*>(&__psizam_table_init));
       add_sym("__psizam_elem_drop",      reinterpret_cast<void*>(&__psizam_elem_drop));
       add_sym("__psizam_table_copy",     reinterpret_cast<void*>(&__psizam_table_copy));
-      add_sym("__psizam_call_indirect",  reinterpret_cast<void*>(&__psizam_call_indirect));
+      add_sym("__psizam_call_indirect",          reinterpret_cast<void*>(&__psizam_call_indirect));
+      add_sym("__psizam_call_indirect_nothrow",  reinterpret_cast<void*>(&__psizam_call_indirect_nothrow));
       add_sym("__psizam_get_memory",    reinterpret_cast<void*>(&__psizam_get_memory));
       add_sym("__psizam_table_get",    reinterpret_cast<void*>(&__psizam_table_get));
       add_sym("__psizam_table_set",    reinterpret_cast<void*>(&__psizam_table_set));

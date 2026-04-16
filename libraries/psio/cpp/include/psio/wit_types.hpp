@@ -52,15 +52,31 @@ namespace psio {
 
    // ---- Compound type definitions ----
 
+   /// Discriminates the kind of a compound type definition.
+   ///
+   /// Values 0-7 are data types (records, variants, enums, etc.).
+   /// Values 8-10 are resource-related types from the WIT Component Model.
+   ///
+   /// Resource types (8-10) model opaque handle-based objects:
+   ///   - resource_: An opaque type with methods, crossed as u32 handles.
+   ///   - own_:      Ownership transfer of a resource (element_type_idx → resource).
+   ///   - borrow_:   Temporary reference to a resource (element_type_idx → resource).
+   ///
+   /// own_ and borrow_ are type constructors like list_ and option_ — they
+   /// wrap a resource type via element_type_idx. On the canonical ABI wire
+   /// they are both u32.
    enum class wit_type_kind : uint8_t {
-      record_  = 0,
-      variant_ = 1,
-      enum_    = 2,
-      flags_   = 3,
-      list_    = 4,
-      option_  = 5,
-      result_  = 6,
-      tuple_   = 7,
+      record_   = 0,
+      variant_  = 1,
+      enum_     = 2,
+      flags_    = 3,
+      list_     = 4,
+      option_   = 5,
+      result_   = 6,
+      tuple_    = 7,
+      resource_ = 8,   ///< Opaque handle type with methods
+      own_      = 9,   ///< Owning handle: element_type_idx → resource type
+      borrow_   = 10,  ///< Borrowed handle: element_type_idx → resource type
    };
 
    /// A named field within a record, variant case, function param/result,
@@ -71,15 +87,25 @@ namespace psio {
    };
    PSIO_REFLECT(wit_named_type, name, type_idx)
 
-   /// A compound type definition (record, variant, enum, flags, list, etc.).
+   /// A compound type definition (record, variant, enum, flags, list, resource, etc.).
+   ///
+   /// For resource_ types:
+   ///   - name:             the resource name (e.g. "cursor")
+   ///   - fields:           unused (resources are opaque — no data fields in WIT)
+   ///   - method_func_idxs: indices into wit_world::funcs[] for the resource's methods
+   ///
+   /// For own_/borrow_ types:
+   ///   - element_type_idx: index of the resource_ type being wrapped
+   ///   - name:             empty (own/borrow are anonymous type constructors)
    struct wit_type_def {
       std::string                 name;
       uint8_t                     kind = 0;   // wit_type_kind
       std::vector<wit_named_type> fields;     // record fields, variant cases, enum/flag labels, tuple elements
-      int32_t                     element_type_idx = 0;  // list/option element; result ok type
+      int32_t                     element_type_idx = 0;  // list/option/own/borrow element; result ok type
       int32_t                     error_type_idx   = 0;  // result err type (0 = none)
+      std::vector<uint32_t>       method_func_idxs;      // resource methods (indices into world.funcs[])
    };
-   PSIO_REFLECT(wit_type_def, name, kind, fields, element_type_idx, error_type_idx)
+   PSIO_REFLECT(wit_type_def, name, kind, fields, element_type_idx, error_type_idx, method_func_idxs)
 
    // ---- Functions ----
 

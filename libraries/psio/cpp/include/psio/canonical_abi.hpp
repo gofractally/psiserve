@@ -34,6 +34,7 @@
 #include <cstring>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace psio {
@@ -79,10 +80,21 @@ namespace psio {
             return 4;  // (i32 ptr, i32 len)
          else if constexpr (is_std_vector_ct<U>::value)
             return 4;  // (i32 ptr, i32 len)
+         else if constexpr (std::is_same_v<U, std::monostate>)
+            return 1;
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             constexpr uint32_t ea = canonical_align_impl<E>();
             return ea > 1 ? ea : 1;  // max(1, payload_align)
+         }
+         else if constexpr (is_std_variant_v<U>) {
+            return [&]<size_t... Is>(std::index_sequence<Is...>) {
+               constexpr size_t N = sizeof...(Is);
+               constexpr uint32_t disc_align = N <= 256 ? 1 : N <= 65536 ? 2 : 4;
+               uint32_t max_a = disc_align;
+               ((max_a = std::max(max_a, canonical_align_impl<std::variant_alternative_t<Is, U>>())), ...);
+               return max_a;
+            }(std::make_index_sequence<std::variant_size_v<U>>{});
          }
          else if constexpr (Reflected<U>) {
             uint32_t max_align = 1;
@@ -122,6 +134,8 @@ namespace psio {
             return 8;  // (i32 ptr, i32 len)
          else if constexpr (is_std_vector_ct<U>::value)
             return 8;  // (i32 ptr, i32 len)
+         else if constexpr (std::is_same_v<U, std::monostate>)
+            return 0;
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             constexpr uint32_t ea = canonical_align_impl<E>();
@@ -131,6 +145,20 @@ namespace psio {
             constexpr uint32_t total = disc_padded + es;
             constexpr uint32_t a = ea > 1 ? ea : 1;
             return (total + a - 1) & ~(a - 1);  // trailing pad
+         }
+         else if constexpr (is_std_variant_v<U>) {
+            return []<size_t... Is>(std::index_sequence<Is...>) {
+               constexpr size_t N = sizeof...(Is);
+               constexpr uint32_t disc_size = N <= 256 ? 1 : N <= 65536 ? 2 : 4;
+               constexpr uint32_t disc_align = disc_size;
+               uint32_t max_pa = 1;
+               ((max_pa = std::max(max_pa, canonical_align_impl<std::variant_alternative_t<Is, U>>())), ...);
+               uint32_t max_ps = 0;
+               ((max_ps = std::max(max_ps, canonical_size_impl<std::variant_alternative_t<Is, U>>())), ...);
+               uint32_t va = std::max(disc_align, max_pa);
+               uint32_t payload_off = (disc_size + max_pa - 1) & ~(max_pa - 1);
+               return (payload_off + max_ps + va - 1) & ~(va - 1);
+            }(std::make_index_sequence<std::variant_size_v<U>>{});
          }
          else if constexpr (Reflected<U>) {
             uint32_t size = 0;
@@ -191,9 +219,19 @@ namespace psio {
             return 2;  // ptr + len
          else if constexpr (is_std_vector_ct<U>::value)
             return 2;  // ptr + len
+         else if constexpr (std::is_same_v<U, std::monostate>)
+            return 0;
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             return 1 + canonical_flat_count_impl<E>();  // discriminant + payload
+         }
+         else if constexpr (is_std_variant_v<U>) {
+            return []<size_t... Is>(std::index_sequence<Is...>) {
+               size_t max_count = 0;
+               ((max_count = std::max(max_count,
+                  canonical_flat_count_impl<std::variant_alternative_t<Is, U>>())), ...);
+               return 1 + max_count;  // discriminant + max payload
+            }(std::make_index_sequence<std::variant_size_v<U>>{});
          }
          else if constexpr (Reflected<U>) {
             size_t n = 0;
@@ -267,10 +305,21 @@ namespace psio {
             (void)arr;
             return 0;
          }
+         else if constexpr (std::is_same_v<U, std::monostate>) {
+            return 0;
+         }
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             if (value.has_value())
                packed_size_field(*value, bump);
+            return 0;
+         }
+         else if constexpr (is_std_variant_v<U>) {
+            std::visit([&](const auto& v) {
+               using A = std::remove_cvref_t<decltype(v)>;
+               if constexpr (!std::is_same_v<A, std::monostate>)
+                  packed_size_field(v, bump);
+            }, value);
             return 0;
          }
          else if constexpr (Reflected<U>) {
@@ -373,6 +422,9 @@ namespace psio {
             p.store_u32(dest, arr);
             p.store_u32(dest + 4, count);
          }
+         else if constexpr (std::is_same_v<U, std::monostate>) {
+            // Nothing to store
+         }
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             constexpr uint32_t ea = canonical_align_impl<E>();
@@ -383,6 +435,31 @@ namespace psio {
             } else {
                p.store_u8(dest, 0);
             }
+         }
+         else if constexpr (is_std_variant_v<U>) {
+            constexpr size_t N = std::variant_size_v<U>;
+            constexpr uint32_t disc_size = N <= 256 ? 1 : N <= 65536 ? 2 : 4;
+            constexpr uint32_t max_pa = []<size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t m = 1;
+               ((m = std::max(m, canonical_align_impl<std::variant_alternative_t<Is, U>>())), ...);
+               return m;
+            }(std::make_index_sequence<N>{});
+            constexpr uint32_t payload_off = (disc_size + max_pa - 1) & ~(max_pa - 1);
+
+            // Write discriminant
+            if constexpr (disc_size == 1)
+               p.store_u8(dest, static_cast<uint8_t>(value.index()));
+            else if constexpr (disc_size == 2)
+               p.store_u16(dest, static_cast<uint16_t>(value.index()));
+            else
+               p.store_u32(dest, static_cast<uint32_t>(value.index()));
+
+            // Write payload
+            std::visit([&](const auto& v) {
+               using A = std::remove_cvref_t<decltype(v)>;
+               if constexpr (!std::is_same_v<A, std::monostate>)
+                  store_field(v, p, dest + payload_off);
+            }, value);
          }
          else if constexpr (Reflected<U>) {
             canonical_lower_fields(value, p, dest);
@@ -396,15 +473,19 @@ namespace psio {
 
    template <typename T, StorePolicy Policy>
    void canonical_lower_fields(const T& value, Policy& p, uint32_t dest) {
-      apply_members(
-         (typename reflect<T>::data_members*)nullptr,
-         [&](auto... ptrs) {
-            [&]<size_t... Is>(std::index_sequence<Is...>) {
-               (detail_canonical::store_field(value.*ptrs, p,
-                  dest + canonical_field_offset_v<T, Is>), ...);
-            }(std::index_sequence_for<decltype(ptrs)...>{});
-         }
-      );
+      if constexpr (Reflected<T>) {
+         apply_members(
+            (typename reflect<T>::data_members*)nullptr,
+            [&](auto... ptrs) {
+               [&]<size_t... Is>(std::index_sequence<Is...>) {
+                  (detail_canonical::store_field(value.*ptrs, p,
+                     dest + canonical_field_offset_v<T, Is>), ...);
+               }(std::index_sequence_for<decltype(ptrs)...>{});
+            }
+         );
+      } else {
+         detail_canonical::store_field(value, p, dest);
+      }
    }
 
    // =========================================================================
@@ -460,6 +541,8 @@ namespace psio {
                result.push_back(load_field<E>(p, ptr + i * es));
             return result;
          }
+         else if constexpr (std::is_same_v<U, std::monostate>)
+            return std::monostate{};
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             constexpr uint32_t ea = canonical_align_impl<E>();
@@ -469,6 +552,41 @@ namespace psio {
                return std::optional<E>(load_field<E>(p, offset + payload_offset));
             else
                return std::optional<E>(std::nullopt);
+         }
+         else if constexpr (is_std_variant_v<U>) {
+            constexpr size_t N = std::variant_size_v<U>;
+            constexpr uint32_t disc_size = N <= 256 ? 1 : N <= 65536 ? 2 : 4;
+            constexpr uint32_t max_pa = []<size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t m = 1;
+               ((m = std::max(m, canonical_align_impl<std::variant_alternative_t<Is, U>>())), ...);
+               return m;
+            }(std::make_index_sequence<N>{});
+            constexpr uint32_t payload_off = (disc_size + max_pa - 1) & ~(max_pa - 1);
+
+            uint32_t disc;
+            if constexpr (disc_size == 1)
+               disc = p.load_u8(offset);
+            else if constexpr (disc_size == 2)
+               disc = p.load_u16(offset);
+            else
+               disc = p.load_u32(offset);
+
+            // Index-dispatch: try each alternative
+            U result;
+            [&]<size_t... Is>(std::index_sequence<Is...>) {
+               auto try_alt = [&]<size_t I>() {
+                  if (disc == I) {
+                     using Alt = std::variant_alternative_t<I, U>;
+                     if constexpr (std::is_same_v<Alt, std::monostate>)
+                        result = U(std::in_place_index<I>);
+                     else
+                        result = U(std::in_place_index<I>,
+                           load_field<Alt>(p, offset + payload_off));
+                  }
+               };
+               (try_alt.template operator()<Is>(), ...);
+            }(std::make_index_sequence<N>{});
+            return result;
          }
          else if constexpr (Reflected<U>) {
             return canonical_lift_fields<U>(p, offset);
@@ -483,18 +601,22 @@ namespace psio {
 
    template <typename T, LoadPolicy Policy>
    T canonical_lift_fields(Policy& p, uint32_t base) {
-      T result{};
-      apply_members(
-         (typename reflect<T>::data_members*)nullptr,
-         [&](auto... ptrs) {
-            [&]<size_t... Is>(std::index_sequence<Is...>) {
-               ((result.*ptrs = detail_canonical::load_field<
-                  std::remove_cvref_t<typename MemberPtrType<decltype(ptrs)>::ValueType>
-               >(p, base + canonical_field_offset_v<T, Is>)), ...);
-            }(std::index_sequence_for<decltype(ptrs)...>{});
-         }
-      );
-      return result;
+      if constexpr (Reflected<T>) {
+         T result{};
+         apply_members(
+            (typename reflect<T>::data_members*)nullptr,
+            [&](auto... ptrs) {
+               [&]<size_t... Is>(std::index_sequence<Is...>) {
+                  ((result.*ptrs = detail_canonical::load_field<
+                     std::remove_cvref_t<typename MemberPtrType<decltype(ptrs)>::ValueType>
+                  >(p, base + canonical_field_offset_v<T, Is>)), ...);
+               }(std::index_sequence_for<decltype(ptrs)...>{});
+            }
+         );
+         return result;
+      } else {
+         return detail_canonical::load_field<T>(p, base);
+      }
    }
 
    // =========================================================================
@@ -531,6 +653,9 @@ namespace psio {
             for (uint32_t i = 0; i < len; i++)
                rebase_field<E>(buf, old_ptr + i * es, delta);
          }
+         else if constexpr (std::is_same_v<U, std::monostate>) {
+            // Nothing to rebase
+         }
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             constexpr uint32_t ea = canonical_align_impl<E>();
@@ -539,6 +664,34 @@ namespace psio {
             std::memcpy(&disc, buf + offset, 1);
             if (disc)
                rebase_field<E>(buf, offset + payload_offset, delta);
+         }
+         else if constexpr (is_std_variant_v<U>) {
+            constexpr size_t N = std::variant_size_v<U>;
+            constexpr uint32_t disc_size = N <= 256 ? 1 : N <= 65536 ? 2 : 4;
+            constexpr uint32_t max_pa = []<size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t m = 1;
+               ((m = std::max(m, canonical_align_impl<std::variant_alternative_t<Is, U>>())), ...);
+               return m;
+            }(std::make_index_sequence<N>{});
+            constexpr uint32_t payload_off = (disc_size + max_pa - 1) & ~(max_pa - 1);
+
+            uint32_t disc;
+            if constexpr (disc_size == 1) {
+               uint8_t d; std::memcpy(&d, buf + offset, 1); disc = d;
+            } else if constexpr (disc_size == 2) {
+               uint16_t d; std::memcpy(&d, buf + offset, 2); disc = d;
+            } else {
+               std::memcpy(&disc, buf + offset, 4);
+            }
+
+            [&]<size_t... Is>(std::index_sequence<Is...>) {
+               auto try_alt = [&]<size_t I>() {
+                  if (disc == I)
+                     rebase_field<std::variant_alternative_t<I, U>>(
+                        buf, offset + payload_off, delta);
+               };
+               (try_alt.template operator()<Is>(), ...);
+            }(std::make_index_sequence<N>{});
          }
          else if constexpr (Reflected<U>) {
             canonical_rebase<U>(buf, offset, delta);
@@ -549,16 +702,20 @@ namespace psio {
 
    template <typename T>
    void canonical_rebase(uint8_t* buf, uint32_t offset, int32_t delta) {
-      apply_members(
-         (typename reflect<T>::data_members*)nullptr,
-         [&](auto... ptrs) {
-            [&]<size_t... Is>(std::index_sequence<Is...>) {
-               (detail_canonical::rebase_field<
-                  std::remove_cvref_t<typename MemberPtrType<decltype(ptrs)>::ValueType>
-               >(buf, offset + canonical_field_offset_v<T, Is>, delta), ...);
-            }(std::index_sequence_for<decltype(ptrs)...>{});
-         }
-      );
+      if constexpr (Reflected<T>) {
+         apply_members(
+            (typename reflect<T>::data_members*)nullptr,
+            [&](auto... ptrs) {
+               [&]<size_t... Is>(std::index_sequence<Is...>) {
+                  (detail_canonical::rebase_field<
+                     std::remove_cvref_t<typename MemberPtrType<decltype(ptrs)>::ValueType>
+                  >(buf, offset + canonical_field_offset_v<T, Is>, delta), ...);
+               }(std::index_sequence_for<decltype(ptrs)...>{});
+            }
+         );
+      } else {
+         detail_canonical::rebase_field<T>(buf, offset, delta);
+      }
    }
 
    // =========================================================================
@@ -598,6 +755,9 @@ namespace psio {
                   return false;
             return true;
          }
+         else if constexpr (std::is_same_v<U, std::monostate>) {
+            return true;
+         }
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             constexpr uint32_t ea = canonical_align_impl<E>();
@@ -609,6 +769,41 @@ namespace psio {
             if (disc)
                return validate_field<E>(buf, buf_size, offset + payload_offset);
             return true;
+         }
+         else if constexpr (is_std_variant_v<U>) {
+            constexpr size_t N = std::variant_size_v<U>;
+            constexpr uint32_t disc_size = N <= 256 ? 1 : N <= 65536 ? 2 : 4;
+            constexpr uint32_t total = canonical_size_impl<U>();
+            if (offset + total > buf_size) return false;
+
+            uint32_t disc;
+            if constexpr (disc_size == 1) {
+               uint8_t d; std::memcpy(&d, buf + offset, 1); disc = d;
+            } else if constexpr (disc_size == 2) {
+               uint16_t d; std::memcpy(&d, buf + offset, 2); disc = d;
+            } else {
+               std::memcpy(&disc, buf + offset, 4);
+            }
+
+            if (disc >= N) return false;
+
+            constexpr uint32_t max_pa = []<size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t m = 1;
+               ((m = std::max(m, canonical_align_impl<std::variant_alternative_t<Is, U>>())), ...);
+               return m;
+            }(std::make_index_sequence<N>{});
+            constexpr uint32_t payload_off = (disc_size + max_pa - 1) & ~(max_pa - 1);
+
+            bool ok = true;
+            [&]<size_t... Is>(std::index_sequence<Is...>) {
+               auto try_alt = [&]<size_t I>() {
+                  if (disc == I)
+                     ok = validate_field<std::variant_alternative_t<I, U>>(
+                        buf, buf_size, offset + payload_off);
+               };
+               (try_alt.template operator()<Is>(), ...);
+            }(std::make_index_sequence<N>{});
+            return ok;
          }
          else if constexpr (Reflected<U>) {
             return canonical_validate<U>(buf, buf_size, offset);
@@ -625,18 +820,22 @@ namespace psio {
    bool canonical_validate(const uint8_t* buf, uint32_t buf_size, uint32_t offset) {
       if (offset + canonical_size_v<T> > buf_size)
          return false;
-      bool ok = true;
-      apply_members(
-         (typename reflect<T>::data_members*)nullptr,
-         [&](auto... ptrs) {
-            [&]<size_t... Is>(std::index_sequence<Is...>) {
-               ((ok && (ok = detail_canonical::validate_field<
-                  std::remove_cvref_t<typename MemberPtrType<decltype(ptrs)>::ValueType>
-               >(buf, buf_size, offset + canonical_field_offset_v<T, Is>))), ...);
-            }(std::index_sequence_for<decltype(ptrs)...>{});
-         }
-      );
-      return ok;
+      if constexpr (Reflected<T>) {
+         bool ok = true;
+         apply_members(
+            (typename reflect<T>::data_members*)nullptr,
+            [&](auto... ptrs) {
+               [&]<size_t... Is>(std::index_sequence<Is...>) {
+                  ((ok && (ok = detail_canonical::validate_field<
+                     std::remove_cvref_t<typename MemberPtrType<decltype(ptrs)>::ValueType>
+                  >(buf, buf_size, offset + canonical_field_offset_v<T, Is>))), ...);
+               }(std::index_sequence_for<decltype(ptrs)...>{});
+            }
+         );
+         return ok;
+      } else {
+         return detail_canonical::validate_field<T>(buf, buf_size, offset);
+      }
    }
 
    // =========================================================================

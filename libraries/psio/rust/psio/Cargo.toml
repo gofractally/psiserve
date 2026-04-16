@@ -1,0 +1,29 @@
+[package]
+name = "psio"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-format serialization: fracpack, Cap'n Proto, FlatBuffers, WIT, JSON, and more"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+custom_error = "1.9.2"
+hex = "0.3.1"
+indexmap = { version = "2.2.6", features = ["serde"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = { version = "1.0.135", features = ["preserve_order"] }
+serde-aux = "4.5"
+psio-macros = { path = "../psio-macros" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+bincode = "1"
+postcard = { version = "1", features = ["alloc"] }
+rmp-serde = "1"
+rkyv = { version = "0.8", features = ["bytecheck"] }
+
+[[bench]]
+name = "fracpack_bench"
+harness = false

@@ -1,8 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "libraries/psio/rust/fracpack-macros",
-    "libraries/psio/rust/fracpack",
+    "libraries/psio/rust/psio-macros",
+    "libraries/psio/rust/psio",
+    "libraries/psio/rust/psio-tool",
     "libraries/wit-macro",
     "libraries/wit-test-component",
 ]

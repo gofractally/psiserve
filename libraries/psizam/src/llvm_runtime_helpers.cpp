@@ -4,7 +4,7 @@
 // Exception safety: These helpers are called FROM LLVM-generated code. When running
 // pre-compiled .pzam code, the LLVM frames lack .eh_frame data, so C++ exceptions
 // cannot unwind through them. Instead, we catch exceptions at this boundary and use
-// siglongjmp via the existing signal_dest mechanism (set up by invoke_with_signal_handler)
+// longjmp via trap_jmp_buf (set up by invoke_with_signal_handler / setjmp)
 // to bypass the LLVM frames entirely.
 
 #include <psizam/detail/llvm_runtime_helpers.hpp>
@@ -25,10 +25,9 @@ namespace {
    // Escape via longjmp with an existing exception_ptr.
    // Used when propagating exceptions from host calls or recursive WASM calls.
    [[noreturn]] void escape_exception(std::exception_ptr eptr) {
-      sigjmp_buf* dest = std::atomic_load(&signal_dest);
-      if (dest) {
+      if (trap_jmp_ptr) {
          saved_exception = std::move(eptr);
-         siglongjmp(*dest, -1);
+         longjmp(*trap_jmp_ptr, -1);
       }
       std::rethrow_exception(eptr);
    }
@@ -36,10 +35,9 @@ namespace {
    // Escape via longjmp with a new exception, or throw if no escape target.
    template<typename E>
    [[noreturn]] void escape_or_throw(const char* msg) {
-      sigjmp_buf* dest = std::atomic_load(&signal_dest);
-      if (dest) {
+      if (trap_jmp_ptr) {
          saved_exception = std::make_exception_ptr(E{msg});
-         siglongjmp(*dest, -1);
+         longjmp(*trap_jmp_ptr, -1);
       }
       throw E{msg};
    }
@@ -85,15 +83,90 @@ int32_t __psizam_memory_grow(void* ctx, int32_t pages, void** new_mem_out) {
 int64_t __psizam_call_host(void* ctx, uint32_t func_idx,
                             void* args_buf, uint32_t nargs) {
    auto& c = as_ctx(ctx);
+   auto* args = static_cast<native_value*>(args_buf);
+
+   // Fast path: call the trampoline directly if available.
+   // The trampoline_ptrs array is indexed by import number and handles
+   // all type conversion internally — no table lookup needed.
+   if (c._host_trampoline_ptrs) {
+      auto trampoline = c._host_trampoline_ptrs[func_idx];
+      if (trampoline) {
+         try {
+            auto result = trampoline(c.get_host_ptr(), args, c.linear_memory());
+            return result.i64;
+         } catch (...) {
+            escape_exception(std::current_exception());
+         }
+      }
+   }
+
+   // Fallback: use the table dispatch
    auto* table = c.get_host_table();
    uint32_t mapped_index = c.get_module().import_functions[func_idx];
-   auto* args = static_cast<native_value*>(args_buf);
    try {
       auto result = table->call(c.get_host_ptr(), mapped_index, args, c.linear_memory());
       return result.i64;
    } catch (...) {
       escape_exception(std::current_exception());
    }
+}
+
+// Nothrow variant for LLVM JIT path where .eh_frame data is registered.
+// Exceptions propagate naturally through LLVM frames without siglongjmp.
+int64_t __psizam_call_host_nothrow(void* ctx, uint32_t func_idx,
+                                    void* args_buf, uint32_t nargs) {
+   auto& c = as_ctx(ctx);
+   auto* args = static_cast<native_value*>(args_buf);
+
+   if (c._host_trampoline_ptrs) {
+      auto trampoline = c._host_trampoline_ptrs[func_idx];
+      if (trampoline) {
+         return trampoline(c.get_host_ptr(), args, c.linear_memory()).i64;
+      }
+   }
+
+   auto* table = c.get_host_table();
+   uint32_t mapped_index = c.get_module().import_functions[func_idx];
+   return table->call(c.get_host_ptr(), mapped_index, args, c.linear_memory()).i64;
+}
+
+// Combined host call: call_depth_dec + call_host + call_depth_inc + get_memory in one.
+// Reduces 4 extern "C" calls to 1, eliminating ~15ns of function call overhead.
+int64_t __psizam_call_host_full(void* ctx, uint32_t func_idx,
+                                 void* args_buf, uint32_t nargs,
+                                 void** mem_out) {
+   auto& c = as_ctx(ctx);
+   auto* args = static_cast<native_value*>(args_buf);
+
+   // Inline call_depth_dec
+   uint32_t depth = c.get_remaining_call_depth();
+   if (depth <= 1)
+      escape_or_throw<wasm_interpreter_exception>("stack overflow");
+   c.set_max_call_depth(depth - 1);
+
+   // Call host function
+   int64_t result;
+   if (c._host_trampoline_ptrs) {
+      auto trampoline = c._host_trampoline_ptrs[func_idx];
+      if (trampoline) {
+         result = trampoline(c.get_host_ptr(), args, c.linear_memory()).i64;
+         goto done;
+      }
+   }
+   {
+      auto* table = c.get_host_table();
+      uint32_t mapped_index = c.get_module().import_functions[func_idx];
+      result = table->call(c.get_host_ptr(), mapped_index, args, c.linear_memory()).i64;
+   }
+
+done:
+   // Inline call_depth_inc
+   c.set_max_call_depth(c.get_remaining_call_depth() + 1);
+
+   // Inline get_memory
+   *mem_out = c.linear_memory();
+
+   return result;
 }
 
 void __psizam_memory_init(void* ctx, uint32_t seg_idx,
@@ -179,6 +252,44 @@ int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
       } catch (...) {
          escape_exception(std::current_exception());
       }
+   }
+}
+
+// Nothrow variant of call_indirect for LLVM JIT path.
+int64_t __psizam_call_indirect_nothrow(void* ctx, void* mem, uint32_t type_idx,
+                                        uint32_t table_elem, void* args_buf, uint32_t nargs) {
+   uint32_t table_idx = type_idx >> 16;
+   type_idx &= 0xFFFF;
+   auto& c = as_ctx(ctx);
+   auto& mod = c.get_module();
+
+   if (table_idx >= mod.tables.size())
+      throw wasm_interpreter_exception{"no table"};
+   uint32_t table_size = c.get_table_size(table_idx);
+
+   if (table_elem >= table_size)
+      throw wasm_interpreter_exception{"undefined element"};
+
+   auto* table_base = c.get_table_base(table_idx);
+   auto& entry = table_base[table_elem];
+
+   if (entry.type == 0xFFFFFFFF)
+      throw wasm_interpreter_exception{"undefined element"};
+
+   const auto& expected_type = mod.types[type_idx];
+   const auto& actual_type = mod.get_function_type(entry.index);
+   if (!(actual_type == expected_type))
+      throw wasm_interpreter_exception{"indirect call type mismatch"};
+
+   uint32_t num_imports = mod.get_imported_functions_size();
+   if (entry.index < num_imports) {
+      return __psizam_call_host_nothrow(ctx, entry.index, args_buf, nargs);
+   } else {
+      uint32_t code_idx = entry.index - num_imports;
+      auto offset = mod.code[code_idx].jit_code_offset;
+      using llvm_entry_fn_t = int64_t(*)(void*, void*, native_value*);
+      auto fn = reinterpret_cast<llvm_entry_fn_t>(offset);
+      return fn(ctx, mem, static_cast<native_value*>(args_buf));
    }
 }
 

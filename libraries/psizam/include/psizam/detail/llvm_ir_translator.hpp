@@ -46,6 +46,7 @@ namespace psizam::detail {
       bool enable_backtrace  = false; // Enable async backtrace support
       int  opt_level         = 2;     // LLVM optimization level (0-3)
       bool per_function      = false; // Per-function compilation: external linkage for all decls
+      bool nothrow_host_calls = false; // Use nothrow host call helpers (JIT path with .eh_frame)
    };
 
    /// Translates psizam IR functions to LLVM IR.

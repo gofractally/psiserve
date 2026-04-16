@@ -27,6 +27,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace psio {
@@ -181,6 +182,56 @@ namespace psio {
                static_assert(sizeof(E) == 0, "wit::field: unsupported optional payload");
             }
          }
+         else if constexpr (psio::is_std_variant_v<F>) {
+            constexpr size_t VN = std::variant_size_v<F>;
+            constexpr uint32_t disc_size = VN <= 256 ? 1 : VN <= 65536 ? 2 : 4;
+            constexpr uint32_t max_pa = []<size_t... Js>(std::index_sequence<Js...>) {
+               uint32_t m = 1;
+               ((m = std::max(m, canonical_align_v<std::variant_alternative_t<Js, F>>)), ...);
+               return m;
+            }(std::make_index_sequence<VN>{});
+            constexpr uint32_t payload_off = (disc_size + max_pa - 1) & ~(max_pa - 1);
+
+            uint32_t disc;
+            if constexpr (disc_size == 1)
+               disc = *fp;
+            else if constexpr (disc_size == 2)
+               disc = detail_wit::read_scalar<uint16_t>(fp);
+            else
+               disc = detail_wit::read_scalar<uint32_t>(fp);
+
+            const uint8_t* payload = fp + payload_off;
+            F result;
+            [&]<size_t... Js>(std::index_sequence<Js...>) {
+               auto try_alt = [&]<size_t J>() {
+                  if (disc != J) return;
+                  using Alt = std::variant_alternative_t<J, F>;
+                  if constexpr (std::is_same_v<Alt, std::monostate>)
+                     result = F(std::in_place_index<J>);
+                  else if constexpr (std::is_same_v<Alt, bool>)
+                     result = F(std::in_place_index<J>, *payload != 0);
+                  else if constexpr (std::is_enum_v<Alt>)
+                     result = F(std::in_place_index<J>, static_cast<Alt>(
+                        detail_wit::read_scalar<std::underlying_type_t<Alt>>(payload)));
+                  else if constexpr (std::is_arithmetic_v<Alt>)
+                     result = F(std::in_place_index<J>, detail_wit::read_scalar<Alt>(payload));
+                  else if constexpr (psio::detail::is_std_string_ct<Alt>::value) {
+                     uint32_t so = detail_wit::read_scalar<uint32_t>(payload);
+                     uint32_t sl = detail_wit::read_scalar<uint32_t>(payload + 4);
+                     result = F(std::in_place_index<J>,
+                        std::string(reinterpret_cast<const char*>(p.base + so), sl));
+                  }
+                  else {
+                     psio::buffer_load_policy lp(p.base, UINT32_MAX);
+                     result = F(std::in_place_index<J>,
+                        psio::detail_canonical::load_field<Alt>(lp,
+                           static_cast<uint32_t>(payload - p.base)));
+                  }
+               };
+               (try_alt.template operator()<Js>(), ...);
+            }(std::make_index_sequence<VN>{});
+            return result;
+         }
          else if constexpr (psio::Reflected<F>) {
             return psio::view<F, wit>(wit_ptr{p.base, fp});
          }
@@ -299,6 +350,44 @@ namespace psio {
             uint32_t arr_off = detail_wit::read_scalar<uint32_t>(fp);
             uint32_t count   = detail_wit::read_scalar<uint32_t>(fp + 4);
             return psio::vec_view<E, wit>(ptr_.base, arr_off, count);
+         }
+         else if constexpr (psio::is_std_variant_v<F>) {
+            // Read-only: return the variant value (variants can't be modified in-place generically)
+            constexpr size_t VN = std::variant_size_v<F>;
+            constexpr uint32_t disc_size = VN <= 256 ? 1 : VN <= 65536 ? 2 : 4;
+            constexpr uint32_t max_pa = []<size_t... Js>(std::index_sequence<Js...>) {
+               uint32_t m = 1;
+               ((m = std::max(m, psio::canonical_align_v<std::variant_alternative_t<Js, F>>)), ...);
+               return m;
+            }(std::make_index_sequence<VN>{});
+            constexpr uint32_t payload_off = (disc_size + max_pa - 1) & ~(max_pa - 1);
+
+            uint32_t disc;
+            if constexpr (disc_size == 1)
+               disc = *fp;
+            else if constexpr (disc_size == 2)
+               disc = detail_wit::read_scalar<uint16_t>(fp);
+            else
+               disc = detail_wit::read_scalar<uint32_t>(fp);
+
+            const uint8_t* payload = fp + payload_off;
+            F result;
+            [&]<size_t... Js>(std::index_sequence<Js...>) {
+               auto try_alt = [&]<size_t J>() {
+                  if (disc != J) return;
+                  using Alt = std::variant_alternative_t<J, F>;
+                  if constexpr (std::is_same_v<Alt, std::monostate>)
+                     result = F(std::in_place_index<J>);
+                  else {
+                     psio::buffer_load_policy lp(reinterpret_cast<const uint8_t*>(ptr_.base), UINT32_MAX);
+                     result = F(std::in_place_index<J>,
+                        psio::detail_canonical::load_field<Alt>(lp,
+                           static_cast<uint32_t>(payload - reinterpret_cast<const uint8_t*>(ptr_.base))));
+                  }
+               };
+               (try_alt.template operator()<Js>(), ...);
+            }(std::make_index_sequence<VN>{});
+            return result;
          }
          else if constexpr (psio::Reflected<F>) {
             // Nested mutable view

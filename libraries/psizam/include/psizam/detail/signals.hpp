@@ -45,9 +45,15 @@ namespace psizam::detail {
 
 namespace psizam::detail {
 
-   // Fixes a duplicate symbol build issue when building with `-fvisibility=hidden`
+   // Pointer to the active setjmp buffer for trap escape.  Uses setjmp/longjmp
+   // (not sigsetjmp/siglongjmp) to avoid the ~400ns per-call cost of
+   // saving/restoring the signal mask via kernel syscalls.  Each
+   // invoke_with_signal_handler allocates a jmp_buf on its stack frame and sets
+   // this pointer, supporting nested calls (WASM→host→WASM).  Signal handlers
+   // longjmp through this pointer; post-longjmp code throws a C++ exception.
+   // This matches what Wasmtime and V8 do for guard-page traps.
    __attribute__((visibility("default")))
-   inline thread_local std::atomic<sigjmp_buf*> signal_dest{nullptr};
+   inline thread_local jmp_buf* trap_jmp_ptr{nullptr};
 
    __attribute__((visibility("default")))
    inline thread_local std::span<std::byte> code_memory_range;
@@ -78,9 +84,7 @@ namespace psizam::detail {
    inline struct sigaction prev_signal_handler;
 
    inline void signal_handler(int sig, siginfo_t* info, void* uap) {
-      sigjmp_buf* dest = std::atomic_load(&signal_dest);
-
-      if (dest) {
+      if (trap_jmp_ptr) {
          const void* addr = info->si_addr;
 
 #if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS) && defined(__aarch64__) && defined(__APPLE__)
@@ -131,16 +135,16 @@ namespace psizam::detail {
 
          //neither range set means legacy catch-all behavior; useful for some of the old tests
          if (code_memory_range.empty() && memory_range.empty())
-            siglongjmp(*dest, sig);
+            longjmp(*trap_jmp_ptr, sig);
 
          //a failure on the stack guard page means stack overflow
          if (!stack_guard_range.empty() &&
              addr >= stack_guard_range.data() && addr < stack_guard_range.data() + stack_guard_range.size())
-            siglongjmp(*dest, sig);
+            longjmp(*trap_jmp_ptr, sig);
 
          //a failure in the memory range is always jumped out of
          if (addr >= memory_range.data() && addr < memory_range.data() + memory_range.size())
-            siglongjmp(*dest, sig);
+            longjmp(*trap_jmp_ptr, sig);
 
          //a failure in the code range...
          if (addr >= code_memory_range.data() && addr < code_memory_range.data() + code_memory_range.size()) {
@@ -151,7 +155,7 @@ namespace psizam::detail {
             if ((sig == SIGSEGV || sig == SIGBUS) && timed_run_has_timed_out.load(std::memory_order_acquire) == false)
                return;
             //otherwise, jump out
-            siglongjmp(*dest, sig);
+            longjmp(*trap_jmp_ptr, sig);
          }
 
          //if in neither range, fall through and let chained handler an opportunity to handle
@@ -182,10 +186,9 @@ namespace psizam::detail {
       }
    }
 
-   // only valid inside invoke_with_signal_handler.
-   // This is a workaround for the fact that it
-   // is currently unsafe to throw an exception through
-   // a jit frame.
+   // Only valid when trap_jmp_ptr is non-null (inside invoke_with_signal_handler).
+   // This is a workaround for the fact that it is currently unsafe to throw
+   // an exception through a JIT frame (no .eh_frame unwind data).
    template<typename F>
    inline void longjmp_on_exception(F&& f) {
       static_assert(std::is_trivially_destructible_v<std::decay_t<F>>, "longjmp has undefined behavior when it bypasses destructors.");
@@ -199,24 +202,14 @@ namespace psizam::detail {
          caught_exception = true;
       }
       if (caught_exception) {
-         sigset_t block_mask;
-         sigemptyset(&block_mask);
-         sigaddset(&block_mask, SIGPROF);
-         pthread_sigmask(SIG_BLOCK, &block_mask, nullptr);
-         sigjmp_buf* dest = std::atomic_load(&signal_dest);
-         siglongjmp(*dest, -1);
+         longjmp(*trap_jmp_ptr, -1);
       }
    }
 
    template<typename E>
    [[noreturn]] inline void signal_throw(const char* msg) {
       saved_exception = std::make_exception_ptr(E{msg});
-      sigset_t block_mask;
-      sigemptyset(&block_mask);
-      sigaddset(&block_mask, SIGPROF);
-      pthread_sigmask(SIG_BLOCK, &block_mask, nullptr);
-      sigjmp_buf* dest = std::atomic_load(&signal_dest);
-      siglongjmp(*dest, -1);
+      longjmp(*trap_jmp_ptr, -1);
    }
 
    inline void setup_signal_handler_impl() {
@@ -251,70 +244,71 @@ namespace psizam::detail {
       ignore_unused_variable_warning(initialized);
    }
 
-   inline void setup_signal_handler() {
-      static int init_helper = (setup_signal_handler_impl(), 0);
-      ignore_unused_variable_warning(init_helper);
-      static_assert(std::atomic<sigjmp_buf*>::is_always_lock_free, "Atomic pointers must be lock-free to be async signal safe.");
-      setup_thread_signal_stack();
-   }
-
-   /// Call a function with a signal handler installed.  If this thread is
-   /// signalled during the execution of f, the function e will be called with
-   /// the signal number as an argument.  If f creates any automatic variables
-   /// with non-trivial destructors, then it must mask the relevant signals
-   /// during the lifetime of these objects or the behavior is undefined.
-   ///
-   /// signals handled: SIGSEGV, SIGBUS (except on Linux), SIGFPE
-   ///
-   // Make this noinline to prevent possible corruption of the caller's local variables.
-   // It's unlikely, but I'm not sure that it can definitely be ruled out if both
-   // this and f are inlined and f modifies locals from the caller.
-   template<typename F, typename E>
-   [[gnu::noinline]] auto invoke_with_signal_handler(F&& f, E&& e, growable_allocator& code_allocator, wasm_allocator* mem_allocator) {
-      setup_signal_handler();
-      sigjmp_buf dest;
-      sigjmp_buf* volatile old_signal_handler = nullptr;
-      const auto old_code_memory_range = code_memory_range;
-      const auto old_memory_range = memory_range;
-      const auto old_stack_guard_range = stack_guard_range;
-      code_memory_range = code_allocator.get_code_span();
-      memory_range = mem_allocator->get_span();
-      int sig;
-      if((sig = sigsetjmp(dest, 1)) == 0) {
-         // Note: Cannot use RAII, as non-trivial destructors w/ longjmp
-         // have undefined behavior. [csetjmp.syn]
-         //
-         // Warning: The order of operations is critical here.
-         // We also have to register signal_dest before unblocking
-         // signals to make sure that only our signal handler is executed
-         // if the caller has previously blocked signals.
-         old_signal_handler = std::atomic_exchange(&signal_dest, &dest);
-         sigset_t unblock_mask, old_sigmask; // Might not be preserved across longjmp
+   // One-shot per-thread unblocking of signals used for guard page traps.
+   // Called once per thread instead of per-call (was the ~200ns pthread_sigmask
+   // in every invoke_with_signal_handler call).
+   inline void ensure_signals_unblocked() {
+      thread_local bool done = [] {
+         sigset_t unblock_mask;
          sigemptyset(&unblock_mask);
          sigaddset(&unblock_mask, SIGSEGV);
          sigaddset(&unblock_mask, SIGBUS);
          sigaddset(&unblock_mask, SIGFPE);
-         sigaddset(&unblock_mask, SIGPROF);
-         pthread_sigmask(SIG_UNBLOCK, &unblock_mask, &old_sigmask);
+         pthread_sigmask(SIG_UNBLOCK, &unblock_mask, nullptr);
+         return true;
+      }();
+      ignore_unused_variable_warning(done);
+   }
+
+   inline void setup_signal_handler() {
+      static int init_helper = (setup_signal_handler_impl(), 0);
+      ignore_unused_variable_warning(init_helper);
+      setup_thread_signal_stack();
+      ensure_signals_unblocked();
+   }
+
+   /// Call a function with trap handling.  If a signal (SIGSEGV, SIGBUS, SIGFPE)
+   /// fires during f(), the signal handler longjmps back here, and the error
+   /// handler e is called with the signal number.  If f() or anything it calls
+   /// uses signal_throw() or longjmp_on_exception(), those also land here and
+   /// rethrow the saved exception.
+   ///
+   /// Uses setjmp/longjmp (not sigsetjmp/siglongjmp) to avoid ~400ns of
+   /// per-call kernel syscalls for signal mask save/restore.  Signals are
+   /// unblocked once per thread in setup_signal_handler().
+   ///
+   // Make this noinline to prevent possible corruption of the caller's local variables.
+   template<typename F, typename E>
+   [[gnu::noinline]] auto invoke_with_signal_handler(F&& f, E&& e, growable_allocator& code_allocator, wasm_allocator* mem_allocator) {
+      setup_signal_handler();
+      jmp_buf dest;
+      const auto old_code_memory_range = code_memory_range;
+      const auto old_memory_range = memory_range;
+      const auto old_stack_guard_range = stack_guard_range;
+      jmp_buf* old_trap_ptr = trap_jmp_ptr;
+      code_memory_range = code_allocator.get_code_span();
+      memory_range = mem_allocator->get_span();
+      int sig;
+      if((sig = setjmp(dest)) == 0) {
+         trap_jmp_ptr = &dest;
          try {
             f();
-            pthread_sigmask(SIG_SETMASK, &old_sigmask, nullptr);
-            std::atomic_store(&signal_dest, old_signal_handler);
+            trap_jmp_ptr = old_trap_ptr;
             memory_range = old_memory_range;
             code_memory_range = old_code_memory_range;
             stack_guard_range = old_stack_guard_range;
          } catch(...) {
-            pthread_sigmask(SIG_SETMASK, &old_sigmask, nullptr);
-            std::atomic_store(&signal_dest, old_signal_handler);
+            trap_jmp_ptr = old_trap_ptr;
             memory_range = old_memory_range;
             code_memory_range = old_code_memory_range;
             stack_guard_range = old_stack_guard_range;
             throw;
          }
       } else {
-         std::atomic_store(&signal_dest, old_signal_handler);
+         trap_jmp_ptr = old_trap_ptr;
          memory_range = old_memory_range;
          code_memory_range = old_code_memory_range;
+         stack_guard_range = old_stack_guard_range;
          if (sig == -1) {
             std::exception_ptr exception = std::move(saved_exception);
             saved_exception = nullptr;

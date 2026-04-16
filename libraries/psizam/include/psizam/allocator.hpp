@@ -21,6 +21,12 @@
 #include <unistd.h>
 #endif
 
+// .eh_frame registration for JIT exception unwinding
+#ifndef PSIZAM_COMPILE_ONLY
+extern "C" void __register_frame(const void*);
+extern "C" void __deregister_frame(const void*);
+#endif
+
 namespace psizam {
 
    class bounded_allocator {
@@ -408,6 +414,15 @@ namespace psizam {
 #endif
          }
 #ifndef PSIZAM_COMPILE_ONLY
+         if (_eh_frame_data) {
+#ifdef __APPLE__
+            __deregister_frame(static_cast<char*>(_eh_frame_data) + 24); // FDE pointer
+#else
+            __deregister_frame(_eh_frame_data);
+#endif
+            std::free(_eh_frame_data);
+            _eh_frame_data = nullptr;
+         }
          if (_is_jit && _code_base) {
             jit_allocator::instance().free(_code_base);
          }
@@ -457,6 +472,13 @@ namespace psizam {
             enable_code(IsJit);
             _is_jit = true;
             _offset = (char*)code_base - _base;
+            // Register .eh_frame so C++ exceptions can unwind through JIT frames.
+            // Only x86_64: macOS aarch64 uses compact unwind (__unwind_info),
+            // not DWARF .eh_frame, so __register_frame doesn't work there.
+            // aarch64 uses longjmp_on_exception in call_host_function instead.
+#if defined(__x86_64__) || (defined(__aarch64__) && defined(__linux__))
+            register_jit_eh_frame();
+#endif
          }
 #endif
       }
@@ -536,6 +558,102 @@ namespace psizam {
 
       void reset() { _offset = 0; }
 
+#ifndef PSIZAM_COMPILE_ONLY
+      // Generate and register minimal .eh_frame data covering the JIT code region.
+      // This enables C++ exception unwinding through JIT-generated frames.
+      // All JIT functions use standard frame pointer convention (CFA = FP + 16),
+      // so a single CIE + FDE covers the entire code region.
+      void register_jit_eh_frame() {
+         if (!_code_base || _code_size == 0) return;
+         // 64 bytes: CIE(24) + FDE(32) + terminator(4) + 4 padding
+         auto* buf = static_cast<uint8_t*>(std::calloc(64, 1));
+         if (!buf) return;
+         uint8_t* p = buf;
+
+#ifdef __x86_64__
+         // --- CIE (24 bytes) ---
+         // length = 20
+         p[0] = 20; p[1] = 0; p[2] = 0; p[3] = 0;
+         // CIE_id = 0 (already zero from calloc)
+         // version = 1
+         p[8] = 1;
+         // augmentation = "zR"
+         p[9] = 'z'; p[10] = 'R'; // p[11] = 0 (null terminator, already zero)
+         // code alignment factor = 1
+         p[12] = 1;
+         // data alignment factor = -8 (SLEB128)
+         p[13] = 0x78;
+         // return address register = 16
+         p[14] = 16;
+         // augmentation data length = 1
+         p[15] = 1;
+         // FDE encoding = DW_EH_PE_absptr (0x00, already zero)
+         // Initial instructions:
+         // DW_CFA_def_cfa rsp(7), 8
+         p[17] = 0x0C; p[18] = 7; p[19] = 8;
+         // DW_CFA_offset RA(16), 1 → saved at CFA-8
+         p[20] = 0x90; p[21] = 1;
+         // p[22], p[23] = padding (zero)
+
+         // --- FDE (32 bytes) ---
+         uint8_t* fde = buf + 24;
+         // length = 28
+         fde[0] = 28; fde[1] = 0; fde[2] = 0; fde[3] = 0;
+         // CIE pointer = 28 (offset back to CIE)
+         fde[4] = 28; fde[5] = 0; fde[6] = 0; fde[7] = 0;
+         // PC begin (64-bit absolute)
+         std::memcpy(fde + 8, &_code_base, 8);
+         // PC range (64-bit)
+         uint64_t range = _code_size;
+         std::memcpy(fde + 16, &range, 8);
+         // augmentation data length = 0 (already zero)
+         // Instructions:
+         // DW_CFA_def_cfa rbp(6), 16
+         fde[25] = 0x0C; fde[26] = 6; fde[27] = 16;
+         // DW_CFA_offset rbp(6), 2 → saved at CFA-16
+         fde[28] = 0x86; fde[29] = 2;
+         // fde[30], fde[31] = padding (zero)
+
+#elif defined(__aarch64__)
+         // --- CIE (24 bytes) ---
+         p[0] = 20; p[1] = 0; p[2] = 0; p[3] = 0;
+         p[8] = 1;
+         p[9] = 'z'; p[10] = 'R';
+         p[12] = 4;    // code alignment factor = 4 (ARM64 instructions)
+         p[13] = 0x78; // data alignment factor = -8
+         p[14] = 30;   // return address register = X30 (LR)
+         p[15] = 1;    // augmentation data length = 1
+         // FDE encoding = absptr (already zero)
+         // Initial: DW_CFA_def_cfa SP(31), 0
+         p[17] = 0x0C; p[18] = 31; p[19] = 0;
+
+         // --- FDE (32 bytes) ---
+         uint8_t* fde = buf + 24;
+         fde[0] = 28; fde[1] = 0; fde[2] = 0; fde[3] = 0;
+         fde[4] = 28; fde[5] = 0; fde[6] = 0; fde[7] = 0;
+         std::memcpy(fde + 8, &_code_base, 8);
+         uint64_t range = _code_size;
+         std::memcpy(fde + 16, &range, 8);
+         // Instructions:
+         // DW_CFA_def_cfa X29(29), 16
+         fde[25] = 0x0C; fde[26] = 29; fde[27] = 16;
+         // DW_CFA_offset X29(29), 2 → saved at CFA-16
+         fde[28] = 0x9D; fde[29] = 2;
+         // DW_CFA_offset X30(30), 1 → saved at CFA-8
+         fde[30] = 0x9E; fde[31] = 1;
+#endif
+
+         // Terminator (4 zero bytes at offset 56, already zero from calloc)
+         _eh_frame_data = buf;
+
+#ifdef __APPLE__
+         __register_frame(buf + 24); // macOS: pointer to single FDE
+#else
+         __register_frame(buf);      // Linux: pointer to .eh_frame section
+#endif
+      }
+#endif
+
       size_t   _offset                = 0;
       size_t   _largest_offset        = 0;
       size_t   _capacity              = 0;
@@ -544,6 +662,7 @@ namespace psizam {
       size_t   _code_size             = 0;
       size_t   _actual_code_size     = 0;
       bool     _is_jit                = false;
+      void*    _eh_frame_data         = nullptr;
    };
 
 #ifdef PSIZAM_COMPILE_ONLY

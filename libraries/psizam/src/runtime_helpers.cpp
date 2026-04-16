@@ -21,10 +21,9 @@ namespace {
 
    template<typename E>
    [[noreturn]] void escape_or_throw(const char* msg) {
-      sigjmp_buf* dest = std::atomic_load(&signal_dest);
-      if (dest) {
+      if (trap_jmp_ptr) {
          saved_exception = std::make_exception_ptr(E{msg});
-         siglongjmp(*dest, -1);
+         longjmp(*trap_jmp_ptr, -1);
       }
       throw E{msg};
    }

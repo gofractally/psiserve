@@ -138,6 +138,7 @@ namespace psizam::detail {
       llvm::Function* rt_memory_size   = nullptr;
       llvm::Function* rt_memory_grow   = nullptr;
       llvm::Function* rt_call_host     = nullptr;
+      llvm::Function* rt_call_host_full = nullptr; // Combined: depth_dec + call + depth_inc + get_memory
       llvm::Function* rt_memory_init   = nullptr;
       llvm::Function* rt_data_drop     = nullptr;
       llvm::Function* rt_memory_copy   = nullptr;
@@ -234,9 +235,16 @@ namespace psizam::detail {
          rt_memory_grow = decl("__psizam_memory_grow",
             llvm::FunctionType::get(i32_ty, {ptr_ty, i32_ty, ptr_ty}, false));
 
-         // int64_t __psizam_call_host(void* ctx, uint32_t func_idx, void* args_buf, uint32_t nargs)
-         rt_call_host = decl("__psizam_call_host",
+         // int64_t __psizam_call_host[_nothrow](void* ctx, uint32_t func_idx, void* args_buf, uint32_t nargs)
+         rt_call_host = decl(opts.nothrow_host_calls ? "__psizam_call_host_nothrow" : "__psizam_call_host",
             llvm::FunctionType::get(i64_ty, {ptr_ty, i32_ty, ptr_ty, i32_ty}, false));
+
+         // int64_t __psizam_call_host_full(void* ctx, uint32_t func_idx, void* args, uint32_t nargs, void** mem_out)
+         // Combined: depth_dec + call + depth_inc + memory reload in one extern call
+         if (opts.nothrow_host_calls) {
+            rt_call_host_full = decl("__psizam_call_host_full",
+               llvm::FunctionType::get(i64_ty, {ptr_ty, i32_ty, ptr_ty, i32_ty, ptr_ty}, false));
+         }
 
          // void __psizam_memory_init(void* ctx, uint32_t seg, uint32_t dest, uint32_t src, uint32_t n)
          rt_memory_init = decl("__psizam_memory_init",
@@ -268,9 +276,9 @@ namespace psizam::detail {
          rt_table_copy = decl("__psizam_table_copy",
             llvm::FunctionType::get(void_ty, {ptr_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty}, false));
 
-         // int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,
-         //                                uint32_t table_elem, void* args_buf, uint32_t nargs)
-         rt_call_indirect = decl("__psizam_call_indirect",
+         // int64_t __psizam_call_indirect[_nothrow](void* ctx, void* mem, uint32_t type_idx,
+         //                                         uint32_t table_elem, void* args_buf, uint32_t nargs)
+         rt_call_indirect = decl(opts.nothrow_host_calls ? "__psizam_call_indirect_nothrow" : "__psizam_call_indirect",
             llvm::FunctionType::get(i64_ty, {ptr_ty, ptr_ty, i32_ty, i32_ty, ptr_ty, i32_ty}, false));
 
          // uint32_t __psizam_table_get(void* ctx, uint32_t table_idx, uint32_t elem_idx)
@@ -726,9 +734,19 @@ namespace psizam::detail {
             }
          }
          llvm::AllocaInst* host_args_alloca = nullptr;
-         if (max_host_args > 0) {
+         llvm::AllocaInst* mem_out_alloca = nullptr;  // For rt_call_host_full's memory output
+         // Always allocate at least 1 slot in the entry block.
+         // Without this, zero-arg host calls (e.g. host_noop()) would fall through
+         // to CreateAlloca inside the loop body, growing the stack on every iteration
+         // until the native stack overflows.
+         {
+            uint32_t alloca_size = max_host_args > 0 ? max_host_args : 1;
             host_args_alloca = builder.CreateAlloca(i64_ty,
-               builder.getInt32(max_host_args), "host_args");
+               builder.getInt32(alloca_size), "host_args");
+         }
+         // Allocate mem_out in the entry block for any function that might call host
+         if (rt_call_host_full && wasm_mod.get_imported_functions_size() > 0) {
+            mem_out_alloca = builder.CreateAlloca(ptr_ty, nullptr, "mem_out");
          }
 
          // ── Pre-scan: which blocks have block_start instructions? ──
@@ -1374,23 +1392,14 @@ namespace psizam::detail {
                   uint32_t funcnum = inst.call.index;
                   uint32_t num_imports = wasm_mod.get_imported_functions_size();
 
-                  // Call depth tracking for all calls (host and WASM)
-                  builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
-
-                  if (funcnum < num_imports) {
-                     // Host function call — go through runtime helper
+                  if (funcnum < num_imports && mem_out_alloca) {
+                     // Fast path: combined call (depth_dec + host_call + depth_inc + get_memory)
+                     // Reduces 4 extern calls to 1 for host function calls.
                      uint32_t nargs = static_cast<uint32_t>(call_args.size());
-                     // Use entry-block alloca (avoids stack growth in loops)
-                     llvm::Value* args_array = host_args_alloca;
-                     if (!args_array) {
-                        // No host calls were expected — shouldn't happen, but be safe
-                        args_array = builder.CreateAlloca(i64_ty, builder.getInt32(1));
-                     }
                      for (uint32_t a = 0; a < nargs; a++) {
-                        llvm::Value* slot = builder.CreateGEP(i64_ty, args_array,
+                        llvm::Value* slot = builder.CreateGEP(i64_ty, host_args_alloca,
                            builder.getInt32(a));
                         llvm::Value* v = call_args[a];
-                        // Extend/bitcast to i64
                         if (v->getType() == i32_ty)
                            v = builder.CreateZExt(v, i64_ty);
                         else if (v->getType() == f32_ty)
@@ -1404,9 +1413,9 @@ namespace psizam::detail {
                      emit_backtrace_set_top(builder, ctx_ptr);
                      emit_backtrace_set_bottom(builder, ctx_ptr);
 
-                     llvm::Value* raw = builder.CreateCall(rt_call_host,
-                        {ctx_ptr, builder.getInt32(funcnum), args_array,
-                         builder.getInt32(nargs)});
+                     llvm::Value* raw = builder.CreateCall(rt_call_host_full,
+                        {ctx_ptr, builder.getInt32(funcnum), host_args_alloca,
+                         builder.getInt32(nargs), mem_out_alloca});
 
                      emit_backtrace_clear_bottom(builder, ctx_ptr);
                      emit_backtrace_clear_top(builder, ctx_ptr);
@@ -1424,49 +1433,96 @@ namespace psizam::detail {
                            result = raw;
                         store_vreg(inst.dest, result);
                      }
-                     // Reload mem_ptr after host call (it might have grown memory)
-                     builder.CreateStore(
-                        builder.CreateCall(rt_get_memory, {ctx_ptr}),
-                        mem_ptr_alloca);
+                     // Load updated memory pointer from the combined call
+                     builder.CreateStore(builder.CreateLoad(ptr_ty, mem_out_alloca), mem_ptr_alloca);
                   } else {
-                     // WASM-to-WASM call
-                     std::vector<llvm::Value*> args;
-                     args.push_back(ctx_ptr);
-                     args.push_back(load_mem_ptr());
+                     // Standard path: separate call_depth tracking
+                     builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
 
-                     // Convert each arg to match callee's parameter types
-                     if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
-                        auto* callee_ty = wasm_funcs[funcnum]->getFunctionType();
-                        for (uint32_t a = 0; a < call_args.size(); a++) {
-                           uint32_t param_idx = a + 2; // skip ctx, mem
-                           if (param_idx < callee_ty->getNumParams()) {
-                              call_args[a] = convert_type(call_args[a], callee_ty->getParamType(param_idx));
-                           }
+                     if (funcnum < num_imports) {
+                        // Host function call — go through runtime helper
+                        uint32_t nargs = static_cast<uint32_t>(call_args.size());
+                        for (uint32_t a = 0; a < nargs; a++) {
+                           llvm::Value* slot = builder.CreateGEP(i64_ty, host_args_alloca,
+                              builder.getInt32(a));
+                           llvm::Value* v = call_args[a];
+                           if (v->getType() == i32_ty)
+                              v = builder.CreateZExt(v, i64_ty);
+                           else if (v->getType() == f32_ty)
+                              v = builder.CreateZExt(builder.CreateBitCast(v, i32_ty), i64_ty);
+                           else if (v->getType() == f64_ty)
+                              v = builder.CreateBitCast(v, i64_ty);
+                           builder.CreateStore(v, slot);
                         }
-                     }
+                        call_args.clear();
 
-                     for (auto* a : call_args) args.push_back(a);
-                     call_args.clear();
-
-                     if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
                         emit_backtrace_set_top(builder, ctx_ptr);
-                        auto* result = builder.CreateCall(wasm_funcs[funcnum], args);
+                        emit_backtrace_set_bottom(builder, ctx_ptr);
+
+                        llvm::Value* raw = builder.CreateCall(rt_call_host,
+                           {ctx_ptr, builder.getInt32(funcnum), host_args_alloca,
+                            builder.getInt32(nargs)});
+
+                        emit_backtrace_clear_bottom(builder, ctx_ptr);
                         emit_backtrace_clear_top(builder, ctx_ptr);
-                        if (inst.dest != ir_vreg_none && !result->getType()->isVoidTy()) {
-                           if (inst.type == types::v128) {
-                              store_v128(static_cast<uint16_t>(inst.dest), result);
-                           } else {
-                              store_vreg(inst.dest, result);
-                           }
+
+                        if (inst.dest != ir_vreg_none) {
+                           llvm::Type* target_ty = ir_type_to_llvm(inst.type);
+                           llvm::Value* result;
+                           if (target_ty == i32_ty)
+                              result = builder.CreateTrunc(raw, i32_ty);
+                           else if (target_ty == f32_ty)
+                              result = builder.CreateBitCast(builder.CreateTrunc(raw, i32_ty), f32_ty);
+                           else if (target_ty == f64_ty)
+                              result = builder.CreateBitCast(raw, f64_ty);
+                           else
+                              result = raw;
+                           store_vreg(inst.dest, result);
                         }
-                        // Reload mem_ptr after WASM-to-WASM call (callee may grow memory)
+                        // Reload mem_ptr after host call (it might have grown memory)
                         builder.CreateStore(
                            builder.CreateCall(rt_get_memory, {ctx_ptr}),
                            mem_ptr_alloca);
+                     } else {
+                        // WASM-to-WASM call
+                        std::vector<llvm::Value*> args;
+                        args.push_back(ctx_ptr);
+                        args.push_back(load_mem_ptr());
+
+                        // Convert each arg to match callee's parameter types
+                        if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
+                           auto* callee_ty = wasm_funcs[funcnum]->getFunctionType();
+                           for (uint32_t a = 0; a < call_args.size(); a++) {
+                              uint32_t param_idx = a + 2; // skip ctx, mem
+                              if (param_idx < callee_ty->getNumParams()) {
+                                 call_args[a] = convert_type(call_args[a], callee_ty->getParamType(param_idx));
+                              }
+                           }
+                        }
+
+                        for (auto* a : call_args) args.push_back(a);
+                        call_args.clear();
+
+                        if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
+                           emit_backtrace_set_top(builder, ctx_ptr);
+                           auto* result = builder.CreateCall(wasm_funcs[funcnum], args);
+                           emit_backtrace_clear_top(builder, ctx_ptr);
+                           if (inst.dest != ir_vreg_none && !result->getType()->isVoidTy()) {
+                              if (inst.type == types::v128) {
+                                 store_v128(static_cast<uint16_t>(inst.dest), result);
+                              } else {
+                                 store_vreg(inst.dest, result);
+                              }
+                           }
+                           // Reload mem_ptr after WASM-to-WASM call (callee may grow memory)
+                           builder.CreateStore(
+                              builder.CreateCall(rt_get_memory, {ctx_ptr}),
+                              mem_ptr_alloca);
+                        }
                      }
+                     // Restore call depth after either host or WASM call
+                     builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
                   }
-                  // Restore call depth after either host or WASM call
-                  builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
                   break;
                }
 
@@ -1486,12 +1542,8 @@ namespace psizam::detail {
 
                   uint32_t nargs = static_cast<uint32_t>(call_args.size());
                   // Use entry-block alloca (avoids stack growth in loops)
-                  llvm::Value* args_array = host_args_alloca;
-                  if (!args_array) {
-                     args_array = builder.CreateAlloca(i64_ty, builder.getInt32(1));
-                  }
                   for (uint32_t a = 0; a < nargs; a++) {
-                     llvm::Value* slot = builder.CreateGEP(i64_ty, args_array,
+                     llvm::Value* slot = builder.CreateGEP(i64_ty, host_args_alloca,
                         builder.getInt32(a));
                      llvm::Value* v = call_args[a];
                      if (v->getType() == i32_ty)
@@ -1516,7 +1568,7 @@ namespace psizam::detail {
 
                   llvm::Value* raw = builder.CreateCall(rt_call_indirect,
                      {ctx_ptr, load_mem_ptr(), builder.getInt32(type_idx),
-                      table_elem, args_array, builder.getInt32(nargs)});
+                      table_elem, host_args_alloca, builder.getInt32(nargs)});
 
                   emit_backtrace_clear_bottom(builder, ctx_ptr);
                   emit_backtrace_clear_top(builder, ctx_ptr);
@@ -1553,11 +1605,8 @@ namespace psizam::detail {
                   if (funcnum < num_imports) {
                      // Host function tail call
                      uint32_t nargs = static_cast<uint32_t>(call_args.size());
-                     llvm::Value* args_array = host_args_alloca;
-                     if (!args_array)
-                        args_array = builder.CreateAlloca(i64_ty, builder.getInt32(1));
                      for (uint32_t a = 0; a < nargs; a++) {
-                        llvm::Value* slot = builder.CreateGEP(i64_ty, args_array, builder.getInt32(a));
+                        llvm::Value* slot = builder.CreateGEP(i64_ty, host_args_alloca, builder.getInt32(a));
                         llvm::Value* v = call_args[a];
                         if (v->getType() == i32_ty) v = builder.CreateZExt(v, i64_ty);
                         else if (v->getType() == f32_ty) v = builder.CreateZExt(builder.CreateBitCast(v, i32_ty), i64_ty);
@@ -1568,7 +1617,7 @@ namespace psizam::detail {
                      emit_backtrace_set_top(builder, ctx_ptr);
                      emit_backtrace_set_bottom(builder, ctx_ptr);
                      llvm::Value* raw = builder.CreateCall(rt_call_host,
-                        {ctx_ptr, builder.getInt32(funcnum), args_array, builder.getInt32(nargs)});
+                        {ctx_ptr, builder.getInt32(funcnum), host_args_alloca, builder.getInt32(nargs)});
                      emit_backtrace_clear_bottom(builder, ctx_ptr);
                      emit_backtrace_clear_top(builder, ctx_ptr);
                      builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
@@ -1624,11 +1673,8 @@ namespace psizam::detail {
                   }
                   if (!table_elem) { call_args.clear(); break; }
                   uint32_t nargs = static_cast<uint32_t>(call_args.size());
-                  llvm::Value* args_array = host_args_alloca;
-                  if (!args_array)
-                     args_array = builder.CreateAlloca(i64_ty, builder.getInt32(1));
                   for (uint32_t a = 0; a < nargs; a++) {
-                     llvm::Value* slot = builder.CreateGEP(i64_ty, args_array, builder.getInt32(a));
+                     llvm::Value* slot = builder.CreateGEP(i64_ty, host_args_alloca, builder.getInt32(a));
                      llvm::Value* v = call_args[a];
                      if (v->getType() == i32_ty) v = builder.CreateZExt(v, i64_ty);
                      else if (v->getType() == f32_ty) v = builder.CreateZExt(builder.CreateBitCast(v, i32_ty), i64_ty);
@@ -1645,7 +1691,7 @@ namespace psizam::detail {
                   emit_backtrace_set_bottom(builder, ctx_ptr);
                   llvm::Value* raw = builder.CreateCall(rt_call_indirect,
                      {ctx_ptr, load_mem_ptr(), builder.getInt32(type_idx),
-                      table_elem, args_array, builder.getInt32(nargs)});
+                      table_elem, host_args_alloca, builder.getInt32(nargs)});
                   emit_backtrace_clear_bottom(builder, ctx_ptr);
                   emit_backtrace_clear_top(builder, ctx_ptr);
                   builder.CreateCall(rt_call_depth_inc, {ctx_ptr});

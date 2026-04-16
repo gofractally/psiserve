@@ -77,6 +77,80 @@ int64_t bench_host_multi(int64_t a, int64_t b, int32_t c, int32_t d) {
 }
 
 // ============================================================================
+// Canonical ABI / resource handle host functions
+// ============================================================================
+
+const uint8_t* g_guest_memory = nullptr;
+uint64_t g_guest_memory_size = 0;
+
+// ============================================================================
+// ABI host functions — minimal stubs to isolate call-transition overhead.
+// Each function accepts the correct argument types and returns a trivial value.
+// The volatile sink prevents the compiler from optimizing away the call.
+// ============================================================================
+static volatile int64_t g_sink;
+
+int32_t g_resource_next = 0;
+int32_t g_resource_free_count = 0;
+
+int32_t bench_host_noop(void) { return 0; }
+
+int64_t bench_host_string_pass(int32_t ptr, int32_t len) {
+   g_sink = ptr + len;
+   return ptr + len;
+}
+
+int64_t bench_host_record_flat(int32_t x, int32_t y, int32_t z, int64_t w) {
+   return static_cast<int64_t>(x) + y + z + w;
+}
+
+int64_t bench_host_record_mem(int32_t ptr) {
+   g_sink = ptr;
+   return ptr;
+}
+
+int64_t bench_host_resource_call(int32_t handle, int64_t arg) {
+   return handle + arg;
+}
+
+int32_t bench_host_resource_create(int64_t initial) {
+   g_sink = initial;
+   return static_cast<int32_t>(initial & 0x7fffffff);
+}
+
+void bench_host_resource_drop(int32_t handle) {
+   g_sink = handle;
+}
+
+// Rich type stubs — minimal, just accept the correct arg types
+int64_t bench_host_struct_2str(int32_t a_ptr, int32_t a_len, int32_t b_ptr, int32_t b_len) {
+   return static_cast<int64_t>(a_ptr) + a_len + b_ptr + b_len;
+}
+
+int64_t bench_host_struct_mixed(int32_t id, int32_t name_ptr, int32_t name_len,
+                                int64_t value, int32_t desc_ptr, int32_t desc_len) {
+   return static_cast<int64_t>(id) + name_ptr + name_len + value + desc_ptr + desc_len;
+}
+
+int64_t bench_host_nested(int32_t id, int32_t inner_x, int32_t inner_y,
+                          int32_t inner_str_ptr, int32_t inner_str_len,
+                          int64_t val, int32_t outer_str_ptr, int32_t outer_str_len) {
+   return static_cast<int64_t>(id) + inner_x + inner_y + inner_str_ptr + inner_str_len
+          + val + outer_str_ptr + outer_str_len;
+}
+
+int64_t bench_host_vec_records(int32_t ptr, int32_t count) {
+   return static_cast<int64_t>(ptr) + count;
+}
+
+int64_t bench_host_many_params(int32_t a, int32_t b, int32_t c, int32_t d,
+                               int64_t e, int64_t f,
+                               int32_t g, int32_t h, int32_t i, int32_t j,
+                               int64_t k, int64_t l) {
+   return static_cast<int64_t>(a) + b + c + d + e + f + g + h + i + j + k + l;
+}
+
+// ============================================================================
 // WASM binary builder
 // ============================================================================
 
@@ -282,6 +356,51 @@ static void register_eosvm_hosts() {
    done = true;
 }
 
+static void register_eosvm_abi_hosts() {
+   static bool done = false;
+   if (done) return;
+   rhf_t::add<&bench_host_noop>("env", "host_noop");
+   rhf_t::add<&bench_host_string_pass>("env", "host_string_pass");
+   rhf_t::add<&bench_host_record_flat>("env", "host_record_flat");
+   rhf_t::add<&bench_host_record_mem>("env", "host_record_mem");
+   rhf_t::add<&bench_host_resource_call>("env", "host_resource_call");
+   rhf_t::add<&bench_host_resource_create>("env", "host_resource_create");
+   rhf_t::add<&bench_host_resource_drop>("env", "host_resource_drop");
+   // Rich type patterns
+   rhf_t::add<&bench_host_struct_2str>("env", "host_struct_2str");
+   rhf_t::add<&bench_host_struct_mixed>("env", "host_struct_mixed");
+   rhf_t::add<&bench_host_nested>("env", "host_nested");
+   rhf_t::add<&bench_host_vec_records>("env", "host_vec_records");
+   rhf_t::add<&bench_host_many_params>("env", "host_many_params");
+   done = true;
+}
+
+template<typename Impl>
+static double run_eosvm_abi(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n) {
+   using backend_t = psizam::backend<rhf_t, Impl>;
+   wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+   wasm_allocator wa;
+   backend_t bkend(code, &wa);
+   rhf_t::resolve(bkend.get_module());
+   bkend.initialize(nullptr);
+
+   // Give host functions access to guest linear memory
+   auto& ctx = bkend.get_context();
+   g_guest_memory = reinterpret_cast<const uint8_t*>(ctx.linear_memory());
+   g_guest_memory_size = static_cast<uint64_t>(ctx.current_linear_memory()) * 65536;
+
+   // Reset resource handle table
+   g_resource_next = 0;
+   g_resource_free_count = 0;
+
+   auto t1 = std::chrono::high_resolution_clock::now();
+   bkend.call_with_return("env", func, n);
+   auto t2 = std::chrono::high_resolution_clock::now();
+
+   g_guest_memory = nullptr;
+   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+}
+
 template<typename Impl>
 static double run_eosvm(wasm_code& code, wasm_allocator& wa, const char* func, uint32_t n) {
    using backend_t = psizam::backend<rhf_t, Impl>;
@@ -470,22 +589,56 @@ static void dump_code_sizes(const std::vector<uint8_t>& wasm_bytes, const char* 
    fprintf(stderr, "  %s: %u functions, total native=%u bytes\n", label, (uint32_t)mod.code.size(), total);
 }
 
+// Run a quick correctness check with n=1 and return the result.
+// Returns INT64_MIN on failure.
 template<typename Impl>
-static double run_eosvm_compute(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n) {
+static int64_t check_eosvm_compute(const std::vector<uint8_t>& wasm_bytes, const char* func) {
    using backend_t = psizam::backend<std::nullptr_t, Impl>;
-   wasm_code code = wasm_bytes;
-   wasm_allocator wa;
-   backend_t bkend(code, &wa);
-   bkend.initialize(nullptr);
+   try {
+      wasm_code code = wasm_bytes;
+      wasm_allocator wa;
+      backend_t bkend(code, &wa);
+      bkend.initialize(nullptr);
+      auto result = bkend.call_with_return("env", func, (uint32_t)1);
+      return result ? result->to_i64() : INT64_MIN;
+   } catch (...) {
+      return INT64_MIN;
+   }
+}
 
-   auto result = bkend.call_with_return("env", func, n);
-   int64_t rv = result ? result->to_i64() : -1;
+template<typename Impl>
+static double run_eosvm_compute(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n,
+                                int64_t expected_result = INT64_MIN) {
+   using backend_t = psizam::backend<std::nullptr_t, Impl>;
+   try {
+      wasm_code code = wasm_bytes;
+      wasm_allocator wa;
+      backend_t bkend(code, &wa);
+      bkend.initialize(nullptr);
 
-   auto t1 = std::chrono::high_resolution_clock::now();
-   bkend.call_with_return("env", func, n);
-   auto t2 = std::chrono::high_resolution_clock::now();
-   fprintf(stderr, "  %s result=%ld\n", func, rv);
-   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+      // Validate correctness with n=1 before committing to the full benchmark.
+      // Catches codegen bugs that produce infinite loops or wrong results.
+      if (expected_result != INT64_MIN) {
+         auto check = bkend.call_with_return("env", func, (uint32_t)1);
+         int64_t cv = check ? check->to_i64() : INT64_MIN;
+         if (cv != expected_result) {
+            fprintf(stderr, "  %s WRONG (got %lld, expected %lld)\n", func, (long long)cv, (long long)expected_result);
+            return -1.0;
+         }
+      }
+
+      auto result = bkend.call_with_return("env", func, n);
+      int64_t rv = result ? result->to_i64() : -1;
+
+      auto t1 = std::chrono::high_resolution_clock::now();
+      bkend.call_with_return("env", func, n);
+      auto t2 = std::chrono::high_resolution_clock::now();
+      fprintf(stderr, "  %s result=%lld\n", func, (long long)rv);
+      return std::chrono::duration<double, std::milli>(t2 - t1).count();
+   } catch (const std::exception& e) {
+      fprintf(stderr, "  %s FAILED: %s\n", func, e.what());
+      return -1.0;
+   }
 }
 
 #ifdef BENCH_HAS_WASM3
@@ -559,6 +712,8 @@ static double run_wamr_compute(const std::vector<uint8_t>& wasm, const char* fun
 // ============================================================================
 
 int main() {
+   setbuf(stdout, nullptr);
+
    register_eosvm_hosts();
 
    wasm_code wasm_bytes = build_bench_wasm();
@@ -740,7 +895,247 @@ int main() {
                "Measures wasm-to-native call transition overhead.",
                num_host_tests, host_labels, host_results);
 
-   fprintf(stderr, "host-call done, starting compute...\n"); fflush(stderr);
+   // =========================================================================
+   // Canonical ABI / resource handle benchmarks
+   // =========================================================================
+#ifdef BENCH_HAS_ABI
+   fprintf(stderr, "\nstarting ABI benchmarks...\n"); fflush(stderr);
+   {
+      register_eosvm_abi_hosts();
+
+      std::vector<uint8_t> abi_wasm;
+      try { abi_wasm = psizam::read_wasm(BENCH_ABI_WASM); } catch (...) {
+         fprintf(stderr, "WARNING: could not load bench_abi.wasm\n");
+      }
+
+      if (!abi_wasm.empty()) {
+         struct abi_def {
+            const char* label;
+            const char* func;
+         };
+         abi_def abi_tests[] = {
+            {"noop (0 args)",                    "bench_noop"},
+            {"string (ptr+len)",                 "bench_string_pass"},
+            {"record flat (4 scalars)",          "bench_record_flat"},
+            {"record mem (ptr)",                 "bench_record_mem"},
+            {"resource method (handle+arg)",     "bench_resource_call"},
+            {"resource lifecycle (c/m/d)",       "bench_resource_lifecycle"},
+            {"struct 2str (4 i32)",              "bench_struct_2str"},
+            {"struct mixed (4i32+1i64)",         "bench_struct_mixed"},
+            {"nested struct (6i32+2i64)",        "bench_nested"},
+            {"vec<record> (ptr+count)",          "bench_vec_records"},
+            {"many params (8i32+4i64)",          "bench_many_params"},
+         };
+         const int num_abi = sizeof(abi_tests) / sizeof(abi_tests[0]);
+         double abi_results[16][RT_COUNT] = {};
+         const char* abi_labels[16];
+
+         for (int t = 0; t < num_abi; t++) {
+            abi_labels[t] = abi_tests[t].label;
+            fprintf(stderr, "abi[%d] %s interp...\n", t, abi_tests[t].func); fflush(stderr);
+            abi_results[t][RT_INTERP] = run_eosvm_abi<interpreter>(abi_wasm, abi_tests[t].func, N);
+#if defined(__x86_64__) || defined(__aarch64__)
+            fprintf(stderr, "abi[%d] jit...\n", t); fflush(stderr);
+            abi_results[t][RT_JIT] = run_eosvm_abi<jit>(abi_wasm, abi_tests[t].func, N);
+            fprintf(stderr, "abi[%d] jit2...\n", t); fflush(stderr);
+            abi_results[t][RT_JIT2] = run_eosvm_abi<jit2>(abi_wasm, abi_tests[t].func, N);
+#endif
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+            fprintf(stderr, "abi[%d] jit_llvm...\n", t); fflush(stderr);
+            abi_results[t][RT_JIT_LLVM] = run_eosvm_abi<jit_llvm>(abi_wasm, abi_tests[t].func, N);
+#endif
+#ifdef BENCH_HAS_WASMTIME
+            fprintf(stderr, "abi[%d] wasmtime...\n", t); fflush(stderr);
+            abi_results[t][RT_WASMTIME] = run_wasmtime_abi(abi_wasm, abi_tests[t].func, N);
+#endif
+         }
+
+         char abi_title[128];
+         snprintf(abi_title, sizeof(abi_title),
+                  "CANONICAL ABI BENCHMARK (%u iterations per test)", N);
+         print_table(abi_title,
+                     "Measures type marshaling overhead: strings, records, resource handles.",
+                     num_abi, abi_labels, abi_results);
+      }
+   }
+#endif
+
+   fprintf(stderr, "host-call done, starting guest-call...\n"); fflush(stderr);
+
+   // =========================================================================
+   // Guest-call benchmark: host -> guest invocation overhead
+   // =========================================================================
+   {
+      // Build a WASM module with no-op exported functions at 0,1,2,4,8 i64 params
+      // Each function just returns its first param (or 0 for 0-param).
+      auto build_nop_wasm = [&]() -> std::vector<uint8_t> {
+         std::vector<uint8_t> w;
+         auto emit = [&](auto... bytes) { (w.push_back(static_cast<uint8_t>(bytes)), ...); };
+         auto emit_u32 = [&](uint32_t v) {
+            do { uint8_t b = v & 0x7f; v >>= 7; if (v) b |= 0x80; w.push_back(b); } while (v);
+         };
+         auto emit_str = [&](const char* s) {
+            uint32_t len = static_cast<uint32_t>(strlen(s));
+            emit_u32(len);
+            for (uint32_t i = 0; i < len; i++) w.push_back(static_cast<uint8_t>(s[i]));
+         };
+         auto section = [&](uint8_t id, auto fn) {
+            w.push_back(id);
+            size_t size_pos = w.size();
+            w.push_back(0);
+            size_t start = w.size();
+            fn();
+            uint32_t size = static_cast<uint32_t>(w.size() - start);
+            if (size < 128) {
+               w[size_pos] = static_cast<uint8_t>(size);
+            } else {
+               std::vector<uint8_t> leb;
+               uint32_t s = size;
+               do { uint8_t b = s & 0x7f; s >>= 7; if (s) b |= 0x80; leb.push_back(b); } while (s);
+               w.erase(w.begin() + static_cast<std::ptrdiff_t>(size_pos),
+                       w.begin() + static_cast<std::ptrdiff_t>(size_pos) + 1);
+               w.insert(w.begin() + static_cast<std::ptrdiff_t>(size_pos), leb.begin(), leb.end());
+            }
+         };
+
+         emit(0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00); // magic + version
+
+         // Type section: 5 types
+         section(1, [&]() {
+            emit_u32(5);
+            emit(0x60); emit_u32(0); emit_u32(1); emit(0x7e);                             // 0: ()->i64
+            emit(0x60); emit_u32(1); emit(0x7e); emit_u32(1); emit(0x7e);                 // 1: (i64)->i64
+            emit(0x60); emit_u32(2); emit(0x7e, 0x7e); emit_u32(1); emit(0x7e);           // 2: (i64,i64)->i64
+            emit(0x60); emit_u32(4); emit(0x7e, 0x7e, 0x7e, 0x7e); emit_u32(1); emit(0x7e); // 3: (i64x4)->i64
+            emit(0x60); emit_u32(8); emit(0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e);
+                        emit_u32(1); emit(0x7e);                                           // 4: (i64x8)->i64
+         });
+
+         // Function section: 5 functions using types 0-4
+         section(3, [&]() {
+            emit_u32(5);
+            for (int i = 0; i < 5; i++) emit_u32(i);
+         });
+
+         // Export section
+         section(7, [&]() {
+            emit_u32(5);
+            emit_str("nop0"); emit(0x00); emit_u32(0);
+            emit_str("nop1"); emit(0x00); emit_u32(1);
+            emit_str("nop2"); emit(0x00); emit_u32(2);
+            emit_str("nop4"); emit(0x00); emit_u32(3);
+            emit_str("nop8"); emit(0x00); emit_u32(4);
+         });
+
+         // Code section: each function body is minimal
+         section(10, [&]() {
+            emit_u32(5);
+            // nop0: () -> i64  { return 0; }
+            { emit_u32(4); emit_u32(0); emit(0x42, 0x00); emit(0x0B); }
+            // nop1: (i64) -> i64  { return param0; }
+            { emit_u32(4); emit_u32(0); emit(0x20, 0x00); emit(0x0B); }
+            // nop2: (i64,i64) -> i64  { return param0; }
+            { emit_u32(4); emit_u32(0); emit(0x20, 0x00); emit(0x0B); }
+            // nop4: (i64x4) -> i64  { return param0; }
+            { emit_u32(4); emit_u32(0); emit(0x20, 0x00); emit(0x0B); }
+            // nop8: (i64x8) -> i64  { return param0; }
+            { emit_u32(4); emit_u32(0); emit(0x20, 0x00); emit(0x0B); }
+         });
+
+         return w;
+      };
+
+      auto nop_wasm = build_nop_wasm();
+
+      const uint32_t GUEST_N = 10'000'000;
+
+      struct guest_bench {
+         const char* label;
+         const char* func;
+         int         num_params;
+      };
+      guest_bench guest_tests[] = {
+         {"0 params", "nop0", 0},
+         {"1 param",  "nop1", 1},
+         {"2 params", "nop2", 2},
+         {"4 params", "nop4", 4},
+         {"8 params", "nop8", 8},
+      };
+      const int num_guest = 5;
+
+      // Runner using typed_function + scoped_execution for JIT backends.
+      // This measures the pure native call overhead without per-call signal
+      // handler setup, stack allocation, or name lookup.
+      auto run_guest_typed = [&]<typename Impl>(const std::vector<uint8_t>& wasm_bytes, int num_params) -> double {
+         using backend_t = psizam::backend<std::nullptr_t, Impl>;
+         wasm_code code_copy(wasm_bytes.begin(), wasm_bytes.end());
+         wasm_allocator wa2;
+         backend_t bkend(code_copy, &wa2);
+         bkend.initialize(nullptr);
+
+         stack_allocator alt_stack(bkend.get_context().get_maximum_stack_size());
+
+         // Get typed functions -- name resolved once, native pointer cached
+         auto fn0 = bkend.template get_typed_function<int64_t()>("nop0", alt_stack);
+         auto fn1 = bkend.template get_typed_function<int64_t(int64_t)>("nop1", alt_stack);
+         auto fn2 = bkend.template get_typed_function<int64_t(int64_t, int64_t)>("nop2", alt_stack);
+         auto fn4 = bkend.template get_typed_function<int64_t(int64_t, int64_t, int64_t, int64_t)>("nop4", alt_stack);
+         auto fn8 = bkend.template get_typed_function<int64_t(int64_t, int64_t, int64_t, int64_t,
+                                                               int64_t, int64_t, int64_t, int64_t)>("nop8", alt_stack);
+
+         double ms = 0;
+         // Signal handler set up once for the entire batch
+         bkend.scoped_execution([&]() {
+            // Warm-up
+            if (num_params == 0) fn0();
+            else if (num_params == 1) fn1(1);
+            else if (num_params == 2) fn2(1, 2);
+            else if (num_params == 4) fn4(1, 2, 3, 4);
+            else fn8(1, 2, 3, 4, 5, 6, 7, 8);
+
+            auto t1 = std::chrono::high_resolution_clock::now();
+            for (uint32_t i = 0; i < GUEST_N; i++) {
+               int64_t a = static_cast<int64_t>(i);
+               if (num_params == 0) fn0();
+               else if (num_params == 1) fn1(a);
+               else if (num_params == 2) fn2(a, a);
+               else if (num_params == 4) fn4(a, a, a, a);
+               else fn8(a, a, a, a, a, a, a, a);
+            }
+            auto t2 = std::chrono::high_resolution_clock::now();
+            ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+         });
+         return ms;
+      };
+
+      double guest_results[5][RT_COUNT] = {};
+      const char* guest_labels[5];
+
+      for (int t = 0; t < num_guest; t++) {
+         guest_labels[t] = guest_tests[t].label;
+         int np = guest_tests[t].num_params;
+
+#if defined(__x86_64__) || defined(__aarch64__)
+         fprintf(stderr, "guest[%d] jit...\n", t); fflush(stderr);
+         guest_results[t][RT_JIT] = run_guest_typed.template operator()<jit>(nop_wasm, np);
+         fprintf(stderr, "guest[%d] jit2...\n", t); fflush(stderr);
+         guest_results[t][RT_JIT2] = run_guest_typed.template operator()<jit2>(nop_wasm, np);
+#endif
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+         fprintf(stderr, "guest[%d] jit_llvm...\n", t); fflush(stderr);
+         guest_results[t][RT_JIT_LLVM] = run_guest_typed.template operator()<jit_llvm>(nop_wasm, np);
+#endif
+      }
+
+      char guest_title[128];
+      snprintf(guest_title, sizeof(guest_title),
+               "GUEST-CALL BENCHMARK (%u iterations per test)", GUEST_N);
+      print_table(guest_title,
+                  "Measures host-to-wasm call transition overhead (no-op guest functions).",
+                  num_guest, guest_labels, guest_results);
+   }
+
+   fprintf(stderr, "guest-call done, starting compute...\n"); fflush(stderr);
    // --- Compute benchmarks ---
 #ifdef BENCH_HAS_COMPUTE
    // Enable native column for compute benchmarks
@@ -761,7 +1156,7 @@ int main() {
       {"ECDSA verify (k1)",    BENCH_ECDSA_WASM,  "bench_ecdsa_verify", bench_ecdsa_verify, 100},
       {"ECDSA sign (k1)",      BENCH_ECDSA_WASM,  "bench_ecdsa_sign",   bench_ecdsa_sign,   100},
       {"Fibonacci (1M)",       BENCH_MISC_WASM,   "bench_fib",          bench_fib,          1'000'000},
-      {"Bubble sort (100K)",   BENCH_MISC_WASM,   "bench_sort",         bench_sort,         100'000},
+      {"Bubble sort (10K)",    BENCH_MISC_WASM,   "bench_sort",         bench_sort,         10'000},
       {"CRC32 (100K)",         BENCH_MISC_WASM,   "bench_crc32",        bench_crc32,        100'000},
       {"Matrix mult 8x8 (100K)", BENCH_MISC_WASM, "bench_matmul",       bench_matmul,       100'000},
    };
@@ -803,19 +1198,22 @@ int main() {
       dump_code_sizes<jit>(wasm, "jit1");
       dump_code_sizes<jit2>(wasm, "jit2");
 #endif
+      // Get interpreter baseline result for correctness validation.
+      // JIT backends verify their n=1 result matches before running the full benchmark,
+      // catching codegen bugs that produce wrong results or infinite loops.
+      int64_t expected = check_eosvm_compute<interpreter>(wasm, func);
+
       fprintf(stderr, "interp...\n"); fflush(stderr);
       compute_results[t][RT_INTERP] = run_eosvm_compute<interpreter>(wasm, func, iters);
 #if defined(__x86_64__) || defined(__aarch64__)
       fprintf(stderr, "jit1...\n"); fflush(stderr);
-      compute_results[t][RT_JIT] = run_eosvm_compute<jit>(wasm, func, iters);
+      compute_results[t][RT_JIT] = run_eosvm_compute<jit>(wasm, func, iters, expected);
       fprintf(stderr, "jit2...\n"); fflush(stderr);
-      compute_results[t][RT_JIT2] = run_eosvm_compute<jit2>(wasm, func, iters);
-      fprintf(stderr, "jit2 done\n"); fflush(stderr);
+      compute_results[t][RT_JIT2] = run_eosvm_compute<jit2>(wasm, func, iters, expected);
 #endif
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       fprintf(stderr, "jit_llvm...\n"); fflush(stderr);
-      compute_results[t][RT_JIT_LLVM] = run_eosvm_compute<jit_llvm>(wasm, func, iters);
-      fprintf(stderr, "jit_llvm done\n"); fflush(stderr);
+      compute_results[t][RT_JIT_LLVM] = run_eosvm_compute<jit_llvm>(wasm, func, iters, expected);
 #endif
 #ifdef BENCH_HAS_WASM3
       compute_results[t][RT_WASM3] = run_wasm3_compute(wasm, func, iters);

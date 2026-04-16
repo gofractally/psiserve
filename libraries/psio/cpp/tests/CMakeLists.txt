@@ -4,8 +4,12 @@ add_executable(psio_tests
    json_tests.cpp
    multiformat_tests.cpp
    view_tests.cpp
+   wit_variant_tests.cpp
    capnp_view_tests.cpp
    capnp_schema_tests.cpp
+   capnp_parser_tests.cpp
+   fbs_parser_tests.cpp
+   wit_resource_tests.cpp
 )
 
 target_link_libraries(psio_tests PRIVATE psio)
