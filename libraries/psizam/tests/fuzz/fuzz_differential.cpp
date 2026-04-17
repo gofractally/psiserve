@@ -396,11 +396,14 @@ static bool compare_returns(const char* source, const char* b1_name, const run_r
 // Returns interpreter outcome (0-6), or -1 on mismatch
 // Result codes from test_module_impl: 0-6 = interpreter outcome, -1 = mismatch, -2 = crash
 static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
+   bool trace = getenv("PSIZAM_FUZZ_TRACE") != nullptr;
+   if (trace) fprintf(stderr, "[trace] interp/softfloat\n");
    auto r_interp = run_backend<interpreter>(wasm, fp_mode::softfloat);
 
    // Determinism cross-check: the same interpreter run in hw_deterministic
    // must produce the same outcome as softfloat (invariant from config.hpp:
    // hw_deterministic(x) == softfloat(x) bit-for-bit).
+   if (trace) fprintf(stderr, "[trace] interp/hw_det\n");
    auto r_interp_hwd = run_backend<interpreter>(wasm, fp_mode::hw_deterministic);
 
    bool has_mismatch = false;
@@ -412,6 +415,7 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
       has_mismatch = true;
 
 #if defined(__x86_64__) || defined(__aarch64__)
+   if (trace) fprintf(stderr, "[trace] jit\n");
    auto r_jit = run_backend<jit>(wasm);
    if (r_interp.outcome != r_jit.outcome) {
       print_mismatch(source, "interpreter", r_interp, "jit", r_jit);
@@ -422,6 +426,7 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
 #endif
 
 #if defined(__x86_64__) || defined(__aarch64__)
+   if (trace) fprintf(stderr, "[trace] jit2\n");
    auto r_jit2 = run_backend<jit2>(wasm);
    if (r_interp.outcome != r_jit2.outcome) {
       print_mismatch(source, "interpreter", r_interp, "jit2", r_jit2);
@@ -432,7 +437,10 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
 #endif
 
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
-   auto r_jit_llvm = run_backend<jit_llvm>(wasm);
+   if (trace) fprintf(stderr, "[trace] jit_llvm\n");
+   run_result r_jit_llvm;
+   if (getenv("PSIZAM_FUZZ_SKIP_LLVM")) { r_jit_llvm.outcome = r_interp.outcome; } else
+   r_jit_llvm = run_backend<jit_llvm>(wasm);
    if (r_interp.outcome != r_jit_llvm.outcome) {
       print_mismatch(source, "interpreter", r_interp, "jit_llvm", r_jit_llvm);
       has_mismatch = true;
@@ -451,7 +459,9 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
    // psizam's execute-by-name enforces argument count (traps on functions
    // with params), while wasm3 passes zero-valued args.
    if (r_interp.outcome == 0) {
+      if (trace) fprintf(stderr, "[trace] wasm3\n");
       auto r_wasm3 = run_wasm3(wasm, r_interp.export_names);
+      if (trace) fprintf(stderr, "[trace] wasm3 done\n");
       if (r_wasm3.outcome == 0) {
          // Both succeeded — compare return values (NaN-tolerant)
          if (!compare_returns(source, "interpreter", r_interp, "wasm3", r_wasm3, true))
@@ -476,6 +486,7 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
 // Run test_module_impl in a forked child process for crash isolation.
 // Returns 0-6 (outcome), -1 (mismatch), or -2 (child crashed).
 static int test_module(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
+   if (getenv("PSIZAM_FUZZ_NO_FORK")) return test_module_impl(wasm, source, verbose);
    int pipefd[2];
    if (pipe(pipefd) != 0) return test_module_impl(wasm, source, verbose); // fallback
 

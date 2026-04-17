@@ -844,19 +844,36 @@ namespace psizam::detail {
       branch_t emit_br(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
          uint32_t inst_idx = UINT32_MAX;
          if (!_unreachable) {
-            // Multi-value branch: emit stores/movs depending on target type
-            if (result_count > 1 && label != UINT32_MAX) {
+            // Branch target handling: emit movs/stores depending on target type
+            if (label != UINT32_MAX) {
                uint32_t target_ctrl = _func->ctrl_stack_top - 1 - label;
                if (target_ctrl < _func->ctrl_stack_top) {
                   auto& target_entry = _func->ctrl_stack[target_ctrl];
-                  if (!target_entry.is_loop && target_entry.result_count > 1) {
+                  if (target_entry.is_loop && target_entry.param_count > 0) {
+                     // Loop target: mov values to loop's param vregs
+                     uint32_t n = std::min<uint32_t>(result_count, target_entry.param_count);
+                     if (n > _func->vstack_top) n = _func->vstack_top;
+                     uint32_t base_depth = _func->vstack_top - n;
+                     for (uint32_t i = 0; i < n; ++i) {
+                        uint32_t src = _func->vstack[base_depth + i];
+                        if (src != target_entry.param_vregs[i]) {
+                           ir_inst mov{};
+                           mov.opcode = ir_op::mov;
+                           mov.type = types::i64;
+                           mov.flags = IR_NONE;
+                           mov.dest = target_entry.param_vregs[i];
+                           mov.rr.src1 = src;
+                           mov.rr.src2 = ir_vreg_none;
+                           _func->emit(mov);
+                        }
+                     }
+                  } else if (!target_entry.is_loop && result_count > 1 && target_entry.result_count > 1) {
+                     // Non-loop multi-value target
                      uint32_t n = std::min<uint32_t>(result_count, target_entry.result_count);
                      if (n > _func->vstack_top) n = _func->vstack_top;
                      uint32_t base_depth = _func->vstack_top - n;
                      if (target_entry.is_function) {
-                        // Function body target: emit multi_return_store to write values
-                        // to the multi-return buffer (br makes emit_end unreachable,
-                        // so the stores there would be skipped)
+                        // Function body target: emit multi_return_store
                         for (uint32_t i = 0; i < n; ++i) {
                            uint32_t src = _func->vstack[base_depth + i];
                            ir_inst store{};
@@ -869,7 +886,6 @@ namespace psizam::detail {
                            _func->emit(store);
                         }
                      } else {
-                        // Non-function block target: mov to merge vregs
                         for (uint32_t i = 0; i < n; ++i) {
                            uint32_t src = _func->vstack[base_depth + i];
                            if (src != target_entry.merge_vregs[i]) {
@@ -884,14 +900,9 @@ namespace psizam::detail {
                            }
                         }
                      }
-                  }
-               }
-            } else if (rt != types::pseudo && _func->vstack_depth() > 0 && label != UINT32_MAX) {
-               // Single-value: existing path
-               uint32_t target_ctrl = _func->ctrl_stack_top - 1 - label;
-               if (target_ctrl < _func->ctrl_stack_top) {
-                  auto& target_entry = _func->ctrl_stack[target_ctrl];
-                  if (target_entry.merge_vreg != ir_vreg_none && !target_entry.is_loop) {
+                  } else if (!target_entry.is_loop && rt != types::pseudo &&
+                             target_entry.merge_vreg != ir_vreg_none && _func->vstack_depth() > 0) {
+                     // Single-value non-loop target
                      uint32_t src = (rt == types::v128 && _func->vstack_top >= 2)
                                     ? _func->vstack[_func->vstack_top - 2]
                                     : _func->vstack_back();
@@ -932,12 +943,31 @@ namespace psizam::detail {
          uint32_t inst_idx = UINT32_MAX;
          if (!_unreachable) {
             uint32_t cond = _func->vpop();
-            if (result_count > 1 && label != UINT32_MAX) {
+            if (label != UINT32_MAX) {
                uint32_t target_ctrl = _func->ctrl_stack_top - 1 - label;
                if (target_ctrl < _func->ctrl_stack_top) {
                   auto& target_entry = _func->ctrl_stack[target_ctrl];
-                  if (!target_entry.is_loop && target_entry.result_count > 1) {
+                  if (target_entry.is_loop && target_entry.param_count > 0) {
+                     // Loop target: mov values to loop's param vregs
+                     uint32_t n = std::min<uint32_t>(result_count, target_entry.param_count);
+                     if (n > _func->vstack_top) n = _func->vstack_top;
+                     uint32_t base_depth = _func->vstack_top - n;
+                     for (uint32_t i = 0; i < n; ++i) {
+                        uint32_t src = _func->vstack[base_depth + i];
+                        if (src != target_entry.param_vregs[i]) {
+                           ir_inst mov{};
+                           mov.opcode = ir_op::mov;
+                           mov.type = types::i64;
+                           mov.flags = IR_NONE;
+                           mov.dest = target_entry.param_vregs[i];
+                           mov.rr.src1 = src;
+                           mov.rr.src2 = ir_vreg_none;
+                           _func->emit(mov);
+                        }
+                     }
+                  } else if (!target_entry.is_loop && result_count > 1 && target_entry.result_count > 1) {
                      uint32_t n = std::min<uint32_t>(result_count, target_entry.result_count);
+                     if (n > _func->vstack_top) n = _func->vstack_top;
                      uint32_t base_depth = _func->vstack_top - n;
                      if (target_entry.is_function) {
                         // Function body target: emit multi_return_store
@@ -953,7 +983,6 @@ namespace psizam::detail {
                            _func->emit(store);
                         }
                      } else {
-                        // Non-function block target: mov to merge vregs
                         for (uint32_t i = 0; i < n; ++i) {
                            uint32_t src = _func->vstack[base_depth + i];
                            if (src != target_entry.merge_vregs[i]) {
@@ -968,13 +997,9 @@ namespace psizam::detail {
                            }
                         }
                      }
-                  }
-               }
-            } else if (rt != types::pseudo && _func->vstack_depth() > 0 && label != UINT32_MAX) {
-               uint32_t target_ctrl = _func->ctrl_stack_top - 1 - label;
-               if (target_ctrl < _func->ctrl_stack_top) {
-                  auto& target_entry = _func->ctrl_stack[target_ctrl];
-                  if (target_entry.merge_vreg != ir_vreg_none && !target_entry.is_loop) {
+                  } else if (!target_entry.is_loop && rt != types::pseudo &&
+                             target_entry.merge_vreg != ir_vreg_none && _func->vstack_depth() > 0) {
+                     // Single-value non-loop target
                      uint32_t src = (rt == types::v128 && _func->vstack_top >= 2)
                                     ? _func->vstack[_func->vstack_top - 2]
                                     : _func->vstack_back();
@@ -1018,7 +1043,26 @@ namespace psizam::detail {
                uint32_t target_ctrl = func->ctrl_stack_top - 1 - label;
                if (target_ctrl < func->ctrl_stack_top) {
                   auto& target_entry = func->ctrl_stack[target_ctrl];
-                  if (result_count > 1 && !target_entry.is_loop && target_entry.result_count > 1) {
+                  if (target_entry.is_loop && target_entry.param_count > 0) {
+                     // Loop target: mov values to loop's param vregs
+                     uint32_t n = std::min<uint32_t>(result_count, target_entry.param_count);
+                     if (func->vstack_top >= n) {
+                        uint32_t base_depth = func->vstack_top - n;
+                        for (uint32_t i = 0; i < n; ++i) {
+                           uint32_t src = func->vstack[base_depth + i];
+                           if (src != target_entry.param_vregs[i]) {
+                              ir_inst mov{};
+                              mov.opcode = ir_op::mov;
+                              mov.type = types::i64;
+                              mov.flags = IR_NONE;
+                              mov.dest = target_entry.param_vregs[i];
+                              mov.rr.src1 = src;
+                              mov.rr.src2 = ir_vreg_none;
+                              func->emit(mov);
+                           }
+                        }
+                     }
+                  } else if (!target_entry.is_loop && result_count > 1 && target_entry.result_count > 1) {
                      uint32_t n = std::min<uint32_t>(result_count, target_entry.result_count);
                      // In unreachable code, vstack_top may be below expected depth — skip merge
                      if (func->vstack_top >= n) {

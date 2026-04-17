@@ -1275,6 +1275,12 @@ namespace psizam::detail {
                   }
 
                   if (bt_index && cases.size() > bt_size) {
+                     // WASM br_table index is i32; IR may surface it wider. Coerce so
+                     // LLVM's switch and the getInt32 case constants agree on type.
+                     if (bt_index->getType() != builder.getInt32Ty() &&
+                         bt_index->getType()->isIntegerTy()) {
+                        bt_index = builder.CreateIntCast(bt_index, builder.getInt32Ty(), false);
+                     }
                      // Last case is the default
                      auto& default_case = cases.back();
 
@@ -2116,18 +2122,25 @@ namespace psizam::detail {
                   store_vreg(inst.dest, builder.CreateXor(
                      load_vreg_as(inst.rr.src1, i32_ty), load_vreg_as(inst.rr.src2, i32_ty)));
                   break;
-               case ir_op::i32_shl:
-                  store_vreg(inst.dest, builder.CreateShl(
-                     load_vreg_as(inst.rr.src1, i32_ty), load_vreg_as(inst.rr.src2, i32_ty)));
+               case ir_op::i32_shl: {
+                  // WASM masks the shift amount (mod 32). LLVM's shl/ashr/lshr
+                  // produce poison when the shift amount is >= bitwidth, so we
+                  // must mask explicitly — otherwise constant folding can turn
+                  // a legal WASM `shl i32 0, 256` into `poison`.
+                  auto* amt = builder.CreateAnd(load_vreg_as(inst.rr.src2, i32_ty), builder.getInt32(31));
+                  store_vreg(inst.dest, builder.CreateShl(load_vreg_as(inst.rr.src1, i32_ty), amt));
                   break;
-               case ir_op::i32_shr_s:
-                  store_vreg(inst.dest, builder.CreateAShr(
-                     load_vreg_as(inst.rr.src1, i32_ty), load_vreg_as(inst.rr.src2, i32_ty)));
+               }
+               case ir_op::i32_shr_s: {
+                  auto* amt = builder.CreateAnd(load_vreg_as(inst.rr.src2, i32_ty), builder.getInt32(31));
+                  store_vreg(inst.dest, builder.CreateAShr(load_vreg_as(inst.rr.src1, i32_ty), amt));
                   break;
-               case ir_op::i32_shr_u:
-                  store_vreg(inst.dest, builder.CreateLShr(
-                     load_vreg_as(inst.rr.src1, i32_ty), load_vreg_as(inst.rr.src2, i32_ty)));
+               }
+               case ir_op::i32_shr_u: {
+                  auto* amt = builder.CreateAnd(load_vreg_as(inst.rr.src2, i32_ty), builder.getInt32(31));
+                  store_vreg(inst.dest, builder.CreateLShr(load_vreg_as(inst.rr.src1, i32_ty), amt));
                   break;
+               }
                case ir_op::i32_rotl:
                   store_vreg(inst.dest, emit_rotate(builder,
                      load_vreg_as(inst.rr.src1, i32_ty), load_vreg_as(inst.rr.src2, i32_ty), i32_ty, false));
@@ -2244,18 +2257,21 @@ namespace psizam::detail {
                   store_vreg(inst.dest, builder.CreateXor(
                      load_vreg_as(inst.rr.src1, i64_ty), load_vreg_as(inst.rr.src2, i64_ty)));
                   break;
-               case ir_op::i64_shl:
-                  store_vreg(inst.dest, builder.CreateShl(
-                     load_vreg_as(inst.rr.src1, i64_ty), load_vreg_as(inst.rr.src2, i64_ty)));
+               case ir_op::i64_shl: {
+                  auto* amt = builder.CreateAnd(load_vreg_as(inst.rr.src2, i64_ty), builder.getInt64(63));
+                  store_vreg(inst.dest, builder.CreateShl(load_vreg_as(inst.rr.src1, i64_ty), amt));
                   break;
-               case ir_op::i64_shr_s:
-                  store_vreg(inst.dest, builder.CreateAShr(
-                     load_vreg_as(inst.rr.src1, i64_ty), load_vreg_as(inst.rr.src2, i64_ty)));
+               }
+               case ir_op::i64_shr_s: {
+                  auto* amt = builder.CreateAnd(load_vreg_as(inst.rr.src2, i64_ty), builder.getInt64(63));
+                  store_vreg(inst.dest, builder.CreateAShr(load_vreg_as(inst.rr.src1, i64_ty), amt));
                   break;
-               case ir_op::i64_shr_u:
-                  store_vreg(inst.dest, builder.CreateLShr(
-                     load_vreg_as(inst.rr.src1, i64_ty), load_vreg_as(inst.rr.src2, i64_ty)));
+               }
+               case ir_op::i64_shr_u: {
+                  auto* amt = builder.CreateAnd(load_vreg_as(inst.rr.src2, i64_ty), builder.getInt64(63));
+                  store_vreg(inst.dest, builder.CreateLShr(load_vreg_as(inst.rr.src1, i64_ty), amt));
                   break;
+               }
                case ir_op::i64_rotl:
                   store_vreg(inst.dest, emit_rotate(builder,
                      load_vreg_as(inst.rr.src1, i64_ty), load_vreg_as(inst.rr.src2, i64_ty), i64_ty, false));
@@ -4693,35 +4709,14 @@ namespace psizam::detail {
             if (bb.getTerminator()) continue;
             builder.SetInsertPoint(&bb);
             if (func.block_count > 0 && &bb == block_exits[0]) {
-               // Multi-value: store all return values to ctx->_multi_return[]
-               if (ft.return_count > 1) {
-                  for (uint32_t i = 0; i < ft.return_count; ++i) {
-                     llvm::Value* val = load_vreg(i);
-                     if (!val) val = llvm::Constant::getNullValue(builder.getInt64Ty());
-                     // Widen the vreg value to i64 for storage. Same logic
-                     // as the multi_return_store case above: bitcast only
-                     // for size-matched types, otherwise zext/bitcast-then-
-                     // zext so we don't emit a bad float→i64 bitcast.
-                     auto* t = val->getType();
-                     if (t == builder.getFloatTy()) {
-                        val = builder.CreateZExt(builder.CreateBitCast(val, builder.getInt32Ty()),
-                                                 builder.getInt64Ty());
-                     } else if (t == builder.getDoubleTy()) {
-                        val = builder.CreateBitCast(val, builder.getInt64Ty());
-                     } else if (t == builder.getInt32Ty()) {
-                        val = builder.CreateZExt(val, builder.getInt64Ty());
-                     } else if (t != builder.getInt64Ty()) {
-                        val = llvm::ConstantInt::get(builder.getInt64Ty(), 0);
-                     }
-                     int32_t offset = 24 + static_cast<int32_t>(i * 8);
-                     auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
-                        builder.getInt32(offset));
-                     auto* typed_ptr = builder.CreateBitCast(ptr,
-                        llvm::PointerType::getUnqual(builder.getInt64Ty()));
-                     builder.CreateStore(val, typed_ptr);
-                  }
-               }
-               // Function exit block — return merge vreg v0
+               // Multi-value return slots are already populated by the
+               // `multi_return_store` IR ops that ir_writer emits in emit_end
+               // and emit_return (see ir_writer.hpp). Do NOT re-store them
+               // here from load_vreg(i): the function-scope merge vregs v0/v1/v2
+               // are never written for multi-value functions, so loading them
+               // produces undef and overwrites the correct values.
+               // Function exit block — return merge vreg v0 (direct LLVM return is
+               // ignored by the caller for multi-value, which reads _multi_return[]).
                if (fn->getReturnType()->isVoidTy()) {
                   builder.CreateRetVoid();
                } else if (fn->getReturnType() == v128_ty &&
