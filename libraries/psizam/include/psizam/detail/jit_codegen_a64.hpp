@@ -28,6 +28,7 @@
 #include <psizam/detail/signals.hpp>
 
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <variant>
