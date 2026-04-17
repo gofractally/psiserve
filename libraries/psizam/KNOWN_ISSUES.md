@@ -5,7 +5,7 @@
 | Platform | Failures | Total | Pass Rate |
 |----------|----------|-------|-----------|
 | macOS aarch64 | 104 | 13,258 | 99.2% |
-| Linux x86_64 | 135 | 13,186 | 99.0% |
+| Linux x86_64 | 127 | 13,186 | 99.0% |
 
 The difference is entirely jit2 backend bugs (x86_64 vs aarch64 codegen).
 
@@ -36,7 +36,7 @@ exist in the current tail-call proposal `.wast`:
 
 Fix: regenerate from current `.wast` with `wast2json --enable-tail-call`.
 
-### jit2 backend bugs (x86_64: 28, aarch64: 5)
+### jit2 backend bugs (x86_64: 20, aarch64: 5)
 
 All pass on interpreter and jit. jit2 is experimental.
 
@@ -46,8 +46,8 @@ All pass on interpreter and jit. jit2 is experimental.
 - **global_0**: Imported global init (counted above)
 
 **x86_64 only:**
-- **table.grow** (7): Returns 0 instead of -1 for invalid operations
-- **table.size** (1): Always returns 0
+- ~~**table.grow** (7): Returns 0 instead of -1 for invalid operations~~ — fixed: regalloc path for `ir_op::table_grow` now calls `__psizam_table_grow` and stores rax to dest vreg (was falling through to stack-mode codegen whose `push rax` was invisible to the regalloc consumer)
+- ~~**table.size** (1): Always returns 0~~ — fixed: same root cause as `table.grow`; regalloc path now stores the helper's return value to the dest vreg
 - **host function results** (1): Memory out-of-bounds on reference-typed returns
 - ~~**simd_const_385, simd_const_387** (2): Segfault in SIMD code~~ — fixed: jit2 regalloc `ir_op::arg` needs v128 type to push 16 bytes for v128 params (ir_writer.hpp set `arg.type = ft.param_types[i]`)
 - **conversions_0, traps_2** (2): Segfault

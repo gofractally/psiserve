@@ -3011,11 +3011,48 @@ namespace psizam::detail {
          case ir_op::table_copy:
          case ir_op::table_get:
          case ir_op::table_set:
-         case ir_op::table_grow:
-         case ir_op::table_size:
          case ir_op::table_fill:
          case ir_op::atomic_op:
             return false; // use stack-mode emit_ir_inst
+
+         // table.size: call helper, store result to dest vreg
+         case ir_op::table_size:
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(static_cast<uint32_t>(inst.ri.imm), esi);
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_table_size));
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            store_rax_vreg(inst.dest);
+            return true;
+
+         // table.grow: args [init_val, delta] pushed by preceding arg insts;
+         // call helper, store result to dest vreg
+         case ir_op::table_grow:
+            this->emit_pop_raw(rax);  // delta
+            this->emit_pop_raw(r8);   // init_val
+            this->emit_push_raw(rdi);
+            this->emit_push_raw(rsi);
+            this->emit_mov(eax, edx);
+            this->emit_mov(r8d, ecx);
+            this->emit_mov(static_cast<uint32_t>(inst.ri.imm), esi);
+            this->emit_mov(rsp, rax);
+            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            this->emit_push_raw(rax);
+            this->emit_bytes(0x48, 0xb8);
+            this->emit_operand_ptr(reinterpret_cast<const void*>(&__psizam_table_grow));
+            this->emit_bytes(0xff, 0xd0);
+            this->emit_pop_raw(rsp);
+            this->emit_pop_raw(rsi);
+            this->emit_pop_raw(rdi);
+            store_rax_vreg(inst.dest);
+            return true;
 
          // ── Memory management (register mode) ──
          case ir_op::memory_size:
