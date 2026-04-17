@@ -456,8 +456,10 @@ namespace psizam::detail {
                   // Function scope multi-value: emit multi_return_store IR ops
                   // so regalloc sees the stores (epilogue can't reference vregs safely)
                   if (!_unreachable && _func->vstack_depth() > entry.stack_depth) {
+                     uint32_t first_src = ir_vreg_none;
                      for (uint32_t i = entry.result_count; i > 0; --i) {
                         uint32_t src = _func->vpop();
+                        if (i == 1) first_src = src;
                         ir_inst store{};
                         store.opcode = ir_op::multi_return_store;
                         store.type = types::i64;
@@ -466,6 +468,22 @@ namespace psizam::detail {
                         store.ri.src1 = src;
                         store.ri.imm = static_cast<int32_t>((i - 1) * 8);
                         _func->emit(store);
+                     }
+                     // Also mov the first return value to merge_vregs[0] so the
+                     // LLVM-level return (which uses merge_vregs[0] as the alloca
+                     // for the scalar return) sees a defined value. x86_64/aarch64
+                     // codegens use _multi_return[] and ignore this mov.
+                     if (first_src != ir_vreg_none &&
+                         entry.merge_vregs[0] != ir_vreg_none &&
+                         first_src != entry.merge_vregs[0]) {
+                        ir_inst mov{};
+                        mov.opcode = ir_op::mov;
+                        mov.type = types::i64;
+                        mov.flags = IR_NONE;
+                        mov.dest = entry.merge_vregs[0];
+                        mov.rr.src1 = first_src;
+                        mov.rr.src2 = ir_vreg_none;
+                        _func->emit(mov);
                      }
                   }
                   _func->vstack_resize(entry.stack_depth);
@@ -588,8 +606,10 @@ namespace psizam::detail {
                // Multi-value return: emit N store instructions to _multi_return buffer
                // We use a special sequence: store each value to the context buffer,
                // then emit a return with result_count encoded in dest field
+               uint32_t first_src = ir_vreg_none;
                for (uint32_t i = result_count; i > 0; --i) {
                   uint32_t src = _func->vpop();
+                  if (i == 1) first_src = src;
                   ir_inst store{};
                   store.opcode = ir_op::nop; // placeholder - the store will be done by codegen
                   store.type = types::i64;
@@ -600,6 +620,24 @@ namespace psizam::detail {
                   // Use a distinct opcode for multi-value return store
                   store.opcode = ir_op::multi_return_store;
                   _func->emit(store);
+               }
+               // Also mov first value to the function's merge_vregs[0] so jit_llvm's
+               // scalar-return path reads a defined value (other backends use
+               // _multi_return[] and ignore this mov).
+               if (_func->ctrl_stack_top > 0 && first_src != ir_vreg_none) {
+                  auto& fn_entry = _func->ctrl_stack[0];
+                  if (fn_entry.is_function &&
+                      fn_entry.merge_vregs[0] != ir_vreg_none &&
+                      first_src != fn_entry.merge_vregs[0]) {
+                     ir_inst mov{};
+                     mov.opcode = ir_op::mov;
+                     mov.type = types::i64;
+                     mov.flags = IR_NONE;
+                     mov.dest = fn_entry.merge_vregs[0];
+                     mov.rr.src1 = first_src;
+                     mov.rr.src2 = ir_vreg_none;
+                     _func->emit(mov);
+                  }
                }
                ir_inst inst{};
                inst.opcode = ir_op::return_;
@@ -689,7 +727,21 @@ namespace psizam::detail {
          entry.result_count = static_cast<uint8_t>(result_count);
          std::memset(entry.result_types, 0, sizeof(entry.result_types));
          std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs));
-         entry.merge_vreg = ir_vreg_none;
+         // Loops use param_vregs for back-branches (br to loop = re-entry), but
+         // end-of-loop fall-through still produces result values that the
+         // enclosing scope consumes. Allocate merge_vregs for multi-value loops
+         // so emit_end's generic pop/mov/push path works; without them,
+         // emit_end pushes ir_vreg_none and corrupts the outer stack (LLVM
+         // return then loads undef from v0).
+         if (result_count > 1) {
+            for (uint32_t i = 0; i < result_count && i < 16; ++i) {
+               entry.merge_vregs[i] = _func->alloc_vreg(types::i64);
+               entry.result_types[i] = types::i64;
+            }
+            entry.merge_vreg = entry.merge_vregs[0];
+         } else {
+            entry.merge_vreg = ir_vreg_none;
+         }
          _func->ctrl_push(entry);
          _func->start_block(entry.block_idx);
          return entry.block_idx;
@@ -885,6 +937,20 @@ namespace psizam::detail {
                            store.ri.imm = static_cast<int32_t>(i * 8);
                            _func->emit(store);
                         }
+                        // Also mov first value to merge_vregs[0] for jit_llvm scalar return
+                        if (n > 0 && target_entry.merge_vregs[0] != ir_vreg_none) {
+                           uint32_t src = _func->vstack[base_depth + 0];
+                           if (src != target_entry.merge_vregs[0]) {
+                              ir_inst mov{};
+                              mov.opcode = ir_op::mov;
+                              mov.type = types::i64;
+                              mov.flags = IR_NONE;
+                              mov.dest = target_entry.merge_vregs[0];
+                              mov.rr.src1 = src;
+                              mov.rr.src2 = ir_vreg_none;
+                              _func->emit(mov);
+                           }
+                        }
                      } else {
                         for (uint32_t i = 0; i < n; ++i) {
                            uint32_t src = _func->vstack[base_depth + i];
@@ -981,6 +1047,20 @@ namespace psizam::detail {
                            store.ri.src1 = src;
                            store.ri.imm = static_cast<int32_t>(i * 8);
                            _func->emit(store);
+                        }
+                        // Also mov first value to merge_vregs[0] for jit_llvm scalar return
+                        if (n > 0 && target_entry.merge_vregs[0] != ir_vreg_none) {
+                           uint32_t src = _func->vstack[base_depth + 0];
+                           if (src != target_entry.merge_vregs[0]) {
+                              ir_inst mov{};
+                              mov.opcode = ir_op::mov;
+                              mov.type = types::i64;
+                              mov.flags = IR_NONE;
+                              mov.dest = target_entry.merge_vregs[0];
+                              mov.rr.src1 = src;
+                              mov.rr.src2 = ir_vreg_none;
+                              _func->emit(mov);
+                           }
                         }
                      } else {
                         for (uint32_t i = 0; i < n; ++i) {
@@ -1079,6 +1159,20 @@ namespace psizam::detail {
                               store.ri.src1 = src;
                               store.ri.imm = static_cast<int32_t>(i * 8);
                               func->emit(store);
+                           }
+                           // Also mov first value to merge_vregs[0] for jit_llvm scalar return
+                           if (n > 0 && target_entry.merge_vregs[0] != ir_vreg_none) {
+                              uint32_t src = func->vstack[base_depth + 0];
+                              if (src != target_entry.merge_vregs[0]) {
+                                 ir_inst mov{};
+                                 mov.opcode = ir_op::mov;
+                                 mov.type = types::i64;
+                                 mov.flags = IR_NONE;
+                                 mov.dest = target_entry.merge_vregs[0];
+                                 mov.rr.src1 = src;
+                                 mov.rr.src2 = ir_vreg_none;
+                                 func->emit(mov);
+                              }
                            }
                         } else {
                            // Non-function block target: mov to merge vregs
