@@ -530,6 +530,53 @@ namespace psizam::detail {
                }
             }
 
+            // Implicit else for if-without-else with parameters:
+            // When the if condition is false, the JIT jumps directly to block_end,
+            // bypassing the then-branch's mov-to-merge-vreg. We must emit an
+            // implicit else that copies the param vregs to merge vregs so the
+            // false path produces the correct result (identity pass-through).
+            if (entry.param_count > 0 && !entry.entered_unreachable &&
+                block_idx < _func->block_count && _func->blocks[block_idx].is_if) {
+               // Emit else_ IR: then-branch jumps to block_end,
+               // if_fixup resolves to here (implicit else body)
+               ir_inst else_inst{};
+               else_inst.opcode = ir_op::else_;
+               else_inst.type = types::pseudo;
+               else_inst.flags = IR_SIDE_EFFECT;
+               else_inst.dest = ir_vreg_none;
+               else_inst.br.target = entry.block_idx;
+               else_inst.br.src1 = ir_vreg_none;
+               _func->emit(else_inst);
+
+               // Copy params to merge vregs (implicit identity pass-through)
+               if (entry.result_count > 1) {
+                  for (uint32_t i = 0; i < entry.result_count && i < 16; ++i) {
+                     if (entry.param_vregs[i] != entry.merge_vregs[i]) {
+                        ir_inst mov{};
+                        mov.opcode = ir_op::mov;
+                        mov.type = types::i64;
+                        mov.flags = IR_NONE;
+                        mov.dest = entry.merge_vregs[i];
+                        mov.rr.src1 = entry.param_vregs[i];
+                        mov.rr.src2 = ir_vreg_none;
+                        _func->emit(mov);
+                     }
+                  }
+               } else if (entry.merge_vreg != ir_vreg_none) {
+                  ir_inst mov{};
+                  mov.opcode = ir_op::mov;
+                  mov.type = entry.result_type;
+                  mov.flags = IR_NONE;
+                  mov.dest = entry.merge_vreg;
+                  mov.rr.src1 = entry.param_vregs[0];
+                  mov.rr.src2 = ir_vreg_none;
+                  _func->emit(mov);
+               }
+
+               // Clear is_if so block_end doesn't also pop the if_fixup
+               _func->blocks[block_idx].is_if = 0;
+            }
+
             _func->end_block(entry.block_idx);
             _unreachable = entry.entered_unreachable ? true : false;
          }
@@ -2460,12 +2507,14 @@ namespace psizam::detail {
          inst.ri.imm = static_cast<int32_t>(tag_index);
          inst.ri.src1 = ir_vreg_none;
          _func->emit(inst);
+         _unreachable = true;
       }
       void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
          ir_inst inst{};
          inst.opcode = ir_op::unreachable;
          inst.flags = IR_SIDE_EFFECT;
          _func->emit(inst);
+         _unreachable = true;
       }
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
          // Structural no-op
@@ -2731,6 +2780,7 @@ namespace psizam::detail {
          inst.rr.src1 = exnref;
          inst.rr.src2 = ir_vreg_none;
          _func->emit(inst);
+         _unreachable = true;
       }
       void emit_eh_leave() {
          if (_unreachable) return;
