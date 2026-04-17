@@ -916,8 +916,8 @@ namespace psizam {
                switch(hf.ret[0]) {
                 case types::i32: ei.push_operand(i32_const_t{result.i32}); break;
                 case types::i64: ei.push_operand(i64_const_t{result.i64}); break;
-                case types::f32: ei.push_operand(f32_const_t{result.f32}); break;
-                case types::f64: ei.push_operand(f64_const_t{result.f64}); break;
+                case types::f32: ei.push_operand(f32_const_t{detail::canon_host_f32(result.f32, ei.fp())}); break;
+                case types::f64: ei.push_operand(f64_const_t{detail::canon_host_f64(result.f64, ei.fp())}); break;
                 default: break;
                }
             }

@@ -217,7 +217,7 @@ namespace psizam::detail {
          _params = function_parameters{_ft};
          _locals = function_locals{locals};
          // FIXME: This is not a tight upper bound
-         const std::size_t instruction_size_ratio_upper_bound = (_fp == fp_mode::softfloat) ? (_enable_backtrace?63:49) : 79;
+         const std::size_t instruction_size_ratio_upper_bound = (_fp != fp_mode::fast) ? (_enable_backtrace?63:49) : 79;
          // Multi-value epilogue needs ~16 bytes per return value for the mov pairs
          std::size_t epilogue_size = (_ft->return_types.size() > 1)
             ? _ft->return_types.size() * 16 + 16
@@ -2411,7 +2411,7 @@ namespace psizam::detail {
       void emit_f32_ceil() {
          COUNT_INSTR();
          auto icount = softfloat_instr(12, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_ceil<true>));
          }
          // roundss 0b1010, (%rsp), %xmm0
@@ -2423,7 +2423,7 @@ namespace psizam::detail {
       void emit_f32_floor() {
          COUNT_INSTR();
          auto icount = softfloat_instr(12, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_floor<true>));
          }
          // roundss 0b1001, (%rsp), %xmm0
@@ -2435,7 +2435,7 @@ namespace psizam::detail {
       void emit_f32_trunc() {
          COUNT_INSTR();
          auto icount = softfloat_instr(12, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_trunc<true>));
          }
          // roundss 0b1011, (%rsp), %xmm0
@@ -2447,7 +2447,7 @@ namespace psizam::detail {
       void emit_f32_nearest() {
          COUNT_INSTR();
          auto icount = softfloat_instr(12, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_nearest<true>));
          }
          // roundss 0b1000, (%rsp), %xmm0
@@ -2459,7 +2459,7 @@ namespace psizam::detail {
       void emit_f32_sqrt() {
          COUNT_INSTR();
          auto icount = softfloat_instr(10, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_sqrt));
          }
          // sqrtss (%rsp), %xmm0
@@ -2489,7 +2489,7 @@ namespace psizam::detail {
       void emit_f32_min() {
          COUNT_INSTR();
          auto icount = softfloat_instr(47, 44, 58);
-        if (_fp == fp_mode::softfloat) {
+        if (_fp != fp_mode::fast) {
            emit_f32_binop_softfloat(CHOOSE_FN(_psizam_f32_min<true>));
            return;
         }
@@ -2523,7 +2523,7 @@ namespace psizam::detail {
       void emit_f32_max() {
          COUNT_INSTR();
          auto icount = softfloat_instr(47, 44, 58);
-        if (_fp == fp_mode::softfloat) {
+        if (_fp != fp_mode::fast) {
            emit_f32_binop_softfloat(CHOOSE_FN(_psizam_f32_max<true>));
            return;
         }
@@ -2607,7 +2607,7 @@ namespace psizam::detail {
       void emit_f64_ceil() {
          COUNT_INSTR();
          auto icount = softfloat_instr(12, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_ceil<true>));
          }
          // roundsd 0b1010, (%rsp), %xmm0
@@ -2619,7 +2619,7 @@ namespace psizam::detail {
       void emit_f64_floor() {
          COUNT_INSTR();
          auto icount = softfloat_instr(12, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_floor<true>));
          }
          // roundsd 0b1001, (%rsp), %xmm0
@@ -2631,7 +2631,7 @@ namespace psizam::detail {
       void emit_f64_trunc() {
          COUNT_INSTR();
          auto icount = softfloat_instr(12, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_trunc<true>));
          }
          // roundsd 0b1011, (%rsp), %xmm0
@@ -2643,7 +2643,7 @@ namespace psizam::detail {
       void emit_f64_nearest() {
          COUNT_INSTR();
          auto icount = softfloat_instr(12, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_nearest<true>));
          }
          // roundsd 0b1000, (%rsp), %xmm0
@@ -2655,7 +2655,7 @@ namespace psizam::detail {
       void emit_f64_sqrt() {
          COUNT_INSTR();
          auto icount = softfloat_instr(10, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_sqrt));
          }
          // sqrtss (%rsp), %xmm0
@@ -2689,7 +2689,7 @@ namespace psizam::detail {
       void emit_f64_min() {
          COUNT_INSTR();
          auto icount = softfloat_instr(49, 47, 61);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             emit_f64_binop_softfloat(CHOOSE_FN(_psizam_f64_min<true>));
             return;
          }
@@ -2723,7 +2723,7 @@ namespace psizam::detail {
       void emit_f64_max() {
          COUNT_INSTR();
          auto icount = softfloat_instr(49, 47, 61);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             emit_f64_binop_softfloat(CHOOSE_FN(_psizam_f64_max<true>));
             return;
          }
@@ -2791,7 +2791,7 @@ namespace psizam::detail {
       void emit_i32_trunc_s_f32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(33, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f32_trunc_i32s>()));
          }
          // cvttss2si 8(%rsp), %eax
@@ -2803,7 +2803,7 @@ namespace psizam::detail {
       void emit_i32_trunc_u_f32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(46, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f32_trunc_i32u>()));
          }
          // cvttss2si 8(%rsp), %rax
@@ -2821,7 +2821,7 @@ namespace psizam::detail {
       void emit_i32_trunc_s_f64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(34, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f64_trunc_i32s<true>>()));
          }
          // cvttsd2si 8(%rsp), %eax
@@ -2833,7 +2833,7 @@ namespace psizam::detail {
       void emit_i32_trunc_u_f64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(47, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f64_trunc_i32u>()));
          }
          // cvttsd2si 8(%rsp), %rax
@@ -2918,7 +2918,7 @@ namespace psizam::detail {
       void emit_i64_trunc_s_f32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(35, 37, 55);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f32_trunc_i64s>()));
          }
          // cvttss2si (%rsp), %rax
@@ -2929,7 +2929,7 @@ namespace psizam::detail {
       void emit_i64_trunc_u_f32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(101, 37, 55);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f32_trunc_i64u>()));
          }
          // mov $0x5f000000, %eax
@@ -2973,7 +2973,7 @@ namespace psizam::detail {
       void emit_i64_trunc_s_f64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(35, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f64_trunc_i64s>()));
          }
          // cvttsd2si (%rsp), %rax
@@ -2984,7 +2984,7 @@ namespace psizam::detail {
       void emit_i64_trunc_u_f64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(109, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f64_trunc_i64u>()));
          }
          // movabsq $0x43e0000000000000, %rax
@@ -3049,7 +3049,7 @@ namespace psizam::detail {
       void emit_f32_convert_s_i32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(10, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_to_f32));
          }
          // cvtsi2ssl (%rsp), %xmm0
@@ -3060,7 +3060,7 @@ namespace psizam::detail {
       void emit_f32_convert_u_i32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(11, 36, 54);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_ui32_to_f32));
          }
          // zero-extend to 64-bits
@@ -3072,7 +3072,7 @@ namespace psizam::detail {
       void emit_f32_convert_s_i64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(11, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_to_f32));
          }
          // cvtsi2sslq (%rsp), %xmm0
@@ -3083,7 +3083,7 @@ namespace psizam::detail {
       void emit_f32_convert_u_i64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(55, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_ui64_to_f32));
          }
         // movq (%rsp), %rax
@@ -3124,7 +3124,7 @@ namespace psizam::detail {
       void emit_f32_demote_f64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(16, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_demote));
          }
          // cvtsd2ss (%rsp), %xmm0
@@ -3140,7 +3140,7 @@ namespace psizam::detail {
       void emit_f64_convert_s_i32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(10, 37, 55);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_to_f64));
          }
          // cvtsi2sdl (%rsp), %xmm0
@@ -3151,7 +3151,7 @@ namespace psizam::detail {
       void emit_f64_convert_u_i32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(11, 37, 55);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_ui32_to_f64));
          }
          //  cvtsi2sdq (%rsp), %xmm0
@@ -3162,7 +3162,7 @@ namespace psizam::detail {
       void emit_f64_convert_s_i64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(11, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_to_f64));
          }
          //  cvtsi2sdq (%rsp), %xmm0
@@ -3173,7 +3173,7 @@ namespace psizam::detail {
       void emit_f64_convert_u_i64() {
          COUNT_INSTR();
          auto icount = softfloat_instr(49, 38, 56);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_ui64_to_f64));
          }
         // movq (%rsp), %rax
@@ -3210,7 +3210,7 @@ namespace psizam::detail {
       void emit_f64_promote_f32() {
          COUNT_INSTR();
          auto icount = softfloat_instr(10, 37, 55);
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_promote));
          }
          // cvtss2sd (%rsp), %xmm0
@@ -5968,7 +5968,7 @@ namespace psizam::detail {
          }};
       }
       auto softfloat_instr(std::size_t hard_expected, std::size_t soft_expected, std::size_t softbt_expected) {
-         return fixed_size_instr((_fp == fp_mode::softfloat) ? (_enable_backtrace?softbt_expected:soft_expected) : hard_expected);
+         return fixed_size_instr((_fp != fp_mode::fast) ? (_enable_backtrace?softbt_expected:soft_expected) : hard_expected);
       }
       auto simd_instr() {
          // SIMD instructions use at least 2-bytes, so 64 gives an
@@ -6714,7 +6714,7 @@ namespace psizam::detail {
 
       void emit_f32_relop(uint8_t opcode, uint64_t (*softfloatfun)(float32_t, float32_t), bool switch_params, bool flip_result) {
          COUNT_INSTR();
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             auto extra = emit_setup_backtrace();
             // pushq %rdi
             emit_bytes(0x57);
@@ -6782,7 +6782,7 @@ namespace psizam::detail {
 
       void emit_f64_relop(uint8_t opcode, uint64_t (*softfloatfun)(float64_t, float64_t), bool switch_params, bool flip_result) {
          COUNT_INSTR();
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             auto extra = emit_setup_backtrace();
             // pushq %rdi
             emit_bytes(0x57);
@@ -6872,7 +6872,7 @@ namespace psizam::detail {
 
       void emit_f32_binop(uint8_t op, float32_t (*softfloatfun)(float32_t, float32_t)) {
          COUNT_INSTR();
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_f32_binop_softfloat(softfloatfun);
          }
          // movss 8(%rsp), %xmm0
@@ -6887,7 +6887,7 @@ namespace psizam::detail {
 
       void emit_f64_binop(uint8_t op, float64_t (*softfloatfun)(float64_t, float64_t)) {
          COUNT_INSTR();
-         if (_fp == fp_mode::softfloat) {
+         if (_fp != fp_mode::fast) {
             return emit_f64_binop_softfloat(softfloatfun);
          }
          // movsd 8(%rsp), %xmm0

@@ -190,7 +190,7 @@ namespace psizam::detail {
       inline char*       linear_memory() { return _linear_memory; }
       inline auto&       get_operand_stack() { return _os; }
       inline const auto& get_operand_stack() const { return _os; }
-      inline auto        get_interface() { return execution_interface{ _linear_memory, &_os }; }
+      inline auto        get_interface() { return execution_interface{ _linear_memory, &_os, _fp }; }
       void               set_max_pages(std::uint32_t max_pages) { _max_pages = std::min(max_pages, static_cast<std::uint32_t>(psizam::max_pages)); }
 
       inline std::error_code get_error_code() const { return _error_code; }

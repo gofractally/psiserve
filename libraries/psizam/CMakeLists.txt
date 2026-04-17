@@ -32,7 +32,15 @@ endif()
 include(CMakeDependentOption)
 
 option(PSIZAM_ENABLE_SOFTFLOAT
-   "Enable deterministic software floating point operations" ON)
+   "Enable deterministic software floating point operations (required for runtime fp_mode selection; OFF pins the build to fp_mode::fast)" ON)
+
+if(NOT PSIZAM_ENABLE_SOFTFLOAT)
+   message(WARNING
+      "PSIZAM_ENABLE_SOFTFLOAT=OFF disables softfloat. The interpreter requires "
+      "softfloat symbols to compile (runtime fp_mode dispatches through them), "
+      "so this configuration does not currently build. Leave ON unless you are "
+      "also removing the interpreter from the build.")
+endif()
 option(PSIZAM_FULL_DEBUG
    "Enable stack dumping and instruction tracing" OFF)
 option(PSIZAM_ENABLE_INSTALL

@@ -519,20 +519,23 @@ namespace psizam {
 
       // ── Per-instance floating-point execution mode ──
       //
-      // For the interpreter backend this is read at every FP opcode and
-      // takes effect immediately.
+      // Interpreter: read at every FP opcode; setter takes effect immediately.
       //
-      // For JIT backends (jit, jit_profile, jit2, jit_llvm) the mode used
-      // when emitting machine code is baked into that code. Module parse
-      // + JIT compile run during backend construction, so once the backend
-      // is constructed the emitted code is already specialized. Calling
-      // set_fp_mode after construction stores the mode on the context
-      // (useful for any runtime-reading paths) but has no effect on the
-      // already-emitted JIT code. For JIT backends, the mode must be set
-      // via construction-time wiring (not yet plumbed) if a non-default
-      // mode is required.
-      inline void    set_fp_mode(fp_mode m) { ctx->set_fp_mode(m); }
-      inline fp_mode get_fp_mode() const    { return ctx->fp(); }
+      // JIT backends (jit, jit_profile, jit2, jit_llvm): the mode is baked
+      // into emitted code at construction. Post-construction changes cannot
+      // re-emit code, so set_fp_mode is only accepted if the requested mode
+      // matches the baked mode (a no-op). A mismatching setter throws to
+      // surface silent consensus hazards — callers must reconstruct the
+      // backend with the desired mode wired at construction time.
+      inline void set_fp_mode(fp_mode m) {
+         if constexpr (Impl::is_jit) {
+            PSIZAM_ASSERT(m == ctx->fp(), wasm_interpreter_exception,
+                          "set_fp_mode on a JIT backend cannot change the baked fp_mode; "
+                          "reconstruct the backend with the desired mode");
+         }
+         ctx->set_fp_mode(m);
+      }
+      inline fp_mode get_fp_mode() const { return ctx->fp(); }
 
       template <typename... Args>
       inline auto operator()(detail::stack_manager& alt_stack, host_t& host, const std::string_view& mod, const std::string_view& func, Args... args) {

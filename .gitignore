@@ -26,6 +26,9 @@ build.ninja
 *~
 .DS_Store
 
+# Claude Code
+.claude/scheduled_tasks.lock
+
 # Certificates / keys
 certs/
 

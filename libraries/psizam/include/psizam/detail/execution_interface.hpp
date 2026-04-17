@@ -1,18 +1,50 @@
 #pragma once
 
+#include <psizam/config.hpp>
 #include <psizam/detail/wasm_stack.hpp>
 #include <psizam/utils.hpp>
 #include <psizam/exceptions.hpp>
 #include <cstring>
+#include <cstdint>
 #include <limits>
 
 namespace psizam::detail {
 
+   // Normalize any NaN bit pattern arriving from the host boundary to the
+   // WASM canonical NaN in deterministic modes. NaNs produced by host code
+   // can carry architecture-specific payloads (esp. signaling NaNs); without
+   // normalization, a WASM module that bit-casts FP→int would observe the
+   // difference and consensus would fork.
+   //
+   // In fp_mode::fast, passthrough — divergence is allowed by contract.
+   inline float canon_host_f32(float v, fp_mode m) {
+      if (m == fp_mode::fast) return v;
+      std::uint32_t bits;
+      std::memcpy(&bits, &v, 4);
+      if ((bits & 0x7FFFFFFFu) > 0x7F800000u) {
+         bits = 0x7FC00000u;
+         std::memcpy(&v, &bits, 4);
+      }
+      return v;
+   }
+   inline double canon_host_f64(double v, fp_mode m) {
+      if (m == fp_mode::fast) return v;
+      std::uint64_t bits;
+      std::memcpy(&bits, &v, 8);
+      if ((bits & 0x7FFFFFFFFFFFFFFFULL) > 0x7FF0000000000000ULL) {
+         bits = 0x7FF8000000000000ULL;
+         std::memcpy(&v, &bits, 8);
+      }
+      return v;
+   }
+
    // interface used for the host function system to use
    // clients can create their own interface to overlay their own implementations
    struct execution_interface {
-      inline execution_interface( char* memory, operand_stack* os ) : memory(memory), os(os) {}
+      inline execution_interface( char* memory, operand_stack* os, fp_mode fp = fp_mode::fast )
+         : memory(memory), os(os), _fp(fp) {}
       inline void* get_memory() const { return memory; }
+      inline fp_mode fp() const { return _fp; }
       inline void trim_operands(std::size_t amt) { os->trim(amt); }
 
       template <typename T>
@@ -47,5 +79,6 @@ namespace psizam::detail {
       }
       char* memory;
       operand_stack* os;
+      fp_mode _fp;
    };
 } // namespace psizam::detail

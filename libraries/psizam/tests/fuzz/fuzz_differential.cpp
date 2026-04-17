@@ -85,13 +85,22 @@ struct run_result {
 };
 
 template <typename Impl>
-static run_result run_backend(const std::vector<uint8_t>& wasm_bytes) {
+static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
+                              fp_mode fp = fp_mode::softfloat) {
    run_result r{};
    try {
       using backend_t = backend<std::nullptr_t, Impl>;
       wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
       wasm_allocator wa;
       backend_t bkend(code, &wa);
+
+      // Interpreter honors post-construction mode changes. For JIT backends
+      // this is a no-op when the requested mode matches the baked mode, and
+      // throws if it would require re-emission — so callers passing a
+      // non-default mode to a JIT backend must reconstruct with mode wired in.
+      if constexpr (!Impl::is_jit) {
+         bkend.set_fp_mode(fp);
+      }
 
       // Check if module has a start function
       r.has_start = (bkend.get_module().start != std::numeric_limits<uint32_t>::max());
@@ -150,7 +159,16 @@ static void print_mismatch(const char* source, const char* b1_name, const run_re
 // Returns interpreter outcome (0-6), or -1 on mismatch
 // Result codes from test_module_impl: 0-6 = interpreter outcome, -1 = mismatch, -2 = crash
 static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
-   auto r_interp = run_backend<interpreter>(wasm);
+   auto r_interp = run_backend<interpreter>(wasm, fp_mode::softfloat);
+
+   // Determinism cross-check: the same interpreter run in hw_deterministic
+   // must produce the same outcome as softfloat (invariant from config.hpp:
+   // hw_deterministic(x) == softfloat(x) bit-for-bit).
+   auto r_interp_hwd = run_backend<interpreter>(wasm, fp_mode::hw_deterministic);
+   if (r_interp.outcome != r_interp_hwd.outcome) {
+      print_mismatch(source, "interp/softfloat", r_interp, "interp/hw_det", r_interp_hwd);
+      return -1;
+   }
 
 #if defined(__x86_64__) || defined(__aarch64__)
    auto r_jit = run_backend<jit>(wasm);
