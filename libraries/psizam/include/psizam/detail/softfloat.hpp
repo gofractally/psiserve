@@ -17,10 +17,21 @@ inline bool is_nan( const float64_t f ) {
    return f64_is_nan( f );
 }
 
+// WASM canonical NaN: positive quiet NaN (sign=0, quiet bit set)
+// Berkeley softfloat (8086-SSE) produces negative quiet NaN (0xFFC00000/0xFFF8000000000000)
+// which differs from ARM hardware NaN (0x7FC00000/0x7FF8000000000000).
+// Canonicalize all NaN results from arithmetic operations to the WASM canonical form.
+inline float32_t canonicalize_nan(float32_t f) {
+   return is_nan(f) ? float32_t{0x7FC00000u} : f;
+}
+inline float64_t canonicalize_nan(float64_t f) {
+   return is_nan(f) ? float64_t{0x7FF8000000000000ull} : f;
+}
+
 template<bool ForceArithmetic>
 float32_t propagate_nan(float32_t a) {
    if constexpr(ForceArithmetic) {
-      return { a.v | 0x00400000u };
+      return { 0x7FC00000u };  // WASM canonical NaN
    } else {
       return a;
    }
@@ -29,26 +40,26 @@ float32_t propagate_nan(float32_t a) {
 template<bool ForceArithmetic>
 float64_t propagate_nan(float64_t a) {
    if constexpr(ForceArithmetic) {
-      return { a.v | 0x0008000000000000u };
+      return { 0x7FF8000000000000ull };  // WASM canonical NaN
    } else {
       return a;
    }
 }
 
 inline float _psizam_f32_add( float a, float b ) {
-   return ::from_softfloat32( ::f32_add( ::to_softfloat32(a), ::to_softfloat32(b) ) );
+   return ::from_softfloat32( canonicalize_nan(::f32_add( ::to_softfloat32(a), ::to_softfloat32(b) )) );
 }
 
 inline float _psizam_f32_sub( float a, float b ) {
-   return ::from_softfloat32( ::f32_sub( ::to_softfloat32(a), ::to_softfloat32(b) ) );
+   return ::from_softfloat32( canonicalize_nan(::f32_sub( ::to_softfloat32(a), ::to_softfloat32(b) )) );
 }
 
 inline float _psizam_f32_div( float a, float b ) {
-   return ::from_softfloat32( ::f32_div( ::to_softfloat32(a), ::to_softfloat32(b) ) );
+   return ::from_softfloat32( canonicalize_nan(::f32_div( ::to_softfloat32(a), ::to_softfloat32(b) )) );
 }
 
 inline float _psizam_f32_mul( float a, float b ) {
-   return ::from_softfloat32( ::f32_mul( ::to_softfloat32(a), ::to_softfloat32(b) ) );
+   return ::from_softfloat32( canonicalize_nan(::f32_mul( ::to_softfloat32(a), ::to_softfloat32(b) )) );
 }
 
 template<bool ArithNan>
@@ -106,7 +117,7 @@ inline float _psizam_f32_neg( float af ) {
 }
 
 inline float _psizam_f32_sqrt( float a ) {
-   float32_t ret = ::f32_sqrt( to_softfloat32(a) );
+   float32_t ret = canonicalize_nan(::f32_sqrt( to_softfloat32(a) ));
    return from_softfloat32(ret);
 }
 
@@ -227,22 +238,22 @@ inline bool _psizam_f32_ge( float af, float bf ) {
 }
 
 inline double _psizam_f64_add( double a, double b ) {
-   float64_t ret = ::f64_add( to_softfloat64(a), to_softfloat64(b) );
+   float64_t ret = canonicalize_nan(::f64_add( to_softfloat64(a), to_softfloat64(b) ));
    return from_softfloat64(ret);
 }
 
 inline double _psizam_f64_sub( double a, double b ) {
-   float64_t ret = ::f64_sub( to_softfloat64(a), to_softfloat64(b) );
+   float64_t ret = canonicalize_nan(::f64_sub( to_softfloat64(a), to_softfloat64(b) ));
    return from_softfloat64(ret);
 }
 
 inline double _psizam_f64_div( double a, double b ) {
-   float64_t ret = ::f64_div( to_softfloat64(a), to_softfloat64(b) );
+   float64_t ret = canonicalize_nan(::f64_div( to_softfloat64(a), to_softfloat64(b) ));
    return from_softfloat64(ret);
 }
 
 inline double _psizam_f64_mul( double a, double b ) {
-   float64_t ret = ::f64_mul( to_softfloat64(a), to_softfloat64(b) );
+   float64_t ret = canonicalize_nan(::f64_mul( to_softfloat64(a), to_softfloat64(b) ));
    return from_softfloat64(ret);
 }
 
@@ -299,7 +310,7 @@ inline double _psizam_f64_neg( double af ) {
 }
 
 inline double _psizam_f64_sqrt( double a ) {
-   float64_t ret = ::f64_sqrt( to_softfloat64(a) );
+   float64_t ret = canonicalize_nan(::f64_sqrt( to_softfloat64(a) ));
    return from_softfloat64(ret);
 }
 
