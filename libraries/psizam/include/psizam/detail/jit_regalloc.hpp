@@ -361,7 +361,13 @@ namespace psizam::detail {
          bool has_calls = false;
          for (uint32_t i = 0; i < func.inst_count; ++i) {
             auto op = func.insts[i].opcode;
-            if (op == ir_op::call || op == ir_op::call_indirect ||
+            // br and br_if inline BLR to __psizam_eh_leave when crossing
+            // try_table scopes (count is encoded in inst.dest >> 16).
+            bool inline_eh_leave =
+               (op == ir_op::br || op == ir_op::br_if)
+               && (func.insts[i].dest >> 16) != 0;
+            if (inline_eh_leave ||
+                op == ir_op::call || op == ir_op::call_indirect ||
                 op == ir_op::memory_grow || op == ir_op::memory_size ||
                 // Bulk memory / table ops call native helpers via BLR
                 op == ir_op::memory_fill || op == ir_op::memory_copy ||
