@@ -421,8 +421,13 @@ namespace psizam::detail {
             {
                jit_scratch_allocator opt_scratch(_opt_scratch_alloc);
                jit_optimizer::optimize(*_func, opt_scratch);
-               jit_regalloc::compute_live_intervals(*_func, opt_scratch);
-               jit_regalloc::allocate_registers(*_func);
+               // Skip regalloc for functions that use exception handling.
+               // Regalloc's interaction with try_table/setjmp/longjmp corrupts
+               // live vregs on the catch path — see KNOWN_ISSUES.md.
+               if (_func->eh_data_count == 0) {
+                  jit_regalloc::compute_live_intervals(*_func, opt_scratch);
+                  jit_regalloc::allocate_registers(*_func);
+               }
                _codegen->compile_function(*_func, body);
             }
             _ir_alloc._offset = _post_array_offset;
@@ -3334,8 +3339,11 @@ namespace psizam::detail {
                {
                   jit_scratch_allocator scratch(ws.opt_scratch_alloc);
                   jit_optimizer::optimize(func, scratch);
-                  jit_regalloc::compute_live_intervals(func, scratch);
-                  jit_regalloc::allocate_registers(func);
+                  // Skip regalloc for EH-using functions (see serial path).
+                  if (func.eh_data_count == 0) {
+                     jit_regalloc::compute_live_intervals(func, scratch);
+                     jit_regalloc::allocate_registers(func);
+                  }
                }
                ws.codegen->compile_function(func, _mod.code[func_idx]);
 
