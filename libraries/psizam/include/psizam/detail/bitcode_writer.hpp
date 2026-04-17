@@ -102,7 +102,13 @@ namespace psizam::detail {
          auto& instr = append_instr(throw_ref_t{});
          instr.data = 0;
       }
-      void emit_eh_leave() {} // interpreter handles EH in interpret_visitor
+      void emit_eh_leave() {
+         // Emit a delegate_ instruction to tell the interpreter to pop the
+         // eh_frame when a try_table body completes without throwing.
+         // Without this, stale handlers remain active and incorrectly catch
+         // exceptions thrown after the try_table has exited.
+         append_instr(delegate_t{});
+      }
 
       struct br_table_parser;
       friend struct br_table_parser;

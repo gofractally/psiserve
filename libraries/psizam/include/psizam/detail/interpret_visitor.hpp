@@ -3108,6 +3108,15 @@ namespace psizam::detail {
 
       // v1 legacy: delegate during normal flow — acts as end
       [[gnu::always_inline]] inline void operator()(const delegate_t& op) {
+         // Pop the eh_frame for a try_table whose body completed without
+         // throwing.  The bitcode_writer emits this instruction via
+         // emit_eh_leave() just before the try_table's end label.
+         if (context.has_eh_frames()) {
+            auto& frame = context.current_eh_frame();
+            uint32_t trim_catches = frame.first_catch;
+            context.pop_eh_frame();
+            context.trim_eh_catches(trim_catches);
+         }
          context.inc_pc();
       }
 
