@@ -1677,13 +1677,23 @@ namespace psizam::detail {
 
                   uint32_t try_depth = op_stack.depth();
 
-                  // Compute depth_change and payload_count for each catch clause.
-                  // Per WASM spec: catch clause labels are resolved relative to the
-                  // ENCLOSING scope, not the try_table itself (label 0 = surrounding
-                  // block, unlike br where label 0 = innermost block). So we resolve
-                  // labels BEFORE pushing try_table onto pc_stack.
+                  // Push try_table onto pc_stack BEFORE resolving labels.
+                  // try_table catch labels use the same scoping as br: label 0 =
+                  // the try_table itself, label 1 = next enclosing block, etc.
+                  pc_element_t elem{};
+                  elem.operand_depth = try_depth;
+                  elem.expected_result = single_type;
+                  elem.label_result = single_type;
+                  elem.is_if = false;
+                  elem.is_try_table = true;
+                  elem.relocations = std::vector<branch_t>{};
+                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
+                  elem.block_params = bp;
+                  pc_stack.push_back(std::move(elem));
+
+                  // Compute depth_change and payload_count for each catch clause
                   for (uint32_t i = 0; i < num_catches; ++i) {
-                     // Target block for this catch clause (resolved from enclosing scope)
+                     // Target block for this catch clause
                      PSIZAM_ASSERT(clauses[i].label < pc_stack.size(), wasm_parse_exception, "catch label out of range");
                      auto& target = pc_stack[pc_stack.size() - 1 - clauses[i].label];
                      clauses[i].depth_change = try_depth - target.operand_depth;
@@ -1709,23 +1719,10 @@ namespace psizam::detail {
 
                   auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses);
 
-                  // Register catch clause PCs for branch target relocation.
-                  // Labels resolved from enclosing scope (before try_table push).
+                  // Register catch clause PCs for branch target relocation
                   for (uint32_t i = 0; i < num_catches; ++i) {
                      handle_branch_target(clauses[i].label, clause_pcs[i]);
                   }
-
-                  // NOW push try_table onto pc_stack (after catch labels resolved)
-                  pc_element_t elem{};
-                  elem.operand_depth = try_depth;
-                  elem.expected_result = single_type;
-                  elem.label_result = single_type;
-                  elem.is_if = false;
-                  elem.is_try_table = true;
-                  elem.relocations = std::vector<branch_t>{};
-                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
-                  elem.block_params = bp;
-                  pc_stack.push_back(std::move(elem));
 
                   op_stack.push_scope();
                   // Push params back inside the try_table scope
