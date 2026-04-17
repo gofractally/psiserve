@@ -1731,6 +1731,12 @@ namespace psizam::detail {
                      }
                   }
 
+                  // Capture depth BEFORE popping params — at runtime the params
+                  // are still on the operand stack when the try_table handler reads
+                  // current_operand_depth(), so catch clause depth_change must be
+                  // computed against the full (pre-pop) depth.
+                  uint32_t catch_try_depth = op_stack.depth();
+
                   // Pop params from outer stack (for multi-value blocks)
                   for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
                      op_stack.pop(bp[i]);
@@ -1747,7 +1753,7 @@ namespace psizam::detail {
                      // Target block for this catch clause (enclosing scope)
                      PSIZAM_ASSERT(clauses[i].label < pc_stack.size(), wasm_parse_exception, "catch label out of range");
                      auto& target = pc_stack[pc_stack.size() - 1 - clauses[i].label];
-                     clauses[i].depth_change = try_depth - target.operand_depth;
+                     clauses[i].depth_change = catch_try_depth - target.operand_depth;
 
                      // Payload count depends on catch kind
                      switch (clauses[i].kind) {
