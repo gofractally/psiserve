@@ -5628,17 +5628,27 @@ namespace psizam::detail {
 
       // Call a trapping trunc function: uint64_t fn(uint64_t).
       // Pops float value from x86 stack, calls fn, pushes int result.
+      //
+      // emit_c_call's save/restore captures rdi AFTER the caller clobbered it
+      // with the arg, so on return rdi holds the arg value (not ctx). We save
+      // ctx ourselves first and restore after — subsequent runtime helpers
+      // (eh_leave, globals, etc.) need rdi = ctx.
       void emit_trunc_call(uint64_t (*fn)(uint64_t), reloc_symbol sym = reloc_symbol::unknown) {
-         this->emit_pop_raw(rdi);         // float bits → arg0 (overwrites context, saved below)
+         this->emit_pop_raw(rax);         // float bits (temporarily in rax)
+         this->emit_push_raw(rdi);        // save ctx
+         this->emit_mov(rax, rdi);        // arg0 = float bits
          emit_c_call(fn, sym);
+         this->emit_pop_raw(rdi);         // restore ctx
          this->emit_push_raw(rax);        // result
       }
 
       // Register-mode: load src vreg, call trunc fn, store dest vreg.
       void emit_trunc_call_reg(const ir_inst& inst, uint64_t (*fn)(uint64_t), reloc_symbol sym = reloc_symbol::unknown) {
          load_vreg_rax(inst.rr.src1);
+         this->emit_push_raw(rdi);        // save ctx before clobbering
          this->emit_mov(rax, rdi);        // arg0 = float bits
          emit_c_call(fn, sym);
+         this->emit_pop_raw(rdi);         // restore ctx
          store_rax_vreg(inst.dest);
       }
 
