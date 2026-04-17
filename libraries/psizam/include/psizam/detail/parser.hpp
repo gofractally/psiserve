@@ -1677,23 +1677,14 @@ namespace psizam::detail {
 
                   uint32_t try_depth = op_stack.depth();
 
-                  // Push try_table onto pc_stack BEFORE resolving labels.
-                  // try_table catch labels use the same scoping as br: label 0 =
-                  // the try_table itself, label 1 = next enclosing block, etc.
-                  pc_element_t elem{};
-                  elem.operand_depth = try_depth;
-                  elem.expected_result = single_type;
-                  elem.label_result = single_type;
-                  elem.is_if = false;
-                  elem.is_try_table = true;
-                  elem.relocations = std::vector<branch_t>{};
-                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
-                  elem.block_params = bp;
-                  pc_stack.push_back(std::move(elem));
-
-                  // Compute depth_change and payload_count for each catch clause
+                  // Compute depth_change and payload_count BEFORE pushing try_table.
+                  // Per the WASM spec, catch clause labels resolve from the ENCLOSING
+                  // scope — the try_table's own label is NOT in scope for its catch
+                  // clause targets. (The body code inside try_table does see it as
+                  // label 0, but catch labels are resolved at the try_table instruction
+                  // level, not inside the body.)
                   for (uint32_t i = 0; i < num_catches; ++i) {
-                     // Target block for this catch clause
+                     // Target block for this catch clause (enclosing scope)
                      PSIZAM_ASSERT(clauses[i].label < pc_stack.size(), wasm_parse_exception, "catch label out of range");
                      auto& target = pc_stack[pc_stack.size() - 1 - clauses[i].label];
                      clauses[i].depth_change = try_depth - target.operand_depth;
@@ -1720,9 +1711,22 @@ namespace psizam::detail {
                   auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses);
 
                   // Register catch clause PCs for branch target relocation
+                  // (still in enclosing scope — before try_table push)
                   for (uint32_t i = 0; i < num_catches; ++i) {
                      handle_branch_target(clauses[i].label, clause_pcs[i]);
                   }
+
+                  // NOW push try_table onto pc_stack (body code sees it as label 0)
+                  pc_element_t elem{};
+                  elem.operand_depth = try_depth;
+                  elem.expected_result = single_type;
+                  elem.label_result = single_type;
+                  elem.is_if = false;
+                  elem.is_try_table = true;
+                  elem.relocations = std::vector<branch_t>{};
+                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
+                  elem.block_params = bp;
+                  pc_stack.push_back(std::move(elem));
 
                   op_stack.push_scope();
                   // Push params back inside the try_table scope

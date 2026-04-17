@@ -80,7 +80,7 @@ EH_TEST_CASE("EH: simple throw and catch via try_table", "[eh]") {
       0x02, 0x7f,                // block (result i32) — $handler
       0x1f, 0x7f,                // try_table (result i32)
       0x01,                      //   1 catch clause
-      0x00, 0x00, 0x01,          //   catch tag=0 label=1
+      0x00, 0x00, 0x00,          //   catch tag=0 label=0 ($handler)
       0x41, 0x2a,                // i32.const 42
       0x08, 0x00,                // throw tag=0
       0x41, 0x00,                // i32.const 0 (unreachable fallthrough)
@@ -143,7 +143,7 @@ EH_TEST_CASE("EH: catch_all catches any exception", "[eh]") {
       0x02, 0x40,                // block $handler (void)
       0x1f, 0x40,                // try_table (void)
       0x01,                      //   1 clause
-      0x02, 0x01,                //   catch_all label=1
+      0x02, 0x00,                //   catch_all label=0 ($handler)
       0x41, 0x63,                // i32.const 99
       0x08, 0x00,                // throw tag=0
       0x0b,                      // end (try_table)
@@ -268,7 +268,7 @@ EH_TEST_CASE("EH: catch_tag_ref catches with payload and exnref", "[eh]") {
       0x02, 0x02,                // block (type 2) — result (i32, exnref)
       0x1f, 0x40,                // try_table (void)
       0x01,                      //   1 catch clause
-      0x01, 0x00, 0x01,          //   catch_ref tag=0 label=1
+      0x01, 0x00, 0x00,          //   catch_ref tag=0 label=0 ($handler)
       0x41, 0xcd, 0x00,          // i32.const 77 (LEB128)
       0x08, 0x00,                // throw tag=0
       0x0b,                      // end (try_table)
@@ -334,7 +334,7 @@ EH_TEST_CASE("EH: catch_all_ref catches with exnref", "[eh]") {
       0x02, 0x69,                // block $handler (result exnref)
       0x1f, 0x40,                // try_table (void)
       0x01,                      //   1 clause
-      0x03, 0x01,                //   catch_all_ref label=1
+      0x03, 0x00,                //   catch_all_ref label=0 ($handler)
       0x41, 0x37,                // i32.const 55
       0x08, 0x00,                // throw tag=0
       0x0b,                      // end (try_table)
@@ -406,11 +406,11 @@ EH_TEST_CASE("EH: throw_ref re-throws caught exception", "[eh]") {
       0x02, 0x7f,                // block $outer (result i32)
       0x1f, 0x7f,                // try_table (result i32)
       0x01,                      //   1 clause
-      0x00, 0x00, 0x01,          //   catch tag=0 label=1 (outer block)
+      0x00, 0x00, 0x00,          //   catch tag=0 label=0 ($outer)
       0x02, 0x69,                // block $inner (result exnref)
       0x1f, 0x40,                // try_table (void)
       0x01,                      //   1 clause
-      0x03, 0x01,                //   catch_all_ref label=1 (inner block)
+      0x03, 0x00,                //   catch_all_ref label=0 ($inner)
       0x41, 0xe3, 0x00,          // i32.const 99 (LEB128)
       0x08, 0x00,                // throw tag=0
       0x0b,                      // end (try_table inner)
@@ -495,9 +495,9 @@ EH_TEST_CASE("EH: multiple catch clauses select correct handler", "[eh]") {
       0x02, 0x7f,                // block $e0_handler (result i32)
       0x1f, 0x40,                // try_table (void)
       0x03,                      //   3 catch clauses
-      0x00, 0x00, 0x01,          //   catch tag=0 label=1 ($e0_handler)
-      0x00, 0x01, 0x02,          //   catch tag=1 label=2 ($e1_handler)
-      0x02, 0x03,                //   catch_all label=3 ($catch_all_handler)
+      0x00, 0x00, 0x00,          //   catch tag=0 label=0 ($e0_handler)
+      0x00, 0x01, 0x01,          //   catch tag=1 label=1 ($e1_handler)
+      0x02, 0x02,                //   catch_all label=2 ($catch_all_handler)
       0x42, 0xe4, 0x00,          // i64.const 100 (LEB128)
       0x08, 0x01,                // throw tag=1
       0x0b,                      // end (try_table)
@@ -590,9 +590,9 @@ EH_TEST_CASE("EH: nested try_table propagates to outer handler", "[eh]") {
       //
       // Structure:
       // block $outer (result i32)                   ;; pc_stack depth=1
-      //   try_table (result i32) (catch $e0 $outer) ;; pc_stack depth=2, label 1 = $outer
+      //   try_table (result i32) (catch $e0 $outer) ;; catch resolves from enclosing: label 0=$outer
       //     block $dummy (result i32)               ;; pc_stack depth=3
-      //       try_table (result i32) (catch $e1 $dummy) ;; pc_stack depth=4, label 1 = $dummy
+      //       try_table (result i32) (catch $e1 $dummy) ;; catch resolves from enclosing: label 0=$dummy
       //         throw $e0 (i32.const 42)
       //         i32.const 0
       //       end
@@ -600,8 +600,8 @@ EH_TEST_CASE("EH: nested try_table propagates to outer handler", "[eh]") {
       //   end
       // end
       //
-      // Labels from inner try_table: depth 0=inner_try, 1=$dummy, 2=outer_try, 3=$outer
-      // catch $e1 label=1 means branch to $dummy
+      // Catch labels resolve from enclosing scope (try_table not in scope for its own catch clauses)
+      // catch $e1 label=0 means branch to $dummy
 
       0x0a, 0x1e, 0x01,
       0x1c,                      // body size = 28
@@ -609,11 +609,11 @@ EH_TEST_CASE("EH: nested try_table propagates to outer handler", "[eh]") {
       0x02, 0x7f,                // block $outer (result i32)
       0x1f, 0x7f,                // try_table_outer (result i32)
       0x01,                      //   1 clause
-      0x00, 0x00, 0x01,          //   catch tag=0 label=1 ($outer)
+      0x00, 0x00, 0x00,          //   catch tag=0 label=0 ($outer)
       0x02, 0x7f,                // block $dummy (result i32)
       0x1f, 0x7f,                // try_table_inner (result i32)
       0x01,                      //   1 clause
-      0x00, 0x01, 0x01,          //   catch tag=1 label=1 ($dummy)
+      0x00, 0x01, 0x00,          //   catch tag=1 label=0 ($dummy)
       0x41, 0x2a,                // i32.const 42
       0x08, 0x00,                // throw tag=0
       0x41, 0x00,                // i32.const 0
@@ -678,7 +678,7 @@ EH_TEST_CASE("EH: try_table normal flow without exception", "[eh]") {
       0x02, 0x7f,                // block (result i32)
       0x1f, 0x7f,                // try_table (result i32)
       0x01,                      //   1 clause
-      0x00, 0x00, 0x01,          //   catch tag=0 label=1
+      0x00, 0x00, 0x00,          //   catch tag=0 label=0 ($handler)
       0x41, 0x2a,                // i32.const 42
       0x0b,                      // end (try_table)
       0x0b,                      // end (block)

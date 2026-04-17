@@ -2671,10 +2671,11 @@ namespace psizam::detail {
             // Emit mov instructions to copy payload to target block's merge vregs.
             // Per WASM spec, catch clause label 0 = enclosing scope (not the
             // try_table itself), so resolve against ctrl_stack directly.
-            // try_entry has NOT been pushed yet, so ctrl_stack[top] = enclosing scope.
+            // try_entry has NOT been pushed yet, so ctrl_stack_top-1 is the
+            // innermost enclosing block (same indexing as emit_br).
             ir_control_entry* target = nullptr;
-            if (clause.label <= _func->ctrl_stack_top) {
-               target = &_func->ctrl_stack[_func->ctrl_stack_top - clause.label];
+            if (clause.label < _func->ctrl_stack_top) {
+               target = &_func->ctrl_stack[_func->ctrl_stack_top - 1 - clause.label];
             }
             if (target && !target->is_loop) {
                uint32_t n = std::min<uint32_t>(
