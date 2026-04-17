@@ -6161,7 +6161,19 @@ namespace psizam::detail {
          }
       }
 
-      void emit_byte(uint8_t val) { *code++ = val; }
+      void grow_code_buffer(size_t needed = 0) {
+         size_t current_size = _code_end - _code_start;
+         size_t extra = std::max({needed, current_size, size_t(4096)});
+         auto* new_space = _allocator.alloc<unsigned char>(extra);
+         PSIZAM_ASSERT(new_space == _code_end, wasm_parse_exception,
+            "JIT code buffer grow: non-contiguous allocation");
+         _code_end += extra;
+      }
+
+      void emit_byte(uint8_t val) {
+         if (code >= _code_end) grow_code_buffer();
+         *code++ = val;
+      }
       void emit_bytes() {}
       template<class... T>
       void emit_bytes(uint8_t val0, T... vals) {
@@ -6170,14 +6182,30 @@ namespace psizam::detail {
       }
       void emit_operand(imm8 val) { emit_byte(static_cast<uint8_t>(val)); }
       void emit_operand(imm32 val) { emit_operand32(static_cast<uint32_t>(val)); }
-      void emit_operand16(uint16_t val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
-      void emit_operand32(uint32_t val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
-      void emit_operand64(uint64_t val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
-      void emit_operandf32(float val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
-      void emit_operandf64(double val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
+      void emit_operand16(uint16_t val) {
+         if (code + 2 > _code_end) grow_code_buffer();
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
+      void emit_operand32(uint32_t val) {
+         if (code + 4 > _code_end) grow_code_buffer();
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
+      void emit_operand64(uint64_t val) {
+         if (code + 8 > _code_end) grow_code_buffer();
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
+      void emit_operandf32(float val) {
+         if (code + 4 > _code_end) grow_code_buffer();
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
+      void emit_operandf64(double val) {
+         if (code + 8 > _code_end) grow_code_buffer();
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
       template<class T>
       void emit_operand_ptr(T* val) {
          // Always emit 8 bytes — target is x86_64 regardless of host pointer size
+         if (code + 8 > _code_end) grow_code_buffer();
          uint64_t ptr = reinterpret_cast<uintptr_t>(val);
          memcpy(code, &ptr, 8);
          code += 8;

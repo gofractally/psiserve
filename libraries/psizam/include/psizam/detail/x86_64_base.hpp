@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 namespace psizam::detail {
 
@@ -468,7 +469,16 @@ namespace psizam::detail {
       static constexpr auto VPBLENDVB = VEX<128, pp_66, mmmm_0F3A, 0>{0x4c};
 
       // ──────────────────── Low-level byte emission ────────────────────
-      void emit_byte(uint8_t val) { *code++ = val; }
+
+      // Derived classes may override ensure_code_space() to grow the buffer.
+      // Default: no-op (assumes sufficient pre-allocation).
+      void ensure_code_space(size_t /*bytes*/) {}
+
+      void emit_byte(uint8_t val) {
+         if constexpr (!std::is_void_v<Derived>)
+            static_cast<Derived*>(this)->ensure_code_space(1);
+         *code++ = val;
+      }
       void emit_bytes() {}
       template<class... T>
       void emit_bytes(uint8_t val0, T... vals) {
@@ -477,13 +487,37 @@ namespace psizam::detail {
       }
       void emit_operand(imm8 val) { emit_byte(static_cast<uint8_t>(val)); }
       void emit_operand(imm32 val) { emit_operand32(static_cast<uint32_t>(val)); }
-      void emit_operand16(uint16_t val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
-      void emit_operand32(uint32_t val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
-      void emit_operand64(uint64_t val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
-      void emit_operandf32(float val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
-      void emit_operandf64(double val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
+      void emit_operand16(uint16_t val) {
+         if constexpr (!std::is_void_v<Derived>)
+            static_cast<Derived*>(this)->ensure_code_space(2);
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
+      void emit_operand32(uint32_t val) {
+         if constexpr (!std::is_void_v<Derived>)
+            static_cast<Derived*>(this)->ensure_code_space(4);
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
+      void emit_operand64(uint64_t val) {
+         if constexpr (!std::is_void_v<Derived>)
+            static_cast<Derived*>(this)->ensure_code_space(8);
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
+      void emit_operandf32(float val) {
+         if constexpr (!std::is_void_v<Derived>)
+            static_cast<Derived*>(this)->ensure_code_space(4);
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
+      void emit_operandf64(double val) {
+         if constexpr (!std::is_void_v<Derived>)
+            static_cast<Derived*>(this)->ensure_code_space(8);
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
       template<class T>
-      void emit_operand_ptr(T* val) { memcpy(code, &val, sizeof(val)); code += sizeof(val); }
+      void emit_operand_ptr(T* val) {
+         if constexpr (!std::is_void_v<Derived>)
+            static_cast<Derived*>(this)->ensure_code_space(sizeof(val));
+         memcpy(code, &val, sizeof(val)); code += sizeof(val);
+      }
 
       // ──────────────────── REX prefix encoding ────────────────────
       void emit_REX_prefix(bool W, bool R, bool X, bool B) {

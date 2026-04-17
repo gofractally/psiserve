@@ -115,6 +115,7 @@
 namespace psizam::detail {
 
    class jit_codegen : public x86_64_base<jit_codegen> {
+      friend class x86_64_base<jit_codegen>;
       using base = x86_64_base<jit_codegen>;
       using base::code;
       using base::rax; using base::rcx; using base::rdx; using base::rbx;
@@ -235,11 +236,13 @@ namespace psizam::detail {
          // SysV ABI entry point
          auto* buf = _allocator.alloc<unsigned char>(256);
          code = buf;
+         _code_end = buf + 256;
          emit_sysv_abi_interface();
 
          // Error handlers
          buf = _allocator.alloc<unsigned char>(80);
          code = buf;
+         _code_end = buf + 80;
          fpe_handler = emit_error_handler(&on_fp_error, reloc_symbol::on_fp_error);
          call_indirect_handler = emit_error_handler(&on_call_indirect_error, reloc_symbol::on_call_indirect_error);
          type_error_handler = emit_error_handler(&on_type_error, reloc_symbol::on_type_error);
@@ -254,6 +257,7 @@ namespace psizam::detail {
             const std::size_t host_functions_size = 384 * num_imported;
             buf = _allocator.alloc<unsigned char>(host_functions_size);
             code = buf;
+            _code_end = buf + host_functions_size;
             for (uint32_t i = 0; i < num_imported; ++i) {
                start_function(code, i);
                emit_host_call(i);
@@ -332,6 +336,7 @@ namespace psizam::detail {
          auto* buf = _allocator.alloc<unsigned char>(est_size);
          auto* code_start = buf;
          code = buf;
+         _code_end = buf + est_size;
 
          start_function(code, func.func_index + _mod.get_imported_functions_size());
          emit_function_prologue(func);
@@ -349,9 +354,8 @@ namespace psizam::detail {
          body.jit_code_size = static_cast<uint32_t>(code - code_start);
 
          // Reclaim unused code buffer tail to keep code compact.
-         std::size_t used = static_cast<std::size_t>(code - code_start);
-         if (used < est_size) {
-            _allocator.reclaim(code, est_size - used);
+         if (code < _code_end) {
+            _allocator.reclaim(code, _code_end - code);
          }
 
          // scratch destructor reclaims all transient data from _scratch_alloc
@@ -6946,6 +6950,22 @@ namespace psizam::detail {
       static void on_call_indirect_error() { signal_throw<wasm_interpreter_exception>("call_indirect out of range"); }
       static void on_type_error() { signal_throw<wasm_interpreter_exception>("call_indirect incorrect function type"); }
       static void on_stack_overflow() { signal_throw<wasm_interpreter_exception>("stack overflow"); }
+
+      // ──────── Code buffer growth ────────
+      unsigned char* _code_end = nullptr;
+
+      void ensure_code_space(size_t bytes) {
+         if (code + bytes > _code_end) grow_code_buffer(bytes);
+      }
+
+      void grow_code_buffer(size_t needed = 0) {
+         size_t current_size = _code_end ? static_cast<size_t>(_code_end - code) : 0;
+         size_t extra = std::max({needed, current_size + 4096, size_t(4096)});
+         auto* new_space = _allocator.alloc<unsigned char>(extra);
+         PSIZAM_ASSERT(new_space == _code_end, wasm_parse_exception,
+            "JIT2 code buffer grow: non-contiguous allocation");
+         _code_end += extra;
+      }
 
       // ──────── State ────────
       growable_allocator& _allocator;        // code only (executable, permanent)

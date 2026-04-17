@@ -4171,11 +4171,21 @@ namespace psizam::detail {
       // Instruction emission helpers
       // ===================================================================
 
+      void grow_code_buffer(size_t needed = 0) {
+         size_t current_size = _code_end - _code_start;
+         size_t extra = std::max({needed, current_size, size_t(4096)});
+         auto* new_space = _allocator.alloc<unsigned char>(extra);
+         // growable_allocator is a bump allocator; the new allocation must be
+         // contiguous with the existing code buffer (no intervening allocs
+         // happen during function body compilation).
+         PSIZAM_ASSERT(new_space == _code_end, wasm_parse_exception,
+            "JIT code buffer grow: non-contiguous allocation");
+         _code_end += extra;
+      }
+
       void emit32(uint32_t instr) {
          if(code + 4 > _code_end) {
-            fprintf(stderr, "aarch64 JIT: code buffer overflow: used %ld, allocated %ld\n",
-                    (long)(code - _code_start), (long)(_code_end - _code_start));
-            assert(false && "code buffer overflow");
+            grow_code_buffer();
          }
          std::memcpy(code, &instr, 4);
          code += 4;
