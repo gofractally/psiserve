@@ -113,6 +113,13 @@ BACKEND_TEST_CASE( "Testing wasm <address_0_wasm>", "[address_0_wasm_tests]" ) {
    CHECK_THROWS_AS(bkend("env", "32_bad", UINT32_C(1)), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <address_1_wat>", "[address_1_wat_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "address.1.wat");
+   backend_t bkend( code, &wa );
+
+}
+
 BACKEND_TEST_CASE( "Testing wasm <address_2_wasm>", "[address_2_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "address.2.wasm");

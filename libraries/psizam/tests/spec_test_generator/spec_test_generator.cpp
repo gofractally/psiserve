@@ -1499,14 +1499,14 @@ void generate_tests(const map<string, vector<picojson::object>>& mappings, const
 
 void usage(const char* name) {
    std::cerr << "Usage:\n"
-             << "  " << name << " [json file created by wast2json]\n";
+             << "  " << name << " [json file created by wast2json] [wasm_dir]\n";
    std::exit(2);
 }
 
 int main(int argc, char** argv) {
    ifstream     ifs;
    stringstream ss;
-   if(argc != 2 || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
+   if((argc != 2 && argc != 3) || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
       usage(argc?argv[0]:"spec_test_generator");
    }
    ifs.open(argv[1]);
@@ -1536,14 +1536,18 @@ int main(int argc, char** argv) {
          }
       }
 
-   // Derive wasm directory from json file path (wasms are in the same directory)
+   // Wasm directory: prefer explicit 2nd argument, otherwise derive from json path
    string wasm_dir;
-   string json_path = argv[1];
-   auto slash = json_path.rfind('/');
-   if (slash != string::npos)
-      wasm_dir = json_path.substr(0, slash);
-   else
-      wasm_dir = ".";
+   if (argc == 3) {
+      wasm_dir = argv[2];
+   } else {
+      string json_path = argv[1];
+      auto slash = json_path.rfind('/');
+      if (slash != string::npos)
+         wasm_dir = json_path.substr(0, slash);
+      else
+         wasm_dir = ".";
+   }
 
    generate_tests(test_mappings, wasm_dir);
 }

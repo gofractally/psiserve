@@ -201,6 +201,8 @@ inline void register_spectest_imports() {
    registered = true;
    // spectest.table: funcref table with 10 elements (standard spectest module)
    spectest_rhf::add_table("spectest", "table", 10, psizam::types::funcref);
+   // spectest.memory: 1 page minimum, 2 pages maximum (standard spectest module)
+   spectest_rhf::add_memory("spectest", "memory", 1, 2, true);
    // spectest.global_i32: i32 global, value 666
    spectest_rhf::add_global("spectest", "global_i32", psizam::types::i32, 666);
    // spectest.global_i64: i64 global, value 666

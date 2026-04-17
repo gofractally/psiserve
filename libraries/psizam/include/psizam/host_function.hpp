@@ -753,6 +753,11 @@ namespace psizam {
          uint8_t  mutability = 0;
          uint64_t value = 0;
       };
+      struct host_memory_import {
+         uint32_t initial_pages;
+         uint32_t maximum_pages = 0;
+         bool     has_maximum = false;
+      };
 
       struct mappings {
          std::unordered_map<host_func_pair, uint32_t, host_func_pair_hash> named_mapping;
@@ -764,6 +769,7 @@ namespace psizam {
          size_t                                                            current_index = 0;
          std::unordered_map<host_func_pair, host_table_import, host_func_pair_hash>  table_imports;
          std::unordered_map<host_func_pair, host_global_import, host_func_pair_hash> global_imports;
+         std::unordered_map<host_func_pair, host_memory_import, host_func_pair_hash> memory_imports;
 
          template <auto F, typename R, typename Args, typename Preconditions>
          void add_mapping(const std::string& mod, const std::string& name) {
@@ -818,6 +824,11 @@ namespace psizam {
       static void add_global(const std::string& mod, const std::string& name,
                              uint8_t content_type, uint64_t value = 0, uint8_t mutability = 0) {
          mappings::get().global_imports[{mod, name}] = {content_type, mutability, value};
+      }
+
+      static void add_memory(const std::string& mod, const std::string& name,
+                             uint32_t initial_pages, uint32_t maximum_pages = 0, bool has_maximum = false) {
+         mappings::get().memory_imports[{mod, name}] = {initial_pages, maximum_pages, has_maximum};
       }
 
       static void resolve(module& mod) {
@@ -886,7 +897,27 @@ namespace psizam {
                   }
                   break;
                }
-               case external_kind::Memory:
+               case external_kind::Memory: {
+                  auto it = current_mappings.memory_imports.find({ mod_name, fn_name });
+                  if (it != current_mappings.memory_imports.end()) {
+                     uint32_t mem_idx = 0;
+                     uint32_t import_count = 0;
+                     for (uint32_t j = 0; j < mod.imports.size() && j <= i; j++) {
+                        if (mod.imports[j].kind == external_kind::Memory) {
+                           if (j == i) { mem_idx = import_count; break; }
+                           import_count++;
+                        }
+                     }
+                     if (mem_idx < mod.memories.size()) {
+                        mod.memories[mem_idx].limits.initial = it->second.initial_pages;
+                        if (it->second.has_maximum) {
+                           mod.memories[mem_idx].limits.maximum = it->second.maximum_pages;
+                           mod.memories[mem_idx].limits.flags   = true;
+                        }
+                     }
+                  }
+                  break;
+               }
                case external_kind::Tag:
                   break; // accepted but no host action needed
             }

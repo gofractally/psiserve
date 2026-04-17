@@ -97,6 +97,7 @@ BACKEND_TEST_CASE( "Testing wasm <loop_0_wasm>", "[loop_0_wasm_tests]" ) {
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "nesting", bit_cast<float>(UINT32_C(1088421888)), bit_cast<float>(UINT32_C(1120403456)))->to_f32()) == UINT32_C(1166601314));
    CHECK(bit_cast<uint32_t>(bkend.call_with_return("env", "nesting", bit_cast<float>(UINT32_C(1088421888)), bit_cast<float>(UINT32_C(1120534528)))->to_f32()) == UINT32_C(1159892992));
    CHECK(!bkend.call_with_return("env", "type-use"));
+   CHECK(bkend.call_with_return("env", "br-implicit-drop")->to_ui32() == UINT32_C(1));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <loop_12_wasm>", "[loop_12_wasm_tests]" ) {

@@ -52,7 +52,8 @@ BACKEND_TEST_CASE( "Testing wasm <func_ptrs_6_wasm>", "[func_ptrs_6_wasm_tests]"
 }
 
 BACKEND_TEST_CASE( "Testing wasm <func_ptrs_7_wasm>", "[func_ptrs_7_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "func_ptrs.7.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }

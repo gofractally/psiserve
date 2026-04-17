@@ -20,15 +20,34 @@ endif()
 
 set(SPEC_TESTS)
 
+# wast2json features: match --enable-all *except* --enable-compact-imports, a
+# WABT-specific non-standard multi-import encoding that psizam's parser does
+# not accept. Newer testsuite .wast files rely on most of the other features.
+set(WAST2JSON_FEATURES
+   --enable-exceptions
+   --enable-threads
+   --enable-function-references
+   --enable-tail-call
+   --enable-annotations
+   --enable-code-metadata
+   --enable-gc
+   --enable-memory64
+   --enable-multi-memory
+   --enable-extended-const
+   --enable-relaxed-simd
+   --enable-custom-page-sizes
+   --enable-wide-arithmetic
+)
+
 macro(add_spec_test_impl name source)
    list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp)
    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
-      COMMAND ${WAST2JSON} --no-check ${source} -o ${name}.json && mv ${name}.json ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
+      COMMAND ${WAST2JSON} ${WAST2JSON_FEATURES} --no-check ${source} -o ${name}.json && mv ${name}.json ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
       WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
       DEPENDS ${source}
    )
    add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
-      COMMAND spec_test_generator ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json > ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
+      COMMAND spec_test_generator ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json ${CMAKE_BINARY_DIR}/wasms > ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
       DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json spec_test_generator)
 endmacro()
 
@@ -62,7 +81,7 @@ foreach(testcase return_call return_call_indirect)
    list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${testcase}_tests.cpp)
    if(EXISTS ${TAIL_CALL_WAST_DIR}/${testcase}.wast)
       add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
-         COMMAND ${WAST2JSON} --enable-tail-call --no-check ${TAIL_CALL_WAST_DIR}/${testcase}.wast -o ${testcase}.json
+         COMMAND ${WAST2JSON} ${WAST2JSON_FEATURES} --no-check ${TAIL_CALL_WAST_DIR}/${testcase}.wast -o ${testcase}.json
          COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
          DEPENDS ${TAIL_CALL_WAST_DIR}/${testcase}.wast
@@ -135,7 +154,7 @@ foreach(testcase ${SIMD_TESTS})
    endif()
    if(_simd_wast)
       add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
-         COMMAND ${WAST2JSON} --no-check ${_simd_extra_flags} ${_simd_wast} -o ${testcase}.json
+         COMMAND ${WAST2JSON} ${WAST2JSON_FEATURES} --no-check ${_simd_extra_flags} ${_simd_wast} -o ${testcase}.json
          COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
          DEPENDS ${_simd_wast}

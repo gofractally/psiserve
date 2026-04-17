@@ -592,7 +592,7 @@ namespace psizam::detail {
          PSIZAM_ASSERT(tt.limits.initial <= get_max_table_elements(_options), wasm_parse_exception, "table size exceeds limit");
       }
 
-      void parse_global_variable(wasm_code_ptr& code, global_variable& gv) {
+      void parse_global_variable(wasm_code_ptr& code, global_variable& gv, uint32_t idx) {
          uint8_t ct           = *code++;
          gv.type.content_type = ct;
          PSIZAM_ASSERT(ct == types::i32 || ct == types::i64 || ct == types::f32 || ct == types::f64 ||
@@ -603,7 +603,10 @@ namespace psizam::detail {
          gv.type.mutability = parse_varuint1(code);
          if(gv.type.mutability)
             on_mutable_global(ct);
-         parse_init_expr(code, gv.init, ct);
+         // Global init may reference any already-parsed global (indices < idx).
+         // This supports both imported-global references and forward-compat
+         // with the extended-const proposal (which allows any immutable global).
+         parse_init_expr(code, gv.init, ct, idx);
       }
 
       void parse_memory_type(wasm_code_ptr& code, memory_type& mt) {
@@ -753,7 +756,7 @@ namespace psizam::detail {
             es.index = 0;
          }
          if ((flags & 1) == 0) {
-            parse_init_expr(code, es.offset, types::i32);
+            parse_init_expr(code, es.offset, types::i32, _mod->globals.size());
             es.mode = elem_mode::active;
             PSIZAM_ASSERT(es.index < _mod->tables.size(), wasm_parse_exception, "wrong table in elem");
             tt = &_mod->tables[es.index];
@@ -832,7 +835,12 @@ namespace psizam::detail {
          PSIZAM_ASSERT((*code++) == opcodes::end, wasm_parse_exception, "no end op found");
       }
 
-      void parse_init_expr(wasm_code_ptr& code, init_expr& ie, uint8_t type) {
+      // max_global_idx: references via global.get are allowed only for indices
+      // strictly less than this. For a global's own init expression, this is the
+      // global's own index (so it may reference prior globals). For data/elem
+      // segment init expressions, this is _mod->globals.size() (all globals
+      // are fully parsed by that point).
+      void parse_init_expr(wasm_code_ptr& code, init_expr& ie, uint8_t type, uint32_t max_global_idx) {
          auto* expr_start = code.raw();
          ie.opcode = *code++;
          switch (ie.opcode) {
@@ -869,7 +877,7 @@ namespace psizam::detail {
             }
             case opcodes::get_global: {
                uint32_t global_idx = parse_varuint32(code);
-               PSIZAM_ASSERT(global_idx < _mod->num_imported_globals, wasm_parse_exception, "global.get in init must reference an imported global");
+               PSIZAM_ASSERT(global_idx < max_global_idx, wasm_parse_exception, "global.get in init must reference an already-declared global");
                PSIZAM_ASSERT(!_mod->globals[global_idx].type.mutability, wasm_parse_exception, "global.get in init must reference an immutable global");
                ie.value.i32 = global_idx;
                break;
@@ -910,7 +918,7 @@ namespace psizam::detail {
                case opcodes::i64_const: parse_varint64(code); ++stack_depth; break;
                case opcodes::get_global: {
                   uint32_t global_idx = parse_varuint32(code);
-                  PSIZAM_ASSERT(global_idx < _mod->num_imported_globals, wasm_parse_exception, "global.get in init must reference an imported global");
+                  PSIZAM_ASSERT(global_idx < max_global_idx, wasm_parse_exception, "global.get in init must reference an already-declared global");
                   PSIZAM_ASSERT(!_mod->globals[global_idx].type.mutability, wasm_parse_exception, "global.get in init must reference an immutable global");
                   ++stack_depth;
                   break;
@@ -2930,7 +2938,7 @@ namespace psizam::detail {
          if (ds.index == 0 || !get_enable_bulk_memory(_options))
          {
             ds.passive = false;
-            parse_init_expr(code, ds.offset, types::i32);
+            parse_init_expr(code, ds.offset, types::i32, _mod->globals.size());
             PSIZAM_ASSERT(_mod->memories.size() != 0, wasm_parse_exception, "data requires memory");
          }
          else if (ds.index == 1)
@@ -2942,7 +2950,7 @@ namespace psizam::detail {
          {
             ds.passive = false;
             ds.index = parse_varuint32(code);
-            parse_init_expr(code, ds.offset, types::i32);
+            parse_init_expr(code, ds.offset, types::i32, _mod->globals.size());
             PSIZAM_ASSERT(ds.index < _mod->memories.size(), wasm_parse_exception, "Data uses nonexistent memory");
          }
          else
@@ -3030,7 +3038,7 @@ namespace psizam::detail {
          PSIZAM_ASSERT(count <= code.bounds() - code.offset(), wasm_parse_exception, "element count exceeds remaining section bytes");
          auto base = elems.size(); // imported globals already present
          elems.resize(base + count);
-         for (size_t i = 0; i < count; i++) { parse_global_variable(code, elems.at(base + i)); }
+         for (size_t i = 0; i < count; i++) { parse_global_variable(code, elems.at(base + i), static_cast<uint32_t>(base + i)); }
       }
       template <uint8_t id>
       requires (id == section_id::export_section)

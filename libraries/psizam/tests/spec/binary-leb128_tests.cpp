@@ -30,21 +30,24 @@ BACKEND_TEST_CASE( "Testing wasm <binary-leb128_1_wasm>", "[binary-leb128_1_wasm
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_10_wasm>", "[binary-leb128_10_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.10.wasm");
    backend_t bkend( code, &wa );
 
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_11_wasm>", "[binary-leb128_11_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.11.wasm");
    backend_t bkend( code, &wa );
 
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_12_wasm>", "[binary-leb128_12_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.12.wasm");
    backend_t bkend( code, &wa );
 
@@ -197,19 +200,22 @@ BACKEND_TEST_CASE( "Testing wasm <binary-leb128_32_wasm>", "[binary-leb128_32_wa
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_33_wasm>", "[binary-leb128_33_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.33.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_34_wasm>", "[binary-leb128_34_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.34.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_35_wasm>", "[binary-leb128_35_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.35.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
@@ -361,13 +367,15 @@ BACKEND_TEST_CASE( "Testing wasm <binary-leb128_57_wasm>", "[binary-leb128_57_wa
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_58_wasm>", "[binary-leb128_58_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.58.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_59_wasm>", "[binary-leb128_59_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.59.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
@@ -380,7 +388,8 @@ BACKEND_TEST_CASE( "Testing wasm <binary-leb128_6_wasm>", "[binary-leb128_6_wasm
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary-leb128_60_wasm>", "[binary-leb128_60_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary-leb128.60.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
