@@ -50,7 +50,10 @@ namespace psizam::detail {
          PSIZAM_ASSERT(index <= _index, wasm_interpreter_exception, "invalid stack index");
          _store[index] = el;
       }
-      void  eat(uint32_t index) { _index = index; }
+      void  eat(uint32_t index) {
+         PSIZAM_ASSERT(index <= _store.size(), wasm_interpreter_exception, "operand stack eat: index out of bounds");
+         _index = index;
+      }
       // compact the last element to the element pointed to by index
       void compact(uint32_t index) {
          _store[index] = _store[_index-1];

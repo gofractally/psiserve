@@ -1695,11 +1695,40 @@ namespace psizam::detail {
                      clauses[i].label = parse_varuint32(code);
                      PSIZAM_ASSERT(clauses[i].label < pc_stack.size(), wasm_parse_exception, "invalid catch label");
 
-                     // Validate that the catch label's expected types match:
-                     // catch/catch_ref: label expects tag payload types (+ exnref for _ref)
-                     // catch_all: label expects nothing
-                     // catch_all_ref: label expects exnref
-                     // (Full type validation deferred to a later pass — just validate label is in range)
+                     // Validate that the catch clause's value types match the target label's expected types.
+                     // catch(tag): pushes tag param types → label must expect those types
+                     // catch_ref(tag): pushes tag param types + exnref → label must expect those
+                     // catch_all: pushes nothing → label must expect nothing
+                     // catch_all_ref: pushes exnref → label must expect exnref
+                     {
+                        auto& target = pc_stack[pc_stack.size() - 1 - clauses[i].label];
+                        // Build expected catch value types
+                        std::vector<uint8_t> catch_types;
+                        if (clauses[i].kind == catch_kind::catch_tag || clauses[i].kind == catch_kind::catch_tag_ref) {
+                           const auto& tag_ft = _mod->types[_mod->tags[clauses[i].tag_index].type_index];
+                           catch_types.assign(tag_ft.param_types.begin(), tag_ft.param_types.end());
+                        }
+                        if (clauses[i].kind == catch_kind::catch_tag_ref || clauses[i].kind == catch_kind::catch_all_ref) {
+                           catch_types.push_back(types::exnref);
+                        }
+                        // Get label's expected types
+                        if (!target.label_results.empty()) {
+                           PSIZAM_ASSERT(catch_types.size() == target.label_results.size(),
+                                         wasm_parse_exception, "type mismatch: catch clause arity doesn't match target label");
+                           for (size_t j = 0; j < catch_types.size(); ++j) {
+                              PSIZAM_ASSERT(catch_types[j] == target.label_results[j],
+                                            wasm_parse_exception, "type mismatch: catch clause type doesn't match target label");
+                           }
+                        } else if (target.label_result != types::pseudo) {
+                           PSIZAM_ASSERT(catch_types.size() == 1,
+                                         wasm_parse_exception, "type mismatch: catch clause arity doesn't match target label");
+                           PSIZAM_ASSERT(catch_types[0] == static_cast<uint8_t>(target.label_result),
+                                         wasm_parse_exception, "type mismatch: catch clause type doesn't match target label");
+                        } else {
+                           PSIZAM_ASSERT(catch_types.empty(),
+                                         wasm_parse_exception, "type mismatch: catch clause pushes values but target label expects none");
+                        }
+                     }
                   }
 
                   // Pop params from outer stack (for multi-value blocks)

@@ -1303,6 +1303,8 @@ namespace psizam::detail {
          while (_as.size() > depth) {
             const auto& af = _as.pop();
             _remaining_call_depth += af.frame_size;
+            // Restore the local variable base to the frame we're returning to
+            _last_op_index = af.last_op_index;
          }
       }
 
@@ -1474,9 +1476,19 @@ namespace psizam::detail {
          _state.as_index         = _as.size();
          _state.os_index         = get_operand_stack().size();
 
+         // Save EH state so it's restored on abnormal exit (trap/exception).
+         // Without this, try_table EH frames from a trapped function leak into
+         // subsequent calls and cause dispatch_exception to use stale handlers.
+         auto saved_eh_stack_size   = _eh_stack.size();
+         auto saved_eh_catches_size = _eh_catches.size();
+         auto saved_eh_exn_size     = _eh_exn_stack.size();
+
          auto cleanup = scope_guard([&]() {
             get_operand_stack().eat(_state.os_index);
             _as.eat(_state.as_index);
+            _eh_stack.resize(saved_eh_stack_size);
+            _eh_catches.resize(saved_eh_catches_size);
+            _eh_exn_stack.resize(saved_eh_exn_size);
             _state = saved_state;
 
             _last_op_index = last_last_op_index;

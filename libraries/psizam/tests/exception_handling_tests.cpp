@@ -530,7 +530,7 @@ EH_TEST_CASE("EH: multiple catch clauses select correct handler", "[eh]") {
  *   (type $t1 (func (param i64)))          ;; type 1: (i64) -> ()
  *   (type $t2 (func (result i32)))         ;; type 2: () -> (i32)
  *   (tag $e0 (type $t0))                   ;; tag 0: i32
- *   (tag $e1 (type $t1))                   ;; tag 1: i64
+ *   (tag $e1 (type $t0))                   ;; tag 1: i32 (same type as e0)
  *   (func (export "nested") (result i32)
  *     (block $outer_catch (result i32)     ;; catches e0 payload
  *       (try_table (result i32) (catch $e0 $outer_catch)
@@ -565,7 +565,7 @@ EH_TEST_CASE("EH: nested try_table propagates to outer handler", "[eh]") {
       // Tag section: 2 tags
       0x0d, 0x05, 0x02,
       0x00, 0x00,               // tag 0: type 0
-      0x00, 0x01,               // tag 1: type 1
+      0x00, 0x00,               // tag 1: type 0 (i32 param, must match $dummy result type)
 
       // Export section: "nested"
       0x07, 0x0a, 0x01,
