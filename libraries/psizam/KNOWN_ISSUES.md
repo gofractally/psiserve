@@ -5,7 +5,7 @@
 | Platform | Failures | Total | Pass Rate |
 |----------|----------|-------|-----------|
 | macOS aarch64 | 104 | 13,258 | 99.2% |
-| Linux x86_64 | 137 | 13,186 | 99.0% |
+| Linux x86_64 | 135 | 13,186 | 99.0% |
 
 The difference is entirely jit2 backend bugs (x86_64 vs aarch64 codegen).
 
@@ -36,7 +36,7 @@ exist in the current tail-call proposal `.wast`:
 
 Fix: regenerate from current `.wast` with `wast2json --enable-tail-call`.
 
-### jit2 backend bugs (x86_64: 30, aarch64: 5)
+### jit2 backend bugs (x86_64: 28, aarch64: 5)
 
 All pass on interpreter and jit. jit2 is experimental.
 
@@ -49,7 +49,7 @@ All pass on interpreter and jit. jit2 is experimental.
 - **table.grow** (7): Returns 0 instead of -1 for invalid operations
 - **table.size** (1): Always returns 0
 - **host function results** (1): Memory out-of-bounds on reference-typed returns
-- **simd_const_385, simd_const_387** (2): Segfault in SIMD code
+- ~~**simd_const_385, simd_const_387** (2): Segfault in SIMD code~~ — fixed: jit2 regalloc `ir_op::arg` needs v128 type to push 16 bytes for v128 params (ir_writer.hpp set `arg.type = ft.param_types[i]`)
 - **conversions_0, traps_2** (2): Segfault
 - **Host function / call depth / reentry** (5): Various segfaults
 - **relaxed_madd_nmadd** (2), **relaxed_dot_product** (1): Wrong results

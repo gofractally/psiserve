@@ -1066,7 +1066,7 @@ namespace psizam::detail {
             for (uint32_t i = 0; i < nparams; ++i) {
                ir_inst arg{};
                arg.opcode = ir_op::arg;
-               arg.type = types::pseudo;
+               arg.type = ft.param_types[i];
                arg.flags = IR_NONE;
                arg.dest = ir_vreg_none;
                arg.rr.src1 = param_vregs[i];
@@ -1228,7 +1228,7 @@ namespace psizam::detail {
             for (uint32_t i = 0; i < nparams; ++i) {
                ir_inst arg{};
                arg.opcode = ir_op::arg;
-               arg.type = types::pseudo;
+               arg.type = ft.param_types[i];
                arg.flags = IR_NONE;
                arg.dest = ir_vreg_none;
                arg.rr.src1 = param_vregs[i];
@@ -1305,7 +1305,7 @@ namespace psizam::detail {
             for (uint32_t i = 0; i < nparams; ++i) {
                ir_inst arg{};
                arg.opcode = ir_op::arg;
-               arg.type = types::pseudo;
+               arg.type = ft.param_types[i];
                arg.flags = IR_NONE;
                arg.dest = ir_vreg_none;
                arg.rr.src1 = param_vregs[i];
@@ -1337,7 +1337,7 @@ namespace psizam::detail {
             for (uint32_t i = 0; i < nparams; ++i) {
                ir_inst arg{};
                arg.opcode = ir_op::arg;
-               arg.type = types::pseudo;
+               arg.type = ft.param_types[i];
                arg.flags = IR_NONE;
                arg.dest = ir_vreg_none;
                arg.rr.src1 = param_vregs[i];
