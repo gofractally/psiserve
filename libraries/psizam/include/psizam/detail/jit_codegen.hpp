@@ -3031,10 +3031,18 @@ namespace psizam::detail {
                this->emit_sub(16, rsp);
                this->emit_vmovdqu(xmm0, *rsp);
             }
-            // Bitselect has 3 v128 inputs; mask vreg stored in addr field
-            if (sub == simd_sub::v128_bitselect) {
-               uint32_t mask_vreg = inst.simd.addr;
-               if (mask_vreg != ir_vreg_none && load_v128_to_xmm(static_cast<uint16_t>(mask_vreg), xmm0)) {
+            // Ternary v128 ops: 3rd v128 input vreg stored in addr field.
+            // Covers v128_bitselect and relaxed fused-multiply / dot-product ops.
+            bool is_ternop =
+                sub == simd_sub::v128_bitselect
+             || sub == simd_sub::f32x4_relaxed_madd
+             || sub == simd_sub::f32x4_relaxed_nmadd
+             || sub == simd_sub::f64x2_relaxed_madd
+             || sub == simd_sub::f64x2_relaxed_nmadd
+             || sub == simd_sub::i32x4_relaxed_dot_i8x16_i7x16_add_s;
+            if (is_ternop) {
+               uint32_t src3_vreg = inst.simd.addr;
+               if (src3_vreg != ir_vreg_none && load_v128_to_xmm(static_cast<uint16_t>(src3_vreg), xmm0)) {
                   this->emit_sub(16, rsp);
                   this->emit_vmovdqu(xmm0, *rsp);
                }
