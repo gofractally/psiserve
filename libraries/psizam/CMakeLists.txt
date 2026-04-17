@@ -56,6 +56,8 @@ cmake_dependent_option(PSIZAM_ENABLE_SPEC_TESTS
    "Enable wasm spec tests" ON "PSIZAM_ENABLE_TESTS" ON)
 cmake_dependent_option(PSIZAM_ENABLE_FUZZ_TESTS
    "Enable fuzz testing" OFF "PSIZAM_ENABLE_TESTS" ON)
+option(PSIZAM_ENABLE_WASM3
+   "Build wasm3 reference interpreter for differential fuzzing" OFF)
 
 # ── Build utilities (sanitizers, profiling) ────────────────────────────────────
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/modules")

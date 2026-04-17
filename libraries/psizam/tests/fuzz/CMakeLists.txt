@@ -23,6 +23,10 @@ if(PSIZAM_ENABLE_LLVM)
    target_link_libraries(psizam-fuzz-diff PRIVATE psizam-llvm)
    target_compile_definitions(psizam-fuzz-diff PRIVATE PSIZAM_ENABLE_LLVM_BACKEND)
 endif()
+if(PSIZAM_ENABLE_WASM3)
+   target_link_libraries(psizam-fuzz-diff PRIVATE m3)
+   target_compile_definitions(psizam-fuzz-diff PRIVATE PSIZAM_ENABLE_WASM3)
+endif()
 
 # Quick smoke test: 20 iterations
 add_test(NAME psizam_fuzz_diff_smoke

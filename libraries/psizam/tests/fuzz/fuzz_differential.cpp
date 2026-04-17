@@ -1,4 +1,4 @@
-// Differential fuzzer for psizam: interpreter vs JIT vs JIT2 vs LLVM
+// Differential fuzzer for psizam: interpreter vs JIT vs JIT2 vs LLVM vs wasm3
 //
 // Usage:
 //   # Generate and test random WASM modules continuously:
@@ -12,6 +12,13 @@
 
 #include <psizam/backend.hpp>
 #include <psizam/detail/watchdog.hpp>
+
+#ifdef PSIZAM_ENABLE_WASM3
+extern "C" {
+#include <wasm3.h>
+#include <m3_env.h>
+}
+#endif
 
 #include <chrono>
 #include <cstdio>
@@ -90,6 +97,7 @@ struct run_result {
    bool has_start;
    std::string what;
    std::vector<return_value> returns;  // one per exported function that completed
+   std::vector<std::string> export_names;  // names of exported functions (in order called)
 };
 
 template <typename Impl>
@@ -121,6 +129,7 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
             if (mod.exports[i].kind == external_kind::Function) {
                std::string s{ (const char*)mod.exports[i].field_str.data(),
                               mod.exports[i].field_str.size() };
+               r.export_names.push_back(s);
                auto ret = ctx.execute(nullptr, detail::interpret_visitor(ctx), s);
                return_value rv{};
                if (ret) {
@@ -175,6 +184,140 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
    return r;
 }
 
+#ifdef PSIZAM_ENABLE_WASM3
+// Map wasm3 error strings to outcome codes matching psizam's convention
+static int wasm3_map_error(M3Result res) {
+   if (!res) return 0;
+   if (strstr(res, "out of bounds memory") || strstr(res, "stack overflow"))
+      return 2; // memory trap
+   if (strstr(res, "[trap]"))
+      return 3; // interpreter trap
+   return 1;    // parse/link/compile error
+}
+
+static run_result run_wasm3(const std::vector<uint8_t>& wasm_bytes,
+                            const std::vector<std::string>& export_names) {
+   run_result r{};
+   IM3Environment env = m3_NewEnvironment();
+   if (!env) { r.outcome = 1; r.what = "m3_NewEnvironment failed"; return r; }
+
+   IM3Runtime runtime = m3_NewRuntime(env, 64 * 1024, nullptr);
+   if (!runtime) { m3_FreeEnvironment(env); r.outcome = 1; r.what = "m3_NewRuntime failed"; return r; }
+
+   IM3Module module = nullptr;
+   M3Result res = m3_ParseModule(env, &module, wasm_bytes.data(), static_cast<uint32_t>(wasm_bytes.size()));
+   if (res) {
+      r.outcome = 1;
+      r.what = res;
+      m3_FreeRuntime(runtime);
+      m3_FreeEnvironment(env);
+      return r;
+   }
+
+   res = m3_LoadModule(runtime, module);
+   if (res) {
+      r.outcome = 1;
+      r.what = res;
+      m3_FreeModule(module);
+      m3_FreeRuntime(runtime);
+      m3_FreeEnvironment(env);
+      return r;
+   }
+   // module is now owned by runtime
+
+   // Run start function if present
+   r.has_start = (module->startFunction >= 0);
+   if (r.has_start) {
+      res = m3_RunStart(module);
+      if (res) {
+         r.outcome = wasm3_map_error(res);
+         r.what = res;
+         m3_FreeRuntime(runtime);
+         m3_FreeEnvironment(env);
+         return r;
+      }
+   }
+
+   // Call exported functions in the same order as psizam (by export name)
+   for (auto& name : export_names) {
+      IM3Function fn = nullptr;
+      res = m3_FindFunction(&fn, runtime, name.c_str());
+      if (res) {
+         r.outcome = 1;
+         r.what = res;
+         m3_FreeRuntime(runtime);
+         m3_FreeEnvironment(env);
+         return r;
+      }
+
+      // Call with zero-valued args (matching psizam behavior)
+      uint32_t num_args = m3_GetArgCount(fn);
+      std::vector<uint64_t> args(num_args, 0);
+      std::vector<const void*> arg_ptrs(num_args);
+      for (uint32_t i = 0; i < num_args; i++)
+         arg_ptrs[i] = &args[i];
+
+      res = m3_Call(fn, num_args, num_args ? arg_ptrs.data() : nullptr);
+      if (res) {
+         r.outcome = wasm3_map_error(res);
+         r.what = res;
+         m3_FreeRuntime(runtime);
+         m3_FreeEnvironment(env);
+         return r;
+      }
+
+      // Read return value
+      return_value rv{};
+      uint32_t num_rets = m3_GetRetCount(fn);
+      if (num_rets > 0) {
+         M3ValueType ret_type = m3_GetRetType(fn, 0);
+         switch (ret_type) {
+            case c_m3Type_i32: {
+               uint32_t val;
+               m3_GetResultsV(fn, &val);
+               rv.type = types::i32;
+               rv.bits = val;
+               break;
+            }
+            case c_m3Type_i64: {
+               uint64_t val;
+               m3_GetResultsV(fn, &val);
+               rv.type = types::i64;
+               rv.bits = val;
+               break;
+            }
+            case c_m3Type_f32: {
+               float val;
+               m3_GetResultsV(fn, &val);
+               rv.type = types::f32;
+               uint32_t bits;
+               memcpy(&bits, &val, 4);
+               rv.bits = bits;
+               break;
+            }
+            case c_m3Type_f64: {
+               double val;
+               m3_GetResultsV(fn, &val);
+               rv.type = types::f64;
+               uint64_t bits;
+               memcpy(&bits, &val, 8);
+               rv.bits = bits;
+               break;
+            }
+            default:
+               break;
+         }
+      }
+      r.returns.push_back(rv);
+   }
+
+   r.outcome = 0;
+   m3_FreeRuntime(runtime);
+   m3_FreeEnvironment(env);
+   return r;
+}
+#endif
+
 static const char* outcome_name(int o) {
    switch (o) {
       case 0: return "ok";
@@ -208,15 +351,33 @@ static const char* type_name(uint8_t t) {
    }
 }
 
+// Check if a float return value is NaN (by examining raw bits)
+static bool is_nan_value(const return_value& v) {
+   if (v.type == types::f32) {
+      uint32_t bits = static_cast<uint32_t>(v.bits);
+      return (bits & 0x7F800000u) == 0x7F800000u && (bits & 0x007FFFFFu) != 0;
+   }
+   if (v.type == types::f64) {
+      return (v.bits & 0x7FF0000000000000ull) == 0x7FF0000000000000ull &&
+             (v.bits & 0x000FFFFFFFFFFFFFull) != 0;
+   }
+   return false;
+}
+
 // Compare return values between two backends. Returns true if all match.
+// When nan_tolerant is true, NaN bit patterns are allowed to differ (both must be NaN though).
 static bool compare_returns(const char* source, const char* b1_name, const run_result& r1,
-                            const char* b2_name, const run_result& r2) {
+                            const char* b2_name, const run_result& r2,
+                            bool nan_tolerant = false) {
    if (r1.outcome != 0 || r2.outcome != 0) return true; // only compare successful runs
    size_t n = std::min(r1.returns.size(), r2.returns.size());
    for (size_t i = 0; i < n; i++) {
       auto& a = r1.returns[i];
       auto& b = r2.returns[i];
       if (a.type != b.type || a.bits != b.bits || a.bits_hi != b.bits_hi) {
+         // In NaN-tolerant mode, both being NaN is acceptable
+         if (nan_tolerant && is_nan_value(a) && is_nan_value(b))
+            continue;
          fprintf(stderr, "RETURN VALUE MISMATCH [%s] export#%zu: %s=%s:0x%llx %s=%s:0x%llx\n",
                  source, i,
                  b1_name, type_name(a.type), (unsigned long long)a.bits,
@@ -268,6 +429,35 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
    }
    if (!compare_returns(source, "interpreter", r_interp, "jit2", r_jit2))
       has_mismatch = true;
+#endif
+
+#ifdef PSIZAM_ENABLE_WASM3
+   // Compare against wasm3 reference interpreter.
+   // wasm3 doesn't support EH or v128 — skip if psizam rejected the module
+   // (wasm3 may accept/reject differently for unsupported proposals).
+   // NaN bit patterns may differ since wasm3 uses hardware floats.
+   if (r_interp.outcome != 1) { // only compare if psizam accepted the module
+      auto r_wasm3 = run_wasm3(wasm, r_interp.export_names);
+      if (r_wasm3.outcome != 1) { // skip if wasm3 couldn't parse/compile
+         // Compare outcomes: both should trap or both should succeed
+         bool outcome_match = true;
+         if (r_interp.outcome == 0 && r_wasm3.outcome != 0) {
+            // psizam succeeded but wasm3 trapped — potential psizam bug
+            print_mismatch(source, "interpreter", r_interp, "wasm3", r_wasm3);
+            outcome_match = false;
+            has_mismatch = true;
+         } else if (r_interp.outcome != 0 && r_wasm3.outcome == 0) {
+            // psizam trapped but wasm3 succeeded — potential psizam bug
+            print_mismatch(source, "interpreter", r_interp, "wasm3", r_wasm3);
+            outcome_match = false;
+            has_mismatch = true;
+         }
+         // When both succeed, compare return values (NaN-tolerant)
+         if (outcome_match &&
+             !compare_returns(source, "interpreter", r_interp, "wasm3", r_wasm3, true))
+            has_mismatch = true;
+      }
+   }
 #endif
 
    if (has_mismatch) return -1;
@@ -378,6 +568,9 @@ int main(int argc, char* argv[]) {
    fprintf(stderr, ", jit2");
 #endif
    // jit_llvm disabled in fuzzer due to known IR translation bugs
+#ifdef PSIZAM_ENABLE_WASM3
+   fprintf(stderr, ", wasm3");
+#endif
    fprintf(stderr, "\n\n");
 
    // Launch wasm-gen as a pipe — it writes length-prefixed WASM modules to stdout
