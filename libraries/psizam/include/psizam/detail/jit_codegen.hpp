@@ -1872,9 +1872,13 @@ namespace psizam::detail {
             }
             // __psizam_eh_enter(ctx, catch_count, catch_data_ptr) → jmpbuf ptr
             this->emit_mov(rsp, rdx);           // catch_data ptr → arg3
+            // Preserve rsi (linear memory) across helper call — see regalloc
+            // branch in this file.
+            this->emit_push_raw(rsi);
             this->emit_mov(catch_count, esi);    // catch_count → arg2
             // rdi already = ctx
             emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_enter));
+            this->emit_pop_raw(rsi);
             if (catch_count > 0)
                this->emit_add(static_cast<uint32_t>(catch_count * 8), rsp);
             this->emit_push_raw(rax); // push jmpbuf ptr
@@ -1932,8 +1936,11 @@ namespace psizam::detail {
             break;
          case ir_op::eh_get_payload: {
             uint32_t pidx = static_cast<uint32_t>(inst.ri.imm);
+            // Preserve rsi (linear memory) across helper call — see eh_enter.
+            this->emit_push_raw(rsi);
             this->emit_mov(pidx, esi); // index → arg2
             emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_get_payload));
+            this->emit_pop_raw(rsi);
             this->emit_push_raw(rax);
             break;
          }
@@ -3518,8 +3525,14 @@ namespace psizam::detail {
                }
             }
             this->emit_mov(rsp, rdx);
+            // Save rsi (linear memory ptr) before clobbering with arg2.
+            // emit_eh_runtime_call pushes/pops rsi AFTER this mov, so its
+            // "save" would capture the arg value and restore that — losing
+            // the linear memory pointer across the helper call.
+            this->emit_push_raw(rsi);
             this->emit_mov(catch_count, esi);
             emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_enter));
+            this->emit_pop_raw(rsi);
             if (catch_count > 0)
                this->emit_add(static_cast<uint32_t>(catch_count * 8), rsp);
             store_rax_vreg(inst.dest);
@@ -3577,8 +3590,11 @@ namespace psizam::detail {
             return true;
          case ir_op::eh_get_payload: {
             uint32_t pidx = static_cast<uint32_t>(inst.ri.imm);
+            // Preserve rsi (linear memory) across helper call — see eh_enter.
+            this->emit_push_raw(rsi);
             this->emit_mov(pidx, esi);
             emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_get_payload));
+            this->emit_pop_raw(rsi);
             store_rax_vreg(inst.dest);
             return true;
          }

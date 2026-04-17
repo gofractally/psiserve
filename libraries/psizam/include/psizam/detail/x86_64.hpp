@@ -1234,6 +1234,22 @@ namespace psizam::detail {
          emit(CALL, rax);
          // eax = 0 (normal) or non-zero (longjmp)
 
+         // ── 3b. Restore RDI/RSI on BOTH paths ──
+         // setjmp is caller-saved for RDI/RSI — it used RDI as the jmpbuf arg and
+         // doesn't preserve RSI. Reload them before either branch, so the try
+         // body (normal path) and the dispatch code (longjmp path) both see a
+         // valid context pointer and memory base.
+         //
+         // setjmp returns in EAX; save it across __psizam_get_memory which clobbers RAX.
+         emit_push(rax);                // save setjmp return value
+         emit_mov(r12, rdi);            // rdi = ctx (from callee-saved r12)
+         emit_push(rdi);                // re-align stack for SysV call
+         emit_mov(&__psizam_get_memory, rax);
+         emit(CALL, rax);
+         emit_pop(rdi);
+         emit_mov(rax, rsi);            // rsi = memory base
+         emit_pop(rax);                 // restore setjmp return value
+
          // ── 4. Branch: normal vs dispatch ──
          emit(TEST, eax, eax);
          void* jz_to_body = emit_branchcc32(JZ);
@@ -1241,16 +1257,7 @@ namespace psizam::detail {
          // ══════════════════════════════════════════════
          // DISPATCH PATH (reached after longjmp)
          // ══════════════════════════════════════════════
-         // R12 = context (callee-saved, preserved by longjmp)
-         // RDI, RSI are destroyed. Restore from R12.
-         emit_mov(r12, rdi);
-
-         // Reload memory base: __psizam_get_memory(ctx)
-         emit_push(rdi);
-         emit_mov(&__psizam_get_memory, rax);
-         emit(CALL, rax);
-         emit_pop(rdi);
-         emit_mov(rax, rsi);           // rsi = memory base
+         // RDI, RSI already reloaded above.
 
          // Get matched catch clause index: __psizam_eh_get_match(ctx)
          emit_push(rdi);
