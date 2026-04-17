@@ -496,6 +496,23 @@ namespace psizam {
          ctx->set_max_pages(initial_max_pages);
       }
 
+      // ── Per-instance floating-point execution mode ──
+      //
+      // For the interpreter backend this is read at every FP opcode and
+      // takes effect immediately.
+      //
+      // For JIT backends (jit, jit_profile, jit2, jit_llvm) the mode used
+      // when emitting machine code is baked into that code. Module parse
+      // + JIT compile run during backend construction, so once the backend
+      // is constructed the emitted code is already specialized. Calling
+      // set_fp_mode after construction stores the mode on the context
+      // (useful for any runtime-reading paths) but has no effect on the
+      // already-emitted JIT code. For JIT backends, the mode must be set
+      // via construction-time wiring (not yet plumbed) if a non-default
+      // mode is required.
+      inline void    set_fp_mode(fp_mode m) { ctx->set_fp_mode(m); }
+      inline fp_mode get_fp_mode() const    { return ctx->fp(); }
+
       template <typename... Args>
       inline auto operator()(detail::stack_manager& alt_stack, host_t& host, const std::string_view& mod, const std::string_view& func, Args... args) {
          return call(alt_stack, host, mod, func, args...);

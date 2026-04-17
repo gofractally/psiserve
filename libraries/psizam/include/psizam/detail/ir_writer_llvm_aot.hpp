@@ -135,9 +135,9 @@ namespace psizam::detail {
          // Build translate options (shared, read-only)
          llvm_translate_options topts;
          topts.opt_level        = 2;
-         topts.deterministic    = true;
+         topts.fp               = _compile_result->softfloat ? fp_mode::softfloat
+                                                             : fp_mode::hw_deterministic;
          topts.per_function     = true;
-         topts.softfloat        = _compile_result->softfloat;
          topts.enable_backtrace = _compile_result->backtrace;
          const std::string& target_triple = _compile_result->target_triple;
 
@@ -327,9 +327,9 @@ namespace psizam::detail {
          // Create per-function LLVM translator + module
          llvm_translate_options topts;
          topts.opt_level        = 2;
-         topts.deterministic    = true;
+         topts.fp               = _compile_result->softfloat ? fp_mode::softfloat
+                                                             : fp_mode::hw_deterministic;
          topts.per_function     = true;
-         topts.softfloat        = _compile_result->softfloat;
          topts.enable_backtrace = _compile_result->backtrace;
 
          auto do_compile = [&]() {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <psizam/allocator.hpp>
+#include <psizam/config.hpp>
 #include <psizam/constants.hpp>
 #include <psizam/exceptions.hpp>
 #include <psizam/detail/execution_interface.hpp>
@@ -193,6 +194,10 @@ namespace psizam::detail {
       void               set_max_pages(std::uint32_t max_pages) { _max_pages = std::min(max_pages, static_cast<std::uint32_t>(psizam::max_pages)); }
 
       inline std::error_code get_error_code() const { return _error_code; }
+
+      // ── Floating-point execution mode (per-instance) ──
+      inline fp_mode fp() const noexcept { return _fp; }
+      inline void    set_fp_mode(fp_mode m) noexcept { _fp = m; }
 
       // ── LLVM runtime helper accessors ──
       inline init_expr& get_global(uint32_t idx) { return _globals[idx]; }
@@ -503,6 +508,7 @@ namespace psizam::detail {
       std::vector<init_expr>          _globals;
       std::vector<bool>               _dropped_elems;
       std::vector<bool>               _dropped_data;
+      fp_mode                         _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
    };
 
    struct jit_visitor { template<typename T> jit_visitor(T&&) {} };

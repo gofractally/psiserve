@@ -76,6 +76,13 @@ namespace psizam::detail {
          _code_segment_base = code_segment_base ? code_segment_base : _allocator.start_code();
       }
 
+      // Per-instance FP mode. Must be set BEFORE emission for JIT backends;
+      // emitted code is specialized at JIT-compile time.
+      // Current JIT2 aarch64 status: SIMD FP ops always route through softfloat
+      // regardless of _fp.
+      void set_fp_mode(fp_mode m) noexcept { _fp = m; }
+      fp_mode get_fp_mode() const noexcept { return _fp; }
+
       // Offset of _remaining_call_depth in unified frame_info_holder layout
       // (always at offset 16, after _bottom_frame and _top_frame pointers)
       static constexpr int32_t call_depth_offset() { return 16; }
@@ -3998,6 +4005,7 @@ namespace psizam::detail {
       module& _mod;
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;
+      fp_mode _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
       void* _code_segment_base = nullptr;
       void* fpe_handler = nullptr;
       void* call_indirect_handler = nullptr;

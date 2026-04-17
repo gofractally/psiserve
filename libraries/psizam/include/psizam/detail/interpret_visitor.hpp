@@ -442,7 +442,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f32();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f32_eq(lhs.to_f32(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f32() == rhs) };
@@ -451,7 +451,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f32();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f32_ne(lhs.to_f32(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f32() != rhs) };
@@ -460,7 +460,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f32();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f32_lt(lhs.to_f32(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f32() < rhs) };
@@ -469,7 +469,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f32();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f32_gt(lhs.to_f32(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f32() > rhs) };
@@ -478,7 +478,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f32();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f32_le(lhs.to_f32(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f32() <= rhs) };
@@ -487,7 +487,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f32();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f32_ge(lhs.to_f32(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f32() >= rhs) };
@@ -496,7 +496,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f64();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f64_eq(lhs.to_f64(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f64() == rhs) };
@@ -505,7 +505,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f64();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f64_ne(lhs.to_f64(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f64() != rhs) };
@@ -514,7 +514,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f64();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f64_lt(lhs.to_f64(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f64() < rhs) };
@@ -523,7 +523,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f64();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f64_gt(lhs.to_f64(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f64() > rhs) };
@@ -532,7 +532,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f64();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f64_le(lhs.to_f64(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f64() <= rhs) };
@@ -541,7 +541,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand().to_f64();
          auto&       lhs = context.peek_operand();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = i32_const_t{ (uint32_t)_psizam_f64_ge(lhs.to_f64(), rhs) };
          else
             lhs = i32_const_t{ (uint32_t)(lhs.to_f64() >= rhs) };
@@ -801,7 +801,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_abs_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f32();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             oper = _psizam_f32_abs(oper);
          else
             oper = __builtin_fabsf(oper);
@@ -809,7 +809,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_neg_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f32();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             oper = _psizam_f32_neg(oper);
          else
             oper = -oper;
@@ -817,7 +817,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_ceil_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f32();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = _psizam_f32_ceil<true>(oper);
          } else
             oper = __builtin_ceilf(oper);
@@ -825,7 +825,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_floor_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f32();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = _psizam_f32_floor<true>(oper);
          } else
             oper = __builtin_floorf(oper);
@@ -833,7 +833,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_trunc_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f32();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = _psizam_f32_trunc<true>(oper);
          } else
             oper = __builtin_trunc(oper);
@@ -841,7 +841,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_nearest_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f32();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = _psizam_f32_nearest<true>(oper);
          } else
             oper = __builtin_nearbyintf(oper);
@@ -849,7 +849,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_sqrt_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f32();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             oper = _psizam_f32_sqrt(oper);
          else
             oper = __builtin_sqrtf(oper);
@@ -858,7 +858,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f32();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f32_add(lhs, rhs.to_f32());
          else
             lhs += rhs.to_f32();
@@ -867,7 +867,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f32();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f32_sub(lhs, rhs.to_f32());
          else
             lhs -= rhs.to_f32();
@@ -876,7 +876,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f32();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             lhs = _psizam_f32_mul(lhs, rhs.to_f32());
          } else
             lhs *= rhs.to_f32();
@@ -885,7 +885,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f32();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f32_div(lhs, rhs.to_f32());
          else
             lhs /= rhs.to_f32();
@@ -894,25 +894,28 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f32();
-         if constexpr (use_softfloat) {
-            lhs = _psizam_f32_min<true>(lhs, rhs.to_f32());
-         } else
+         // WASM min/max propagate NaN — __builtin_fmin uses IEEE-754 minNum
+         // (returns non-NaN operand), which violates WASM spec. Use softfloat
+         // helper for hw_deterministic too; only fast gets the builtin.
+         if (context.fp() == fp_mode::fast)
             lhs = __builtin_fminf(lhs, rhs.to_f32());
+         else
+            lhs = _psizam_f32_min<true>(lhs, rhs.to_f32());
       }
       [[gnu::always_inline]] inline void operator()(const f32_max_t& op) {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f32();
-         if constexpr (use_softfloat) {
-            lhs = _psizam_f32_max<true>(lhs, rhs.to_f32());
-         } else
+         if (context.fp() == fp_mode::fast)
             lhs = __builtin_fmaxf(lhs, rhs.to_f32());
+         else
+            lhs = _psizam_f32_max<true>(lhs, rhs.to_f32());
       }
       [[gnu::always_inline]] inline void operator()(const f32_copysign_t& op) {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f32();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f32_copysign(lhs, rhs.to_f32());
          else
             lhs = __builtin_copysignf(lhs, rhs.to_f32());
@@ -920,7 +923,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_abs_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f64();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             oper = _psizam_f64_abs(oper);
          else
             oper = __builtin_fabs(oper);
@@ -928,7 +931,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_neg_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f64();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             oper = _psizam_f64_neg(oper);
          else
             oper = -oper;
@@ -937,7 +940,7 @@ namespace psizam::detail {
 
          context.inc_pc();
          auto& oper = context.peek_operand().to_f64();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = _psizam_f64_ceil<true>(oper);
          } else
             oper = __builtin_ceil(oper);
@@ -945,7 +948,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_floor_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f64();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = _psizam_f64_floor<true>(oper);
          } else
             oper = __builtin_floor(oper);
@@ -953,7 +956,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_trunc_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f64();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = _psizam_f64_trunc<true>(oper);
          } else
             oper = __builtin_trunc(oper);
@@ -961,7 +964,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_nearest_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f64();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = _psizam_f64_nearest<true>(oper);
          } else
             oper = __builtin_nearbyint(oper);
@@ -969,7 +972,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_sqrt_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand().to_f64();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             oper = _psizam_f64_sqrt(oper);
          else
             oper = __builtin_sqrt(oper);
@@ -978,7 +981,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f64();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f64_add(lhs, rhs.to_f64());
          else
             lhs += rhs.to_f64();
@@ -987,7 +990,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f64();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f64_sub(lhs, rhs.to_f64());
          else
             lhs -= rhs.to_f64();
@@ -996,7 +999,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f64();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f64_mul(lhs, rhs.to_f64());
          else
             lhs *= rhs.to_f64();
@@ -1005,7 +1008,7 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f64();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f64_div(lhs, rhs.to_f64());
          else
             lhs /= rhs.to_f64();
@@ -1014,25 +1017,25 @@ namespace psizam::detail {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f64();
-         if constexpr (use_softfloat) {
-            lhs = _psizam_f64_min<true>(lhs, rhs.to_f64());
-         } else
+         if (context.fp() == fp_mode::fast)
             lhs = __builtin_fmin(lhs, rhs.to_f64());
+         else
+            lhs = _psizam_f64_min<true>(lhs, rhs.to_f64());
       }
       [[gnu::always_inline]] inline void operator()(const f64_max_t& op) {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f64();
-         if constexpr (use_softfloat) {
-            lhs = _psizam_f64_max<true>(lhs, rhs.to_f64());
-         } else
+         if (context.fp() == fp_mode::fast)
             lhs = __builtin_fmax(lhs, rhs.to_f64());
+         else
+            lhs = _psizam_f64_max<true>(lhs, rhs.to_f64());
       }
       [[gnu::always_inline]] inline void operator()(const f64_copysign_t& op) {
          context.inc_pc();
          const auto& rhs = context.pop_operand();
          auto&       lhs = context.peek_operand().to_f64();
-         if constexpr (use_softfloat)
+         if (context.fp() == fp_mode::softfloat)
             lhs = _psizam_f64_copysign(lhs, rhs.to_f64());
          else
             lhs = __builtin_copysign(lhs, rhs.to_f64());
@@ -1045,7 +1048,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const i32_trunc_s_f32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = i32_const_t{ _psizam_f32_trunc_i32s(oper.to_f32()) };
          } else {
             float af = oper.to_f32();
@@ -1057,7 +1060,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const i32_trunc_u_f32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = i32_const_t{ _psizam_f32_trunc_i32u(oper.to_f32()) };
          } else {
             float af = oper.to_f32();
@@ -1069,7 +1072,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const i32_trunc_s_f64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = i32_const_t{ _psizam_f64_trunc_i32s<true>(oper.to_f64()) };
          } else {
             double af = oper.to_f64();
@@ -1081,7 +1084,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const i32_trunc_u_f64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = i32_const_t{ _psizam_f64_trunc_i32u(oper.to_f64()) };
          } else {
             double af = oper.to_f64();
@@ -1103,7 +1106,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const i64_trunc_s_f32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = i64_const_t{ _psizam_f32_trunc_i64s(oper.to_f32()) };
          } else {
             float af = oper.to_f32();
@@ -1115,7 +1118,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const i64_trunc_u_f32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = i64_const_t{ _psizam_f32_trunc_i64u(oper.to_f32()) };
          } else {
             float af = oper.to_f32();
@@ -1127,7 +1130,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const i64_trunc_s_f64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = i64_const_t{ _psizam_f64_trunc_i64s(oper.to_f64()) };
          } else {
             double af = oper.to_f64();
@@ -1139,7 +1142,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const i64_trunc_u_f64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = i64_const_t{ _psizam_f64_trunc_i64u(oper.to_f64()) };
          } else {
             double af = oper.to_f64();
@@ -1151,7 +1154,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_convert_s_i32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f32_const_t{ _psizam_i32_to_f32(oper.to_i32()) };
          } else {
             oper = f32_const_t{ static_cast<float>(oper.to_i32()) };
@@ -1160,7 +1163,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_convert_u_i32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f32_const_t{ _psizam_ui32_to_f32(oper.to_ui32()) };
          } else {
             oper = f32_const_t{ static_cast<float>(oper.to_ui32()) };
@@ -1169,7 +1172,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_convert_s_i64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f32_const_t{ _psizam_i64_to_f32(oper.to_i64()) };
          } else {
             oper = f32_const_t{ static_cast<float>(oper.to_i64()) };
@@ -1178,7 +1181,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_convert_u_i64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f32_const_t{ _psizam_ui64_to_f32(oper.to_ui64()) };
          } else {
             oper = f32_const_t{ static_cast<float>(oper.to_ui64()) };
@@ -1187,7 +1190,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f32_demote_f64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f32_const_t{ _psizam_f64_demote(oper.to_f64()) };
          } else {
             oper = f32_const_t{ static_cast<float>(oper.to_f64()) };
@@ -1196,7 +1199,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_convert_s_i32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f64_const_t{ _psizam_i32_to_f64(oper.to_i32()) };
          } else {
             oper = f64_const_t{ static_cast<double>(oper.to_i32()) };
@@ -1205,7 +1208,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_convert_u_i32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f64_const_t{ _psizam_ui32_to_f64(oper.to_ui32()) };
          } else {
             oper = f64_const_t{ static_cast<double>(oper.to_ui32()) };
@@ -1214,7 +1217,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_convert_s_i64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f64_const_t{ _psizam_i64_to_f64(oper.to_i64()) };
          } else {
             oper = f64_const_t{ static_cast<double>(oper.to_i64()) };
@@ -1223,7 +1226,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_convert_u_i64_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f64_const_t{ _psizam_ui64_to_f64(oper.to_ui64()) };
          } else {
             oper = f64_const_t{ static_cast<double>(oper.to_ui64()) };
@@ -1232,7 +1235,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const f64_promote_f32_t& op) {
          context.inc_pc();
          auto& oper = context.peek_operand();
-         if constexpr (use_softfloat) {
+         if (context.fp() == fp_mode::softfloat) {
             oper = f64_const_t{ _psizam_f32_promote(oper.to_f32()) };
          } else {
             oper = f64_const_t{ static_cast<double>(oper.to_f32()) };

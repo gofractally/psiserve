@@ -24,7 +24,7 @@ namespace psizam::detail {
       // Step 1: Translate all IR functions to LLVM IR
       llvm_translate_options topts;
       topts.opt_level          = g_llvm_opt_level;
-      topts.deterministic      = deterministic;
+      topts.fp                 = deterministic ? fp_mode::hw_deterministic : fp_mode::fast;
       topts.nothrow_host_calls = true;  // JIT path has .eh_frame; skip try/catch overhead
       llvm_ir_translator translator(mod, topts);
 

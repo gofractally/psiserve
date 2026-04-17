@@ -121,7 +121,7 @@ namespace psizam::detail {
          declare_functions();
          // Declare runtime helper functions
          declare_runtime_helpers();
-         if (opts.softfloat) {
+         if ((opts.fp == fp_mode::softfloat)) {
             declare_softfloat_helpers();
          }
          if (opts.enable_backtrace) {
@@ -170,7 +170,7 @@ namespace psizam::detail {
       // Backtrace intrinsic
       llvm::Function* frameaddress_intrinsic = nullptr;
 
-      // Softfloat function declarations (only populated when opts.softfloat)
+      // Softfloat function declarations (only populated when (opts.fp == fp_mode::softfloat))
       // f32 arithmetic: i32(i32, i32)
       llvm::Function* sf_f32_add = nullptr;
       llvm::Function* sf_f32_sub = nullptr;
@@ -453,6 +453,105 @@ namespace psizam::detail {
          return builder.CreateBitCast(builder.CreateCall(fn, {ai}), f64_ty);
       }
 
+      // hw_deterministic NaN canonicalization — replace any NaN result with the WASM
+      // canonical NaN (f32: 0x7FC00000, f64: 0x7FF8000000000000). Applied only in
+      // hw_deterministic mode, and only to ops that can produce NaN. Guarantees
+      // cross-platform bit-identical results for NaN-producing inputs.
+      llvm::Value* canonicalize_f32(llvm::IRBuilder<>& builder, llvm::Value* v) {
+         auto* is_nan = builder.CreateFCmpUNO(v, v);
+         auto* canon_i = builder.getInt32(0x7FC00000);
+         auto* canon_f = builder.CreateBitCast(canon_i, f32_ty);
+         return builder.CreateSelect(is_nan, canon_f, v);
+      }
+      llvm::Value* canonicalize_f64(llvm::IRBuilder<>& builder, llvm::Value* v) {
+         auto* is_nan = builder.CreateFCmpUNO(v, v);
+         auto* canon_i = builder.getInt64(0x7FF8000000000000ULL);
+         auto* canon_f = builder.CreateBitCast(canon_i, f64_ty);
+         return builder.CreateSelect(is_nan, canon_f, v);
+      }
+      llvm::Value* canonicalize_v4xf32(llvm::IRBuilder<>& builder, llvm::Value* v) {
+         auto* is_nan = builder.CreateFCmpUNO(v, v);
+         auto* canon = llvm::ConstantVector::getSplat(llvm::ElementCount::getFixed(4),
+                         llvm::ConstantFP::get(f32_ty,
+                            llvm::APFloat(llvm::APFloat::IEEEsingle(),
+                               llvm::APInt(32, 0x7FC00000))));
+         return builder.CreateSelect(is_nan, canon, v);
+      }
+      llvm::Value* canonicalize_v2xf64(llvm::IRBuilder<>& builder, llvm::Value* v) {
+         auto* is_nan = builder.CreateFCmpUNO(v, v);
+         auto* canon = llvm::ConstantVector::getSplat(llvm::ElementCount::getFixed(2),
+                         llvm::ConstantFP::get(f64_ty,
+                            llvm::APFloat(llvm::APFloat::IEEEdouble(),
+                               llvm::APInt(64, 0x7FF8000000000000ULL))));
+         return builder.CreateSelect(is_nan, canon, v);
+      }
+      // Conditional canonicalization: applied only in hw_deterministic mode.
+      // In fast mode, returns v unchanged (native HW NaN — may vary across platforms).
+      // In softfloat mode, the value came from a softfloat helper which already
+      // produces a WASM-spec arithmetic NaN, so no extra canonicalization needed.
+      llvm::Value* maybe_canon_f32(llvm::IRBuilder<>& builder, llvm::Value* v) {
+         return (opts.fp == fp_mode::hw_deterministic) ? canonicalize_f32(builder, v) : v;
+      }
+      llvm::Value* maybe_canon_f64(llvm::IRBuilder<>& builder, llvm::Value* v) {
+         return (opts.fp == fp_mode::hw_deterministic) ? canonicalize_f64(builder, v) : v;
+      }
+      llvm::Value* maybe_canon_v4xf32(llvm::IRBuilder<>& builder, llvm::Value* v) {
+         return (opts.fp == fp_mode::hw_deterministic) ? canonicalize_v4xf32(builder, v) : v;
+      }
+      llvm::Value* maybe_canon_v2xf64(llvm::IRBuilder<>& builder, llvm::Value* v) {
+         return (opts.fp == fp_mode::hw_deterministic) ? canonicalize_v2xf64(builder, v) : v;
+      }
+
+      // SIMD softfloat scalarization — extract each lane, call scalar sf_*, insert back.
+      // Only used when opts.fp == fp_mode::softfloat. Slow (lane-by-lane host calls)
+      // but guarantees bit-identical results to scalar softfloat backends.
+      llvm::Value* simd_sf_f32x4_binop(llvm::IRBuilder<>& builder, llvm::Function* fn,
+                                       llvm::Value* a, llvm::Value* b) {
+         llvm::Value* result = llvm::UndefValue::get(v4xf32_ty);
+         for (int j = 0; j < 4; ++j) {
+            auto* idx = builder.getInt32(j);
+            auto* ae  = builder.CreateExtractElement(a, idx);
+            auto* be  = builder.CreateExtractElement(b, idx);
+            result = builder.CreateInsertElement(result,
+                       call_sf_f32_binop(builder, fn, ae, be), idx);
+         }
+         return result;
+      }
+      llvm::Value* simd_sf_f32x4_unop(llvm::IRBuilder<>& builder, llvm::Function* fn,
+                                      llvm::Value* a) {
+         llvm::Value* result = llvm::UndefValue::get(v4xf32_ty);
+         for (int j = 0; j < 4; ++j) {
+            auto* idx = builder.getInt32(j);
+            auto* ae  = builder.CreateExtractElement(a, idx);
+            result = builder.CreateInsertElement(result,
+                       call_sf_f32_unop(builder, fn, ae), idx);
+         }
+         return result;
+      }
+      llvm::Value* simd_sf_f64x2_binop(llvm::IRBuilder<>& builder, llvm::Function* fn,
+                                       llvm::Value* a, llvm::Value* b) {
+         llvm::Value* result = llvm::UndefValue::get(v2xf64_ty);
+         for (int j = 0; j < 2; ++j) {
+            auto* idx = builder.getInt32(j);
+            auto* ae  = builder.CreateExtractElement(a, idx);
+            auto* be  = builder.CreateExtractElement(b, idx);
+            result = builder.CreateInsertElement(result,
+                       call_sf_f64_binop(builder, fn, ae, be), idx);
+         }
+         return result;
+      }
+      llvm::Value* simd_sf_f64x2_unop(llvm::IRBuilder<>& builder, llvm::Function* fn,
+                                      llvm::Value* a) {
+         llvm::Value* result = llvm::UndefValue::get(v2xf64_ty);
+         for (int j = 0; j < 2; ++j) {
+            auto* idx = builder.getInt32(j);
+            auto* ae  = builder.CreateExtractElement(a, idx);
+            result = builder.CreateInsertElement(result,
+                       call_sf_f64_unop(builder, fn, ae), idx);
+         }
+         return result;
+      }
+
       llvm::Type* wasm_type_to_llvm(uint8_t wt) {
          switch (wt) {
             case types::i32:  return i32_ty;
@@ -495,7 +594,7 @@ namespace psizam::detail {
             // In deterministic/softfloat mode, WASM requires precise FP semantics —
             // identity operations (x-0, x*1) must not be folded away because they
             // quiet sNaN to qNaN.
-            if (opts.deterministic || opts.softfloat)
+            if (opts.fp != fp_mode::fast)
                fn->addFnAttr(llvm::Attribute::StrictFP);
             if (opts.enable_backtrace)
                fn->addFnAttr("frame-pointer", "all");
@@ -580,7 +679,7 @@ namespace psizam::detail {
          // In deterministic or softfloat mode, use constrained FP to prevent LLVM
          // from folding identity float ops (x-0.0 → x, x*1.0 → x) that would
          // skip sNaN → qNaN quieting required by the WASM spec.
-         if (opts.deterministic || opts.softfloat) {
+         if (opts.fp != fp_mode::fast) {
             builder.setIsFPConstrained(true);
             builder.setDefaultConstrainedExcept(llvm::fp::ebStrict);
             builder.setDefaultConstrainedRounding(llvm::RoundingMode::NearestTiesToEven);
@@ -2302,7 +2401,7 @@ namespace psizam::detail {
 
                // ──── f32 unary ────
                case ir_op::f32_abs:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_abs,
                         load_vreg_as(inst.rr.src1, f32_ty)));
                   } else {
@@ -2312,7 +2411,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f32_neg:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_neg,
                         load_vreg_as(inst.rr.src1, f32_ty)));
                   } else {
@@ -2320,59 +2419,59 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f32_ceil:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_ceil,
                         load_vreg_as(inst.rr.src1, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {f32_ty}),
-                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                        {load_vreg_as(inst.rr.src1, f32_ty)})));
                   }
                   break;
                case ir_op::f32_floor:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_floor,
                         load_vreg_as(inst.rr.src1, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {f32_ty}),
-                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                        {load_vreg_as(inst.rr.src1, f32_ty)})));
                   }
                   break;
                case ir_op::f32_trunc:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_trunc,
                         load_vreg_as(inst.rr.src1, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {f32_ty}),
-                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                        {load_vreg_as(inst.rr.src1, f32_ty)})));
                   }
                   break;
                case ir_op::f32_nearest:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_nearest,
                         load_vreg_as(inst.rr.src1, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {f32_ty}),
-                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                        {load_vreg_as(inst.rr.src1, f32_ty)})));
                   }
                   break;
                case ir_op::f32_sqrt:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_unop(builder, sf_f32_sqrt,
                         load_vreg_as(inst.rr.src1, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {f32_ty}),
-                        {load_vreg_as(inst.rr.src1, f32_ty)}));
+                        {load_vreg_as(inst.rr.src1, f32_ty)})));
                   }
                   break;
 
                // ──── f64 unary ────
                case ir_op::f64_abs:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_abs,
                         load_vreg_as(inst.rr.src1, f64_ty)));
                   } else {
@@ -2382,7 +2481,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f64_neg:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_neg,
                         load_vreg_as(inst.rr.src1, f64_ty)));
                   } else {
@@ -2390,115 +2489,115 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f64_ceil:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_ceil,
                         load_vreg_as(inst.rr.src1, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {f64_ty}),
-                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                        {load_vreg_as(inst.rr.src1, f64_ty)})));
                   }
                   break;
                case ir_op::f64_floor:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_floor,
                         load_vreg_as(inst.rr.src1, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {f64_ty}),
-                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                        {load_vreg_as(inst.rr.src1, f64_ty)})));
                   }
                   break;
                case ir_op::f64_trunc:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_trunc,
                         load_vreg_as(inst.rr.src1, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {f64_ty}),
-                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                        {load_vreg_as(inst.rr.src1, f64_ty)})));
                   }
                   break;
                case ir_op::f64_nearest:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_nearest,
                         load_vreg_as(inst.rr.src1, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {f64_ty}),
-                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                        {load_vreg_as(inst.rr.src1, f64_ty)})));
                   }
                   break;
                case ir_op::f64_sqrt:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_unop(builder, sf_f64_sqrt,
                         load_vreg_as(inst.rr.src1, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {f64_ty}),
-                        {load_vreg_as(inst.rr.src1, f64_ty)}));
+                        {load_vreg_as(inst.rr.src1, f64_ty)})));
                   }
                   break;
 
                // ──── f32 binary arithmetic ────
                case ir_op::f32_add:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_add,
                         load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFAdd(
-                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateFAdd(
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty))));
                   }
                   break;
                case ir_op::f32_sub:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_sub,
                         load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFSub(
-                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateFSub(
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty))));
                   }
                   break;
                case ir_op::f32_mul:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_mul,
                         load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFMul(
-                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateFMul(
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty))));
                   }
                   break;
                case ir_op::f32_div:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_div,
                         load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFDiv(
-                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateFDiv(
+                        load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty))));
                   }
                   break;
                case ir_op::f32_min:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_min,
                         load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {f32_ty}),
-                        {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)}));
+                        {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)})));
                   }
                   break;
                case ir_op::f32_max:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_max,
                         load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f32(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {f32_ty}),
-                        {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)}));
+                        {load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)})));
                   }
                   break;
                case ir_op::f32_copysign:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f32_binop(builder, sf_f32_copysign,
                         load_vreg_as(inst.rr.src1, f32_ty), load_vreg_as(inst.rr.src2, f32_ty)));
                   } else {
@@ -2510,63 +2609,63 @@ namespace psizam::detail {
 
                // ──── f64 binary arithmetic ────
                case ir_op::f64_add:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_add,
                         load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFAdd(
-                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateFAdd(
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty))));
                   }
                   break;
                case ir_op::f64_sub:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_sub,
                         load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFSub(
-                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateFSub(
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty))));
                   }
                   break;
                case ir_op::f64_mul:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_mul,
                         load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFMul(
-                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateFMul(
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty))));
                   }
                   break;
                case ir_op::f64_div:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_div,
                         load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFDiv(
-                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateFDiv(
+                        load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty))));
                   }
                   break;
                case ir_op::f64_min:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_min,
                         load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {f64_ty}),
-                        {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)}));
+                        {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)})));
                   }
                   break;
                case ir_op::f64_max:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_max,
                         load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
                   } else {
-                     store_vreg(inst.dest, builder.CreateCall(
+                     store_vreg(inst.dest, maybe_canon_f64(builder, builder.CreateCall(
                         llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {f64_ty}),
-                        {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)}));
+                        {load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)})));
                   }
                   break;
                case ir_op::f64_copysign:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, call_sf_f64_binop(builder, sf_f64_copysign,
                         load_vreg_as(inst.rr.src1, f64_ty), load_vreg_as(inst.rr.src2, f64_ty)));
                   } else {
@@ -2688,7 +2787,7 @@ namespace psizam::detail {
 
                // Float conversions from integers
                case ir_op::f32_convert_s_i32:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f32_convert_i32s, {load_vreg_as(inst.rr.src1, i32_ty)}), f32_ty));
                   } else {
@@ -2696,7 +2795,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f32_convert_u_i32:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f32_convert_i32u, {load_vreg_as(inst.rr.src1, i32_ty)}), f32_ty));
                   } else {
@@ -2704,7 +2803,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f32_convert_s_i64:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f32_convert_i64s, {load_vreg_as(inst.rr.src1, i64_ty)}), f32_ty));
                   } else {
@@ -2712,7 +2811,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f32_convert_u_i64:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f32_convert_i64u, {load_vreg_as(inst.rr.src1, i64_ty)}), f32_ty));
                   } else {
@@ -2720,7 +2819,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f64_convert_s_i32:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f64_convert_i32s, {load_vreg_as(inst.rr.src1, i32_ty)}), f64_ty));
                   } else {
@@ -2728,7 +2827,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f64_convert_u_i32:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f64_convert_i32u, {load_vreg_as(inst.rr.src1, i32_ty)}), f64_ty));
                   } else {
@@ -2736,7 +2835,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f64_convert_s_i64:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f64_convert_i64s, {load_vreg_as(inst.rr.src1, i64_ty)}), f64_ty));
                   } else {
@@ -2744,7 +2843,7 @@ namespace psizam::detail {
                   }
                   break;
                case ir_op::f64_convert_u_i64:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f64_convert_i64u, {load_vreg_as(inst.rr.src1, i64_ty)}), f64_ty));
                   } else {
@@ -2754,19 +2853,21 @@ namespace psizam::detail {
 
                // Float promotions/demotions
                case ir_op::f32_demote_f64:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f32_demote_f64, {builder.CreateBitCast(load_vreg_as(inst.rr.src1, f64_ty), i64_ty)}), f32_ty));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFPTrunc(load_vreg_as(inst.rr.src1, f64_ty), f32_ty));
+                     store_vreg(inst.dest, maybe_canon_f32(builder,
+                        builder.CreateFPTrunc(load_vreg_as(inst.rr.src1, f64_ty), f32_ty)));
                   }
                   break;
                case ir_op::f64_promote_f32:
-                  if (opts.softfloat) {
+                  if ((opts.fp == fp_mode::softfloat)) {
                      store_vreg(inst.dest, builder.CreateBitCast(
                         builder.CreateCall(sf_f64_promote_f32, {builder.CreateBitCast(load_vreg_as(inst.rr.src1, f32_ty), i32_ty)}), f64_ty));
                   } else {
-                     store_vreg(inst.dest, builder.CreateFPExt(load_vreg_as(inst.rr.src1, f32_ty), f64_ty));
+                     store_vreg(inst.dest, maybe_canon_f64(builder,
+                        builder.CreateFPExt(load_vreg_as(inst.rr.src1, f32_ty), f64_ty)));
                   }
                   break;
 
@@ -3916,46 +4017,214 @@ namespace psizam::detail {
                   }
 
                   // ── Float arithmetic ──
-                  case simd_sub::f32x4_abs: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f64x2_abs: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f32x4_neg: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFNeg(a), v128_ty)); break; }
-                  case simd_sub::f64x2_neg: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFNeg(a), v128_ty)); break; }
-                  case simd_sub::f32x4_sqrt: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f64x2_sqrt: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  // In softfloat mode, scalarize lane-wise through scalar sf_* helpers.
+                  // That guarantees bit-identical results to the scalar softfloat backend.
+                  case simd_sub::f32x4_abs: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f32x4_unop(builder, sf_f32_abs, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {v4xf32_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_abs: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f64x2_unop(builder, sf_f64_abs, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fabs, {v2xf64_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_neg: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f32x4_unop(builder, sf_f32_neg, a) : (llvm::Value*)builder.CreateFNeg(a);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_neg: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f64x2_unop(builder, sf_f64_neg, a) : (llvm::Value*)builder.CreateFNeg(a);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_sqrt: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f32x4_unop(builder, sf_f32_sqrt, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {v4xf32_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_sqrt: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f64x2_unop(builder, sf_f64_sqrt, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::sqrt, {v2xf64_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
 
-                  case simd_sub::f32x4_add: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFAdd(a, b), v128_ty)); break; }
-                  case simd_sub::f64x2_add: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFAdd(a, b), v128_ty)); break; }
-                  case simd_sub::f32x4_sub: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFSub(a, b), v128_ty)); break; }
-                  case simd_sub::f64x2_sub: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFSub(a, b), v128_ty)); break; }
-                  case simd_sub::f32x4_mul: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFMul(a, b), v128_ty)); break; }
-                  case simd_sub::f64x2_mul: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFMul(a, b), v128_ty)); break; }
-                  case simd_sub::f32x4_div: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFDiv(a, b), v128_ty)); break; }
-                  case simd_sub::f64x2_div: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFDiv(a, b), v128_ty)); break; }
+                  case simd_sub::f32x4_add: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f32x4_binop(builder, sf_f32_add, a, b) : (llvm::Value*)builder.CreateFAdd(a, b);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_add: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f64x2_binop(builder, sf_f64_add, a, b) : (llvm::Value*)builder.CreateFAdd(a, b);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_sub: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f32x4_binop(builder, sf_f32_sub, a, b) : (llvm::Value*)builder.CreateFSub(a, b);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_sub: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f64x2_binop(builder, sf_f64_sub, a, b) : (llvm::Value*)builder.CreateFSub(a, b);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_mul: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f32x4_binop(builder, sf_f32_mul, a, b) : (llvm::Value*)builder.CreateFMul(a, b);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_mul: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f64x2_binop(builder, sf_f64_mul, a, b) : (llvm::Value*)builder.CreateFMul(a, b);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_div: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f32x4_binop(builder, sf_f32_div, a, b) : (llvm::Value*)builder.CreateFDiv(a, b);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_div: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty);
+                     llvm::Value* r = (opts.fp == fp_mode::softfloat) ? simd_sf_f64x2_binop(builder, sf_f64_div, a, b) : (llvm::Value*)builder.CreateFDiv(a, b);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
 
-                  case simd_sub::f32x4_min: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
-                  case simd_sub::f64x2_min: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
-                  case simd_sub::f32x4_max: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
-                  case simd_sub::f64x2_max: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a, b}), v128_ty)); break; }
+                  case simd_sub::f32x4_min: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f32x4_binop(builder, sf_f32_min, a, b);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {v4xf32_ty}); r = builder.CreateCall(fn, {a, b}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_min: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f64x2_binop(builder, sf_f64_min, a, b);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::minimum, {v2xf64_ty}); r = builder.CreateCall(fn, {a, b}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_max: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f32x4_binop(builder, sf_f32_max, a, b);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {v4xf32_ty}); r = builder.CreateCall(fn, {a, b}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_max: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f64x2_binop(builder, sf_f64_max, a, b);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::maximum, {v2xf64_ty}); r = builder.CreateCall(fn, {a, b}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
                   case simd_sub::f32x4_pmin: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(builder.CreateFCmpOLT(b, a), b, a), v128_ty)); break; }
                   case simd_sub::f64x2_pmin: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(builder.CreateFCmpOLT(b, a), b, a), v128_ty)); break; }
                   case simd_sub::f32x4_pmax: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* b = load_v128(inst.simd.v_src2, v4xf32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(builder.CreateFCmpOLT(a, b), b, a), v128_ty)); break; }
                   case simd_sub::f64x2_pmax: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* b = load_v128(inst.simd.v_src2, v2xf64_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSelect(builder.CreateFCmpOLT(a, b), b, a), v128_ty)); break; }
 
                   // ── Float rounding ──
-                  case simd_sub::f32x4_ceil: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f64x2_ceil: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f32x4_floor: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f64x2_floor: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f32x4_trunc: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f64x2_trunc: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f32x4_nearest: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f64x2_nearest: { auto* a = load_v128(inst.simd.v_src1, v2xf64_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {v2xf64_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
+                  case simd_sub::f32x4_ceil: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f32x4_unop(builder, sf_f32_ceil, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {v4xf32_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_ceil: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f64x2_unop(builder, sf_f64_ceil, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::ceil, {v2xf64_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_floor: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f32x4_unop(builder, sf_f32_floor, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {v4xf32_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_floor: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f64x2_unop(builder, sf_f64_floor, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::floor, {v2xf64_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_trunc: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f32x4_unop(builder, sf_f32_trunc, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {v4xf32_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_trunc: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f64x2_unop(builder, sf_f64_trunc, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::trunc, {v2xf64_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_nearest: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f32x4_unop(builder, sf_f32_nearest, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {v4xf32_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                  }
+                  case simd_sub::f64x2_nearest: {
+                     auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) r = simd_sf_f64x2_unop(builder, sf_f64_nearest, a);
+                     else { auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::nearbyint, {v2xf64_ty}); r = builder.CreateCall(fn, {a}); }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                  }
 
                   // ── Conversions ──
                   case simd_sub::i32x4_trunc_sat_f32x4_s: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fptosi_sat, {v4xi32_ty, v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
                   case simd_sub::i32x4_trunc_sat_f32x4_u: { auto* a = load_v128(inst.simd.v_src1, v4xf32_ty); auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fptoui_sat, {v4xi32_ty, v4xf32_ty}); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateCall(fn, {a}), v128_ty)); break; }
-                  case simd_sub::f32x4_convert_i32x4_s: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSIToFP(a, v4xf32_ty), v128_ty)); break; }
-                  case simd_sub::f32x4_convert_i32x4_u: { auto* a = load_v128(inst.simd.v_src1, v4xi32_ty); store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateUIToFP(a, v4xf32_ty), v128_ty)); break; }
+                  case simd_sub::f32x4_convert_i32x4_s: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) {
+                        r = llvm::UndefValue::get(v4xf32_ty);
+                        for (int j = 0; j < 4; ++j) {
+                           auto* idx = builder.getInt32(j);
+                           auto* ae = builder.CreateExtractElement(a, idx);
+                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f32_convert_i32s, {ae}), f32_ty);
+                           r = builder.CreateInsertElement(r, fb, idx);
+                        }
+                     } else {
+                        r = builder.CreateSIToFP(a, v4xf32_ty);
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
+                  }
+                  case simd_sub::f32x4_convert_i32x4_u: {
+                     auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) {
+                        r = llvm::UndefValue::get(v4xf32_ty);
+                        for (int j = 0; j < 4; ++j) {
+                           auto* idx = builder.getInt32(j);
+                           auto* ae = builder.CreateExtractElement(a, idx);
+                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f32_convert_i32u, {ae}), f32_ty);
+                           r = builder.CreateInsertElement(r, fb, idx);
+                        }
+                     } else {
+                        r = builder.CreateUIToFP(a, v4xf32_ty);
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
+                  }
                   case simd_sub::i32x4_trunc_sat_f64x2_s_zero: {
                      auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
                      auto* fn = llvm::Intrinsic::getOrInsertDeclaration(llvm_mod.get(), llvm::Intrinsic::fptosi_sat, {llvm::FixedVectorType::get(i32_ty, 2), v2xf64_ty});
@@ -3976,29 +4245,75 @@ namespace psizam::detail {
                   }
                   case simd_sub::f64x2_convert_low_i32x4_s: {
                      auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
-                     auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
-                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateSIToFP(low2, v2xf64_ty), v128_ty));
-                     break;
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) {
+                        r = llvm::UndefValue::get(v2xf64_ty);
+                        for (int j = 0; j < 2; ++j) {
+                           auto* idx = builder.getInt32(j);
+                           auto* ae = builder.CreateExtractElement(a, idx);
+                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f64_convert_i32s, {ae}), f64_ty);
+                           r = builder.CreateInsertElement(r, fb, idx);
+                        }
+                     } else {
+                        auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
+                        r = builder.CreateSIToFP(low2, v2xf64_ty);
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
                   }
                   case simd_sub::f64x2_convert_low_i32x4_u: {
                      auto* a = load_v128(inst.simd.v_src1, v4xi32_ty);
-                     auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
-                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateUIToFP(low2, v2xf64_ty), v128_ty));
-                     break;
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) {
+                        r = llvm::UndefValue::get(v2xf64_ty);
+                        for (int j = 0; j < 2; ++j) {
+                           auto* idx = builder.getInt32(j);
+                           auto* ae = builder.CreateExtractElement(a, idx);
+                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f64_convert_i32u, {ae}), f64_ty);
+                           r = builder.CreateInsertElement(r, fb, idx);
+                        }
+                     } else {
+                        auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
+                        r = builder.CreateUIToFP(low2, v2xf64_ty);
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
                   }
                   case simd_sub::f32x4_demote_f64x2_zero: {
                      auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
-                     auto* narrow2 = builder.CreateFPTrunc(a, llvm::FixedVectorType::get(f32_ty, 2));
-                     auto* zero2 = llvm::Constant::getNullValue(llvm::FixedVectorType::get(f32_ty, 2));
-                     auto* result = builder.CreateShuffleVector(narrow2, zero2, llvm::ArrayRef<int>{0,1,2,3});
-                     store_v128(inst.simd.v_dest, builder.CreateBitCast(result, v128_ty));
-                     break;
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) {
+                        r = llvm::ConstantVector::getSplat(llvm::ElementCount::getFixed(4),
+                              llvm::ConstantFP::get(f32_ty, 0.0));
+                        for (int j = 0; j < 2; ++j) {
+                           auto* idx = builder.getInt32(j);
+                           auto* ae = builder.CreateExtractElement(a, idx);
+                           auto* bi = builder.CreateBitCast(ae, i64_ty);
+                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f32_demote_f64, {bi}), f32_ty);
+                           r = builder.CreateInsertElement(r, fb, idx);
+                        }
+                     } else {
+                        auto* narrow2 = builder.CreateFPTrunc(a, llvm::FixedVectorType::get(f32_ty, 2));
+                        auto* zero2 = llvm::Constant::getNullValue(llvm::FixedVectorType::get(f32_ty, 2));
+                        r = builder.CreateShuffleVector(narrow2, zero2, llvm::ArrayRef<int>{0,1,2,3});
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
                   }
                   case simd_sub::f64x2_promote_low_f32x4: {
                      auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
-                     auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
-                     store_v128(inst.simd.v_dest, builder.CreateBitCast(builder.CreateFPExt(low2, v2xf64_ty), v128_ty));
-                     break;
+                     llvm::Value* r;
+                     if (opts.fp == fp_mode::softfloat) {
+                        r = llvm::UndefValue::get(v2xf64_ty);
+                        for (int j = 0; j < 2; ++j) {
+                           auto* idx = builder.getInt32(j);
+                           auto* ae = builder.CreateExtractElement(a, idx);
+                           auto* bi = builder.CreateBitCast(ae, i32_ty);
+                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f64_promote_f32, {bi}), f64_ty);
+                           r = builder.CreateInsertElement(r, fb, idx);
+                        }
+                     } else {
+                        auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
+                        r = builder.CreateFPExt(low2, v2xf64_ty);
+                     }
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
                   }
 
                   // ── Relaxed SIMD ──

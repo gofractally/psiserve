@@ -163,6 +163,13 @@ namespace psizam::detail {
       /// Access to code segment base for parallel compilation merge.
       void* get_code_segment_base() const { return _code_segment_base; }
 
+      // Per-instance FP mode. Must be set BEFORE emission for JIT backends;
+      // emitted code is specialized at JIT-compile time and cannot be rebranded after.
+      // Current JIT2 status: SIMD FP ops always route through softfloat regardless
+      // of _fp. Scalar FP paths inherit from x86_64_base patterns.
+      void set_fp_mode(fp_mode m) noexcept { _fp = m; }
+      fp_mode get_fp_mode() const noexcept { return _fp; }
+
       /// Get the call_indirect error handler address (for element table patching).
       void* get_call_indirect_handler() const { return call_indirect_handler; }
 
@@ -6860,6 +6867,7 @@ namespace psizam::detail {
       module& _mod;
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;
+      fp_mode _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
       relocation_recorder _reloc_recorder;   // tracks absolute address embeddings for PIC
       void* _code_segment_base;
       void* fpe_handler = nullptr;

@@ -15,6 +15,7 @@
 //   - Remaining args are WASM function parameters
 //   - Return type matches WASM function return type (void, i32, i64, f32, f64)
 
+#include <psizam/config.hpp>
 #include <psizam/detail/jit_ir.hpp>
 #include <psizam/types.hpp>
 
@@ -41,8 +42,12 @@ namespace psizam::detail {
 
    /// Options for the LLVM IR translator.
    struct llvm_translate_options {
-      bool softfloat         = false; // Use softfloat wrappers instead of native float ops
-      bool deterministic     = false; // Constrained FP: prevents identity-op folding, preserves NaN semantics
+      // Floating-point execution mode (see psizam/config.hpp).
+      // fast             : native FP, no determinism guarantees.
+      // hw_deterministic : native FP, NaN-canonicalized, bit-matches softfloat.
+      // softfloat        : lane-wise softfloat (reference oracle, slowest).
+      fp_mode fp             = fp_mode::fast;
+
       bool enable_backtrace  = false; // Enable async backtrace support
       int  opt_level         = 2;     // LLVM optimization level (0-3)
       bool per_function      = false; // Per-function compilation: external linkage for all decls

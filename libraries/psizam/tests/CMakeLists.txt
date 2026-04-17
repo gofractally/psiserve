@@ -204,6 +204,19 @@ target_compile_definitions(jit2_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
 add_executable(jit2_load_test ${CMAKE_CURRENT_SOURCE_DIR}/../tests/jit2_load_test.cpp)
 target_link_libraries(jit2_load_test psizam psizam-exec)
 
+# ── fp_mode differential tests (interpreter-only) ─────────────────────────────
+
+add_executable(fp_mode_differential_tests main.cpp
+   fp_mode_differential_tests.cpp
+)
+target_link_libraries(fp_mode_differential_tests psizam psizam-exec Catch2::Catch2)
+target_include_directories(fp_mode_differential_tests PUBLIC
+   ${CMAKE_CURRENT_SOURCE_DIR}
+   ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_compile_definitions(fp_mode_differential_tests PUBLIC CATCH_CONFIG_NO_POSIX_SIGNALS)
+catch_discover_tests(fp_mode_differential_tests)
+
 add_executable(compile_time ${CMAKE_CURRENT_SOURCE_DIR}/../tests/compile_time.cpp)
 target_link_libraries(compile_time psizam psizam-exec)
 

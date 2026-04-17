@@ -1,6 +1,7 @@
 #pragma once
 
 #include <psizam/allocator.hpp>
+#include <psizam/config.hpp>
 #include <psizam/exceptions.hpp>
 #include <psizam/detail/execution_context.hpp>
 #include <psizam/detail/llvm_runtime_helpers.hpp>
@@ -162,6 +163,12 @@ namespace psizam::detail {
             _allocator.reclaim(code, _code_end - code);
          }
       }
+
+      // Per-instance FP mode. MUST be called before emission begins (i.e.
+      // before emit_prologue / parse_function_body code). After machine code
+      // has been emitted, changing the mode has no effect on baked code.
+      void set_fp_mode(fp_mode m) { _fp = m; }
+      fp_mode get_fp_mode() const { return _fp; }
 
       ~machine_code_writer_a64() {
          _allocator.end_code<true>(_code_segment_base);
@@ -333,7 +340,7 @@ namespace psizam::detail {
          _ft = &_mod.types[_mod.functions[funcnum]];
          _params = function_parameters{_ft};
          _locals = function_locals{locals};
-         const std::size_t instruction_size_ratio_upper_bound = use_softfloat?(_enable_backtrace?120:100):100;
+         const std::size_t instruction_size_ratio_upper_bound = (_fp == fp_mode::softfloat) ? (_enable_backtrace?120:100) : 100;
          // Multi-value epilogue: 8 bytes per value (2 instructions) + frame restore
          std::size_t epilogue_size = (_ft->return_types.size() > 1)
             ? _ft->return_types.size() * 8 + max_epilogue_size
@@ -1787,6 +1794,12 @@ namespace psizam::detail {
 
       template<auto F>
       constexpr auto choose_fn() {
+         // NOTE: outer branch MUST be compile-time (if constexpr) because the
+         // two branches have incompatible return types — a function pointer
+         // vs. nullptr — which cannot be unified in a runtime `if`. The
+         // adapt_*<F> overloads are also only defined under PSIZAM_SOFTFLOAT,
+         // so the `else` path must be excluded from instantiation when
+         // softfloat is compile-time off.
          if constexpr (use_softfloat && !use_native_fp) {
             if constexpr (std::is_same_v<decltype(F), float(*)(float)>) {
                return &adapt_f32_unop<F>;
@@ -2432,7 +2445,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_ceil() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_ceil<true>));
          }
          emit_pop_x(X0);
@@ -2443,7 +2456,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_floor() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_floor<true>));
          }
          emit_pop_x(X0);
@@ -2454,7 +2467,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_trunc() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_trunc<true>));
          }
          emit_pop_x(X0);
@@ -2465,7 +2478,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_nearest() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_nearest<true>));
          }
          emit_pop_x(X0);
@@ -2476,7 +2489,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_sqrt() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_sqrt));
          }
          emit_pop_x(X0);
@@ -2504,7 +2517,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_min() {
-         if constexpr(use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             emit_f32_binop_softfloat(CHOOSE_FN(_psizam_f32_min<true>));
             return;
          }
@@ -2512,7 +2525,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_max() {
-         if constexpr(use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             emit_f32_binop_softfloat(CHOOSE_FN(_psizam_f32_max<true>));
             return;
          }
@@ -2551,7 +2564,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_ceil() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_ceil<true>));
          }
          emit_pop_x(X0);
@@ -2562,7 +2575,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_floor() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_floor<true>));
          }
          emit_pop_x(X0);
@@ -2573,7 +2586,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_trunc() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_trunc<true>));
          }
          emit_pop_x(X0);
@@ -2584,7 +2597,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_nearest() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_nearest<true>));
          }
          emit_pop_x(X0);
@@ -2595,7 +2608,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_sqrt() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_sqrt));
          }
          emit_pop_x(X0);
@@ -2623,7 +2636,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_min() {
-         if constexpr(use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             emit_f64_binop_softfloat(CHOOSE_FN(_psizam_f64_min<true>));
             return;
          }
@@ -2631,7 +2644,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_max() {
-         if constexpr(use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             emit_f64_binop_softfloat(CHOOSE_FN(_psizam_f64_max<true>));
             return;
          }
@@ -2674,7 +2687,7 @@ namespace psizam::detail {
       }
 
       void emit_i32_trunc_s_f32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f32_trunc_i32s>()));
          }
          emit_pop_x(X0);
@@ -2686,7 +2699,7 @@ namespace psizam::detail {
       }
 
       void emit_i32_trunc_u_f32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f32_trunc_i32u>()));
          }
          emit_pop_x(X0);
@@ -2698,7 +2711,7 @@ namespace psizam::detail {
       }
 
       void emit_i32_trunc_s_f64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f64_trunc_i32s<true>>()));
          }
          emit_pop_x(X0);
@@ -2710,7 +2723,7 @@ namespace psizam::detail {
       }
 
       void emit_i32_trunc_u_f64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f64_trunc_i32u>()));
          }
          emit_pop_x(X0);
@@ -2738,7 +2751,7 @@ namespace psizam::detail {
       }
 
       void emit_i64_trunc_s_f32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f32_trunc_i64s>()));
          }
          emit_pop_x(X0);
@@ -2750,7 +2763,7 @@ namespace psizam::detail {
       }
 
       void emit_i64_trunc_u_f32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f32_trunc_i64u>()));
          }
          emit_pop_x(X0);
@@ -2762,7 +2775,7 @@ namespace psizam::detail {
       }
 
       void emit_i64_trunc_s_f64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f64_trunc_i64s>()));
          }
          emit_pop_x(X0);
@@ -2774,7 +2787,7 @@ namespace psizam::detail {
       }
 
       void emit_i64_trunc_u_f64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(softfloat_trap<&_psizam_f64_trunc_i64u>()));
          }
          emit_pop_x(X0);
@@ -2786,7 +2799,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_convert_s_i32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_to_f32));
          }
          emit_pop_x(X0);
@@ -2796,7 +2809,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_convert_u_i32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_ui32_to_f32));
          }
          emit_pop_x(X0);
@@ -2806,7 +2819,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_convert_s_i64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_to_f32));
          }
          emit_pop_x(X0);
@@ -2816,7 +2829,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_convert_u_i64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_ui64_to_f32));
          }
          emit_pop_x(X0);
@@ -2826,7 +2839,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_demote_f64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f64_demote));
          }
          emit_pop_x(X0);
@@ -2839,7 +2852,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_convert_s_i32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_to_f64));
          }
          emit_pop_x(X0);
@@ -2849,7 +2862,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_convert_u_i32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_ui32_to_f64));
          }
          emit_pop_x(X0);
@@ -2859,7 +2872,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_convert_s_i64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_to_f64));
          }
          emit_pop_x(X0);
@@ -2869,7 +2882,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_convert_u_i64() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_ui64_to_f64));
          }
          emit_pop_x(X0);
@@ -2879,7 +2892,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_promote_f32() {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             return emit_softfloat_unop(CHOOSE_FN(_psizam_f32_promote));
          }
          emit_pop_x(X0);
@@ -2900,56 +2913,56 @@ namespace psizam::detail {
       // - NaN input produces 0
       // This matches WASM trunc_sat semantics exactly.
       void emit_i32_trunc_sat_f32_s() {
-         if constexpr (use_softfloat && !use_native_fp) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_trunc_sat_f32_s)); }
+         if (!use_native_fp && _fp == fp_mode::softfloat) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_trunc_sat_f32_s)); }
          emit_pop_x(X0);
          emit32(0x1E270000); // FMOV S0, W0
          emit32(0x1E380000); // FCVTZS W0, S0
          emit_push_x(X0);
       }
       void emit_i32_trunc_sat_f32_u() {
-         if constexpr (use_softfloat && !use_native_fp) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_trunc_sat_f32_u)); }
+         if (!use_native_fp && _fp == fp_mode::softfloat) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_trunc_sat_f32_u)); }
          emit_pop_x(X0);
          emit32(0x1E270000); // FMOV S0, W0
          emit32(0x1E390000); // FCVTZU W0, S0
          emit_push_x(X0);
       }
       void emit_i32_trunc_sat_f64_s() {
-         if constexpr (use_softfloat && !use_native_fp) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_trunc_sat_f64_s)); }
+         if (!use_native_fp && _fp == fp_mode::softfloat) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_trunc_sat_f64_s)); }
          emit_pop_x(X0);
          emit32(0x9E670000); // FMOV D0, X0
          emit32(0x1E780000); // FCVTZS W0, D0
          emit_push_x(X0);
       }
       void emit_i32_trunc_sat_f64_u() {
-         if constexpr (use_softfloat && !use_native_fp) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_trunc_sat_f64_u)); }
+         if (!use_native_fp && _fp == fp_mode::softfloat) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i32_trunc_sat_f64_u)); }
          emit_pop_x(X0);
          emit32(0x9E670000); // FMOV D0, X0
          emit32(0x1E790000); // FCVTZU W0, D0
          emit_push_x(X0);
       }
       void emit_i64_trunc_sat_f32_s() {
-         if constexpr (use_softfloat && !use_native_fp) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_trunc_sat_f32_s)); }
+         if (!use_native_fp && _fp == fp_mode::softfloat) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_trunc_sat_f32_s)); }
          emit_pop_x(X0);
          emit32(0x1E270000); // FMOV S0, W0
          emit32(0x9E380000); // FCVTZS X0, S0
          emit_push_x(X0);
       }
       void emit_i64_trunc_sat_f32_u() {
-         if constexpr (use_softfloat && !use_native_fp) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_trunc_sat_f32_u)); }
+         if (!use_native_fp && _fp == fp_mode::softfloat) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_trunc_sat_f32_u)); }
          emit_pop_x(X0);
          emit32(0x1E270000); // FMOV S0, W0
          emit32(0x9E390000); // FCVTZU X0, S0
          emit_push_x(X0);
       }
       void emit_i64_trunc_sat_f64_s() {
-         if constexpr (use_softfloat && !use_native_fp) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_trunc_sat_f64_s)); }
+         if (!use_native_fp && _fp == fp_mode::softfloat) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_trunc_sat_f64_s)); }
          emit_pop_x(X0);
          emit32(0x9E670000); // FMOV D0, X0
          emit32(0x9E780000); // FCVTZS X0, D0
          emit_push_x(X0);
       }
       void emit_i64_trunc_sat_f64_u() {
-         if constexpr (use_softfloat && !use_native_fp) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_trunc_sat_f64_u)); }
+         if (!use_native_fp && _fp == fp_mode::softfloat) { return emit_softfloat_unop(CHOOSE_FN(_psizam_i64_trunc_sat_f64_u)); }
          emit_pop_x(X0);
          emit32(0x9E670000); // FMOV D0, X0
          emit32(0x9E790000); // FCVTZU X0, D0
@@ -4779,7 +4792,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_binop(float32_t (*softfloatfun)(float32_t, float32_t), uint32_t hw_instr) {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             if (softfloatfun) {
                return emit_f32_binop_softfloat(softfloatfun);
             }
@@ -4794,7 +4807,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_binop(float64_t (*softfloatfun)(float64_t, float64_t), uint32_t hw_instr) {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             if (softfloatfun) {
                return emit_f64_binop_softfloat(softfloatfun);
             }
@@ -4808,7 +4821,7 @@ namespace psizam::detail {
       }
 
       void emit_f32_relop(uint64_t (*softfloatfun)(float32_t, float32_t), bool switch_params, bool flip_result, uint32_t native_cond = COND_EQ) {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             if (switch_params) {
                emit_pop_x(X0);
                emit_pop_x(X1);
@@ -4842,7 +4855,7 @@ namespace psizam::detail {
       }
 
       void emit_f64_relop(uint64_t (*softfloatfun)(float64_t, float64_t), bool switch_params, bool flip_result, uint32_t native_cond = COND_EQ) {
-         if constexpr (use_softfloat && !use_native_fp) {
+         if (!use_native_fp && _fp == fp_mode::softfloat) {
             if (switch_params) {
                emit_pop_x(X0);
                emit_pop_x(X1);
@@ -5463,6 +5476,11 @@ namespace psizam::detail {
       void* _code_segment_base;
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;
+      // Floating-point mode selected per-instance at JIT-compile time.
+      // Default preserves the pre-existing compile-time behavior. Once the
+      // module is JIT-compiled, the emitted code is baked — changing _fp
+      // afterward has no effect on already-emitted machine code.
+      fp_mode _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
       const func_type* _ft = nullptr;
       function_parameters _params;
       function_locals _locals;
