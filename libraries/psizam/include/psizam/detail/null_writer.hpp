@@ -485,7 +485,7 @@ class null_writer {
    void emit_throw(uint32_t) {}
    void emit_rethrow(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {}
    void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {}
-   std::vector<branch_t> emit_try_table(uint8_t, uint32_t, const std::vector<catch_clause>&) { return {}; }
+   std::vector<branch_t> emit_try_table(uint8_t, uint32_t, const std::vector<catch_clause>&, uint32_t = 0) { return {}; }
    void emit_throw_ref() {}
    void emit_eh_leave() {}
 

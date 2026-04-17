@@ -1785,7 +1785,7 @@ namespace psizam::detail {
                      }
                   }
 
-                  auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses);
+                  auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses, static_cast<uint32_t>(bp.size()));
 
                   // Register catch clause PCs for branch target relocation
                   // (still in enclosing scope — before try_table push)

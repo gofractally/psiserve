@@ -2662,9 +2662,9 @@ namespace psizam::detail {
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {
          // Structural no-op
       }
-      std::vector<branch_t> emit_try_table(uint8_t result_type, uint32_t result_count, const std::vector<catch_clause>& clauses) {
+      std::vector<branch_t> emit_try_table(uint8_t result_type, uint32_t result_count, const std::vector<catch_clause>& clauses, uint32_t param_count = 0) {
          if (_unreachable) {
-            emit_block(result_type, result_count);
+            emit_block(result_type, result_count, param_count);
             return std::vector<branch_t>(clauses.size(), UINT32_MAX);
          }
 
@@ -2676,7 +2676,16 @@ namespace psizam::detail {
          // ── 2. Allocate the try body control entry (need merge vregs for dispatch) ──
          ir_control_entry try_entry{};
          try_entry.block_idx = _func->new_block(); // try body block
-         try_entry.stack_depth = _func->vstack_depth();
+         try_entry.param_count = static_cast<uint8_t>(param_count);
+         std::memset(try_entry.param_vregs, 0xFF, sizeof(try_entry.param_vregs));
+         if (param_count <= _func->vstack_depth()) {
+            try_entry.stack_depth = _func->vstack_depth() - param_count;
+            for (uint32_t i = 0; i < param_count && i < 16; ++i) {
+               try_entry.param_vregs[i] = _func->vstack[try_entry.stack_depth + i];
+            }
+         } else {
+            try_entry.stack_depth = _func->vstack_depth();
+         }
          try_entry.result_type = result_type;
          try_entry.is_loop = 0;
          try_entry.is_function = 0;

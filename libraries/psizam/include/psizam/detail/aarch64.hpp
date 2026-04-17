@@ -1395,7 +1395,7 @@ namespace psizam::detail {
       void emit_delegate(uint32_t, uint8_t, uint32_t, uint32_t = UINT32_MAX) {}
 
       std::vector<void*> emit_try_table(uint8_t /*result_type*/, uint32_t /*result_count*/,
-                                        const std::vector<catch_clause>& clauses) {
+                                        const std::vector<catch_clause>& clauses, uint32_t /*param_count*/ = 0) {
          invalidate_recent_ops();
          uint32_t catch_count = static_cast<uint32_t>(clauses.size());
          if (catch_count == 0) return {};

@@ -1194,7 +1194,7 @@ namespace psizam::detail {
          // delegate acts as end of try — structural no-op in JIT
       }
       std::vector<void*> emit_try_table(uint8_t /*result_type*/, uint32_t /*result_count*/,
-                                        const std::vector<catch_clause>& clauses) {
+                                        const std::vector<catch_clause>& clauses, uint32_t /*param_count*/ = 0) {
          uint32_t catch_count = static_cast<uint32_t>(clauses.size());
          if (catch_count == 0) return {};
 

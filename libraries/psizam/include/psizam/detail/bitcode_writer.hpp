@@ -83,7 +83,7 @@ namespace psizam::detail {
          instr.data = label;
       }
       // WASM 3.0 EH — returns pointers to each catch clause's PC field for branch relocation
-      std::vector<uint32_t*> emit_try_table(uint8_t result_type, uint32_t result_count, const std::vector<catch_clause>& clauses) {
+      std::vector<uint32_t*> emit_try_table(uint8_t result_type, uint32_t result_count, const std::vector<catch_clause>& clauses, uint32_t /*param_count*/ = 0) {
          auto& instr = append_instr(try_table_t{});
          instr.data = static_cast<uint32_t>(clauses.size());
          std::vector<uint32_t*> clause_pcs;
