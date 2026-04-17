@@ -266,46 +266,25 @@ static run_result run_wasm3(const std::vector<uint8_t>& wasm_bytes,
          return r;
       }
 
-      // Read return value
+      // Read return values using the array API so multi-value works.
+      // m3_GetResultsV requires one variadic pointer per return; a single-pointer
+      // call is UB for multi-value functions and wrote garbage into slot 0.
       return_value rv{};
       uint32_t num_rets = m3_GetRetCount(fn);
       if (num_rets > 0) {
-         M3ValueType ret_type = m3_GetRetType(fn, 0);
-         switch (ret_type) {
-            case c_m3Type_i32: {
-               uint32_t val;
-               m3_GetResultsV(fn, &val);
-               rv.type = types::i32;
-               rv.bits = val;
-               break;
+         std::vector<uint64_t> slots(num_rets, 0);
+         std::vector<const void*> ptrs(num_rets);
+         for (uint32_t i = 0; i < num_rets; ++i) ptrs[i] = &slots[i];
+         M3Result gr = m3_GetResults(fn, num_rets, ptrs.data());
+         if (gr == m3Err_none) {
+            M3ValueType ret_type = m3_GetRetType(fn, 0);
+            switch (ret_type) {
+               case c_m3Type_i32: rv.type = types::i32; rv.bits = (uint32_t)slots[0]; break;
+               case c_m3Type_i64: rv.type = types::i64; rv.bits = slots[0]; break;
+               case c_m3Type_f32: rv.type = types::f32; rv.bits = (uint32_t)slots[0]; break;
+               case c_m3Type_f64: rv.type = types::f64; rv.bits = slots[0]; break;
+               default: break;
             }
-            case c_m3Type_i64: {
-               uint64_t val;
-               m3_GetResultsV(fn, &val);
-               rv.type = types::i64;
-               rv.bits = val;
-               break;
-            }
-            case c_m3Type_f32: {
-               float val;
-               m3_GetResultsV(fn, &val);
-               rv.type = types::f32;
-               uint32_t bits;
-               memcpy(&bits, &val, 4);
-               rv.bits = bits;
-               break;
-            }
-            case c_m3Type_f64: {
-               double val;
-               m3_GetResultsV(fn, &val);
-               rv.type = types::f64;
-               uint64_t bits;
-               memcpy(&bits, &val, 8);
-               rv.bits = bits;
-               break;
-            }
-            default:
-               break;
          }
       }
       r.returns.push_back(rv);
