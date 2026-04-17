@@ -1010,6 +1010,13 @@ namespace psizam::detail {
             emit_branch_to_handler(COND_NE, memory_handler);
             // Truncate to 32 bits for guard-page-based OOB detection
             emit_mov_reg32(addr_reg, addr_reg);
+         } else {
+            // Memory32: zero-extend address to 32 bits. Operations like
+            // i32.trunc_f64_s can leave the upper 32 bits sign-extended
+            // (e.g., -9 → 0xFFFFFFFFFFFFFFF7). Without clearing the upper
+            // bits, the 64-bit addr+offset addition wraps around, turning
+            // an OOB address into an in-bounds one.
+            emit_mov_reg32(addr_reg, addr_reg);
          }
          if (uoffset & 0x80000000u) {
             emit_mov_imm32(X16, uoffset);
