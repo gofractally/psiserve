@@ -272,13 +272,14 @@ namespace psio {
 
          // Parse top-level items
          while (!peek_is(detail::wit_tok::eof)) {
+            auto attrs = parse_attributes();
             auto tok = lex_.peek();
             switch (tok.kind) {
                case detail::wit_tok::kw_interface:
-                  parse_interface_decl(world);
+                  parse_interface_decl(world, std::move(attrs));
                   break;
                case detail::wit_tok::kw_world:
-                  parse_world_decl(world);
+                  parse_world_decl(world, std::move(attrs));
                   break;
                case detail::wit_tok::kw_use:
                   skip_use_stmt(); // skip top-level use for now
@@ -416,14 +417,57 @@ namespace psio {
             world.name = pkg;
       }
 
+      // ----- Attributes -----
+
+      std::vector<wit_attribute> parse_attributes() {
+         std::vector<wit_attribute> attrs;
+         while (peek_is(tok::at)) {
+            lex_.next(); // consume '@'
+            auto name_tok = expect_ident();
+            wit_attribute attr;
+            attr.name = std::string(name_tok.text);
+            if (peek_is(tok::lparen)) {
+               lex_.next(); // '('
+               if (!peek_is(tok::rparen)) {
+                  auto key_tok = expect_ident();
+                  attr.arg_key = std::string(key_tok.text);
+                  expect(tok::equal);
+                  attr.arg_value = parse_attr_value();
+               }
+               expect(tok::rparen);
+            }
+            attrs.push_back(std::move(attr));
+         }
+         return attrs;
+      }
+
+      // Attribute values are either an identifier (feature = foo) or a
+      // semver literal (version = 0.2.0).
+      std::string parse_attr_value() {
+         auto t = lex_.next();
+         std::string v(t.text);
+         if (t.kind == tok::number) {
+            // semver: num.num.num
+            while (peek_is(tok::dot)) {
+               lex_.next();
+               auto n = lex_.next();
+               v += '.';
+               v += n.text;
+            }
+         }
+         return v;
+      }
+
       // ----- Interface -----
 
-      void parse_interface_decl(pzam_wit_world& world) {
+      void parse_interface_decl(pzam_wit_world& world,
+                                std::vector<wit_attribute> attrs = {}) {
          expect(tok::kw_interface);
          auto name = expect_ident();
 
          wit_interface iface;
          iface.name = std::string(name.text);
+         iface.attributes = std::move(attrs);
 
          expect(tok::lbrace);
          parse_interface_body(world, iface);
@@ -435,22 +479,23 @@ namespace psio {
 
       void parse_interface_body(pzam_wit_world& world, wit_interface& iface) {
          while (!peek_is(tok::rbrace) && !peek_is(tok::eof)) {
+            auto item_attrs = parse_attributes();
             auto t = lex_.peek();
             switch (t.kind) {
                case tok::kw_record:
-                  parse_record(world, &iface);
+                  parse_record(world, &iface, std::move(item_attrs));
                   break;
                case tok::kw_variant:
-                  parse_variant(world, &iface);
+                  parse_variant(world, &iface, std::move(item_attrs));
                   break;
                case tok::kw_enum:
-                  parse_enum(world, &iface);
+                  parse_enum(world, &iface, std::move(item_attrs));
                   break;
                case tok::kw_flags:
-                  parse_flags(world, &iface);
+                  parse_flags(world, &iface, std::move(item_attrs));
                   break;
                case tok::kw_type:
-                  parse_type_alias(world, &iface);
+                  parse_type_alias(world, &iface, std::move(item_attrs));
                   break;
                case tok::kw_resource:
                   skip_resource();
@@ -460,7 +505,7 @@ namespace psio {
                   break;
                case tok::ident:
                   // Could be: name: func(...) -> ...;
-                  parse_named_func(world, &iface);
+                  parse_named_func(world, &iface, std::move(item_attrs));
                   break;
                default:
                   error(t, "unexpected token in interface body");
@@ -470,16 +515,20 @@ namespace psio {
 
       // ----- World -----
 
-      void parse_world_decl(pzam_wit_world& world) {
+      void parse_world_decl(pzam_wit_world& world,
+                            std::vector<wit_attribute> attrs = {}) {
          expect(tok::kw_world);
          auto name = expect_ident();
 
          if (world.name.empty())
             world.name = std::string(name.text);
+         if (world.attributes.empty())
+            world.attributes = std::move(attrs);
 
          expect(tok::lbrace);
 
          while (!peek_is(tok::rbrace) && !peek_is(tok::eof)) {
+            auto item_attrs = parse_attributes();
             auto t = lex_.peek();
             switch (t.kind) {
                case tok::kw_import:
@@ -489,19 +538,19 @@ namespace psio {
                   parse_world_export(world);
                   break;
                case tok::kw_record:
-                  parse_record(world, nullptr);
+                  parse_record(world, nullptr, std::move(item_attrs));
                   break;
                case tok::kw_variant:
-                  parse_variant(world, nullptr);
+                  parse_variant(world, nullptr, std::move(item_attrs));
                   break;
                case tok::kw_enum:
-                  parse_enum(world, nullptr);
+                  parse_enum(world, nullptr, std::move(item_attrs));
                   break;
                case tok::kw_flags:
-                  parse_flags(world, nullptr);
+                  parse_flags(world, nullptr, std::move(item_attrs));
                   break;
                case tok::kw_type:
-                  parse_type_alias(world, nullptr);
+                  parse_type_alias(world, nullptr, std::move(item_attrs));
                   break;
                case tok::kw_use:
                   skip_use_stmt();
@@ -596,21 +645,25 @@ namespace psio {
 
       // ----- Type definitions -----
 
-      void parse_record(pzam_wit_world& world, wit_interface* iface) {
+      void parse_record(pzam_wit_world& world, wit_interface* iface,
+                        std::vector<wit_attribute> attrs = {}) {
          expect(tok::kw_record);
          auto name = expect_ident();
 
          wit_type_def td;
          td.name = std::string(name.text);
          td.kind = static_cast<uint8_t>(wit_type_kind::record_);
+         td.attributes = std::move(attrs);
 
          expect(tok::lbrace);
          while (!peek_is(tok::rbrace) && !peek_is(tok::eof)) {
+            auto field_attrs = parse_attributes();
             auto field_name = expect_ident();
             expect(tok::colon);
             int32_t type_idx = parse_type_ref(world);
 
-            td.fields.push_back({std::string(field_name.text), type_idx});
+            td.fields.push_back({std::string(field_name.text), type_idx,
+                                 std::move(field_attrs)});
 
             // Optional trailing comma
             if (peek_is(tok::comma)) lex_.next();
@@ -621,16 +674,19 @@ namespace psio {
          if (iface) iface->type_idxs.push_back(idx);
       }
 
-      void parse_variant(pzam_wit_world& world, wit_interface* iface) {
+      void parse_variant(pzam_wit_world& world, wit_interface* iface,
+                         std::vector<wit_attribute> attrs = {}) {
          expect(tok::kw_variant);
          auto name = expect_ident();
 
          wit_type_def td;
          td.name = std::string(name.text);
          td.kind = static_cast<uint8_t>(wit_type_kind::variant_);
+         td.attributes = std::move(attrs);
 
          expect(tok::lbrace);
          while (!peek_is(tok::rbrace) && !peek_is(tok::eof)) {
+            auto case_attrs = parse_attributes();
             auto case_name = expect_ident();
             int32_t type_idx = 0;
             // Optional payload type
@@ -639,7 +695,8 @@ namespace psio {
                type_idx = parse_type_ref(world);
                expect(tok::rparen);
             }
-            td.fields.push_back({std::string(case_name.text), type_idx});
+            td.fields.push_back({std::string(case_name.text), type_idx,
+                                 std::move(case_attrs)});
             if (peek_is(tok::comma)) lex_.next();
          }
          expect(tok::rbrace);
@@ -648,18 +705,22 @@ namespace psio {
          if (iface) iface->type_idxs.push_back(idx);
       }
 
-      void parse_enum(pzam_wit_world& world, wit_interface* iface) {
+      void parse_enum(pzam_wit_world& world, wit_interface* iface,
+                      std::vector<wit_attribute> attrs = {}) {
          expect(tok::kw_enum);
          auto name = expect_ident();
 
          wit_type_def td;
          td.name = std::string(name.text);
          td.kind = static_cast<uint8_t>(wit_type_kind::enum_);
+         td.attributes = std::move(attrs);
 
          expect(tok::lbrace);
          while (!peek_is(tok::rbrace) && !peek_is(tok::eof)) {
+            auto label_attrs = parse_attributes();
             auto label = expect_ident();
-            td.fields.push_back({std::string(label.text), 0});
+            td.fields.push_back({std::string(label.text), 0,
+                                 std::move(label_attrs)});
             if (peek_is(tok::comma)) lex_.next();
          }
          expect(tok::rbrace);
@@ -668,18 +729,22 @@ namespace psio {
          if (iface) iface->type_idxs.push_back(idx);
       }
 
-      void parse_flags(pzam_wit_world& world, wit_interface* iface) {
+      void parse_flags(pzam_wit_world& world, wit_interface* iface,
+                       std::vector<wit_attribute> attrs = {}) {
          expect(tok::kw_flags);
          auto name = expect_ident();
 
          wit_type_def td;
          td.name = std::string(name.text);
          td.kind = static_cast<uint8_t>(wit_type_kind::flags_);
+         td.attributes = std::move(attrs);
 
          expect(tok::lbrace);
          while (!peek_is(tok::rbrace) && !peek_is(tok::eof)) {
+            auto label_attrs = parse_attributes();
             auto label = expect_ident();
-            td.fields.push_back({std::string(label.text), 0});
+            td.fields.push_back({std::string(label.text), 0,
+                                 std::move(label_attrs)});
             if (peek_is(tok::comma)) lex_.next();
          }
          expect(tok::rbrace);
@@ -688,7 +753,8 @@ namespace psio {
          if (iface) iface->type_idxs.push_back(idx);
       }
 
-      void parse_type_alias(pzam_wit_world& world, wit_interface* iface) {
+      void parse_type_alias(pzam_wit_world& world, wit_interface* iface,
+                            std::vector<wit_attribute> attrs = {}) {
          expect(tok::kw_type);
          auto name = expect_ident();
          expect(tok::equal);
@@ -701,6 +767,7 @@ namespace psio {
          td.name = std::string(name.text);
          td.kind = static_cast<uint8_t>(wit_type_kind::record_); // alias
          td.element_type_idx = type_idx;
+         td.attributes = std::move(attrs);
 
          uint32_t idx = add_type(world, std::move(td));
          if (iface) iface->type_idxs.push_back(idx);
@@ -708,10 +775,12 @@ namespace psio {
 
       // ----- Functions -----
 
-      void parse_named_func(pzam_wit_world& world, wit_interface* iface) {
+      void parse_named_func(pzam_wit_world& world, wit_interface* iface,
+                            std::vector<wit_attribute> attrs = {}) {
          auto name = expect_ident();
          expect(tok::colon);
          auto func = parse_func_sig(world, std::string(name.text));
+         func.attributes = std::move(attrs);
          expect(tok::semicolon);
 
          world.funcs.push_back(std::move(func));

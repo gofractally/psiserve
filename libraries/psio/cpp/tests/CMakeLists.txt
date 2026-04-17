@@ -10,6 +10,9 @@ add_executable(psio_tests
    capnp_parser_tests.cpp
    fbs_parser_tests.cpp
    wit_resource_tests.cpp
+   wit_attribute_tests.cpp
+   psio_attribute_tests.cpp
+   fracpack_validate_tests.cpp
 )
 
 target_link_libraries(psio_tests PRIVATE psio)

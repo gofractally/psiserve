@@ -79,13 +79,35 @@ namespace psio {
       borrow_   = 10,  ///< Borrowed handle: element_type_idx → resource type
    };
 
+   /// An attribute attached to a WIT item, field, or case.
+   ///
+   /// Examples:
+   ///   @since(version = 0.2.0)  → name="since", arg_key="version", arg_value="0.2.0"
+   ///   @unstable(feature = foo) → name="unstable", arg_key="feature", arg_value="foo"
+   ///   @final                   → name="final", arg_key="", arg_value=""
+   ///   @sorted                  → name="sorted", arg_key="", arg_value=""
+   ///
+   /// The spec-endorsed attributes are @since, @unstable, @deprecated (feature
+   /// gating). PSIO extends this vocabulary with @final (closed record),
+   /// @sorted, @unique-keys, @canonical, @utf8 (semantic invariants).
+   ///
+   /// Unknown attributes are preserved on the AST so they can round-trip
+   /// through import/export without loss.
+   struct wit_attribute {
+      std::string name;
+      std::string arg_key;
+      std::string arg_value;
+   };
+   PSIO_REFLECT(wit_attribute, name, arg_key, arg_value)
+
    /// A named field within a record, variant case, function param/result,
    /// or label within an enum/flags.
    struct wit_named_type {
-      std::string name;
-      int32_t     type_idx = 0;  // negative = wit_prim, non-negative = index into types[]
+      std::string                name;
+      int32_t                    type_idx = 0;  // negative = wit_prim, non-negative = index into types[]
+      std::vector<wit_attribute> attributes;
    };
-   PSIO_REFLECT(wit_named_type, name, type_idx)
+   PSIO_REFLECT(wit_named_type, name, type_idx, attributes)
 
    /// A compound type definition (record, variant, enum, flags, list, resource, etc.).
    ///
@@ -104,8 +126,9 @@ namespace psio {
       int32_t                     element_type_idx = 0;  // list/option/own/borrow element; result ok type
       int32_t                     error_type_idx   = 0;  // result err type (0 = none)
       std::vector<uint32_t>       method_func_idxs;      // resource methods (indices into world.funcs[])
+      std::vector<wit_attribute>  attributes;            // @since, @final, @sorted, etc.
    };
-   PSIO_REFLECT(wit_type_def, name, kind, fields, element_type_idx, error_type_idx, method_func_idxs)
+   PSIO_REFLECT(wit_type_def, name, kind, fields, element_type_idx, error_type_idx, method_func_idxs, attributes)
 
    // ---- Functions ----
 
@@ -115,18 +138,20 @@ namespace psio {
       std::vector<wit_named_type> params;
       std::vector<wit_named_type> results;
       uint32_t                    core_func_idx = UINT32_MAX;  // WASM export index, or UINT32_MAX if unlinked
+      std::vector<wit_attribute>  attributes;
    };
-   PSIO_REFLECT(wit_func, name, params, results, core_func_idx)
+   PSIO_REFLECT(wit_func, name, params, results, core_func_idx, attributes)
 
    // ---- Interfaces ----
 
    /// A named group of types and functions (WIT interface).
    struct wit_interface {
-      std::string              name;
-      std::vector<uint32_t>    type_idxs;  // indices into world.types[]
-      std::vector<uint32_t>    func_idxs;  // indices into world.funcs[]
+      std::string                name;
+      std::vector<uint32_t>      type_idxs;  // indices into world.types[]
+      std::vector<uint32_t>      func_idxs;  // indices into world.funcs[]
+      std::vector<wit_attribute> attributes;
    };
-   PSIO_REFLECT(wit_interface, name, type_idxs, func_idxs)
+   PSIO_REFLECT(wit_interface, name, type_idxs, func_idxs, attributes)
 
    // ---- World (top-level container) ----
 
@@ -141,8 +166,9 @@ namespace psio {
       std::vector<wit_func>         funcs;       // all function signatures
       std::vector<wit_interface>    exports;
       std::vector<wit_interface>    imports;
+      std::vector<wit_attribute>    attributes;
    };
-   PSIO_REFLECT(wit_world, package, name, wit_source, types, funcs, exports, imports)
+   PSIO_REFLECT(wit_world, package, name, wit_source, types, funcs, exports, imports, attributes)
 
    // Backward-compat alias for psizam consumers
    using pzam_wit_world = wit_world;

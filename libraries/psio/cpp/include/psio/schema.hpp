@@ -3,6 +3,7 @@
 #include <charconv>
 #include <concepts>
 #include <map>
+#include <psio/attributes.hpp>
 #include <psio/fracpack.hpp>
 #include <psio/from_json/map.hpp>
 #include <psio/get_type_name.hpp>
@@ -186,9 +187,27 @@ namespace psio
       void to_json_members(const std::vector<Member>&, auto& stream);
       void from_json_members(const std::vector<Member>&, auto& stream);
 
+      // Schema attribute. Carries WIT-style annotations like @sorted, @number(5),
+      // @since("1.2") that flow from C++ reflection through the IR to WIT emit.
+      // value is nullopt for bare flags (@sorted), otherwise the rendered form
+      // of the argument ("5", "\"1.2\"", "feature = \"foo\"").
+      //
+      // Phase A: populated in-memory by SchemaBuilder. Not yet on the FracPack
+      // wire for Object/Struct/Variant (those types still use the vector<Member>
+      // unwrap for wire compat). Member's attributes ARE wire-serialized as a
+      // trailing field.
+      struct Attribute
+      {
+         std::string                name;
+         std::optional<std::string> value;
+         friend bool operator==(const Attribute&, const Attribute&) = default;
+      };
+      PSIO_REFLECT(Attribute, name, value)
+
       struct Object
       {
-         std::vector<Member> members;
+         std::vector<Member>    members;
+         std::vector<Attribute> attributes;
       };
 
       PSIO_REFLECT_TYPENAME(Object)
@@ -214,7 +233,8 @@ namespace psio
 
       struct Struct
       {
-         std::vector<Member> members;
+         std::vector<Member>    members;
+         std::vector<Attribute> attributes;
       };
       PSIO_REFLECT_TYPENAME(Struct)
 
@@ -317,7 +337,8 @@ namespace psio
 
       struct Variant
       {
-         std::vector<Member> members;
+         std::vector<Member>    members;
+         std::vector<Attribute> attributes;
       };
       PSIO_REFLECT_TYPENAME(Variant)
 
@@ -479,10 +500,11 @@ namespace psio
 
       struct Member
       {
-         std::string name;
-         AnyType     type;
+         std::string            name;
+         AnyType                type;
+         std::vector<Attribute> attributes;
       };
-      PSIO_REFLECT(Member, name, type)
+      PSIO_REFLECT(Member, name, type, attributes)
 
       inline AnyType::AnyType() {}
       inline AnyType::AnyType(Int type) : value(std::move(type)) {}
@@ -740,6 +762,53 @@ namespace psio
       validation_t fracpack_validate(std::span<const char> data,
                                      const CompiledSchema& schema,
                                      const std::string&    type);
+
+      /// A compiled, rapid-validation-ready artifact bundling a CompiledSchema
+      /// with a specific root type. Construct once per (schema, root type) pair;
+      /// validate many blobs against it.
+      ///
+      ///   auto schema = SchemaBuilder{}.insert<MyType>("MyType").build();
+      ///   auto v      = psio::compile(schema, "MyType");
+      ///   auto result = psio::fracpack_validate(bytes, v);   // validation_t
+      ///
+      /// Not copyable or movable — CompiledSchema holds a reference to its
+      /// source Schema, so CompiledValidator must be constructed in place
+      /// (guaranteed copy elision applies to prvalue return from compile()).
+      struct CompiledValidator
+      {
+         CompiledValidator(const Schema& s, std::string_view root_type_name)
+             : compiled(s), root_name(root_type_name)
+         {
+            const AnyType* at = s.get(root_name);
+            root = at ? compiled.get(at) : nullptr;
+         }
+         CompiledValidator(const CompiledValidator&)            = delete;
+         CompiledValidator& operator=(const CompiledValidator&) = delete;
+
+         CompiledSchema      compiled;
+         std::string         root_name;
+         const CompiledType* root = nullptr;
+
+         /// True if the root type name resolves to a known type in the schema.
+         bool valid() const { return root != nullptr; }
+      };
+
+      /// Compile a schema into a rapid-validation artifact for a specific root
+      /// type. Pair with fracpack_validate(bytes, validator).
+      inline CompiledValidator compile(const Schema& s, std::string_view root_type_name)
+      {
+         return CompiledValidator{s, root_type_name};
+      }
+
+      /// Validate a FracPack byte buffer against a compiled validator.
+      /// Wraps the (schema, type) 3-arg form with a single compiled artifact.
+      inline validation_t fracpack_validate(std::span<const char>    data,
+                                            const CompiledValidator& v)
+      {
+         if (!v.valid())
+            return validation_t::invalid;
+         return fracpack_validate(data, v.compiled, v.root_name);
+      }
 
       struct OpenToken
       {
@@ -1719,6 +1788,60 @@ namespace psio
          requires std::convertible_to<typename T::key_type, std::string_view>;
       };
 
+      // Convert a single attribute tag (from attributes.hpp) to a schema
+      // Attribute IR entry. Callers use attrs_from_tuple() to convert a whole
+      // std::tuple<tags...> into std::vector<Attribute>.
+      inline Attribute tag_to_attribute(sorted_tag)      { return {"sorted"}; }
+      inline Attribute tag_to_attribute(unique_keys_tag) { return {"unique-keys"}; }
+      inline Attribute tag_to_attribute(utf8_tag)        { return {"utf8"}; }
+      inline Attribute tag_to_attribute(canonical_tag)   { return {"canonical"}; }
+      inline Attribute tag_to_attribute(final_tag)       { return {"final"}; }
+      inline Attribute tag_to_attribute(padding_tag)     { return {"padding"}; }
+      inline Attribute tag_to_attribute(flags_tag)       { return {"flags"}; }
+
+      template <unsigned N>
+      Attribute tag_to_attribute(number_tag<N>)
+      {
+         return {"number", std::to_string(N)};
+      }
+
+      template <FixedString V>
+      Attribute tag_to_attribute(since_tag<V>)
+      {
+         return {"since", std::string{"\""} + V.buf + "\""};
+      }
+
+      template <FixedString N>
+      Attribute tag_to_attribute(unstable_tag<N>)
+      {
+         return {"unstable", std::string{"feature = \""} + N.buf + "\""};
+      }
+
+      template <FixedString V>
+      Attribute tag_to_attribute(deprecated_tag<V>)
+      {
+         return {"deprecated", std::string{"\""} + V.buf + "\""};
+      }
+
+      template <typename Tuple, std::size_t... I>
+      std::vector<Attribute> attrs_from_tuple_impl(const Tuple& t, std::index_sequence<I...>)
+      {
+         return {tag_to_attribute(std::get<I>(t))...};
+      }
+
+      template <typename... Tags>
+      std::vector<Attribute> attrs_from_tuple(const std::tuple<Tags...>& t)
+      {
+         return attrs_from_tuple_impl(t,
+                                      std::make_index_sequence<sizeof...(Tags)>{});
+      }
+
+      // Specialization for empty tuple — avoid pointless {} expansion.
+      inline std::vector<Attribute> attrs_from_tuple(const std::tuple<>&)
+      {
+         return {};
+      }
+
       class SchemaBuilder;
 
       template <typename T>
@@ -1835,7 +1958,10 @@ namespace psio
                }
                else if constexpr (is_std_variant_v<T>)
                {
-                  schema.insert(name, Variant{insert_variant_alternatives(*this, (T*)nullptr)});
+                  schema.insert(
+                      name,
+                      Variant{.members    = insert_variant_alternatives(*this, (T*)nullptr),
+                              .attributes = attrs_from_tuple(type_attrs_of<T>())});
                }
                else if constexpr (is_std_array_v<T>)
                {
@@ -1856,23 +1982,33 @@ namespace psio
                }
                else if constexpr (reflect<T>::is_struct)
                {
-                  auto members = psio::apply_members(
+                  auto members = psio::apply_member_templates(
                       (typename reflect<T>::data_members*)nullptr,
-                      [this](auto... member)
+                      [this]<auto... M>() -> std::vector<Member>
                       {
                          std::size_t i = 0;
                          return std::vector<Member>{Member{
                              .name = reflect<T>::data_member_names[i++],
                              .type = insert<
-                                 std::remove_cvref_t<decltype(((T*)nullptr)->*member)>>()}...};
+                                 std::remove_cvref_t<decltype(((T*)nullptr)->*M)>>(),
+                             .attributes = attrs_from_tuple(member_attrs_of<M>())}...};
                       });
+                  auto type_attrs = attrs_from_tuple(type_attrs_of<T>());
+                  // PSIO_REFLECT flags: canonical() and final() roll into the
+                  // attribute stream so downstream WIT emit sees them uniformly.
+                  if constexpr (reflect<T>::canonical)
+                     type_attrs.push_back({"canonical"});
+                  if constexpr (reflect<T>::final)
+                     type_attrs.push_back({"final"});
                   if constexpr (reflect<T>::definitionWillNotChange)
                   {
-                     schema.insert(name, Struct{std::move(members)});
+                     schema.insert(name, Struct{.members    = std::move(members),
+                                                .attributes = std::move(type_attrs)});
                   }
                   else
                   {
-                     schema.insert(name, Object{std::move(members)});
+                     schema.insert(name, Object{.members    = std::move(members),
+                                                .attributes = std::move(type_attrs)});
                   }
                }
                else if constexpr (JsonMapType<T>)
@@ -2020,6 +2156,9 @@ namespace psio
       };
    }  // namespace schema_types
 
+   using schema_types::compile;
+   using schema_types::CompiledValidator;
+   using schema_types::fracpack_validate;
    using schema_types::match;
    using schema_types::Schema;
    using schema_types::SchemaBuilder;

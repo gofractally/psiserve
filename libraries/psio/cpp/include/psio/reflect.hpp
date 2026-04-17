@@ -165,6 +165,8 @@ namespace psio
       static constexpr bool is_defined              = false;
       static constexpr bool is_struct               = false;
       static constexpr bool definitionWillNotChange = false;
+      static constexpr bool canonical               = false;
+      static constexpr bool final                   = false;
       template <typename L>
       static void get(const std::string_view& m, L&& lambda);
    };
@@ -427,6 +429,16 @@ namespace psio
       return f(M...);
    }
 
+   // Like apply_members, but the callback receives the member pointers as a
+   // template parameter pack instead of a function parameter pack. Needed
+   // when the callback must use each member pointer in a compile-time context
+   // (e.g., as a non-type template argument).
+   template <auto... M, typename F>
+   constexpr decltype(auto) apply_member_templates(MemberList<M...>*, F&& f)
+   {
+      return static_cast<F&&>(f).template operator()<M...>();
+   }
+
    template <typename T, auto... M, typename F>
    constexpr F for_each_member(T* t, MemberList<M...>*, F&& f)
    {
@@ -617,6 +629,18 @@ namespace psio
 
 #define PSIO_MATCH_ITEMSallowHashedMethods(...) (PSIO_KEEP_FLAG, allowHashedMethods), 1
 #define PSIO_HAS_FLAG_IMPL_allowHashedMethods_allowHashedMethods(...) , 1
+
+// WIT-attribute flags. See doc/wit-attributes.md.
+//  canonical() — this type has exactly one admissible wire form.
+//  final()     — this schema is closed; receivers reject trailing unknowns.
+// Distinct from definitionWillNotChange() (which is a wire-format
+// optimization choosing Struct over Object); final() is a semantic
+// contract, captured independently.
+#define PSIO_MATCH_ITEMScanonical(...) (PSIO_KEEP_FLAG, canonical), 1
+#define PSIO_HAS_FLAG_IMPL_canonical_canonical(...) , 1
+
+#define PSIO_MATCH_ITEMSfinal(...) (PSIO_KEEP_FLAG, final), 1
+#define PSIO_HAS_FLAG_IMPL_final_final(...) , 1
 
 // numbered(int, ident)
 // unnumbered(ident)
@@ -814,6 +838,8 @@ namespace psio
       static constexpr bool is_struct  = true;                                                                    \
       static constexpr bool definitionWillNotChange =                                                             \
           PSIO_HAS_FLAG(definitionWillNotChange, __VA_ARGS__);                                                    \
+      static constexpr bool canonical = PSIO_HAS_FLAG(canonical, __VA_ARGS__);                                    \
+      static constexpr bool final     = PSIO_HAS_FLAG(final, __VA_ARGS__);                                        \
       static constexpr bool requires_compressed_method_names()                                                    \
       {                                                                                                           \
          constexpr bool allowHashedMethods = PSIO_HAS_FLAG(allowHashedMethods, __VA_ARGS__);                      \
