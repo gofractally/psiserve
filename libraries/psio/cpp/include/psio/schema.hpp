@@ -209,8 +209,7 @@ namespace psio
          std::vector<Member>    members;
          std::vector<Attribute> attributes;
       };
-
-      PSIO_REFLECT_TYPENAME(Object)
+      PSIO_REFLECT(Object, members, attributes)
 
       void to_json(const Object& type, auto& stream)
       {
@@ -221,22 +220,12 @@ namespace psio
          from_json_members(type.members, stream);
       }
 
-      inline auto& clio_unwrap_packable(Object& type)
-      {
-         return type.members;
-      }
-
-      inline auto& clio_unwrap_packable(const Object& type)
-      {
-         return type.members;
-      }
-
       struct Struct
       {
          std::vector<Member>    members;
          std::vector<Attribute> attributes;
       };
-      PSIO_REFLECT_TYPENAME(Struct)
+      PSIO_REFLECT(Struct, members, attributes)
 
       void to_json(const Struct& type, auto& stream)
       {
@@ -245,16 +234,6 @@ namespace psio
       void from_json(Struct& type, auto& stream)
       {
          from_json_members(type.members, stream);
-      }
-
-      inline auto& clio_unwrap_packable(Struct& type)
-      {
-         return type.members;
-      }
-
-      inline auto& clio_unwrap_packable(const Struct& type)
-      {
-         return type.members;
       }
 
       struct Array
@@ -340,7 +319,7 @@ namespace psio
          std::vector<Member>    members;
          std::vector<Attribute> attributes;
       };
-      PSIO_REFLECT_TYPENAME(Variant)
+      PSIO_REFLECT(Variant, members, attributes)
 
       void to_json(const Variant& type, auto& stream)
       {
@@ -349,16 +328,6 @@ namespace psio
       void from_json(Variant& type, auto& stream)
       {
          from_json_members(type.members, stream);
-      }
-
-      inline auto& clio_unwrap_packable(Variant& type)
-      {
-         return type.members;
-      }
-
-      inline auto& clio_unwrap_packable(const Variant& type)
-      {
-         return type.members;
       }
 
       struct Tuple

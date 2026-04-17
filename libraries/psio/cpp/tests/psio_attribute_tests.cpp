@@ -280,3 +280,95 @@ TEST_CASE("schema: variant type carries attributes slot",
    // Nothing declared — attributes empty but the field exists.
    REQUIRE(v->attributes.empty());
 }
+
+// ────────────────────────────────────────────────────────────────────────
+//  FracPack round-trip: aggregate-type attributes survive pack/unpack
+//
+//  Before dropping clio_unwrap_packable on Object/Struct/Variant, these
+//  types serialized as bare vector<Member> — their attributes field was
+//  in-memory only. Now they pack as proper extensible structs and the
+//  attributes tail rides the wire.
+// ────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("schema fracpack: Object attributes survive round-trip",
+          "[psio][attributes][fracpack]")
+{
+   namespace S = psio::schema_types;
+   S::SchemaBuilder b;
+   b.insert<attr_test::TaggedRecord>("tagged");   // PSIO_TYPE_ATTRS canonical
+   b.insert<attr_test::Container>("container");   // field-level sorted/number
+   auto schema = std::move(b).build();
+
+   auto bytes = psio::to_frac(schema);
+   auto rt    = psio::from_frac<S::Schema>(bytes);
+
+   // Type-level attribute on an Object survives.
+   const auto* tagged = resolve(rt, "tagged");
+   REQUIRE(tagged);
+   const auto* tobj = std::get_if<S::Object>(&tagged->value);
+   REQUIRE(tobj);
+   REQUIRE(find_attr(tobj->attributes, "canonical") != nullptr);
+
+   // Field-level attributes on Members survive (pre-existing behavior).
+   const auto* cont = resolve(rt, "container");
+   REQUIRE(cont);
+   const auto* cobj = std::get_if<S::Object>(&cont->value);
+   REQUIRE(cobj);
+   REQUIRE(cobj->members.size() == 2);
+   REQUIRE(find_attr(cobj->members[0].attributes, "sorted") != nullptr);
+   const auto* num = find_attr(cobj->members[1].attributes, "number");
+   REQUIRE(num);
+   REQUIRE(num->value == "5");
+}
+
+TEST_CASE("schema fracpack: Struct attributes survive round-trip",
+          "[psio][attributes][fracpack]")
+{
+   namespace S = psio::schema_types;
+   S::SchemaBuilder b;
+   b.insert<attr_test::WillNotChange>("wnc");
+   auto schema = std::move(b).build();
+
+   // Add a synthetic type attribute post-build to prove wire-serialization
+   // of aggregate attrs, not just the SchemaBuilder population path.
+   auto* any = const_cast<S::AnyType*>(schema.get("wnc"));
+   REQUIRE(any);
+   auto* s = std::get_if<S::Struct>(&any->value);
+   REQUIRE(s);
+   s->attributes.push_back({"canonical", std::nullopt});
+
+   auto bytes = psio::to_frac(schema);
+   auto rt    = psio::from_frac<S::Schema>(bytes);
+
+   const auto* rt_any = resolve(rt, "wnc");
+   REQUIRE(rt_any);
+   const auto* rt_s = std::get_if<S::Struct>(&rt_any->value);
+   REQUIRE(rt_s);
+   REQUIRE(find_attr(rt_s->attributes, "canonical") != nullptr);
+}
+
+TEST_CASE("schema fracpack: Variant attributes survive round-trip",
+          "[psio][attributes][fracpack]")
+{
+   namespace S = psio::schema_types;
+   S::SchemaBuilder b;
+   b.insert<attr_test::MyVariant>("myvar");
+   auto schema = std::move(b).build();
+
+   auto* any = const_cast<S::AnyType*>(schema.get("myvar"));
+   REQUIRE(any);
+   auto* v = std::get_if<S::Variant>(&any->value);
+   REQUIRE(v);
+   v->attributes.push_back({"since", std::string{"0.3.0"}});
+
+   auto bytes = psio::to_frac(schema);
+   auto rt    = psio::from_frac<S::Schema>(bytes);
+
+   const auto* rt_any = resolve(rt, "myvar");
+   REQUIRE(rt_any);
+   const auto* rt_v = std::get_if<S::Variant>(&rt_any->value);
+   REQUIRE(rt_v);
+   const auto* since = find_attr(rt_v->attributes, "since");
+   REQUIRE(since);
+   REQUIRE(since->value == "0.3.0");
+}
