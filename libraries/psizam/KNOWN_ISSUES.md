@@ -44,6 +44,7 @@ All pass on interpreter and jit. jit2 is experimental.
 - ~~**block_0, if_0**: IR virtual stack underflow~~ — fixed: emit_throw/emit_rethrow/emit_throw_ref now set `_unreachable = true`; emit_end synthesizes implicit else for if-without-else blocks with params
 - ~~**func_0**: Wrong return value on break-i32-f64~~ — fixed by same unreachable tracking fix
 - ~~**conversions_0, traps_2** (on aarch64): Segfault~~ — fixed by same unreachable tracking fix
+- ~~**if_96..103** (12, jit2+jit_llvm): SEGFAULT on invalid modules with typed if params~~ — fixed: emit_if now checks param_count <= vstack_depth() before subtracting, matching emit_block/emit_loop
 - **global_0**: Imported global init (counted above)
 
 **x86_64 only:**
@@ -54,6 +55,10 @@ All pass on interpreter and jit. jit2 is experimental.
 - ~~**conversions_0, traps_2** (2): Segfault~~ — fixed upstream
 - ~~**Host function / call depth / reentry** (5): Various segfaults~~ — fixed upstream
 - ~~**relaxed_madd_nmadd** (2), **relaxed_dot_product** (1): Wrong results~~ — fixed: jit2 regalloc v128_op handler now pushes the 3rd operand for all ternary ops (relaxed fma + dot-add), not just `v128_bitselect`; the missing push was causing softfloat helpers to read garbage for `a.lo/a.hi` and corrupt the stack
+
+**aarch64 only:**
+- ~~**rem codegen clobber**: i32/i64 rem_u/rem_s hardcoded W2/X2 as scratch for UDIV/SDIV quotient, clobbering live vregs~~ — fixed: use X16 (intra-procedure-call scratch) instead
+- ~~**IR corruption in dead code**: emit_br/emit_br_if/emit_try_table returned branch index 0 in unreachable code, corrupting IR instruction 0~~ — fixed: return UINT32_MAX instead
 
 ### aarch64 notes
 
