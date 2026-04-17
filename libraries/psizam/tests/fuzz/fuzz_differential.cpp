@@ -78,10 +78,18 @@ static std::string find_wasm_gen() {
 //   4 = timeout (watchdog fired)
 //   5 = other std::exception
 //   6 = unknown (non-std::exception)
+// Serialized return value: type tag + raw bits for bitwise comparison
+struct return_value {
+   uint8_t  type;   // types::i32, i64, f32, f64, v128, or 0 = void
+   uint64_t bits;   // raw value bits (i32 zero-extended, f32 bit-cast to u32 zero-extended)
+   uint64_t bits_hi; // high 64 bits for v128, 0 otherwise
+};
+
 struct run_result {
    int  outcome;
    bool has_start;
    std::string what;
+   std::vector<return_value> returns;  // one per exported function that completed
 };
 
 template <typename Impl>
@@ -105,8 +113,40 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
       // Check if module has a start function
       r.has_start = (bkend.get_module().start != std::numeric_limits<uint32_t>::max());
 
-      // Execute all exported functions with a tight watchdog
-      bkend.execute_all(watchdog(std::chrono::milliseconds(500)));
+      // Execute all exported functions, capturing return values
+      bkend.timed_run(watchdog(std::chrono::milliseconds(500)), [&]() {
+         auto& mod = bkend.get_module();
+         auto& ctx = bkend.get_context();
+         for (int i = 0; i < mod.exports.size(); i++) {
+            if (mod.exports[i].kind == external_kind::Function) {
+               std::string s{ (const char*)mod.exports[i].field_str.data(),
+                              mod.exports[i].field_str.size() };
+               auto ret = ctx.execute(nullptr, detail::interpret_visitor(ctx), s);
+               return_value rv{};
+               if (ret) {
+                  if (ret->template is_a<i32_const_t>()) {
+                     rv.type = types::i32;
+                     rv.bits = ret->to_ui32();
+                  } else if (ret->template is_a<i64_const_t>()) {
+                     rv.type = types::i64;
+                     rv.bits = ret->to_ui64();
+                  } else if (ret->template is_a<f32_const_t>()) {
+                     rv.type = types::f32;
+                     rv.bits = ret->to_fui32();
+                  } else if (ret->template is_a<f64_const_t>()) {
+                     rv.type = types::f64;
+                     rv.bits = ret->to_fui64();
+                  } else if (ret->template is_a<v128_const_t>()) {
+                     rv.type = types::v128;
+                     auto v = ret->to_v128();
+                     rv.bits = v.low;
+                     rv.bits_hi = v.high;
+                  }
+               }
+               r.returns.push_back(rv);
+            }
+         }
+      });
       r.outcome = 0;
    } catch (wasm_parse_exception& e) {
       r.outcome = 1;
@@ -156,6 +196,42 @@ static void print_mismatch(const char* source, const char* b1_name, const run_re
    if (!r2.what.empty()) fprintf(stderr, "  %s what: %s\n", b2_name, r2.what.c_str());
 }
 
+static const char* type_name(uint8_t t) {
+   switch (t) {
+      case types::i32: return "i32";
+      case types::i64: return "i64";
+      case types::f32: return "f32";
+      case types::f64: return "f64";
+      case types::v128: return "v128";
+      case 0: return "void";
+      default: return "?";
+   }
+}
+
+// Compare return values between two backends. Returns true if all match.
+static bool compare_returns(const char* source, const char* b1_name, const run_result& r1,
+                            const char* b2_name, const run_result& r2) {
+   if (r1.outcome != 0 || r2.outcome != 0) return true; // only compare successful runs
+   size_t n = std::min(r1.returns.size(), r2.returns.size());
+   for (size_t i = 0; i < n; i++) {
+      auto& a = r1.returns[i];
+      auto& b = r2.returns[i];
+      if (a.type != b.type || a.bits != b.bits || a.bits_hi != b.bits_hi) {
+         fprintf(stderr, "RETURN VALUE MISMATCH [%s] export#%zu: %s=%s:0x%llx %s=%s:0x%llx\n",
+                 source, i,
+                 b1_name, type_name(a.type), (unsigned long long)a.bits,
+                 b2_name, type_name(b.type), (unsigned long long)b.bits);
+         return false;
+      }
+   }
+   if (r1.returns.size() != r2.returns.size()) {
+      fprintf(stderr, "RETURN COUNT MISMATCH [%s]: %s=%zu %s=%zu\n",
+              source, b1_name, r1.returns.size(), b2_name, r2.returns.size());
+      return false;
+   }
+   return true;
+}
+
 // Returns interpreter outcome (0-6), or -1 on mismatch
 // Result codes from test_module_impl: 0-6 = interpreter outcome, -1 = mismatch, -2 = crash
 static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
@@ -165,26 +241,36 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
    // must produce the same outcome as softfloat (invariant from config.hpp:
    // hw_deterministic(x) == softfloat(x) bit-for-bit).
    auto r_interp_hwd = run_backend<interpreter>(wasm, fp_mode::hw_deterministic);
+
+   bool has_mismatch = false;
    if (r_interp.outcome != r_interp_hwd.outcome) {
       print_mismatch(source, "interp/softfloat", r_interp, "interp/hw_det", r_interp_hwd);
-      return -1;
+      has_mismatch = true;
    }
+   if (!compare_returns(source, "interp/softfloat", r_interp, "interp/hw_det", r_interp_hwd))
+      has_mismatch = true;
 
 #if defined(__x86_64__) || defined(__aarch64__)
    auto r_jit = run_backend<jit>(wasm);
    if (r_interp.outcome != r_jit.outcome) {
       print_mismatch(source, "interpreter", r_interp, "jit", r_jit);
-      return -1;
+      has_mismatch = true;
    }
+   if (!compare_returns(source, "interpreter", r_interp, "jit", r_jit))
+      has_mismatch = true;
 #endif
 
 #if defined(__x86_64__) || defined(__aarch64__)
    auto r_jit2 = run_backend<jit2>(wasm);
    if (r_interp.outcome != r_jit2.outcome) {
       print_mismatch(source, "interpreter", r_interp, "jit2", r_jit2);
-      return -1;
+      has_mismatch = true;
    }
+   if (!compare_returns(source, "interpreter", r_interp, "jit2", r_jit2))
+      has_mismatch = true;
 #endif
+
+   if (has_mismatch) return -1;
 
    if (verbose) {
       fprintf(stderr, "  OK [%s]: %s (%zu bytes)\n",

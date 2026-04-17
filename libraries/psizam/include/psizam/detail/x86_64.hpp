@@ -6282,9 +6282,11 @@ namespace psizam::detail {
       void emit_multipop_multivalue(uint32_t depth_change, uint32_t result_count) {
          uint32_t gap = depth_change - result_count;
          if (gap == 0) return;
-         for (uint32_t i = 0; i < result_count; i++) {
-            int32_t src_offset = static_cast<int32_t>(i) * 8;
-            int32_t dst_offset = static_cast<int32_t>(i + gap) * 8;
+         // Copy in reverse order (deepest result first) to avoid overwriting
+         // source slots that haven't been read yet.
+         for (uint32_t i = result_count; i > 0; i--) {
+            int32_t src_offset = static_cast<int32_t>(i - 1) * 8;
+            int32_t dst_offset = static_cast<int32_t>(i - 1 + gap) * 8;
             emit_mov(*(rsp + src_offset), rax);
             emit_mov(rax, *(rsp + dst_offset));
          }
