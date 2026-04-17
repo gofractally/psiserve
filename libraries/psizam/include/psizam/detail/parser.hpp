@@ -405,6 +405,11 @@ namespace psizam::detail {
                   break;
                case section_id::start_section: parse_section<section_id::start_section>(code_ptr, mod.start); break;
                case section_id::element_section:
+                  // normalize_types() is normally called after the function section,
+                  // but modules with only imported functions (no function section) still
+                  // need fast_functions populated before element parsing.
+                  if (fast_functions.empty() && _mod->get_imported_functions_size() > 0)
+                     normalize_types();
                   parse_section<section_id::element_section>(code_ptr, mod.elements);
                   break;
                case section_id::code_section: parse_section<section_id::code_section>(code_ptr, mod.code); break;

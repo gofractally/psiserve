@@ -436,26 +436,20 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
    // wasm3 doesn't support EH or v128 — skip if psizam rejected the module
    // (wasm3 may accept/reject differently for unsupported proposals).
    // NaN bit patterns may differ since wasm3 uses hardware floats.
-   if (r_interp.outcome != 1) { // only compare if psizam accepted the module
+   // Compare against wasm3 only when psizam ran to completion (outcome 0).
+   // Outcome mismatches from traps/parse errors can differ legitimately:
+   // psizam's execute-by-name enforces argument count (traps on functions
+   // with params), while wasm3 passes zero-valued args.
+   if (r_interp.outcome == 0) {
       auto r_wasm3 = run_wasm3(wasm, r_interp.export_names);
-      if (r_wasm3.outcome != 1) { // skip if wasm3 couldn't parse/compile
-         // Compare outcomes: both should trap or both should succeed
-         bool outcome_match = true;
-         if (r_interp.outcome == 0 && r_wasm3.outcome != 0) {
-            // psizam succeeded but wasm3 trapped — potential psizam bug
-            print_mismatch(source, "interpreter", r_interp, "wasm3", r_wasm3);
-            outcome_match = false;
+      if (r_wasm3.outcome == 0) {
+         // Both succeeded — compare return values (NaN-tolerant)
+         if (!compare_returns(source, "interpreter", r_interp, "wasm3", r_wasm3, true))
             has_mismatch = true;
-         } else if (r_interp.outcome != 0 && r_wasm3.outcome == 0) {
-            // psizam trapped but wasm3 succeeded — potential psizam bug
-            print_mismatch(source, "interpreter", r_interp, "wasm3", r_wasm3);
-            outcome_match = false;
-            has_mismatch = true;
-         }
-         // When both succeed, compare return values (NaN-tolerant)
-         if (outcome_match &&
-             !compare_returns(source, "interpreter", r_interp, "wasm3", r_wasm3, true))
-            has_mismatch = true;
+      } else if (r_wasm3.outcome != 1) {
+         // psizam succeeded but wasm3 trapped — potential psizam bug
+         print_mismatch(source, "interpreter", r_interp, "wasm3", r_wasm3);
+         has_mismatch = true;
       }
    }
 #endif
