@@ -3117,12 +3117,28 @@ namespace psizam::detail {
                   // actually execute at runtime).
                   auto* val = load_vreg(inst.ri.src1);
                   if (!val) break;
+                  // _multi_return slots are uint64_t. Widen the vreg's raw
+                  // bits to i64 (size-preserving bitcast for float types,
+                  // zext for narrower ints) rather than letting CreateStore
+                  // emit a size-mismatched bitcast.
+                  auto* t = val->getType();
+                  llvm::Value* val_i64 = val;
+                  if (t == f32_ty) {
+                     val_i64 = builder.CreateZExt(builder.CreateBitCast(val, i32_ty), i64_ty);
+                  } else if (t == f64_ty) {
+                     val_i64 = builder.CreateBitCast(val, i64_ty);
+                  } else if (t == i32_ty) {
+                     val_i64 = builder.CreateZExt(val, i64_ty);
+                  } else if (t != i64_ty) {
+                     // Unknown type (e.g. v128) — best-effort zero
+                     val_i64 = llvm::ConstantInt::get(i64_ty, 0);
+                  }
                   int32_t offset = 24 + inst.ri.imm; // multi_return_offset = 24
                   auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
                      builder.getInt32(offset));
                   auto* typed_ptr = builder.CreateBitCast(ptr,
                      llvm::PointerType::getUnqual(builder.getInt64Ty()));
-                  builder.CreateStore(val, typed_ptr);
+                  builder.CreateStore(val_i64, typed_ptr);
                   break;
                }
 
@@ -4682,8 +4698,21 @@ namespace psizam::detail {
                   for (uint32_t i = 0; i < ft.return_count; ++i) {
                      llvm::Value* val = load_vreg(i);
                      if (!val) val = llvm::Constant::getNullValue(builder.getInt64Ty());
-                     if (val->getType() != builder.getInt64Ty())
-                        val = builder.CreateBitOrPointerCast(val, builder.getInt64Ty());
+                     // Widen the vreg value to i64 for storage. Same logic
+                     // as the multi_return_store case above: bitcast only
+                     // for size-matched types, otherwise zext/bitcast-then-
+                     // zext so we don't emit a bad float→i64 bitcast.
+                     auto* t = val->getType();
+                     if (t == builder.getFloatTy()) {
+                        val = builder.CreateZExt(builder.CreateBitCast(val, builder.getInt32Ty()),
+                                                 builder.getInt64Ty());
+                     } else if (t == builder.getDoubleTy()) {
+                        val = builder.CreateBitCast(val, builder.getInt64Ty());
+                     } else if (t == builder.getInt32Ty()) {
+                        val = builder.CreateZExt(val, builder.getInt64Ty());
+                     } else if (t != builder.getInt64Ty()) {
+                        val = llvm::ConstantInt::get(builder.getInt64Ty(), 0);
+                     }
                      int32_t offset = 24 + static_cast<int32_t>(i * 8);
                      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
                         builder.getInt32(offset));
@@ -4830,6 +4859,14 @@ namespace psizam::detail {
       std::string err;
       llvm::raw_string_ostream err_stream(err);
       if (llvm::verifyModule(*_impl->llvm_mod, &err_stream)) {
+         if (const char* dump = std::getenv("PSIZAM_LLVM_DUMP_ON_VERIFY_FAIL")) {
+            (void)dump;
+            std::string ir;
+            llvm::raw_string_ostream os(ir);
+            _impl->llvm_mod->print(os, nullptr);
+            fprintf(stderr, "=== LLVM module dump (verify failed) ===\n%s\n=== end ===\n",
+                    ir.c_str());
+         }
          throw wasm_parse_exception("LLVM module verification failed: " + err);
       }
 
