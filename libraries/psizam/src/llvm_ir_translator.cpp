@@ -1267,6 +1267,15 @@ namespace psizam::detail {
                   // inst.rr.src1 = index vreg, inst.dest = table size
                   llvm::Value* bt_index = load_vreg(inst.rr.src1);
                   uint32_t bt_size = inst.dest;
+                  // WASM br_table's index is i32. If the vreg happens to be
+                  // i64 (e.g. a cross-type reuse in unreachable code), LLVM's
+                  // SwitchInst rejects mismatched case/value types. Truncate
+                  // to i32 so CreateSwitch + addCase(getInt32(c)) validates.
+                  if (bt_index && bt_index->getType() == i64_ty) {
+                     bt_index = builder.CreateTrunc(bt_index, i32_ty);
+                  } else if (bt_index && bt_index->getType() != i32_ty) {
+                     bt_index = convert_type(bt_index, i32_ty);
+                  }
 
                   // Helper to resolve br target to correct LLVM block
                   auto resolve_br_target = [&](uint32_t target) -> llvm::BasicBlock* {
