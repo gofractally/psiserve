@@ -370,7 +370,50 @@ namespace psizam::detail {
                 op == ir_op::table_copy || op == ir_op::table_get ||
                 op == ir_op::table_set || op == ir_op::table_grow ||
                 op == ir_op::table_size || op == ir_op::table_fill ||
-                op == ir_op::atomic_op) {
+                op == ir_op::atomic_op ||
+                // EH ops call C++ helpers via BLR (jit_eh_enter, setjmp, etc.)
+                op == ir_op::eh_enter || op == ir_op::eh_setjmp ||
+                op == ir_op::eh_leave || op == ir_op::eh_throw ||
+                op == ir_op::eh_throw_ref || op == ir_op::eh_get_match ||
+                op == ir_op::eh_get_payload || op == ir_op::eh_get_exnref ||
+                // Trapping float-to-int conversions always call helpers via BLR
+                op == ir_op::i32_trunc_s_f32 || op == ir_op::i32_trunc_u_f32 ||
+                op == ir_op::i32_trunc_s_f64 || op == ir_op::i32_trunc_u_f64 ||
+                op == ir_op::i64_trunc_s_f32 || op == ir_op::i64_trunc_u_f32 ||
+                op == ir_op::i64_trunc_s_f64 || op == ir_op::i64_trunc_u_f64 ||
+#ifdef PSIZAM_SOFTFLOAT
+                // When softfloat is compiled in, float ops MAY call C++ helpers
+                // via BLR (when _fp == fp_mode::softfloat at JIT-compile time).
+                // Conservative: always mark them so regalloc is safe for any fp_mode.
+                // (abs, neg, copysign are pure bit ops — no BLR)
+                op == ir_op::f32_sqrt || op == ir_op::f64_sqrt ||
+                op == ir_op::f32_ceil || op == ir_op::f32_floor ||
+                op == ir_op::f32_trunc || op == ir_op::f32_nearest ||
+                op == ir_op::f64_ceil || op == ir_op::f64_floor ||
+                op == ir_op::f64_trunc || op == ir_op::f64_nearest ||
+                op == ir_op::f32_add || op == ir_op::f32_sub ||
+                op == ir_op::f32_mul || op == ir_op::f32_div ||
+                op == ir_op::f32_min || op == ir_op::f32_max ||
+                op == ir_op::f64_add || op == ir_op::f64_sub ||
+                op == ir_op::f64_mul || op == ir_op::f64_div ||
+                op == ir_op::f64_min || op == ir_op::f64_max ||
+                op == ir_op::f32_eq || op == ir_op::f32_ne ||
+                op == ir_op::f32_lt || op == ir_op::f32_gt ||
+                op == ir_op::f32_le || op == ir_op::f32_ge ||
+                op == ir_op::f64_eq || op == ir_op::f64_ne ||
+                op == ir_op::f64_lt || op == ir_op::f64_gt ||
+                op == ir_op::f64_le || op == ir_op::f64_ge ||
+                op == ir_op::i32_trunc_sat_f32_s || op == ir_op::i32_trunc_sat_f32_u ||
+                op == ir_op::i32_trunc_sat_f64_s || op == ir_op::i32_trunc_sat_f64_u ||
+                op == ir_op::i64_trunc_sat_f32_s || op == ir_op::i64_trunc_sat_f32_u ||
+                op == ir_op::i64_trunc_sat_f64_s || op == ir_op::i64_trunc_sat_f64_u ||
+                op == ir_op::f32_convert_s_i32 || op == ir_op::f32_convert_u_i32 ||
+                op == ir_op::f32_convert_s_i64 || op == ir_op::f32_convert_u_i64 ||
+                op == ir_op::f64_convert_s_i32 || op == ir_op::f64_convert_u_i32 ||
+                op == ir_op::f64_convert_s_i64 || op == ir_op::f64_convert_u_i64 ||
+                op == ir_op::f32_demote_f64 || op == ir_op::f64_promote_f32 ||
+#endif
+                false) {
                call_bmp[i / 64] |= uint64_t(1) << (i % 64);
                has_calls = true;
             }

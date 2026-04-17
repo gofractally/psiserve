@@ -578,7 +578,9 @@ namespace psizam::detail {
       }
 
       void vstack_resize(uint32_t depth) {
-         PSIZAM_ASSERT(depth <= vstack_top, wasm_parse_exception, "IR virtual stack resize underflow");
+         // Allow upward resize: in unreachable code, stack may have been
+         // popped below the block entry depth.  Callers push results afterward.
+         PSIZAM_ASSERT(depth <= vstack_cap, wasm_parse_exception, "IR virtual stack resize overflow");
          vstack_top = depth;
       }
 

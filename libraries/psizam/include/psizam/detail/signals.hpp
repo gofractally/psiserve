@@ -99,8 +99,14 @@ namespace psizam::detail {
             bool in_mem = !memory_range.empty() &&
                (uint64_t)addr >= (uint64_t)memory_range.data() &&
                (uint64_t)addr < (uint64_t)memory_range.data() + memory_range.size();
-            fprintf(stderr, "JIT FAULT sig=%d addr=%p pc=0x%llx instr=0x%08x in_code=%d in_mem=%d\n",
-                    sig, addr, pc_val, faulting_instr, in_code, in_mem);
+            bool addr_in_code = !code_memory_range.empty() &&
+               (uint64_t)addr >= (uint64_t)code_memory_range.data() &&
+               (uint64_t)addr < (uint64_t)code_memory_range.data() + code_memory_range.size();
+            fprintf(stderr, "JIT FAULT sig=%d addr=%p pc=0x%llx instr=0x%08x in_code=%d in_mem=%d addr_in_code=%d\n",
+                    sig, addr, pc_val, faulting_instr, in_code, in_mem, addr_in_code);
+            fprintf(stderr, "  code_range=[%p, %p) mem_range=[%p, %p)\n",
+                    code_memory_range.data(), code_memory_range.data() + code_memory_range.size(),
+                    memory_range.data(), memory_range.data() + memory_range.size());
             auto* ss = &uc->uc_mcontext->__ss;
             fprintf(stderr, "  X0=%016llx  X1=%016llx  X8=%016llx  X9=%016llx\n",
                     ss->__x[0], ss->__x[1], ss->__x[8], ss->__x[9]);
@@ -157,6 +163,33 @@ namespace psizam::detail {
             //otherwise, jump out
             longjmp(*trap_jmp_ptr, sig);
          }
+
+         // If the PC (not the fault address) is in the code range, the fault
+         // was caused by JIT code accessing an address outside any known range.
+         // This is still a WASM trap — longjmp out rather than terminating.
+#if defined(__aarch64__) && defined(__APPLE__)
+         {
+            ucontext_t* uc = (ucontext_t*)uap;
+            uint64_t pc_val = uc->uc_mcontext->__ss.__pc;
+            if (!code_memory_range.empty() &&
+                pc_val >= (uint64_t)code_memory_range.data() &&
+                pc_val < (uint64_t)code_memory_range.data() + code_memory_range.size())
+               longjmp(*trap_jmp_ptr, sig);
+         }
+#elif defined(__x86_64__)
+         {
+            ucontext_t* uc = (ucontext_t*)uap;
+#if defined(__APPLE__)
+            uint64_t pc_val = uc->uc_mcontext->__ss.__rip;
+#else
+            uint64_t pc_val = uc->uc_mcontext.gregs[REG_RIP];
+#endif
+            if (!code_memory_range.empty() &&
+                pc_val >= (uint64_t)code_memory_range.data() &&
+                pc_val < (uint64_t)code_memory_range.data() + code_memory_range.size())
+               longjmp(*trap_jmp_ptr, sig);
+         }
+#endif
 
          //if in neither range, fall through and let chained handler an opportunity to handle
       }

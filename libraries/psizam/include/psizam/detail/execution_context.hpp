@@ -285,8 +285,8 @@ namespace psizam::detail {
                _table_data[t] = table_start;
             }
          }
+         _dropped_elems.assign(mod.elements.size(), false);
          if (mod.tables.size() != 0) {
-            _dropped_elems.assign(mod.elements.size(), false);
             for (uint32_t i = 0; i < mod.elements.size(); ++i) {
                auto& elem_seg = mod.elements[i];
                if (elem_seg.mode == elem_mode::passive) {
@@ -1139,8 +1139,7 @@ namespace psizam::detail {
       inline void call(uint32_t index) {
          // TODO validate index is valid
          if (index < _mod->get_imported_functions_size()) {
-            // TODO validate only importing functions
-            const auto& ft = _mod->types[_mod->imports[index].type.func_t];
+            const auto& ft = _mod->get_function_type(index);
             type_check(ft);
             inc_pc();
             std::uint32_t frame_size = _mod->get_function_stack_size(index);

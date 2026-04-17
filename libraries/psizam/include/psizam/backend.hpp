@@ -430,21 +430,39 @@ namespace psizam {
          construct();
       }
 
+      void check_deferred_llvm_exception() {
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+         if constexpr (std::is_same_v<Impl, jit_llvm>) {
+            if (detail::llvm_deferred_exception) {
+               auto ex = detail::llvm_deferred_exception;
+               detail::llvm_deferred_exception = nullptr;
+               std::rethrow_exception(ex);
+            }
+         }
+#endif
+      }
+
       module& parse_module(wasm_code& code, const Options& options) {
          mod->allocator.use_default_memory();
-         return parser_t{ mod->allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module(code, *mod, debug);
+         auto& result = parser_t{ mod->allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module(code, *mod, debug);
+         check_deferred_llvm_exception();
+         return result;
       }
 
       template <typename XDebugInfo>
       module& parse_module(wasm_code& code, const Options& options, XDebugInfo& debug) {
          mod->allocator.use_default_memory();
-         return parser_tpl<XDebugInfo>{ mod->allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module(code, *mod, debug);
+         auto& result = parser_tpl<XDebugInfo>{ mod->allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module(code, *mod, debug);
+         check_deferred_llvm_exception();
+         return result;
       }
 
       module& parse_module2(wasm_code_ptr& ptr, size_t sz, const Options& options, bool single_parsing) {
          if (single_parsing) {
             mod->allocator.use_default_memory();
-            return parser_t{ mod->allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module2(ptr, sz, *mod, debug);
+            auto& result = parser_t{ mod->allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module2(ptr, sz, *mod, debug);
+            check_deferred_llvm_exception();
+            return result;
          } else {
             // To prevent large number of memory mappings used, two-passes of
             // parsing are performed.
@@ -457,13 +475,16 @@ namespace psizam {
                psizam::module first_pass_module;
                first_pass_module.allocator.use_default_memory();
                parser_t{ first_pass_module.allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module2(ptr, sz, first_pass_module, debug);
+               check_deferred_llvm_exception();
                first_pass_module.finalize();
                largest_size = first_pass_module.allocator.largest_used_size();
             }
 
             // Second pass: uses actual required memory for final parsing
             mod->allocator.use_fixed_memory(largest_size);
-            return parser_t{ mod->allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module2(orig_ptr, sz, *mod, debug);
+            auto& result = parser_t{ mod->allocator, options, Impl::enable_backtrace, detail::has_max_stack_bytes<Options> }.parse_module2(orig_ptr, sz, *mod, debug);
+            check_deferred_llvm_exception();
+            return result;
          }
       }
 

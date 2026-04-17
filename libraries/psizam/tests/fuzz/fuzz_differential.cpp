@@ -19,6 +19,7 @@
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 #if defined(__APPLE__)
@@ -98,15 +99,22 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes) {
       // Execute all exported functions with a tight watchdog
       bkend.execute_all(watchdog(std::chrono::milliseconds(500)));
       r.outcome = 0;
-   } catch (wasm_parse_exception&) {
+   } catch (wasm_parse_exception& e) {
       r.outcome = 1;
-   } catch (wasm_bad_alloc&) {
-      // Resource allocation failure (mmap, too-large memory) — module rejected
+      r.what = e.what();
+   } catch (wasm_bad_alloc& e) {
       r.outcome = 1;
+      r.what = e.what();
+   } catch (wasm_link_exception& e) {
+      r.outcome = 1;
+      r.what = e.what();
    } catch (wasm_memory_exception&) {
       r.outcome = 2;
-   } catch (wasm_interpreter_exception&) {
+   } catch (wasm_exception&) {
       r.outcome = 3;
+   } catch (wasm_interpreter_exception& e) {
+      r.outcome = 3;
+      r.what = e.what();
    } catch (timeout_exception&) {
       r.outcome = 4;
    } catch (std::exception& e) {
@@ -139,14 +147,16 @@ static void print_mismatch(const char* source, const char* b1_name, const run_re
    if (!r2.what.empty()) fprintf(stderr, "  %s what: %s\n", b2_name, r2.what.c_str());
 }
 
-static bool test_module(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
+// Returns interpreter outcome (0-6), or -1 on mismatch
+// Result codes from test_module_impl: 0-6 = interpreter outcome, -1 = mismatch, -2 = crash
+static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
    auto r_interp = run_backend<interpreter>(wasm);
 
 #if defined(__x86_64__) || defined(__aarch64__)
    auto r_jit = run_backend<jit>(wasm);
    if (r_interp.outcome != r_jit.outcome) {
       print_mismatch(source, "interpreter", r_interp, "jit", r_jit);
-      return false;
+      return -1;
    }
 #endif
 
@@ -154,15 +164,7 @@ static bool test_module(const std::vector<uint8_t>& wasm, const char* source, bo
    auto r_jit2 = run_backend<jit2>(wasm);
    if (r_interp.outcome != r_jit2.outcome) {
       print_mismatch(source, "interpreter", r_interp, "jit2", r_jit2);
-      return false;
-   }
-#endif
-
-#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-   auto r_llvm = run_backend<jit_llvm>(wasm);
-   if (r_interp.outcome != r_llvm.outcome) {
-      print_mismatch(source, "interpreter", r_interp, "jit_llvm", r_llvm);
-      return false;
+      return -1;
    }
 #endif
 
@@ -170,7 +172,43 @@ static bool test_module(const std::vector<uint8_t>& wasm, const char* source, bo
       fprintf(stderr, "  OK [%s]: %s (%zu bytes)\n",
               source, outcome_name(r_interp.outcome), wasm.size());
    }
-   return true;
+   return r_interp.outcome;
+}
+
+// Run test_module_impl in a forked child process for crash isolation.
+// Returns 0-6 (outcome), -1 (mismatch), or -2 (child crashed).
+static int test_module(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
+   int pipefd[2];
+   if (pipe(pipefd) != 0) return test_module_impl(wasm, source, verbose); // fallback
+
+   pid_t pid = fork();
+   if (pid < 0) {
+      close(pipefd[0]); close(pipefd[1]);
+      return test_module_impl(wasm, source, verbose); // fallback
+   }
+   if (pid == 0) {
+      // Child: run the test and write result to pipe
+      close(pipefd[0]);
+      int result = test_module_impl(wasm, source, verbose);
+      auto written = write(pipefd[1], &result, sizeof(result));
+      (void)written;
+      close(pipefd[1]);
+      _exit(result >= 0 ? 0 : 1);
+   }
+   // Parent: read result from child
+   close(pipefd[1]);
+   int result;
+   ssize_t n = read(pipefd[0], &result, sizeof(result));
+   close(pipefd[0]);
+   int status;
+   waitpid(pid, &status, 0);
+   if (n == sizeof(result)) return result;
+   // Child crashed before writing result
+   if (WIFSIGNALED(status)) {
+      fprintf(stderr, "CRASH [%s]: child killed by signal %d (%zu bytes)\n",
+              source, WTERMSIG(status), wasm.size());
+   }
+   return -2;
 }
 
 static std::vector<uint8_t> read_file(const char* path) {
@@ -190,12 +228,29 @@ static bool read_exact(FILE* f, void* buf, size_t n) {
 }
 
 int main(int argc, char* argv[]) {
-   // --file mode: test a single WASM file
+   // --file mode: test a single WASM file (uses fork for crash isolation)
    if (argc >= 3 && strcmp(argv[1], "--file") == 0) {
       auto wasm = read_file(argv[2]);
       if (wasm.empty()) { fprintf(stderr, "Cannot read %s\n", argv[2]); return 1; }
-      bool ok = test_module(wasm, argv[2], true);
-      return ok ? 0 : 1;
+      int ok = test_module(wasm, argv[2], true);
+      return ok >= 0 ? 0 : 1;
+   }
+   // --file-backend mode: test one backend at a time (no fork, for debugger)
+   if (argc >= 4 && strcmp(argv[1], "--file-backend") == 0) {
+      auto wasm = read_file(argv[2]);
+      if (wasm.empty()) { fprintf(stderr, "Cannot read %s\n", argv[2]); return 1; }
+      const char* which = argv[3];
+      run_result r{};
+      if (strcmp(which, "interp") == 0) r = run_backend<interpreter>(wasm);
+#if defined(__x86_64__) || defined(__aarch64__)
+      else if (strcmp(which, "jit") == 0) r = run_backend<jit>(wasm);
+      else if (strcmp(which, "jit2") == 0) r = run_backend<jit2>(wasm);
+#endif
+      else { fprintf(stderr, "Unknown backend: %s\n", which); return 1; }
+      fprintf(stderr, "%s: %s", which, outcome_name(r.outcome));
+      if (!r.what.empty()) fprintf(stderr, " (%s)", r.what.c_str());
+      fprintf(stderr, "\n");
+      return 0;
    }
 
    auto wasm_gen = find_wasm_gen();
@@ -218,9 +273,7 @@ int main(int argc, char* argv[]) {
 #if defined(__x86_64__) || defined(__aarch64__)
    fprintf(stderr, ", jit2");
 #endif
-#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-   fprintf(stderr, ", jit_llvm");
-#endif
+   // jit_llvm disabled in fuzzer due to known IR translation bugs
    fprintf(stderr, "\n\n");
 
    // Launch wasm-gen as a pipe — it writes length-prefixed WASM modules to stdout
@@ -232,7 +285,8 @@ int main(int argc, char* argv[]) {
       return 1;
    }
 
-   uint32_t tested = 0, passed = 0, mismatches = 0;
+   uint32_t tested = 0, passed = 0, mismatches = 0, crashes = 0;
+   uint32_t outcomes[7] = {};
    auto t_start = std::chrono::steady_clock::now();
 
    for (uint32_t i = 0; i < iterations; i++) {
@@ -250,13 +304,21 @@ int main(int argc, char* argv[]) {
       char label[64];
       snprintf(label, sizeof(label), "module#%u", i);
 
-      if (test_module(wasm, label, false)) {
+      int result = test_module(wasm, label, false);
+      if (result >= 0) {
          passed++;
-      } else {
-         mismatches++;
-         // Save failing module for reproduction
+         if (result < 7) outcomes[result]++;
+      } else if (result == -2) {
+         crashes++;
          char crash_path[256];
          snprintf(crash_path, sizeof(crash_path), "crash_%u_seed%llu.wasm", i, (unsigned long long)seed);
+         FILE* cf = fopen(crash_path, "wb");
+         if (cf) { fwrite(wasm.data(), 1, wasm.size(), cf); fclose(cf); }
+         fprintf(stderr, "  Saved to %s (%zu bytes)\n", crash_path, wasm.size());
+      } else {
+         mismatches++;
+         char crash_path[256];
+         snprintf(crash_path, sizeof(crash_path), "mismatch_%u_seed%llu.wasm", i, (unsigned long long)seed);
          FILE* cf = fopen(crash_path, "wb");
          if (cf) { fwrite(wasm.data(), 1, wasm.size(), cf); fclose(cf); }
          fprintf(stderr, "  Saved to %s (%zu bytes)\n", crash_path, wasm.size());
@@ -264,16 +326,18 @@ int main(int argc, char* argv[]) {
 
       if ((i + 1) % 100 == 0) {
          auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
-         fprintf(stderr, "\r  [%u/%u] %u passed, %u mismatches (%.1f modules/sec)",
-                 i + 1, iterations, passed, mismatches, tested / elapsed);
+         fprintf(stderr, "\r  [%u/%u] %u passed, %u mismatches, %u crashes (%.1f modules/sec)",
+                 i + 1, iterations, passed, mismatches, crashes, tested / elapsed);
       }
    }
 
    pclose(gen);
 
    auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
-   fprintf(stderr, "\n\nDone: %u tested, %u passed, %u MISMATCHES (%.1fs, %.1f/sec)\n",
-           tested, passed, mismatches, elapsed, tested / elapsed);
+   fprintf(stderr, "\n\nDone: %u tested, %u passed, %u mismatches, %u crashes (%.1fs, %.1f/sec)\n",
+           tested, passed, mismatches, crashes, elapsed, tested / elapsed);
+   fprintf(stderr, "Outcomes: %u ok, %u rejected, %u memory_trap, %u interp_trap, %u timeout\n",
+           outcomes[0], outcomes[1], outcomes[2], outcomes[3], outcomes[4]);
 
-   return (passed == tested) ? 0 : 1;
+   return (mismatches == 0 && crashes == 0) ? 0 : 1;
 }

@@ -38,10 +38,28 @@ fn main() {
         let mut u = Unstructured::new(&seed_buf);
 
         let config = wasm_smith::Config {
+            // Resource limits
             max_memories: 1,
             max_tables: 2,
             max_instructions: 1000,
             max_memory32_bytes: 655360,
+            // Disable proposals not fully supported by all backends
+            gc_enabled: false,
+            relaxed_simd_enabled: false,
+            wide_arithmetic_enabled: false,
+            custom_page_sizes_enabled: false,
+            exceptions_enabled: true,
+            reference_types_enabled: false,  // JIT assert on ref-typed globals
+            memory64_enabled: false,         // limited JIT support
+            threads_enabled: false,          // shared memory not supported in fuzzer
+            tail_call_enabled: false,        // may not be fully impl in all backends
+            // Keep well-supported proposals
+            simd_enabled: false,             // v128 stores can hit guard page edge cases
+            bulk_memory_enabled: true,
+            multi_value_enabled: true,
+            sign_extension_ops_enabled: true,
+            saturating_float_to_int_enabled: true,
+            extended_const_enabled: true,
             ..Default::default()
         };
 

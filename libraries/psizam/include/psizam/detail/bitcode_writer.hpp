@@ -90,8 +90,11 @@ namespace psizam::detail {
          for (auto& c : clauses) {
             auto& ci = append_instr(try_table_t{});
             ci.data = (static_cast<uint32_t>(c.kind) << 24) | (c.tag_index & 0x00FFFFFF);
-            ci.pc = 0; // will be filled by fix_branch
-            clause_pcs.push_back(&ci.pc);
+            ci.pc = c.depth_change; // depth_change encoded here; handler_pc patched into ci2.pc below
+            auto& ci2 = append_instr(try_table_t{});
+            ci2.data = 0;
+            ci2.pc = 0; // will be filled by fix_branch
+            clause_pcs.push_back(&ci2.pc);
          }
          return clause_pcs;
       }

@@ -961,18 +961,28 @@ namespace psizam::detail {
 
       // ──────── Global access ────────
 
-      void emit_global_load(uint32_t gi, uint32_t rd) {
+      void emit_global_load(uint32_t gi, uint32_t rd, uint8_t type) {
          auto offset = _mod.get_global_offset(gi);
          emit_ldr_offset(X16, X20, wasm_allocator::globals_end() - 8);
          emit_add_signed_imm(X16, X16, static_cast<int32_t>(offset));
-         emit_ldr_offset(rd, X16, 0);
+         if (type == types::i32 || type == types::f32) {
+            // 32-bit load zero-extends upper 32 bits: LDR Wrd, [X16]
+            emit32(0xB9400200 | rd);
+         } else {
+            emit_ldr_offset(rd, X16, 0);
+         }
       }
 
-      void emit_global_store(uint32_t gi, uint32_t rs) {
+      void emit_global_store(uint32_t gi, uint32_t rs, uint8_t type) {
          auto offset = _mod.get_global_offset(gi);
          emit_ldr_offset(X16, X20, wasm_allocator::globals_end() - 8);
          emit_add_signed_imm(X16, X16, static_cast<int32_t>(offset));
-         emit_str_offset(rs, X16, 0);
+         if (type == types::i32 || type == types::f32) {
+            // 32-bit store: STR Wrs, [X16]
+            emit32(0xB9000200 | rs);
+         } else {
+            emit_str_offset(rs, X16, 0);
+         }
       }
 
       // ──────── Memory access helpers ────────
@@ -2068,7 +2078,7 @@ namespace psizam::detail {
                emit_push(X1);  // high first (deeper)
                emit_push(X0);  // low on top
             } else {
-               emit_global_load(inst.local.index, X0);
+               emit_global_load(inst.local.index, X0, inst.type);
                store_x0_vreg(inst.dest);
             }
             break;
@@ -2085,7 +2095,7 @@ namespace psizam::detail {
                emit_str_offset(X1, X16, 8);   // store high
             } else {
                load_vreg_x0(inst.local.src1);
-               emit_global_store(inst.local.index, X0);
+               emit_global_store(inst.local.index, X0, inst.type);
             }
             break;
          }
@@ -2148,6 +2158,7 @@ namespace psizam::detail {
             break;
 
          // ── Float unary ops ──
+         // abs, neg, copysign are pure bit manipulation — no softfloat needed
          case ir_op::f32_abs:
             load_vreg_x0(inst.rr.src1);
             emit32(0x12007800); // AND W0, W0, #0x7FFFFFFF
@@ -2171,6 +2182,10 @@ namespace psizam::detail {
             store_x0_vreg(inst.dest);
             break;
          case ir_op::f32_sqrt:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) {
+               emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f32_unop_w<&_psizam_f32_sqrt>));
+               break;
+            }
             load_vreg_x0(inst.rr.src1);
             emit32(0x1E270000); // FMOV S0, W0
             emit32(0x1E21C000); // FSQRT S0, S0
@@ -2178,34 +2193,98 @@ namespace psizam::detail {
             store_x0_vreg(inst.dest);
             break;
          case ir_op::f64_sqrt:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) {
+               emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f64_unop_w<&_psizam_f64_sqrt>));
+               break;
+            }
             load_vreg_x0(inst.rr.src1);
             emit32(0x9E670000); // FMOV D0, X0
             emit32(0x1E61C000); // FSQRT D0, D0
             emit32(0x9E660000); // FMOV X0, D0
             store_x0_vreg(inst.dest);
             break;
-         case ir_op::f32_ceil:   emit_f32_round(inst, 0x1E24C000); break; // FRINTP S0, S0
-         case ir_op::f32_floor:  emit_f32_round(inst, 0x1E254000); break; // FRINTM S0, S0
-         case ir_op::f32_trunc:  emit_f32_round(inst, 0x1E25C000); break; // FRINTZ S0, S0
-         case ir_op::f32_nearest:emit_f32_round(inst, 0x1E244000); break; // FRINTN S0, S0 (ties to even)
-         case ir_op::f64_ceil:   emit_f64_round(inst, 0x1E64C000); break; // FRINTP D0, D0
-         case ir_op::f64_floor:  emit_f64_round(inst, 0x1E654000); break; // FRINTM D0, D0
-         case ir_op::f64_trunc:  emit_f64_round(inst, 0x1E65C000); break; // FRINTZ D0, D0
-         case ir_op::f64_nearest:emit_f64_round(inst, 0x1E644000); break; // FRINTN D0, D0 (ties to even)
+         case ir_op::f32_ceil:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f32_unop_w<&_psizam_f32_ceil<true>>)); break; }
+            emit_f32_round(inst, 0x1E24C000);
+            break;
+         case ir_op::f32_floor:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f32_unop_w<&_psizam_f32_floor<true>>)); break; }
+            emit_f32_round(inst, 0x1E254000);
+            break;
+         case ir_op::f32_trunc:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f32_unop_w<&_psizam_f32_trunc<true>>)); break; }
+            emit_f32_round(inst, 0x1E25C000);
+            break;
+         case ir_op::f32_nearest:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f32_unop_w<&_psizam_f32_nearest<true>>)); break; }
+            emit_f32_round(inst, 0x1E244000);
+            break;
+         case ir_op::f64_ceil:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f64_unop_w<&_psizam_f64_ceil<true>>)); break; }
+            emit_f64_round(inst, 0x1E64C000);
+            break;
+         case ir_op::f64_floor:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f64_unop_w<&_psizam_f64_floor<true>>)); break; }
+            emit_f64_round(inst, 0x1E654000);
+            break;
+         case ir_op::f64_trunc:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f64_unop_w<&_psizam_f64_trunc<true>>)); break; }
+            emit_f64_round(inst, 0x1E65C000);
+            break;
+         case ir_op::f64_nearest:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f64_unop_w<&_psizam_f64_nearest<true>>)); break; }
+            emit_f64_round(inst, 0x1E644000);
+            break;
 
          // ── Float binary ops ──
-         case ir_op::f32_add: emit_f32_binop(inst, 0x1E202800); break; // FADD S0, S0, S1
-         case ir_op::f32_sub: emit_f32_binop(inst, 0x1E203800); break;
-         case ir_op::f32_mul: emit_f32_binop(inst, 0x1E200800); break;
-         case ir_op::f32_div: emit_f32_binop(inst, 0x1E201800); break;
-         case ir_op::f32_min: emit_f32_min(inst); break;
-         case ir_op::f32_max: emit_f32_max(inst); break;
-         case ir_op::f64_add: emit_f64_binop(inst, 0x1E602800); break;
-         case ir_op::f64_sub: emit_f64_binop(inst, 0x1E603800); break;
-         case ir_op::f64_mul: emit_f64_binop(inst, 0x1E600800); break;
-         case ir_op::f64_div: emit_f64_binop(inst, 0x1E601800); break;
-         case ir_op::f64_min: emit_f64_min(inst); break;
-         case ir_op::f64_max: emit_f64_max(inst); break;
+         case ir_op::f32_add:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f32_binop_w<&_psizam_f32_add>)); break; }
+            emit_f32_binop(inst, 0x1E202800);
+            break;
+         case ir_op::f32_sub:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f32_binop_w<&_psizam_f32_sub>)); break; }
+            emit_f32_binop(inst, 0x1E203800);
+            break;
+         case ir_op::f32_mul:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f32_binop_w<&_psizam_f32_mul>)); break; }
+            emit_f32_binop(inst, 0x1E200800);
+            break;
+         case ir_op::f32_div:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f32_binop_w<&_psizam_f32_div>)); break; }
+            emit_f32_binop(inst, 0x1E201800);
+            break;
+         case ir_op::f32_min:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f32_binop_w<&_psizam_f32_min<true>>)); break; }
+            emit_f32_min(inst);
+            break;
+         case ir_op::f32_max:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f32_binop_w<&_psizam_f32_max<true>>)); break; }
+            emit_f32_max(inst);
+            break;
+         case ir_op::f64_add:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f64_binop_w<&_psizam_f64_add>)); break; }
+            emit_f64_binop(inst, 0x1E602800);
+            break;
+         case ir_op::f64_sub:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f64_binop_w<&_psizam_f64_sub>)); break; }
+            emit_f64_binop(inst, 0x1E603800);
+            break;
+         case ir_op::f64_mul:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f64_binop_w<&_psizam_f64_mul>)); break; }
+            emit_f64_binop(inst, 0x1E600800);
+            break;
+         case ir_op::f64_div:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f64_binop_w<&_psizam_f64_div>)); break; }
+            emit_f64_binop(inst, 0x1E601800);
+            break;
+         case ir_op::f64_min:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f64_binop_w<&_psizam_f64_min<true>>)); break; }
+            emit_f64_min(inst);
+            break;
+         case ir_op::f64_max:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_binop(inst, reinterpret_cast<void*>(&sf_f64_binop_w<&_psizam_f64_max<true>>)); break; }
+            emit_f64_max(inst);
+            break;
 
          case ir_op::f32_copysign:
             load_vreg_x0(inst.rr.src1); // magnitude
@@ -2226,49 +2305,161 @@ namespace psizam::detail {
             break;
 
          // ── Float comparisons ──
-         case ir_op::f32_eq: emit_f32_cmp(func, inst, idx, COND_EQ); break;
-         case ir_op::f32_ne: emit_f32_cmp(func, inst, idx, COND_NE); break;
-         case ir_op::f32_lt: emit_f32_cmp(func, inst, idx, COND_LO); break; // MI for ordered, but LO handles unordered
-         case ir_op::f32_gt: emit_f32_cmp(func, inst, idx, COND_GT); break;
-         case ir_op::f32_le: emit_f32_cmp(func, inst, idx, COND_LS); break;
-         case ir_op::f32_ge: emit_f32_cmp(func, inst, idx, COND_GE); break;
-         case ir_op::f64_eq: emit_f64_cmp(func, inst, idx, COND_EQ); break;
-         case ir_op::f64_ne: emit_f64_cmp(func, inst, idx, COND_NE); break;
-         case ir_op::f64_lt: emit_f64_cmp(func, inst, idx, COND_LO); break;
-         case ir_op::f64_gt: emit_f64_cmp(func, inst, idx, COND_GT); break;
-         case ir_op::f64_le: emit_f64_cmp(func, inst, idx, COND_LS); break;
-         case ir_op::f64_ge: emit_f64_cmp(func, inst, idx, COND_GE); break;
+         case ir_op::f32_eq:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f32_cmp_w<&_psizam_f32_eq>)); break; }
+            emit_f32_cmp(func, inst, idx, COND_EQ);
+            break;
+         case ir_op::f32_ne:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f32_cmp_w<&_psizam_f32_ne>)); break; }
+            emit_f32_cmp(func, inst, idx, COND_NE);
+            break;
+         case ir_op::f32_lt:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f32_cmp_w<&_psizam_f32_lt>)); break; }
+            emit_f32_cmp(func, inst, idx, COND_LO);
+            break;
+         case ir_op::f32_gt:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f32_cmp_w<&_psizam_f32_gt>)); break; }
+            emit_f32_cmp(func, inst, idx, COND_GT);
+            break;
+         case ir_op::f32_le:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f32_cmp_w<&_psizam_f32_le>)); break; }
+            emit_f32_cmp(func, inst, idx, COND_LS);
+            break;
+         case ir_op::f32_ge:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f32_cmp_w<&_psizam_f32_ge>)); break; }
+            emit_f32_cmp(func, inst, idx, COND_GE);
+            break;
+         case ir_op::f64_eq:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f64_cmp_w<&_psizam_f64_eq>)); break; }
+            emit_f64_cmp(func, inst, idx, COND_EQ);
+            break;
+         case ir_op::f64_ne:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f64_cmp_w<&_psizam_f64_ne>)); break; }
+            emit_f64_cmp(func, inst, idx, COND_NE);
+            break;
+         case ir_op::f64_lt:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f64_cmp_w<&_psizam_f64_lt>)); break; }
+            emit_f64_cmp(func, inst, idx, COND_LO);
+            break;
+         case ir_op::f64_gt:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f64_cmp_w<&_psizam_f64_gt>)); break; }
+            emit_f64_cmp(func, inst, idx, COND_GT);
+            break;
+         case ir_op::f64_le:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f64_cmp_w<&_psizam_f64_le>)); break; }
+            emit_f64_cmp(func, inst, idx, COND_LS);
+            break;
+         case ir_op::f64_ge:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_cmp(func, inst, idx, reinterpret_cast<void*>(&sf_f64_cmp_w<&_psizam_f64_ge>)); break; }
+            emit_f64_cmp(func, inst, idx, COND_GE);
+            break;
 
          // ── Float-to-int conversions (trapping: overflow/NaN → exception) ──
-         case ir_op::i32_trunc_s_f32:     emit_fcvt_trap(inst, 0x1E380000, true, true); break;   // FCVTZS W0, S0
-         case ir_op::i32_trunc_u_f32:     emit_fcvt_trap(inst, 0x1E390000, true, true); break;   // FCVTZU W0, S0
-         case ir_op::i32_trunc_s_f64:     emit_fcvt_trap(inst, 0x1E780000, true, false); break;  // FCVTZS W0, D0
-         case ir_op::i32_trunc_u_f64:     emit_fcvt_trap(inst, 0x1E790000, true, false); break;
-         case ir_op::i64_trunc_s_f32:     emit_fcvt_trap(inst, 0x9E380000, true, true); break;   // FCVTZS X0, S0
-         case ir_op::i64_trunc_u_f32:     emit_fcvt_trap(inst, 0x9E390000, true, true); break;
-         case ir_op::i64_trunc_s_f64:     emit_fcvt_trap(inst, 0x9E780000, true, false); break;
-         case ir_op::i64_trunc_u_f64:     emit_fcvt_trap(inst, 0x9E790000, true, false); break;
-         case ir_op::i32_trunc_sat_f32_s: emit_fcvt(inst, 0x1E380000, true, true); break;
-         case ir_op::i32_trunc_sat_f32_u: emit_fcvt(inst, 0x1E390000, true, true); break;
-         case ir_op::i32_trunc_sat_f64_s: emit_fcvt(inst, 0x1E780000, true, false); break;
-         case ir_op::i32_trunc_sat_f64_u: emit_fcvt(inst, 0x1E790000, true, false); break;
-         case ir_op::i64_trunc_sat_f32_s: emit_fcvt(inst, 0x9E380000, true, true); break;
-         case ir_op::i64_trunc_sat_f32_u: emit_fcvt(inst, 0x9E390000, true, true); break;
-         case ir_op::i64_trunc_sat_f64_s: emit_fcvt(inst, 0x9E780000, true, false); break;
-         case ir_op::i64_trunc_sat_f64_u: emit_fcvt(inst, 0x9E790000, true, false); break;
+         case ir_op::i32_trunc_s_f32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_trap_f32_to_int_w<&_psizam_f32_trunc_i32s>)); break; }
+            emit_fcvt_trap(inst, 0x1E380000, true, true);
+            break;
+         case ir_op::i32_trunc_u_f32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_trap_f32_to_int_w<&_psizam_f32_trunc_i32u>)); break; }
+            emit_fcvt_trap(inst, 0x1E390000, true, true);
+            break;
+         case ir_op::i32_trunc_s_f64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_trap_f64_to_int_w<&_psizam_f64_trunc_i32s<true>>)); break; }
+            emit_fcvt_trap(inst, 0x1E780000, true, false);
+            break;
+         case ir_op::i32_trunc_u_f64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_trap_f64_to_int_w<&_psizam_f64_trunc_i32u>)); break; }
+            emit_fcvt_trap(inst, 0x1E790000, true, false);
+            break;
+         case ir_op::i64_trunc_s_f32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_trap_f32_to_int_w<&_psizam_f32_trunc_i64s>)); break; }
+            emit_fcvt_trap(inst, 0x9E380000, true, true);
+            break;
+         case ir_op::i64_trunc_u_f32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_trap_f32_to_int_w<&_psizam_f32_trunc_i64u>)); break; }
+            emit_fcvt_trap(inst, 0x9E390000, true, true);
+            break;
+         case ir_op::i64_trunc_s_f64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_trap_f64_to_int_w<&_psizam_f64_trunc_i64s>)); break; }
+            emit_fcvt_trap(inst, 0x9E780000, true, false);
+            break;
+         case ir_op::i64_trunc_u_f64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_trap_f64_to_int_w<&_psizam_f64_trunc_i64u>)); break; }
+            emit_fcvt_trap(inst, 0x9E790000, true, false);
+            break;
+         case ir_op::i32_trunc_sat_f32_s:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_sat_f32_to_int_w<&_psizam_i32_trunc_sat_f32_s>)); break; }
+            emit_fcvt(inst, 0x1E380000, true, true);
+            break;
+         case ir_op::i32_trunc_sat_f32_u:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_sat_f32_to_int_w<&_psizam_i32_trunc_sat_f32_u>)); break; }
+            emit_fcvt(inst, 0x1E390000, true, true);
+            break;
+         case ir_op::i32_trunc_sat_f64_s:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_sat_f64_to_int_w<&_psizam_i32_trunc_sat_f64_s>)); break; }
+            emit_fcvt(inst, 0x1E780000, true, false);
+            break;
+         case ir_op::i32_trunc_sat_f64_u:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_sat_f64_to_int_w<&_psizam_i32_trunc_sat_f64_u>)); break; }
+            emit_fcvt(inst, 0x1E790000, true, false);
+            break;
+         case ir_op::i64_trunc_sat_f32_s:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_sat_f32_to_int_w<&_psizam_i64_trunc_sat_f32_s>)); break; }
+            emit_fcvt(inst, 0x9E380000, true, true);
+            break;
+         case ir_op::i64_trunc_sat_f32_u:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_sat_f32_to_int_w<&_psizam_i64_trunc_sat_f32_u>)); break; }
+            emit_fcvt(inst, 0x9E390000, true, true);
+            break;
+         case ir_op::i64_trunc_sat_f64_s:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_sat_f64_to_int_w<&_psizam_i64_trunc_sat_f64_s>)); break; }
+            emit_fcvt(inst, 0x9E780000, true, false);
+            break;
+         case ir_op::i64_trunc_sat_f64_u:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_sat_f64_to_int_w<&_psizam_i64_trunc_sat_f64_u>)); break; }
+            emit_fcvt(inst, 0x9E790000, true, false);
+            break;
 
          // ── Int-to-float conversions ──
-         case ir_op::f32_convert_s_i32:   emit_icvt(inst, 0x1E220000, true, true); break;   // SCVTF S0, W0
-         case ir_op::f32_convert_u_i32:   emit_icvt(inst, 0x1E230000, true, true); break;
-         case ir_op::f32_convert_s_i64:   emit_icvt(inst, 0x9E220000, false, true); break;
-         case ir_op::f32_convert_u_i64:   emit_icvt(inst, 0x9E230000, false, true); break;
-         case ir_op::f64_convert_s_i32:   emit_icvt(inst, 0x1E620000, true, false); break;
-         case ir_op::f64_convert_u_i32:   emit_icvt(inst, 0x1E630000, true, false); break;
-         case ir_op::f64_convert_s_i64:   emit_icvt(inst, 0x9E620000, false, false); break;
-         case ir_op::f64_convert_u_i64:   emit_icvt(inst, 0x9E630000, false, false); break;
+         case ir_op::f32_convert_s_i32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_i32_to_f32_w)); break; }
+            emit_icvt(inst, 0x1E220000, true, true);
+            break;
+         case ir_op::f32_convert_u_i32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_ui32_to_f32_w)); break; }
+            emit_icvt(inst, 0x1E230000, true, true);
+            break;
+         case ir_op::f32_convert_s_i64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_i64_to_f32_w)); break; }
+            emit_icvt(inst, 0x9E220000, false, true);
+            break;
+         case ir_op::f32_convert_u_i64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_ui64_to_f32_w)); break; }
+            emit_icvt(inst, 0x9E230000, false, true);
+            break;
+         case ir_op::f64_convert_s_i32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_i32_to_f64_w)); break; }
+            emit_icvt(inst, 0x1E620000, true, false);
+            break;
+         case ir_op::f64_convert_u_i32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_ui32_to_f64_w)); break; }
+            emit_icvt(inst, 0x1E630000, true, false);
+            break;
+         case ir_op::f64_convert_s_i64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_i64_to_f64_w)); break; }
+            emit_icvt(inst, 0x9E620000, false, false);
+            break;
+         case ir_op::f64_convert_u_i64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) { emit_sf_unop(inst, reinterpret_cast<void*>(&sf_ui64_to_f64_w)); break; }
+            emit_icvt(inst, 0x9E630000, false, false);
+            break;
 
          // ── Float-float conversions ──
          case ir_op::f32_demote_f64:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) {
+               emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f64_demote_w));
+               break;
+            }
             load_vreg_x0(inst.rr.src1);
             emit32(0x9E670000); // FMOV D0, X0
             emit32(0x1E624000); // FCVT S0, D0
@@ -2276,6 +2467,10 @@ namespace psizam::detail {
             store_x0_vreg(inst.dest);
             break;
          case ir_op::f64_promote_f32:
+            if constexpr (use_softfloat) if (_fp == fp_mode::softfloat) {
+               emit_sf_unop(inst, reinterpret_cast<void*>(&sf_f32_promote_w));
+               break;
+            }
             load_vreg_x0(inst.rr.src1);
             emit32(0x1E270000); // FMOV S0, W0
             emit32(0x1E22C000); // FCVT D0, S0
@@ -2541,14 +2736,16 @@ namespace psizam::detail {
             // Load jmpbuf ptr
             if (inst.rr.src1 != ir_vreg_none) load_vreg_x0(inst.rr.src1);
             else { emit_pop(X0); }
-            // Save ctx/mem, call setjmp(jmpbuf)
-            emit_push(X19);
-            emit_push(X20);
-            // X0 already = jmpbuf (arg1)
+            // Call setjmp(jmpbuf). _setjmp/_longjmp already save/restore all
+            // callee-saved registers (X19-X28, FP, LR, SP) so X19 (ctx) and
+            // X20 (mem) are automatically preserved across longjmp.
+            //
+            // Do NOT push/pop X19/X20 around the call: the normal-flow pop
+            // frees those stack slots, and the try body can overwrite them.
+            // When longjmp restores SP to the setjmp point, the pops would
+            // read garbage (e.g., the callee's saved FP/LR).
             emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_setjmp));
             emit32(0xD63F0100); // BLR X8
-            emit_pop(X20);
-            emit_pop(X19);
             if (inst.dest != ir_vreg_none)
                store_x0_vreg(inst.dest);
             else
@@ -3591,6 +3788,39 @@ namespace psizam::detail {
 
       // ── Float helpers ──
 
+      // Generic softfloat emit helpers: call a C++ wrapper function from JIT code.
+      // All wrappers take/return uint64_t matching the GPR convention.
+
+      // Unary: load src1 → X0, call fn(X0) → X0, store to dest
+      void emit_sf_unop(const ir_inst& inst, void* fn) {
+         load_vreg_x0(inst.rr.src1);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(fn));
+         emit32(0xD63F0100); // BLR X8
+         store_x0_vreg(inst.dest);
+      }
+
+      // Binary: load src1 → X0, src2 → X1, call fn(X0, X1) → X0, store to dest
+      void emit_sf_binop(const ir_inst& inst, void* fn) {
+         load_vreg_x0(inst.rr.src1);
+         load_vreg_x1(inst.rr.src2);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(fn));
+         emit32(0xD63F0100); // BLR X8
+         store_x0_vreg(inst.dest);
+      }
+
+      // Comparison: call fn(X0, X1) → uint64_t (0 or 1), then CMP W0, #0 to set flags.
+      // If fused with a branch, emits B.NE to the branch target; otherwise CSET.
+      void emit_sf_cmp(ir_function& func, const ir_inst& inst, uint32_t idx, void* fn) {
+         load_vreg_x0(inst.rr.src1);
+         load_vreg_x1(inst.rr.src2);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(fn));
+         emit32(0xD63F0100); // BLR X8
+         emit32(0x7100001F); // CMP W0, #0
+         if ((inst.flags & IR_FUSE_NEXT) && emit_fused_branch(func, idx, COND_NE)) return;
+         emit_cset(X0, COND_NE);
+         store_x0_vreg(inst.dest);
+      }
+
       // NaN canonicalization on FP reg: if S0 is NaN, replace with canonical NaN
       void emit_f32_canonicalize_nan() {
          emit32(0x1E202000);  // FCMP S0, S0 — unordered if NaN
@@ -3732,19 +3962,27 @@ namespace psizam::detail {
          store_x0_vreg(inst.dest);
       }
 
-      // Trapping float-to-int: clear FPSR, convert, check IOC flag → trap on overflow/NaN
+      // Trapping float-to-int conversion via C++ helper call.
+      // Inline FPSR/IOC checks proved unreliable on Apple Silicon in the jit2 context
+      // (works in jit single-pass but not jit2, root cause not determined).
+      // The helper does bounds checking in C++ and calls signal_throw on overflow/NaN.
       void emit_fcvt_trap(const ir_inst& inst, uint32_t cvt_op, bool src_is32, bool fp_is32) {
          load_vreg_x0(inst.rr.src1);
-         if (fp_is32) emit32(0x1E270000); // FMOV S0, W0
-         else         emit32(0x9E670000); // FMOV D0, X0
-         // Clear FPSR
-         emit32(0xD2800008); // MOVZ X8, #0
-         emit32(0xD51B4428); // MSR FPSR, X8
-         emit32(cvt_op);     // FCVTZx Wd/Xd, S0/D0
-         // Check FPSR IOC (Invalid Operation) bit
-         emit32(0xD53B4428); // MRS X8, FPSR
-         emit32(0x7200011F); // TST W8, #1
-         emit_branch_to_handler(COND_NE, fpe_handler);
+         // Select the appropriate checked conversion helper
+         void* helper = nullptr;
+         switch (cvt_op) {
+            case 0x1E380000: helper = reinterpret_cast<void*>(&checked_trunc_i32_s_f32); break;
+            case 0x1E390000: helper = reinterpret_cast<void*>(&checked_trunc_i32_u_f32); break;
+            case 0x1E780000: helper = reinterpret_cast<void*>(&checked_trunc_i32_s_f64); break;
+            case 0x1E790000: helper = reinterpret_cast<void*>(&checked_trunc_i32_u_f64); break;
+            case 0x9E380000: helper = reinterpret_cast<void*>(&checked_trunc_i64_s_f32); break;
+            case 0x9E390000: helper = reinterpret_cast<void*>(&checked_trunc_i64_u_f32); break;
+            case 0x9E780000: helper = reinterpret_cast<void*>(&checked_trunc_i64_s_f64); break;
+            case 0x9E790000: helper = reinterpret_cast<void*>(&checked_trunc_i64_u_f64); break;
+         }
+         // X0 = input bits, call helper → X0 = result (or signal_throw on overflow/NaN)
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(helper));
+         emit32(0xD63F0100); // BLR X8
          store_x0_vreg(inst.dest);
       }
 
@@ -3930,6 +4168,174 @@ namespace psizam::detail {
       static void on_memory_error() { signal_throw<wasm_memory_exception>("wasm memory out-of-bounds"); }
       static void on_unreachable() { signal_throw<wasm_interpreter_exception>("unreachable"); }
       static void on_fp_error() { signal_throw<wasm_interpreter_exception>("floating point error"); }
+
+      // ── Softfloat wrapper functions for JIT2 ──
+      // All wrappers take/return uint64_t to match GPR calling convention.
+      // Internally convert to float/double, call softfloat, convert back.
+
+      // Helper: extract float from uint64_t bits
+      static float bits_to_f32(uint64_t bits) {
+         float f; uint32_t b = static_cast<uint32_t>(bits);
+         std::memcpy(&f, &b, sizeof(float)); return f;
+      }
+      // Helper: pack float into uint64_t bits
+      static uint64_t f32_to_bits(float f) {
+         uint32_t b; std::memcpy(&b, &f, sizeof(float));
+         return static_cast<uint64_t>(b);
+      }
+      // Helper: extract double from uint64_t bits
+      static double bits_to_f64(uint64_t bits) {
+         double f; std::memcpy(&f, &bits, sizeof(double)); return f;
+      }
+      // Helper: pack double into uint64_t bits
+      static uint64_t f64_to_bits(double f) {
+         uint64_t b; std::memcpy(&b, &f, sizeof(double)); return b;
+      }
+
+      // ── f32 unary/binary/cmp wrappers ──
+      template<auto Fn>
+      static uint64_t sf_f32_unop_w(uint64_t a) {
+         return f32_to_bits(Fn(bits_to_f32(a)));
+      }
+      template<auto Fn>
+      static uint64_t sf_f32_binop_w(uint64_t a, uint64_t b) {
+         return f32_to_bits(Fn(bits_to_f32(a), bits_to_f32(b)));
+      }
+      template<auto Fn>
+      static uint64_t sf_f32_cmp_w(uint64_t a, uint64_t b) {
+         return Fn(bits_to_f32(a), bits_to_f32(b)) ? 1u : 0u;
+      }
+
+      // ── f64 unary/binary/cmp wrappers ──
+      template<auto Fn>
+      static uint64_t sf_f64_unop_w(uint64_t a) {
+         return f64_to_bits(Fn(bits_to_f64(a)));
+      }
+      template<auto Fn>
+      static uint64_t sf_f64_binop_w(uint64_t a, uint64_t b) {
+         return f64_to_bits(Fn(bits_to_f64(a), bits_to_f64(b)));
+      }
+      template<auto Fn>
+      static uint64_t sf_f64_cmp_w(uint64_t a, uint64_t b) {
+         return Fn(bits_to_f64(a), bits_to_f64(b)) ? 1u : 0u;
+      }
+
+      // ── Trapping conversion wrappers (softfloat functions throw via PSIZAM_ASSERT) ──
+      // Must use longjmp_on_exception since C++ exceptions can't unwind through JIT frames.
+      template<auto Fn>
+      static uint64_t sf_trap_f32_to_int_w(uint64_t bits) {
+         uint64_t result;
+         longjmp_on_exception([&]() {
+            result = static_cast<uint64_t>(Fn(bits_to_f32(bits)));
+         });
+         return result;
+      }
+      template<auto Fn>
+      static uint64_t sf_trap_f64_to_int_w(uint64_t bits) {
+         uint64_t result;
+         longjmp_on_exception([&]() {
+            result = static_cast<uint64_t>(Fn(bits_to_f64(bits)));
+         });
+         return result;
+      }
+
+      // ── Saturating conversion wrappers ──
+      template<auto Fn>
+      static uint64_t sf_sat_f32_to_int_w(uint64_t bits) {
+         return static_cast<uint64_t>(Fn(bits_to_f32(bits)));
+      }
+      template<auto Fn>
+      static uint64_t sf_sat_f64_to_int_w(uint64_t bits) {
+         return static_cast<uint64_t>(Fn(bits_to_f64(bits)));
+      }
+
+      // ── Int-to-float conversion wrappers ──
+      // i32→f32/f64 (signed): input is sign-extended in X0, treat low 32 as int32_t
+      static uint64_t sf_i32_to_f32_w(uint64_t a) {
+         return f32_to_bits(_psizam_i32_to_f32(static_cast<int32_t>(a)));
+      }
+      static uint64_t sf_ui32_to_f32_w(uint64_t a) {
+         return f32_to_bits(_psizam_ui32_to_f32(static_cast<uint32_t>(a)));
+      }
+      static uint64_t sf_i64_to_f32_w(uint64_t a) {
+         return f32_to_bits(_psizam_i64_to_f32(static_cast<int64_t>(a)));
+      }
+      static uint64_t sf_ui64_to_f32_w(uint64_t a) {
+         return f32_to_bits(_psizam_ui64_to_f32(a));
+      }
+      static uint64_t sf_i32_to_f64_w(uint64_t a) {
+         return f64_to_bits(_psizam_i32_to_f64(static_cast<int32_t>(a)));
+      }
+      static uint64_t sf_ui32_to_f64_w(uint64_t a) {
+         return f64_to_bits(_psizam_ui32_to_f64(static_cast<uint32_t>(a)));
+      }
+      static uint64_t sf_i64_to_f64_w(uint64_t a) {
+         return f64_to_bits(_psizam_i64_to_f64(static_cast<int64_t>(a)));
+      }
+      static uint64_t sf_ui64_to_f64_w(uint64_t a) {
+         return f64_to_bits(_psizam_ui64_to_f64(a));
+      }
+
+      // ── Float-float conversion wrappers ──
+      static uint64_t sf_f32_promote_w(uint64_t a) {
+         return f64_to_bits(_psizam_f32_promote(bits_to_f32(a)));
+      }
+      static uint64_t sf_f64_demote_w(uint64_t a) {
+         return f32_to_bits(_psizam_f64_demote(bits_to_f64(a)));
+      }
+
+      // Checked trapping float-to-int conversion helpers (non-softfloat path).
+      // Called from JIT code via BLR. Takes float bits in X0, returns converted int in X0.
+      // On overflow/NaN, calls signal_throw (which longjmps out, never returns).
+      static uint64_t checked_trunc_i32_s_f32(uint64_t bits) {
+         float f = bits_to_f32(bits);
+         if (std::isnan(f) || f >= 2147483648.0f || f < -2147483648.0f)
+            signal_throw<wasm_interpreter_exception>("floating point error");
+         return static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(f)));
+      }
+      static uint64_t checked_trunc_i32_u_f32(uint64_t bits) {
+         float f = bits_to_f32(bits);
+         if (std::isnan(f) || f >= 4294967296.0f || f <= -1.0f)
+            signal_throw<wasm_interpreter_exception>("floating point error");
+         return static_cast<uint64_t>(static_cast<uint32_t>(f));
+      }
+      static uint64_t checked_trunc_i32_s_f64(uint64_t bits) {
+         double f = bits_to_f64(bits);
+         if (std::isnan(f) || f >= 2147483648.0 || f < -2147483648.0)
+            signal_throw<wasm_interpreter_exception>("floating point error");
+         return static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(f)));
+      }
+      static uint64_t checked_trunc_i32_u_f64(uint64_t bits) {
+         double f = bits_to_f64(bits);
+         if (std::isnan(f) || f >= 4294967296.0 || f <= -1.0)
+            signal_throw<wasm_interpreter_exception>("floating point error");
+         return static_cast<uint64_t>(static_cast<uint32_t>(f));
+      }
+      static uint64_t checked_trunc_i64_s_f32(uint64_t bits) {
+         float f = bits_to_f32(bits);
+         if (std::isnan(f) || f >= 9223372036854775808.0f || f < -9223372036854775808.0f)
+            signal_throw<wasm_interpreter_exception>("floating point error");
+         return static_cast<uint64_t>(static_cast<int64_t>(f));
+      }
+      static uint64_t checked_trunc_i64_u_f32(uint64_t bits) {
+         float f = bits_to_f32(bits);
+         if (std::isnan(f) || f >= 18446744073709551616.0f || f <= -1.0f)
+            signal_throw<wasm_interpreter_exception>("floating point error");
+         return static_cast<uint64_t>(f);
+      }
+      static uint64_t checked_trunc_i64_s_f64(uint64_t bits) {
+         double f = bits_to_f64(bits);
+         if (std::isnan(f) || f >= 9223372036854775808.0 || f < -9223372036854775808.0)
+            signal_throw<wasm_interpreter_exception>("floating point error");
+         return static_cast<uint64_t>(static_cast<int64_t>(f));
+      }
+      static uint64_t checked_trunc_i64_u_f64(uint64_t bits) {
+         double f = bits_to_f64(bits);
+         if (std::isnan(f) || f >= 18446744073709551616.0 || f <= -1.0)
+            signal_throw<wasm_interpreter_exception>("floating point error");
+         return static_cast<uint64_t>(f);
+      }
+
       static void on_call_indirect_error() { signal_throw<wasm_interpreter_exception>("call_indirect out of range"); }
       static void on_type_error() { signal_throw<wasm_interpreter_exception>("call_indirect incorrect function type"); }
       static void on_stack_overflow() { signal_throw<wasm_interpreter_exception>("stack overflow"); }

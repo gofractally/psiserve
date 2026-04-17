@@ -8,6 +8,7 @@
 //           locals/globals, calls, select.
 
 #include <psizam/detail/llvm_ir_translator.hpp>
+#include <psizam/exceptions.hpp>
 
 #include <llvm/IR/IRBuilder.h>
 #include <cstdlib>
@@ -4790,8 +4791,7 @@ namespace psizam::detail {
       std::string err;
       llvm::raw_string_ostream err_stream(err);
       if (llvm::verifyModule(*_impl->llvm_mod, &err_stream)) {
-         std::cerr << "Fatal: LLVM module verification failed: " << err << "\n";
-         std::abort();
+         throw wasm_parse_exception("LLVM module verification failed: " + err);
       }
 
       // Run optimization passes.

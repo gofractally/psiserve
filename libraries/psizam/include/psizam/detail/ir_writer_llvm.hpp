@@ -24,6 +24,10 @@ namespace psizam::detail {
    void     set_llvm_opt_level(int level);
    int      get_llvm_opt_level();
 
+   // Thread-local for transporting exceptions out of ir_writer_llvm destructor.
+   // Destructors cannot throw; this stores the exception for post-destructor rethrow.
+   inline thread_local std::exception_ptr llvm_deferred_exception;
+
    class ir_writer_llvm : public ir_writer {
     public:
       ir_writer_llvm(growable_allocator& alloc, std::size_t source_bytes, module& mod,
@@ -33,6 +37,7 @@ namespace psizam::detail {
            _deterministic(deterministic)
       {
          _skip_codegen = true;
+         llvm_deferred_exception = nullptr;
       }
 
       ~ir_writer_llvm() {
@@ -41,9 +46,14 @@ namespace psizam::detail {
          // Run the LLVM pipeline: translate IR -> LLVM IR -> native code.
          // IR data in scratch allocator is still alive; base class destructor
          // (which runs after this) will clean it up.
-         llvm_compile_functions(get_functions(), get_num_functions(),
-                                get_ir_module(), get_ir_allocator(),
-                                _deterministic);
+         try {
+            llvm_compile_functions(get_functions(), get_num_functions(),
+                                   get_ir_module(), get_ir_allocator(),
+                                   _deterministic);
+         } catch (...) {
+            // Cannot throw from destructor; defer for rethrow after parser destructs
+            llvm_deferred_exception = std::current_exception();
+         }
       }
 
     private:

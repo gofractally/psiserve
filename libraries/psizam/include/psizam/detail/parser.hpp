@@ -720,8 +720,16 @@ namespace psizam::detail {
 
          uint32_t imported_functions_size = _mod->get_imported_functions_size();
          fast_functions.resize(_mod->functions.size() + imported_functions_size);
-         for (uint32_t i = 0; i < imported_functions_size; ++i) {
-            fast_functions[i] = type_aliases.at(_mod->imports[i].type.func_t);
+         {
+            // Map function indices to the correct import entries,
+            // skipping non-function imports (memory, global, table).
+            uint32_t func_idx = 0;
+            for (uint32_t i = 0; i < _mod->imports.size() && func_idx < imported_functions_size; ++i) {
+               if (_mod->imports[i].kind == external_kind::Function) {
+                  fast_functions[func_idx] = type_aliases.at(_mod->imports[i].type.func_t);
+                  func_idx++;
+               }
+            }
          }
          for (uint32_t i = 0; i < _mod->functions.size(); ++i) {
             PSIZAM_ASSERT(_mod->functions[i] < type_aliases.size(), wasm_parse_exception, "function type index out of range");
@@ -1667,24 +1675,16 @@ namespace psizam::detail {
                   for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
                      op_stack.pop(bp[i]);
 
-                  // Push try_table onto pc_stack BEFORE emit_try_table so we can
-                  // compute depth_change for each catch clause (labels are relative
-                  // to inside the try_table: depth 0 = try_table itself)
                   uint32_t try_depth = op_stack.depth();
-                  pc_element_t elem{};
-                  elem.operand_depth = try_depth;
-                  elem.expected_result = single_type;
-                  elem.label_result = single_type;
-                  elem.is_if = false;
-                  elem.is_try_table = true;
-                  elem.relocations = std::vector<branch_t>{};
-                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
-                  elem.block_params = bp; // copy, not move (need bp for push_scope below)
-                  pc_stack.push_back(std::move(elem));
 
-                  // Compute depth_change and payload_count for each catch clause
+                  // Compute depth_change and payload_count for each catch clause.
+                  // Per WASM spec: catch clause labels are resolved relative to the
+                  // ENCLOSING scope, not the try_table itself (label 0 = surrounding
+                  // block, unlike br where label 0 = innermost block). So we resolve
+                  // labels BEFORE pushing try_table onto pc_stack.
                   for (uint32_t i = 0; i < num_catches; ++i) {
-                     // Target block for this catch clause
+                     // Target block for this catch clause (resolved from enclosing scope)
+                     PSIZAM_ASSERT(clauses[i].label < pc_stack.size(), wasm_parse_exception, "catch label out of range");
                      auto& target = pc_stack[pc_stack.size() - 1 - clauses[i].label];
                      clauses[i].depth_change = try_depth - target.operand_depth;
 
@@ -1709,10 +1709,23 @@ namespace psizam::detail {
 
                   auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses);
 
-                  // Register catch clause PCs for branch target relocation
+                  // Register catch clause PCs for branch target relocation.
+                  // Labels resolved from enclosing scope (before try_table push).
                   for (uint32_t i = 0; i < num_catches; ++i) {
                      handle_branch_target(clauses[i].label, clause_pcs[i]);
                   }
+
+                  // NOW push try_table onto pc_stack (after catch labels resolved)
+                  pc_element_t elem{};
+                  elem.operand_depth = try_depth;
+                  elem.expected_result = single_type;
+                  elem.label_result = single_type;
+                  elem.is_if = false;
+                  elem.is_try_table = true;
+                  elem.relocations = std::vector<branch_t>{};
+                  if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
+                  elem.block_params = bp;
+                  pc_stack.push_back(std::move(elem));
 
                   op_stack.push_scope();
                   // Push params back inside the try_table scope

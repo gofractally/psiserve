@@ -18,6 +18,7 @@
 
 add_executable(psizam-fuzz-diff fuzz_differential.cpp)
 target_link_libraries(psizam-fuzz-diff PRIVATE psizam psizam-exec)
+target_compile_definitions(psizam-fuzz-diff PRIVATE PSIZAM_JIT_SIGNAL_DIAGNOSTICS)
 if(PSIZAM_ENABLE_LLVM)
    target_link_libraries(psizam-fuzz-diff PRIVATE psizam-llvm)
    target_compile_definitions(psizam-fuzz-diff PRIVATE PSIZAM_ENABLE_LLVM_BACKEND)

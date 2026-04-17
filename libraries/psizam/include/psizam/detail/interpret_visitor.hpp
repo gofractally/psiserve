@@ -81,6 +81,7 @@ namespace psizam::detail {
          uint32_t table_idx = op.index >> 16;
          const auto& index = context.pop_operand().to_ui32();
          uint32_t fn = context.table_elem(index, table_idx);
+         PSIZAM_ASSERT(fn < context.get_module().get_functions_total(), wasm_interpreter_exception, "call_indirect to uninitialized table entry");
          const auto& expected_type = context.get_module().types.at(type_idx);
          const auto& actual_type = context.get_module().get_function_type(fn);
          PSIZAM_ASSERT(actual_type == expected_type, wasm_interpreter_exception, "bad call_indirect type");
@@ -94,6 +95,7 @@ namespace psizam::detail {
          uint32_t table_idx = op.index >> 16;
          const auto& index = context.pop_operand().to_ui32();
          uint32_t fn = context.table_elem(index, table_idx);
+         PSIZAM_ASSERT(fn < context.get_module().get_functions_total(), wasm_interpreter_exception, "call_indirect to uninitialized table entry");
          const auto& expected_type = context.get_module().types.at(type_idx);
          const auto& actual_type = context.get_module().get_function_type(fn);
          PSIZAM_ASSERT(actual_type == expected_type, wasm_interpreter_exception, "bad call_indirect type");
@@ -3158,20 +3160,25 @@ namespace psizam::detail {
             context.eh_catches_size()  // first_catch
          });
 
-         // Read the inline clause descriptors (they follow as try_table_t instructions)
+         // Read the inline clause descriptors (two try_table_t instructions per clause)
          context.inc_pc();
+         uint32_t try_depth = context.current_operand_depth();
          for (uint32_t i = 0; i < num_clauses; ++i) {
             auto* clause_op = context.get_pc();
             auto& clause_data = clause_op->template get<try_table_t>();
             uint8_t  kind      = static_cast<uint8_t>(clause_data.data >> 24);
             uint32_t tag_idx   = clause_data.data & 0x00FFFFFF;
-            uint32_t label_pc  = clause_data.pc;
+            uint32_t depth_change = clause_data.pc;
+            context.inc_pc();
+            auto* pc_op = context.get_pc();
+            auto& pc_data = pc_op->template get<try_table_t>();
+            uint32_t label_pc = pc_data.pc;
 
             context.push_eh_catch({
                kind,
                tag_idx,
                label_pc,
-               context.current_operand_depth()
+               try_depth - depth_change
             });
             context.inc_pc();
          }
@@ -3206,10 +3213,19 @@ namespace psizam::detail {
                   // Restore operand stack depth
                   context.eat_operands(entry.operand_depth);
 
-                  // Push payload values for catch/catch_ref
+                  // Push payload values for catch/catch_ref with correct variant types
                   if (entry.kind == catch_kind::catch_tag || entry.kind == catch_kind::catch_tag_ref) {
-                     for (auto v : payload)
-                        context.push_operand({i64_const_t{static_cast<int64_t>(v)}});
+                     const auto& mod = context.get_module();
+                     const auto& tag_ft = mod.types[mod.tags[tag_index].type_index];
+                     for (uint32_t pi = 0; pi < payload.size(); ++pi) {
+                        uint8_t ptype = pi < tag_ft.param_types.size() ? tag_ft.param_types[pi] : types::i64;
+                        switch (ptype) {
+                           case types::i32: context.push_operand({i32_const_t{static_cast<uint32_t>(payload[pi])}}); break;
+                           case types::f32: context.push_operand({f32_const_t{static_cast<uint32_t>(payload[pi])}}); break;
+                           case types::f64: context.push_operand({f64_const_t{payload[pi]}}); break;
+                           default:         context.push_operand({i64_const_t{static_cast<int64_t>(payload[pi])}}); break;
+                        }
+                     }
                   }
 
                   // Push exnref for catch_ref/catch_all_ref
