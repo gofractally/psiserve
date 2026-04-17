@@ -876,7 +876,7 @@ namespace psizam::detail {
          return inst_idx;
       }
 
-      branch_t emit_br_if(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
+      branch_t emit_br_if(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
          uint32_t inst_idx = 0;
          if (!_unreachable) {
             uint32_t cond = _func->vpop();
@@ -947,7 +947,7 @@ namespace psizam::detail {
               if (hint == 0) inst.flags |= IR_BRANCH_UNLIKELY;
               else if (hint == 1) inst.flags |= IR_BRANCH_LIKELY;
             }
-            inst.dest = dc; // depth change for multipop
+            inst.dest = dc | (eh_leave_count << 16); // low 16 = depth change, high 16 = eh_leave_count
             inst.br.target = UINT32_MAX; // patched by fix_branch
             inst.br.src1 = cond;
             inst_idx = _func->current_inst_index();
@@ -959,7 +959,7 @@ namespace psizam::detail {
       struct br_table_parser {
          ir_writer_impl* _writer;
          br_table_parser(ir_writer_impl* w) : _writer(w) {}
-         branch_t emit_case(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
+         branch_t emit_case(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
             // Emit merge movs if target has merge vregs
             if (label != UINT32_MAX) {
                auto* func = _writer->_func;
@@ -1023,15 +1023,15 @@ namespace psizam::detail {
             inst.opcode = ir_op::br;
             inst.type = rt;
             inst.flags = IR_SIDE_EFFECT;
-            inst.dest = dc;
+            inst.dest = dc | (eh_leave_count << 16); // low 16 = depth change, high 16 = eh_leave_count
             inst.br.target = UINT32_MAX; // patched by fix_branch
             inst.br.src1 = ir_vreg_none;
             uint32_t inst_idx = _writer->_func->current_inst_index();
             _writer->_func->emit(inst);
             return inst_idx;
          }
-         branch_t emit_default(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
-            return emit_case(dc, rt, label, result_count);
+         branch_t emit_default(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
+            return emit_case(dc, rt, label, result_count, eh_leave_count);
          }
       };
       br_table_parser emit_br_table(uint32_t table_size) {

@@ -778,13 +778,17 @@ namespace psizam::detail {
             _in_br_table = true;
             break;
 
-         case ir_op::br:
+         case ir_op::br: {
+            uint32_t dc = inst.dest & 0xFFFF;
+            uint32_t eh_count = inst.dest >> 16;
             if (_in_br_table) {
                bool is_default = (_br_table_case >= _br_table_size);
                if (is_default) {
                   // Default case: pop index, unconditional branch
                   this->emit_pop_raw(rax); // discard index
-                  emit_branch_to_block(func, inst.br.target, inst.dest, inst.type);
+                  for (uint32_t i = 0; i < eh_count; ++i)
+                     emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
+                  emit_branch_to_block(func, inst.br.target, dc, inst.type);
                   _in_br_table = false;
                } else {
                   // Numbered case: compare index at (%rsp) without popping
@@ -794,18 +798,37 @@ namespace psizam::detail {
                   // If equal, pop index and branch
                   void* skip = this->emit_branchcc32(base::JNE);
                   this->emit_pop_raw(rax); // pop index
-                  emit_branch_to_block(func, inst.br.target, inst.dest, inst.type);
+                  for (uint32_t i = 0; i < eh_count; ++i)
+                     emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
+                  emit_branch_to_block(func, inst.br.target, dc, inst.type);
                   base::fix_branch(skip, code);
                   _br_table_case++;
                }
             } else {
-               emit_branch_to_block(func, inst.br.target, inst.dest, inst.type);
+               for (uint32_t i = 0; i < eh_count; ++i)
+                  emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
+               emit_branch_to_block(func, inst.br.target, dc, inst.type);
             }
             break;
+         }
 
-         case ir_op::br_if:
-            emit_cond_branch_to_block(func, inst.br.target, inst.dest, inst.type);
+         case ir_op::br_if: {
+            uint32_t dc = inst.dest & 0xFFFF;
+            uint32_t eh_count = inst.dest >> 16;
+            if (eh_count > 0) {
+               // Must use complex path to emit eh_leave on taken path only
+               this->emit_pop_raw(rax);
+               this->emit(base::TEST, eax, eax);
+               void* skip = this->emit_branchcc32(base::JZ);
+               for (uint32_t i = 0; i < eh_count; ++i)
+                  emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
+               emit_branch_to_block(func, inst.br.target, dc, inst.type);
+               base::fix_branch(skip, code);
+            } else {
+               emit_cond_branch_to_block(func, inst.br.target, dc, inst.type);
+            }
             break;
+         }
 
 
          // ── Calls ──
@@ -1982,10 +2005,19 @@ namespace psizam::detail {
             return true;
          }
          if (next.opcode == ir_op::br_if) {
-            // br_if branches when condition is TRUE → use cc directly
-            // Note: br_if with depth_change > 0 can't be fused (needs multipop)
-            // but the optimizer already checked use_count == 1 and adjacency
-            emit_branch_cc_to_block(func, next.br.target, next.dest, next.type, cc);
+            uint32_t dc = next.dest & 0xFFFF;
+            uint32_t eh_count = next.dest >> 16;
+            if (eh_count > 0) {
+               // Can't fuse: need eh_leave on taken path
+               void* skip = this->emit_branchcc32(invert_cc(cc));
+               for (uint32_t i = 0; i < eh_count; ++i)
+                  emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
+               emit_branch_to_block(func, next.br.target, dc, next.type);
+               base::fix_branch(skip, code);
+            } else {
+               // br_if branches when condition is TRUE → use cc directly
+               emit_branch_cc_to_block(func, next.br.target, dc, next.type, cc);
+            }
             return true;
          }
          return false;
@@ -2243,12 +2275,15 @@ namespace psizam::detail {
             return true;
          }
          case ir_op::br: {
+            uint32_t eh_count = inst.dest >> 16;
             // Result value transfer is handled by mov instructions emitted by ir_writer
             if (_in_br_table) {
                bool is_default = (_br_table_case >= _br_table_size);
                if (is_default) {
                   // Default: discard index, branch unconditionally
                   this->emit_pop_raw(rax);
+                  for (uint32_t i = 0; i < eh_count; ++i)
+                     emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
                   emit_branch_to_block(func, inst.br.target, 0, types::pseudo);
                   _in_br_table = false;
                } else {
@@ -2256,19 +2291,33 @@ namespace psizam::detail {
                   this->emit_operand32(_br_table_case);
                   void* skip = this->emit_branchcc32(base::JNE);
                   this->emit_pop_raw(rax);
+                  for (uint32_t i = 0; i < eh_count; ++i)
+                     emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
                   emit_branch_to_block(func, inst.br.target, 0, types::pseudo);
                   base::fix_branch(skip, code);
                   _br_table_case++;
                }
             } else {
+               for (uint32_t i = 0; i < eh_count; ++i)
+                  emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
                emit_branch_to_block(func, inst.br.target, 0, types::pseudo);
             }
             return true;
          }
          case ir_op::br_if: {
+            uint32_t dc = inst.dest & 0xFFFF;
+            uint32_t eh_count = inst.dest >> 16;
             load_vreg_rax(inst.br.src1); // condition
             this->emit(base::TEST, eax, eax);
-            emit_branch_cc_to_block(func, inst.br.target, inst.dest, inst.type, base::JNZ);
+            if (eh_count > 0) {
+               void* skip = this->emit_branchcc32(base::JZ);
+               for (uint32_t i = 0; i < eh_count; ++i)
+                  emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
+               emit_branch_to_block(func, inst.br.target, dc, inst.type);
+               base::fix_branch(skip, code);
+            } else {
+               emit_branch_cc_to_block(func, inst.br.target, dc, inst.type, base::JNZ);
+            }
             return true;
          }
          case ir_op::br_table: {

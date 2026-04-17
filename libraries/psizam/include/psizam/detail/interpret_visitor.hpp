@@ -58,6 +58,15 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const br_if_t& op) {
          const auto& val = context.pop_operand();
          if (context.is_true(val)) {
+            // Pop EH frames for any try_table scopes crossed by this branch
+            for (uint32_t i = 0; i < op.stacksz; ++i) {
+               if (context.has_eh_frames()) {
+                  auto& frame = context.current_eh_frame();
+                  uint32_t trim = frame.first_catch;
+                  context.pop_eh_frame();
+                  context.trim_eh_catches(trim);
+               }
+            }
             context.jump(op.data, op.pc);
          } else {
             context.inc_pc();
@@ -71,6 +80,15 @@ namespace psizam::detail {
          const auto& in = context.pop_operand().to_ui32();
          const auto* table = reinterpret_cast<const br_table_t::elem_t*>(context.get_pc() + 1);
          const auto& entry = table[std::min(in, op.size)];
+         // Pop EH frames for any try_table scopes crossed by this branch
+         for (uint32_t i = 0; i < entry.eh_leave_count; ++i) {
+            if (context.has_eh_frames()) {
+               auto& frame = context.current_eh_frame();
+               uint32_t trim = frame.first_catch;
+               context.pop_eh_frame();
+               context.trim_eh_catches(trim);
+            }
+         }
          context.jump(entry.stack_pop, entry.pc);
       }
       [[gnu::always_inline]] inline void operator()(const call_t& op) {

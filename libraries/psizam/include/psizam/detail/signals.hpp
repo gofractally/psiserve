@@ -191,7 +191,11 @@ namespace psizam::detail {
          }
 #endif
 
-         //if in neither range, fall through and let chained handler an opportunity to handle
+         // Fallback: if we're in a WASM execution context (trap_jmp_ptr set) but
+         // no known range matched, this is likely a fault in a C helper function
+         // called from JIT code (e.g., due to operand stack underflow producing
+         // garbage values). Trap cleanly rather than crashing the host process.
+         longjmp(*trap_jmp_ptr, sig);
       }
 
       struct sigaction* prev_action;

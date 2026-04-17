@@ -361,13 +361,15 @@ namespace psizam::detail {
          emit_bytes(0xe9);
          return emit_branch_target32();
       }
-      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
+      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
          if (auto cond = try_pop_recent_op<condition_op>()) {
             COUNT_INSTR_NO_FLAGS(); // The previous flags are use be the conditional branch
-            if (is_simple_multipop(depth_change, rt, result_count)) {
+            if (eh_leave_count == 0 && is_simple_multipop(depth_change, rt, result_count)) {
                return emit_branchcc32(cond->branchop);
             } else {
                void* skip = emit_branch8(reverse_condition(cond->branchop));
+               for (uint32_t i = 0; i < eh_leave_count; ++i)
+                  emit_eh_leave();
                if (result_count > 1)
                   emit_multipop_multivalue(depth_change, result_count);
                else
@@ -383,10 +385,12 @@ namespace psizam::detail {
          emit_pop(rax);
          emit(TEST, eax, eax);
 
-         if(is_simple_multipop(depth_change, rt, result_count)) {
+         if(eh_leave_count == 0 && is_simple_multipop(depth_change, rt, result_count)) {
             return emit_branchcc32(JNZ);
          } else {
             void* skip = emit_branch8(JZ);
+            for (uint32_t i = 0; i < eh_leave_count; ++i)
+               emit_eh_leave();
             // add depth_change*8, %rsp
             if (result_count > 1)
                emit_multipop_multivalue(depth_change, result_count);
@@ -402,7 +406,7 @@ namespace psizam::detail {
 
       // Generate a binary search.
       struct br_table_generator {
-         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
+         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
             while(true) {
                assert(!stack.empty() && "The parser is supposed to handle the number of elements in br_table.");
                auto [min, max, label] = stack.back();
@@ -428,7 +432,9 @@ namespace psizam::detail {
                   auto icount = _this->variable_size_instr(0, result_count > 1 ? result_count * 16 + 17 : 22);
                   assert(min == static_cast<uint32_t>(_i));
                   _i++;
-                  if (is_simple_multipop(depth_change, rt, result_count)) {
+                  for (uint32_t i = 0; i < eh_leave_count; ++i)
+                     _this->emit_eh_leave();
+                  if (eh_leave_count == 0 && is_simple_multipop(depth_change, rt, result_count)) {
                      if(label) {
                         return label;
                      } else {
@@ -449,8 +455,8 @@ namespace psizam::detail {
             }
 
          }
-         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
-            void* result = emit_case(depth_change, rt, UINT32_MAX, result_count);
+         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
+            void* result = emit_case(depth_change, rt, UINT32_MAX, result_count, eh_leave_count);
             assert(stack.empty() && "unexpected default.");
             return result;
          }

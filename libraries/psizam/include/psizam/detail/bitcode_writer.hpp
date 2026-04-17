@@ -50,9 +50,10 @@ namespace psizam::detail {
          instr.data = encode_depth_change(depth_change, rt, result_count);
          return &instr.pc;
       }
-      uint32_t * emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = UINT32_MAX) {
+      uint32_t * emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = UINT32_MAX, uint32_t eh_leave_count = 0) {
          auto& instr = append_instr(br_if_t{});
          instr.data = encode_depth_change(depth_change, rt, result_count);
+         instr.stacksz = eh_leave_count;
          return &instr.pc;
       }
 
@@ -128,14 +129,15 @@ namespace psizam::detail {
             _this->fb[_this->op_index] = error_t{};
             bt.size           = table_size;
          }
-         uint32_t * emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = UINT32_MAX) {
+         uint32_t * emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = UINT32_MAX, uint32_t eh_leave_count = 0) {
             auto& elem = _br_tab[_i++];
             elem.stack_pop = encode_depth_change(depth_change, rt, result_count);
+            elem.eh_leave_count = eh_leave_count;
             return &elem.pc;
          }
          // Must be called after all cases
-         uint32_t* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = UINT32_MAX) {
-            auto result = emit_case(depth_change, rt, UINT32_MAX, result_count);
+         uint32_t* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = UINT32_MAX, uint32_t eh_leave_count = 0) {
+            auto result = emit_case(depth_change, rt, UINT32_MAX, result_count, eh_leave_count);
             PSIZAM_ASSERT(_this->fb[_this->op_index].is_a<error_t>(), wasm_parse_exception, "overwrote br_table data");
             return result;
          }

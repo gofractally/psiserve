@@ -530,10 +530,10 @@ namespace psizam::detail {
          return branch;
       }
 
-      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
+      void* emit_br_if(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
          // Try to fold: if last op was a comparison, use B.cond directly
          if (auto cond = try_pop_recent_op<condition_op>()) {
-            if (is_simple_multipop(depth_change, rt, result_count)) {
+            if (eh_leave_count == 0 && is_simple_multipop(depth_change, rt, result_count)) {
                // B.cond target (patched later)
                void* branch = code;
                emit32(0x54000000 | cond->cond);
@@ -543,6 +543,8 @@ namespace psizam::detail {
                // B.!cond skip
                void* skip = code;
                emit32(0x54000000 | invert_condition(cond->cond));
+               for (uint32_t i = 0; i < eh_leave_count; ++i)
+                  emit_eh_leave();
                if (result_count > 1)
                   emit_multipop_multivalue(depth_change, result_count);
                else
@@ -557,7 +559,7 @@ namespace psizam::detail {
          // Pop condition
          emit_pop_x(X0);
 
-         if(is_simple_multipop(depth_change, rt, result_count)) {
+         if(eh_leave_count == 0 && is_simple_multipop(depth_change, rt, result_count)) {
             // CBNZ W0, target (patched later)
             void* branch = code;
             emit32(0x35000000 | X0);
@@ -567,6 +569,8 @@ namespace psizam::detail {
             // CBZ W0, skip
             void* skip = code;
             emit32(0x34000000 | X0);
+            for (uint32_t i = 0; i < eh_leave_count; ++i)
+               emit_eh_leave();
             if (result_count > 1)
                emit_multipop_multivalue(depth_change, result_count);
             else
@@ -581,7 +585,7 @@ namespace psizam::detail {
 
       // Generate a binary search tree for br_table
       struct br_table_generator {
-         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
+         void* emit_case(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
             while(true) {
                assert(!stack.empty());
                auto [min, max, label] = stack.back();
@@ -601,7 +605,9 @@ namespace psizam::detail {
                } else {
                   assert(min == static_cast<uint32_t>(_i));
                   _i++;
-                  if (is_simple_multipop(depth_change, rt, result_count)) {
+                  for (uint32_t i = 0; i < eh_leave_count; ++i)
+                     _this->emit_eh_leave();
+                  if (eh_leave_count == 0 && is_simple_multipop(depth_change, rt, result_count)) {
                      void* branch = _this->code;
                      _this->emit32(0x14000000);
                      return branch;
@@ -617,8 +623,8 @@ namespace psizam::detail {
                }
             }
          }
-         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0) {
-            void* result = emit_case(depth_change, rt, UINT32_MAX, result_count);
+         void* emit_default(uint32_t depth_change, uint8_t rt, uint32_t = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
+            void* result = emit_case(depth_change, rt, UINT32_MAX, result_count, eh_leave_count);
             assert(stack.empty());
             return result;
          }

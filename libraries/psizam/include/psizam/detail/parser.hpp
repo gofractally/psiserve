@@ -1204,6 +1204,30 @@ namespace psizam::detail {
             pc_stack.pop_back();
          };
 
+         // Count try_table scopes between current position and branch target
+         // at relative depth `label`.  We check depths 0..label (inclusive)
+         // because br to a non-loop scope exits it, skipping the eh_leave
+         // that would normally be emitted at its `end` instruction.
+         auto count_eh_leaves_for_branch = [&](uint32_t label) -> uint32_t {
+            if (label >= pc_stack.size()) return 0; // invalid label; compute_depth_change will reject
+            uint32_t count = 0;
+            for (uint32_t i = 0; i <= label; ++i) {
+               uint32_t idx = pc_stack.size() - 1 - i;
+               if (pc_stack[idx].is_try_table) {
+                  ++count;
+               }
+            }
+            return count;
+         };
+
+         // Count and emit eh_leave for each try_table scope crossed by an
+         // unconditional branch (br, return).
+         auto emit_eh_leaves_for_branch = [&](uint32_t label) {
+            uint32_t count = count_eh_leaves_for_branch(label);
+            for (uint32_t i = 0; i < count; ++i)
+               code_writer.emit_eh_leave();
+         };
+
          auto check_in_bounds = [&]{
             PSIZAM_ASSERT(!pc_stack.empty(),
                           wasm_parse_exception, "code after function end");
@@ -1230,6 +1254,8 @@ namespace psizam::detail {
                case opcodes::return_: {
                   check_in_bounds();
                   uint32_t label = pc_stack.size() - 1;
+                  // Pop EH frames for any try_table scopes crossed by this return
+                  emit_eh_leaves_for_branch(label);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
                   auto branch = code_writer.emit_return(depth_change, rt, rc);
                   handle_branch_target(label, branch);
@@ -1521,6 +1547,8 @@ namespace psizam::detail {
                case opcodes::br: {
                   check_in_bounds();
                   uint32_t label = parse_varuint32(code);
+                  // Pop EH frames for any try_table scopes crossed by this branch
+                  emit_eh_leaves_for_branch(label);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
                   auto branch = code_writer.emit_br(depth_change, rt, label, rc);
                   handle_branch_target(label, branch);
@@ -1530,8 +1558,9 @@ namespace psizam::detail {
                   check_in_bounds();
                   uint32_t label = parse_varuint32(code);
                   op_stack.pop(types::i32);
+                  uint32_t eh_count = count_eh_leaves_for_branch(label);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
-                  auto branch = code_writer.emit_br_if(depth_change, rt, label, rc);
+                  auto branch = code_writer.emit_br_if(depth_change, rt, label, rc, eh_count);
                   handle_branch_target(label, branch);
                } break;
                case opcodes::br_table: {
@@ -1543,8 +1572,9 @@ namespace psizam::detail {
                   auto handler = code_writer.emit_br_table(table_size);
                   for (size_t i = 0; i < table_size; i++) {
                      uint32_t label = parse_varuint32(code);
+                     uint32_t eh_count = count_eh_leaves_for_branch(label);
                      auto [depth_change,rt,rc] = compute_depth_change(label);
-                     auto branch = handler.emit_case(depth_change, rt, label, rc);
+                     auto branch = handler.emit_case(depth_change, rt, label, rc, eh_count);
                      handle_branch_target(label, branch);
                      uint8_t one_result = pc_stack[pc_stack.size() - label - 1].label_result;
                      if(i == 0) {
@@ -1554,8 +1584,9 @@ namespace psizam::detail {
                      }
                   }
                   uint32_t label = parse_varuint32(code);
+                  uint32_t eh_count = count_eh_leaves_for_branch(label);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
-                  auto branch = handler.emit_default(depth_change, rt, label, rc);
+                  auto branch = handler.emit_default(depth_change, rt, label, rc, eh_count);
                   handle_branch_target(label, branch);
                   PSIZAM_ASSERT(table_size == 0 || result_type == pc_stack[pc_stack.size() - label - 1].label_result,
                                 wasm_parse_exception, "br_table labels must have the same type");

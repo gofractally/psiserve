@@ -630,7 +630,7 @@
 
 #define PSIZAM_CREATE_BR_TABLE_TYPE(name, code)                                                                        \
    struct PSIZAM_OPCODE_T(name) {                                                                                      \
-      struct elem_t { uint32_t pc; uint32_t stack_pop; };                                                              \
+      struct elem_t { uint32_t pc; uint32_t stack_pop; uint32_t eh_leave_count; };                                       \
       uint32_t  size;                                                                                                  \
       static constexpr uint8_t opcode = code;                                                                          \
    };
