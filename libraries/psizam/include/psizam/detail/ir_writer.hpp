@@ -2468,7 +2468,7 @@ namespace psizam::detail {
          inst.opcode = ir_op::br;
          inst.type = types::pseudo;
          inst.flags = IR_SIDE_EFFECT;
-         inst.dest = ir_vreg_none;
+         inst.dest = 0; // no depth_change, no eh_leave_count
          inst.br.target = UINT32_MAX;
          uint32_t inst_idx = _func->current_inst_index();
          _func->emit(inst);
@@ -2607,7 +2607,7 @@ namespace psizam::detail {
             inst.opcode = ir_op::br_if;
             inst.type = types::pseudo;
             inst.flags = IR_SIDE_EFFECT;
-            inst.dest = ir_vreg_none;
+            inst.dest = 0; // internal dispatch — no depth_change, no eh_leave_count
             inst.br.target = try_body_gate;
             inst.br.src1 = is_normal;
             _func->emit(inst);
@@ -2666,7 +2666,7 @@ namespace psizam::detail {
                   binst.opcode = ir_op::br_if;
                   binst.type = types::pseudo;
                   binst.flags = IR_SIDE_EFFECT;
-                  binst.dest = ir_vreg_none;
+                  binst.dest = 0; // internal dispatch — no depth_change, no eh_leave_count
                   binst.br.target = handler_blocks[ci];
                   binst.br.src1 = cmp_result;
                   _func->emit(binst);
@@ -2746,12 +2746,21 @@ namespace psizam::detail {
                }
             }
 
+            // Emit eh_leave for any try_table scopes crossed by this catch branch.
+            // The matching try_table's frame is already popped by try_match_exception
+            // at runtime, but outer try_tables between here and the target need cleanup.
+            for (uint32_t li = 0; li < clause.eh_leave_count; ++li) {
+               emit_eh_leave();
+            }
+
             // Emit branch to catch target (unresolved — parser calls fix_branch)
+            // dest must be 0 (not ir_vreg_none) — high 16 bits encode eh_leave_count
+            // which is 0 here since eh_leave instructions are emitted separately above.
             ir_inst br{};
             br.opcode = ir_op::br;
             br.type = types::pseudo;
             br.flags = IR_SIDE_EFFECT;
-            br.dest = ir_vreg_none;
+            br.dest = 0;
             br.br.target = UINT32_MAX;
             br.br.src1 = ir_vreg_none;
             result.push_back(_func->current_inst_index());

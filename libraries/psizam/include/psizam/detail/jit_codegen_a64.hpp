@@ -1184,6 +1184,11 @@ namespace psizam::detail {
             return true;
          }
          if (next.opcode == ir_op::br_if) {
+            uint32_t eh_count = next.dest >> 16;
+            if (eh_count > 0) {
+               // Can't fuse: need eh_leave on taken path
+               return false;
+            }
             emit_cond_branch_to_block(func, next.br.target, cc);
             return true;
          }
@@ -1755,10 +1760,18 @@ namespace psizam::detail {
             break;
          }
          case ir_op::br: {
+            uint32_t eh_count = inst.dest >> 16;
+            auto emit_eh_leaves = [&]() {
+               for (uint32_t i = 0; i < eh_count; ++i) {
+                  emit_mov_reg(X0, X19); // ctx — reload before each call (BLR clobbers X0)
+                  emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_leave));
+               }
+            };
             if (_in_br_table) {
                bool is_default = (_br_table_case >= _br_table_size);
                if (is_default) {
                   emit_pop(X0); // discard index
+                  emit_eh_leaves();
                   emit_branch_to_block(func, inst.br.target);
                   _in_br_table = false;
                } else {
@@ -1767,19 +1780,34 @@ namespace psizam::detail {
                   emit_cmp_imm32(X17, _br_table_case);
                   void* skip = emit_cond_branch_placeholder(COND_NE);
                   emit_pop(X0); // pop index
+                  emit_eh_leaves();
                   emit_branch_to_block(func, inst.br.target);
                   fix_branch(skip, code);
                   _br_table_case++;
                }
             } else {
+               emit_eh_leaves();
                emit_branch_to_block(func, inst.br.target);
             }
             break;
          }
          case ir_op::br_if: {
+            uint32_t eh_count = inst.dest >> 16;
             load_vreg_x0(inst.br.src1);
             emit_cmp_imm32(X0, 0);
-            emit_cond_branch_to_block(func, inst.br.target, COND_NE);
+            if (eh_count > 0) {
+               // Must use complex path to emit eh_leave on taken path only:
+               // if condition is false, skip over eh_leave + branch
+               void* skip = emit_cond_branch_placeholder(COND_EQ);
+               for (uint32_t i = 0; i < eh_count; ++i) {
+                  emit_mov_reg(X0, X19); // ctx — reload before each call (BLR clobbers X0)
+                  emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_leave));
+               }
+               emit_branch_to_block(func, inst.br.target);
+               fix_branch(skip, code);
+            } else {
+               emit_cond_branch_to_block(func, inst.br.target, COND_NE);
+            }
             break;
          }
          case ir_op::br_table: {

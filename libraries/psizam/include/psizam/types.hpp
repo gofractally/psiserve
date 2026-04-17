@@ -230,6 +230,7 @@ namespace psizam {
       uint32_t label;      // branch target (depth into pc_stack)
       uint32_t depth_change;   // operand slots to pop: try_depth - target.operand_depth
       uint32_t payload_count;  // number of values to push (tag params + optional exnref)
+      uint32_t eh_leave_count; // number of intervening try_table scopes to leave on branch
    };
 
    union import_type {

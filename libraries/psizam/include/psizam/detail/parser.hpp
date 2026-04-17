@@ -1760,6 +1760,12 @@ namespace psizam::detail {
                      auto& target = pc_stack[pc_stack.size() - 1 - clauses[i].label];
                      clauses[i].depth_change = catch_try_depth - target.operand_depth;
 
+                     // Count intervening try_table scopes between the enclosing scope
+                     // (which is the try_table we're about to push — but it's not on
+                     // pc_stack yet, and its jit_eh_stack frame is already popped by
+                     // try_match_exception at runtime) and the branch target.
+                     clauses[i].eh_leave_count = count_eh_leaves_for_branch(clauses[i].label);
+
                      // Payload count depends on catch kind
                      switch (clauses[i].kind) {
                         case catch_kind::catch_tag:
