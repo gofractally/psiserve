@@ -56,7 +56,7 @@ All pass on interpreter and jit. jit2 is experimental.
 - ~~**Host function / call depth / reentry** (5): Various segfaults~~ — fixed upstream
 - ~~**relaxed_madd_nmadd** (2), **relaxed_dot_product** (1): Wrong results~~ — fixed: jit2 regalloc v128_op handler now pushes the 3rd operand for all ternary ops (relaxed fma + dot-add), not just `v128_bitselect`; the missing push was causing softfloat helpers to read garbage for `a.lo/a.hi` and corrupt the stack
 - ~~**multi-value `call` / `call_indirect` rax corruption**~~ — fixed: regalloc paths for direct `call` and `call_indirect` now skip `store_rax_vreg(inst.dest)` for multi-value returns (`ft.return_count > 1`). For multi-value returns the callee writes results to `ctx->_multi_return[]` and the IR writer emits separate `ir_op::multi_return_load` instructions; `rax` is undefined in that case, so storing it into the dest vreg's register could clobber a live vreg that regalloc reused the register for
-- ~~**SIGBUS on nested try_table + regalloc** (fuzzer seed 263 module 174)~~ — worked around: jit2 now skips regalloc for any function that uses exception handling (`eh_data_count > 0`), falling back to stack-mode codegen. Root cause: the linear-scan regalloc treats setjmp as just another call site, but a catch handler reached via longjmp inherits the *setjmp-time* callee-saved register state — not the state regalloc assumes at the catch's IR position. If a vreg X is live at the catch entry but was not live at setjmp, X's assigned callee-saved register holds a stale pre-setjmp value after longjmp, causing arbitrary corruption (in this case, eventually trashing the outer `invoke_with_signal_handler`'s `jmp_buf` and producing SIGBUS on longjmp return). A proper fix requires the catch handler's entry live set to be a subset of setjmp's live set, or per-path register state reconciliation
+- ~~**SIGBUS on nested try_table + regalloc** (fuzzer seed 263 module 174)~~ — worked around: jit2 now skips regalloc for any function that uses exception handling (`eh_data_count > 0`), falling back to stack-mode codegen. See `jit2 regalloc ↔ EH interaction bug` below for the full investigation and why the proper fix is deferred
 
 **aarch64 only:**
 - ~~**rem codegen clobber**: i32/i64 rem_u/rem_s hardcoded W2/X2 as scratch for UDIV/SDIV quotient, clobbering live vregs~~ — fixed: use X16 (intra-procedure-call scratch) instead
@@ -66,3 +66,113 @@ All pass on interpreter and jit. jit2 is experimental.
 
 The aarch64 JIT backends do not fully implement SIMD floating-point operations
 with softfloat. These failures only appear on ARM64, not on x86_64.
+
+---
+
+## Open design issues
+
+### jit2 regalloc ↔ EH interaction bug
+
+**Status:** worked around in `libraries/psizam/include/psizam/detail/ir_writer.hpp`
+by skipping regalloc for any function with `eh_data_count > 0` (commit `28229a0`).
+The workaround is correctness-preserving but costs performance for any function
+using `try_table` — those functions fall back to stack-mode codegen.
+
+**Reproducer.** Differential fuzzer seed 263 module 174 (5184 bytes). Minimal
+repro:
+
+```
+./bin/psizam-fuzz-diff --file-backend crash_174_seed263.wasm jit2   # → SIGBUS
+```
+
+Interpreter and `jit_llvm` correctly trap with `unreachable`. The module is a
+deeply-nested (25+ levels) stack of `try_table` / `loop` / `block` with a
+multi-value `call_indirect (type 3)` somewhere in the middle. The crash
+disappears when any one of:
+
+- regalloc is globally disabled for jit2, or
+- all four EH regalloc handlers (`eh_enter`, `eh_setjmp`, `eh_leave`, `eh_throw`)
+  are disabled together (individual disables don't work — mixing modes breaks
+  the native-stack vs vreg-register convention), or
+- the first `call_indirect (type 3)` is removed from the module.
+
+**Symptom.** gdb at crash:
+
+```
+Program received signal SIGBUS, Bus error.
+invoke_with_signal_handler (...) at signals.hpp:337
+337      if((sig = setjmp(dest)) == 0) {
+rip            <setjmp return site>
+rsp            0x25dadba9ea279b37      ← garbage
+rbp            0x4840dba9ff7bea39      ← garbage
+r12..r15       valid stack addresses   ← preserved
+```
+
+Sequence: (1) a SIG* fires inside JIT code; (2) the handler `longjmp`s to
+`trap_jmp_ptr` which points at the outer `invoke_with_signal_handler`'s
+`jmp_buf dest`; (3) longjmp restores rbp/rsp from `dest`, but `dest` has been
+overwritten — some JIT store landed on the host stack at the wrong address;
+(4) the next C++ instruction (`mov %eax, -0x13c(%rbp)`) faults.
+
+**Suspected mechanism.** Linear-scan regalloc treats `eh_setjmp` as a regular
+call site — any vreg whose interval crosses it gets a callee-saved register
+(rbx, r12–r15), which setjmp/longjmp preserves. That handles one direction
+correctly. The problem is the *reverse* edge: when `longjmp` returns to the
+setjmp point, control continues through the IR into the catch handler. At
+the catch-handler IR position, regalloc assumes whatever register assignment
+it computed by linear scan — but the actual register contents are whatever
+`longjmp` restored from `jmp_buf`, i.e. the **setjmp-time** values.
+
+If vreg X is live at the catch IR position but was *not* live at `eh_setjmp`
+(e.g., X was defined inside the try body or in the EH dispatch prologue),
+X's assigned callee-saved register holds a stale pre-setjmp value after
+longjmp. Subsequent uses of X read garbage, and downstream stores using that
+garbage as a base/offset can land anywhere — including on the host stack,
+which is what corrupts `dest`.
+
+**What was investigated and ruled out:**
+- ❌ **Multi-value `call`/`call_indirect` rax clobber.** Fixed as a separate
+  bug (commit `c013d77`) but does not resolve this crash on its own.
+- ❌ **Caller-saved register assignment across a call.** Regalloc's
+  `crosses_call` check (jit_regalloc.hpp:458) correctly forces callee-saved
+  regs for intervals crossing any call, including `eh_setjmp`. XMM regs are
+  never assigned to call-crossing intervals (all XMM are caller-saved on
+  SysV x86_64). The eviction path (line 560) explicitly refuses to evict
+  into caller-saved for a call-crossing interval.
+- ❌ **Misaligned SSE or unaligned atomics.** No `movaps`/`lock cmpxchg` in
+  the generated code path. JIT uses `movdqu` (unaligned) for spills.
+- ❌ **Individual EH handler bug.** Disabling just `eh_throw`'s regalloc
+  path doesn't stop the crash; disabling just `eh_enter` or `eh_setjmp` in
+  isolation causes a different crash (stack-mode vs regalloc-mode state
+  mismatch on operand stack). Only disabling all four together is safe.
+
+**What remains unknown:** the exact IR position and register that gets a
+stale value, and therefore the exact instruction that writes garbage onto
+the host stack. gdb at crash time has already lost the state; stepping
+through ~100 loop iterations of JIT code is impractical.
+
+**Proper fix directions (not yet implemented):**
+1. **Force-spill across `eh_setjmp`.** Treat `eh_setjmp` as clobbering *all*
+   GPRs (not just caller-saved). Any vreg with an interval crossing it
+   must be evicted to memory; reloads are inserted on both the normal-return
+   and catch paths. This is how production JITs (V8, SpiderMonkey) typically
+   handle setjmp/longjmp. Implementation cost: moderate — requires teaching
+   regalloc about spill-insertion at specific IR points, which the current
+   linear scan doesn't do (it only spills on full-register pressure).
+2. **Extend catch-reachable live ranges back to `eh_setjmp`.** At
+   `compute_live_intervals` time, for each catch handler entry position
+   P_catch, extend every vreg live at P_catch so its `start` is ≤
+   `eh_setjmp`. This unifies regalloc's view with the actual longjmp
+   semantics: any vreg usable at catch must have been in a register at
+   setjmp. Implementation cost: low — a post-processing pass over
+   intervals. Risk: may over-extend intervals and cause spurious register
+   pressure.
+3. **Split regalloc at EH boundaries.** Treat `eh_setjmp` as a basic-block
+   boundary that terminates all live ranges and restarts fresh. Reloads
+   after setjmp come from spill memory. This is the cleanest model but
+   requires changing the regalloc data flow.
+
+Option (2) is the most tractable first step. If someone picks this up, start
+with a repro via `psizam-fuzz-diff 200 263` and verify the fix keeps
+`[eh]` compliance tests green and the fuzzer clean through seeds 42, 263,
+and a few others.

@@ -421,9 +421,17 @@ namespace psizam::detail {
             {
                jit_scratch_allocator opt_scratch(_opt_scratch_alloc);
                jit_optimizer::optimize(*_func, opt_scratch);
-               // Skip regalloc for functions that use exception handling.
-               // Regalloc's interaction with try_table/setjmp/longjmp corrupts
-               // live vregs on the catch path — see KNOWN_ISSUES.md.
+               // Correctness workaround (2026-04-17): skip regalloc for any
+               // function that uses exception handling. Linear-scan regalloc
+               // does not model the control-flow edge from throw → matching
+               // setjmp → catch handler; the catch handler inherits the
+               // setjmp-time callee-saved register values restored by
+               // longjmp, which may not match regalloc's view of which
+               // vregs live in which registers at the catch IR position.
+               // Reproducer: fuzzer seed 263 module 174. Proper fix requires
+               // either (a) extending live ranges of catch-reachable vregs
+               // back to eh_setjmp, or (b) force-spilling across eh_setjmp.
+               // See KNOWN_ISSUES.md for full details.
                if (_func->eh_data_count == 0) {
                   jit_regalloc::compute_live_intervals(*_func, opt_scratch);
                   jit_regalloc::allocate_registers(*_func);
@@ -3339,7 +3347,8 @@ namespace psizam::detail {
                {
                   jit_scratch_allocator scratch(ws.opt_scratch_alloc);
                   jit_optimizer::optimize(func, scratch);
-                  // Skip regalloc for EH-using functions (see serial path).
+                  // Skip regalloc for EH-using functions — correctness
+                  // workaround, see serial path above and KNOWN_ISSUES.md.
                   if (func.eh_data_count == 0) {
                      jit_regalloc::compute_live_intervals(func, scratch);
                      jit_regalloc::allocate_registers(func);
