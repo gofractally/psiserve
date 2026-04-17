@@ -1999,7 +1999,9 @@ namespace psizam::detail {
                }
 
                case ir_op::memory_grow: {
-                  llvm::Value* pages = load_vreg(inst.rr.src1);
+                  // rt_memory_grow expects i32 pages; vreg may be stored as i64
+                  // (ir_writer widens i32 vregs in some paths), so coerce.
+                  llvm::Value* pages = load_vreg_as(inst.rr.src1, i32_ty);
                   if (!pages) break;
                   // Allocate space on stack for the new memory pointer
                   llvm::Value* mem_out = builder.CreateAlloca(ptr_ty);
