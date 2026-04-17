@@ -431,6 +431,16 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
       has_mismatch = true;
 #endif
 
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+   auto r_jit_llvm = run_backend<jit_llvm>(wasm);
+   if (r_interp.outcome != r_jit_llvm.outcome) {
+      print_mismatch(source, "interpreter", r_interp, "jit_llvm", r_jit_llvm);
+      has_mismatch = true;
+   }
+   if (!compare_returns(source, "interpreter", r_interp, "jit_llvm", r_jit_llvm))
+      has_mismatch = true;
+#endif
+
 #ifdef PSIZAM_ENABLE_WASM3
    // Compare against wasm3 reference interpreter.
    // wasm3 doesn't support EH or v128 — skip if psizam rejected the module
@@ -534,6 +544,9 @@ int main(int argc, char* argv[]) {
       else if (strcmp(which, "jit") == 0) r = run_backend<jit>(wasm);
       else if (strcmp(which, "jit2") == 0) r = run_backend<jit2>(wasm);
 #endif
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+      else if (strcmp(which, "jit_llvm") == 0) r = run_backend<jit_llvm>(wasm);
+#endif
       else { fprintf(stderr, "Unknown backend: %s\n", which); return 1; }
       fprintf(stderr, "%s: %s", which, outcome_name(r.outcome));
       if (!r.what.empty()) fprintf(stderr, " (%s)", r.what.c_str());
@@ -561,7 +574,9 @@ int main(int argc, char* argv[]) {
 #if defined(__x86_64__) || defined(__aarch64__)
    fprintf(stderr, ", jit2");
 #endif
-   // jit_llvm disabled in fuzzer due to known IR translation bugs
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+   fprintf(stderr, ", jit_llvm");
+#endif
 #ifdef PSIZAM_ENABLE_WASM3
    fprintf(stderr, ", wasm3");
 #endif

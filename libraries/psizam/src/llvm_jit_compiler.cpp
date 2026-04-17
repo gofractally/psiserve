@@ -100,6 +100,17 @@ namespace psizam::detail {
       add_sym("__psizam_call_depth_inc", reinterpret_cast<void*>(&__psizam_call_depth_inc));
       add_sym("__psizam_trap",           reinterpret_cast<void*>(&__psizam_trap));
 
+      // WASM EH runtime helpers (try_table, throw, catch)
+      add_sym("__psizam_eh_enter",             reinterpret_cast<void*>(&__psizam_eh_enter));
+      add_sym("__psizam_eh_leave",             reinterpret_cast<void*>(&__psizam_eh_leave));
+      add_sym("__psizam_eh_throw",             reinterpret_cast<void*>(&__psizam_eh_throw));
+      add_sym("__psizam_eh_throw_ref",         reinterpret_cast<void*>(&__psizam_eh_throw_ref));
+      add_sym("__psizam_eh_get_match",         reinterpret_cast<void*>(&__psizam_eh_get_match));
+      add_sym("__psizam_eh_get_payload",       reinterpret_cast<void*>(&__psizam_eh_get_payload));
+      add_sym("__psizam_eh_get_payload_count", reinterpret_cast<void*>(&__psizam_eh_get_payload_count));
+      add_sym("__psizam_eh_get_exnref",        reinterpret_cast<void*>(&__psizam_eh_get_exnref));
+      add_sym("__psizam_setjmp",               reinterpret_cast<void*>(&__psizam_setjmp));
+
       // Softfloat helpers — map __psizam_sf_* symbols to inline _psizam_* functions
       add_sym("__psizam_sf_f32_add",       reinterpret_cast<void*>(&_psizam_f32_add));
       add_sym("__psizam_sf_f32_sub",       reinterpret_cast<void*>(&_psizam_f32_sub));

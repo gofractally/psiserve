@@ -434,23 +434,42 @@ namespace psizam::detail {
             llvm::FunctionType::get(i64_ty, {i32_ty}, false));
       }
 
-      // Helpers: call softfloat function with automatic bitcasting
+      // Helpers: call softfloat function with automatic bitcasting.
+      // Bitcasts require same-size types; if the caller passed a value of a
+      // different float width (can happen with unreachable-code uses where
+      // load_vreg_as returns a zero of the target type), convert it first.
+      llvm::Value* to_f32_bits(llvm::IRBuilder<>& builder, llvm::Value* a) {
+         auto* t = a->getType();
+         if (t == i32_ty) return a;
+         if (t == f32_ty) return builder.CreateBitCast(a, i32_ty);
+         if (t == f64_ty) return builder.CreateBitCast(builder.CreateFPTrunc(a, f32_ty), i32_ty);
+         if (t == i64_ty) return builder.CreateTrunc(a, i32_ty);
+         return llvm::Constant::getNullValue(i32_ty);
+      }
+      llvm::Value* to_f64_bits(llvm::IRBuilder<>& builder, llvm::Value* a) {
+         auto* t = a->getType();
+         if (t == i64_ty) return a;
+         if (t == f64_ty) return builder.CreateBitCast(a, i64_ty);
+         if (t == f32_ty) return builder.CreateBitCast(builder.CreateFPExt(a, f64_ty), i64_ty);
+         if (t == i32_ty) return builder.CreateZExt(a, i64_ty);
+         return llvm::Constant::getNullValue(i64_ty);
+      }
       llvm::Value* call_sf_f32_binop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a, llvm::Value* b) {
-         auto* ai = builder.CreateBitCast(a, i32_ty);
-         auto* bi = builder.CreateBitCast(b, i32_ty);
+         auto* ai = to_f32_bits(builder, a);
+         auto* bi = to_f32_bits(builder, b);
          return builder.CreateBitCast(builder.CreateCall(fn, {ai, bi}), f32_ty);
       }
       llvm::Value* call_sf_f32_unop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a) {
-         auto* ai = builder.CreateBitCast(a, i32_ty);
+         auto* ai = to_f32_bits(builder, a);
          return builder.CreateBitCast(builder.CreateCall(fn, {ai}), f32_ty);
       }
       llvm::Value* call_sf_f64_binop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a, llvm::Value* b) {
-         auto* ai = builder.CreateBitCast(a, i64_ty);
-         auto* bi = builder.CreateBitCast(b, i64_ty);
+         auto* ai = to_f64_bits(builder, a);
+         auto* bi = to_f64_bits(builder, b);
          return builder.CreateBitCast(builder.CreateCall(fn, {ai, bi}), f64_ty);
       }
       llvm::Value* call_sf_f64_unop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a) {
-         auto* ai = builder.CreateBitCast(a, i64_ty);
+         auto* ai = to_f64_bits(builder, a);
          return builder.CreateBitCast(builder.CreateCall(fn, {ai}), f64_ty);
       }
 
@@ -983,11 +1002,27 @@ namespace psizam::detail {
             return val;
          };
 
-         // Load a vreg and convert to a specific type
+         // Load a vreg and convert to a specific type.
+         // Returns a zero constant of the target type if the vreg is unallocated
+         // (e.g. in unreachable code): this keeps the IR builder from calling
+         // methods on a null Value* and matches what other backends produce for
+         // a dead-code use (garbage is fine; the op will never actually execute).
          auto load_vreg_as = [&](uint32_t vreg, llvm::Type* target_ty) -> llvm::Value* {
             llvm::Value* val = load_vreg(vreg);
-            if (!val) return nullptr;
-            return convert_type(val, target_ty);
+            if (!val) return llvm::Constant::getNullValue(target_ty);
+            auto* out = convert_type(val, target_ty);
+            // Defensive: if convert_type didn't actually produce the requested
+            // type (edge case with unexpected source types), fall back to a
+            // same-size int bitcast or a zero constant of the target type.
+            if (out->getType() != target_ty) {
+               unsigned out_bits = out->getType()->getPrimitiveSizeInBits();
+               unsigned dst_bits = target_ty->getPrimitiveSizeInBits();
+               if (out_bits == dst_bits)
+                  out = builder.CreateBitCast(out, target_ty);
+               else
+                  out = llvm::Constant::getNullValue(target_ty);
+            }
+            return out;
          };
 
          auto store_vreg = [&](uint32_t vreg, llvm::Value* val) {
@@ -3077,7 +3112,11 @@ namespace psizam::detail {
 
                // ──── Multi-value return store ────
                case ir_op::multi_return_store: {
+                  // In unreachable code the source vreg may not have been
+                  // allocated; skip the store in that case (the op won't
+                  // actually execute at runtime).
                   auto* val = load_vreg(inst.ri.src1);
+                  if (!val) break;
                   int32_t offset = 24 + inst.ri.imm; // multi_return_offset = 24
                   auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
                      builder.getInt32(offset));
