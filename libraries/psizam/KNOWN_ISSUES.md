@@ -41,7 +41,7 @@ Fix: regenerate from current `.wast` with `wast2json --enable-tail-call`.
 All pass on interpreter and jit. jit2 is experimental.
 
 **Both platforms:**
-- **block_0, if_0**: IR virtual stack underflow
+- ~~**block_0, if_0**: IR virtual stack underflow~~ — fixed: emit_throw/emit_rethrow/emit_throw_ref now set `_unreachable = true`; emit_end synthesizes implicit else for if-without-else blocks with params
 - **func_0**: Wrong return value on break-i32-f64
 - **global_0**: Imported global init (counted above)
 
