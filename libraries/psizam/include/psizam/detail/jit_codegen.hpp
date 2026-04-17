@@ -2375,8 +2375,11 @@ namespace psizam::detail {
             if (arg_bytes > 0)
                this->emit_add(arg_bytes, rsp);
             emit_call_depth_inc();
-            // Store result
-            if (ft.return_count > 0 && inst.dest != ir_vreg_none) {
+            // Store result. For multi-value returns, the callee writes results
+            // to ctx->_multi_return[] and separate ir_op::multi_return_load
+            // instructions push them onto vstack — rax is NOT the primary, so
+            // storing it would corrupt whichever register regalloc reused.
+            if (ft.return_count == 1 && inst.dest != ir_vreg_none) {
                if (ft.return_type == types::v128) {
                   // v128 return: callee put result in xmm0, store to dest XMM/spill
                   store_xmm_to_v128(xmm0, inst.dest);
@@ -2444,7 +2447,13 @@ namespace psizam::detail {
                arg_bytes += (ft.param_types[p] == types::v128) ? 16 : 8;
             if (arg_bytes > 0) this->emit_add(arg_bytes, rsp);
             emit_call_depth_inc();
-            if (ft.return_count > 0 && inst.dest != ir_vreg_none) {
+            // For multi-value returns, the callee writes all return values to
+            // ctx->_multi_return[] and the IR writer emits separate
+            // ir_op::multi_return_load instructions (which push the results
+            // onto vstack). The primary is NOT returned in rax, so storing
+            // whatever happens to be in rax into the dest vreg would corrupt
+            // whichever register regalloc reused for it.
+            if (ft.return_count == 1 && inst.dest != ir_vreg_none) {
                if (ft.return_type == types::v128) {
                   this->emit_sub(16, rsp);
                   this->emit_vmovdqu(xmm0, *rsp);

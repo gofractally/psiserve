@@ -55,6 +55,8 @@ All pass on interpreter and jit. jit2 is experimental.
 - ~~**conversions_0, traps_2** (2): Segfault~~ — fixed upstream
 - ~~**Host function / call depth / reentry** (5): Various segfaults~~ — fixed upstream
 - ~~**relaxed_madd_nmadd** (2), **relaxed_dot_product** (1): Wrong results~~ — fixed: jit2 regalloc v128_op handler now pushes the 3rd operand for all ternary ops (relaxed fma + dot-add), not just `v128_bitselect`; the missing push was causing softfloat helpers to read garbage for `a.lo/a.hi` and corrupt the stack
+- ~~**multi-value `call` / `call_indirect` rax corruption**~~ — fixed: regalloc paths for direct `call` and `call_indirect` now skip `store_rax_vreg(inst.dest)` for multi-value returns (`ft.return_count > 1`). For multi-value returns the callee writes results to `ctx->_multi_return[]` and the IR writer emits separate `ir_op::multi_return_load` instructions; `rax` is undefined in that case, so storing it into the dest vreg's register could clobber a live vreg that regalloc reused the register for
+- **SIGBUS on heavily nested try_table+multi-value call_indirect** — fuzzer seed 263 module 174 (5184 bytes) SIGBUS's in jit2 after a multi-value `call_indirect (type 3)` nested inside 25+ levels of try_table / loop / block. Interpreter and jit_llvm trap correctly. Stack is corrupted on return from the JIT (longjmp restores garbage rsp from a clobbered `jmp_buf`). Root cause not yet identified — likely separate regalloc / EH interaction bug
 
 **aarch64 only:**
 - ~~**rem codegen clobber**: i32/i64 rem_u/rem_s hardcoded W2/X2 as scratch for UDIV/SDIV quotient, clobbering live vregs~~ — fixed: use X16 (intra-procedure-call scratch) instead
