@@ -58,7 +58,11 @@ endif()
 # ── Libraries ──────────────────────────────────────────────────────────────────
 add_subdirectory(libraries/psio)
 if(NOT PSISERVE_WASI)
-   add_subdirectory(external/psitri/libraries/ucc)
+   # Embed psitri as a subdirectory so its headers / libraries (sal, psitri,
+   # hash, ucc, art) are available to psiserve. Psitri's own test suite and
+   # benchmark wrappers are off in this mode; use its standalone build for that.
+   set(BUILD_TESTS OFF CACHE BOOL "psitri tests stay in its own build" FORCE)
+   add_subdirectory(external/psitri)
    add_subdirectory(external/quill)
 endif()
 add_subdirectory(libraries/wasi)
