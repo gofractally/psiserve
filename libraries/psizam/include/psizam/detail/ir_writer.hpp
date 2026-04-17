@@ -451,7 +451,6 @@ namespace psizam::detail {
          if (_func->ctrl_stack_top > 0) {
             auto entry = _func->ctrl_pop();
             block_idx = entry.block_idx;
-
             if (entry.result_count > 1) {
                if (entry.is_function) {
                   // Function scope multi-value: emit multi_return_store IR ops
@@ -837,7 +836,7 @@ namespace psizam::detail {
       }
 
       branch_t emit_br(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0) {
-         uint32_t inst_idx = 0;
+         uint32_t inst_idx = UINT32_MAX;
          if (!_unreachable) {
             // Multi-value branch: emit stores/movs depending on target type
             if (result_count > 1 && label != UINT32_MAX) {
@@ -924,7 +923,7 @@ namespace psizam::detail {
       }
 
       branch_t emit_br_if(uint32_t dc, uint8_t rt, uint32_t label = UINT32_MAX, uint32_t result_count = 0, uint32_t eh_leave_count = 0) {
-         uint32_t inst_idx = 0;
+         uint32_t inst_idx = UINT32_MAX;
          if (!_unreachable) {
             uint32_t cond = _func->vpop();
             if (result_count > 1 && label != UINT32_MAX) {
@@ -2522,7 +2521,7 @@ namespace psizam::detail {
       std::vector<branch_t> emit_try_table(uint8_t result_type, uint32_t result_count, const std::vector<catch_clause>& clauses) {
          if (_unreachable) {
             emit_block(result_type, result_count);
-            return std::vector<branch_t>(clauses.size(), 0);
+            return std::vector<branch_t>(clauses.size(), UINT32_MAX);
          }
 
          uint32_t num_catches = static_cast<uint32_t>(clauses.size());

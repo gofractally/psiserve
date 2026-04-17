@@ -92,7 +92,15 @@ namespace psizam::detail {
             ucontext_t* uc = (ucontext_t*)uap;
             uint64_t pc_val = uc->uc_mcontext->__ss.__pc;
             uint32_t faulting_instr = 0;
-            memcpy(&faulting_instr, (void*)pc_val, 4);
+            // Only read the faulting instruction if the PC is in a readable range.
+            // If PC is 0 or unmapped, memcpy would cause a nested SIGSEGV.
+            bool pc_readable = pc_val != 0 &&
+               ((!code_memory_range.empty() &&
+                 pc_val >= (uint64_t)code_memory_range.data() &&
+                 pc_val < (uint64_t)code_memory_range.data() + code_memory_range.size()) ||
+                (pc_val >= 0x100000000ULL && pc_val < 0x800000000000ULL)); // heuristic: in app text segment
+            if (pc_readable)
+               memcpy(&faulting_instr, (void*)pc_val, 4);
             bool in_code = !code_memory_range.empty() &&
                pc_val >= (uint64_t)code_memory_range.data() &&
                pc_val < (uint64_t)code_memory_range.data() + code_memory_range.size();

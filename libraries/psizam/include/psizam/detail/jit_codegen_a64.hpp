@@ -3689,10 +3689,10 @@ namespace psizam::detail {
          void* done = code;
          emit32(0x14000000); // B done
          fix_branch(not_minus1, code);
-         // SDIV W2, W0, W1
-         emit32(0x1AC00C02 | (X1 << 16) | (X0 << 5));
-         // MSUB W0, W2, W1, W0
-         emit32(0x1B018040 | (X1 << 16) | (X0 << 10));
+         // SDIV W16, W0, W1 (use X16 as scratch to avoid clobbering live vregs)
+         emit32(0x1AC00C00 | X16 | (X1 << 16) | (X0 << 5));
+         // MSUB W0, W16, W1, W0
+         emit32(0x1B008000 | X0 | (X16 << 5) | (X1 << 16) | (X0 << 10) | (1 << 15));
          fix_branch(done, code);
          store_x0_vreg(inst.dest);
          { int64_t off = (static_cast<uint8_t*>(fpe_handler) - static_cast<uint8_t*>(cbz)) / 4;
@@ -3706,10 +3706,10 @@ namespace psizam::detail {
          // CBZ W1, fpe_handler
          emit32(0x34000000 | X1);
          void* cbz = code - 4;
-         // UDIV W2, W0, W1
-         emit32(0x1AC00802 | (X1 << 16) | (X0 << 5));
-         // MSUB W0, W2, W1, W0
-         emit32(0x1B018040 | (X1 << 16) | (X0 << 10));
+         // UDIV W16, W0, W1 (use X16 as scratch to avoid clobbering live vregs)
+         emit32(0x1AC00800 | X16 | (X1 << 16) | (X0 << 5));
+         // MSUB W0, W16, W1, W0
+         emit32(0x1B008000 | X0 | (X16 << 5) | (X1 << 16) | (X0 << 10) | (1 << 15));
          store_x0_vreg(inst.dest);
          { int64_t off = (static_cast<uint8_t*>(fpe_handler) - static_cast<uint8_t*>(cbz)) / 4;
            uint32_t patched = 0x34000000 | X1 | ((static_cast<uint32_t>(off) & 0x7FFFF) << 5);
@@ -3730,10 +3730,10 @@ namespace psizam::detail {
          void* done = code;
          emit32(0x14000000); // B done
          fix_branch(not_minus1, code);
-         // SDIV X2, X0, X1
-         emit32(0x9AC00C02 | (X1 << 16) | (X0 << 5));
-         // MSUB X0, X2, X1, X0
-         emit32(0x9B018040 | (X1 << 16) | (X0 << 10));
+         // SDIV X16, X0, X1 (use X16 as scratch to avoid clobbering live vregs)
+         emit32(0x9AC00C00 | X16 | (X1 << 16) | (X0 << 5));
+         // MSUB X0, X16, X1, X0
+         emit32(0x9B008000 | X0 | (X16 << 5) | (X1 << 16) | (X0 << 10) | (1 << 15));
          fix_branch(done, code);
          store_x0_vreg(inst.dest);
          { int64_t off = (static_cast<uint8_t*>(fpe_handler) - static_cast<uint8_t*>(cbz)) / 4;
@@ -3747,10 +3747,10 @@ namespace psizam::detail {
          // CBZ X1, fpe_handler
          emit32(0xB4000000 | X1);
          void* cbz = code - 4;
-         // UDIV X2, X0, X1
-         emit32(0x9AC00802 | (X1 << 16) | (X0 << 5));
-         // MSUB X0, X2, X1, X0
-         emit32(0x9B018040 | (X1 << 16) | (X0 << 10));
+         // UDIV X16, X0, X1 (use X16 as scratch to avoid clobbering live vregs)
+         emit32(0x9AC00800 | X16 | (X1 << 16) | (X0 << 5));
+         // MSUB X0, X16, X1, X0
+         emit32(0x9B008000 | X0 | (X16 << 5) | (X1 << 16) | (X0 << 10) | (1 << 15));
          store_x0_vreg(inst.dest);
          { int64_t off = (static_cast<uint8_t*>(fpe_handler) - static_cast<uint8_t*>(cbz)) / 4;
            uint32_t patched = 0xB4000000 | X1 | ((static_cast<uint32_t>(off) & 0x7FFFF) << 5);
