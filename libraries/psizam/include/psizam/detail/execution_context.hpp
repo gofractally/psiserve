@@ -485,13 +485,18 @@ namespace psizam::detail {
          switch(sig) {
           case SIGSEGV:
           case SIGBUS:
+            PSIZAM_THROW(wasm_memory_exception, "wasm memory out-of-bounds");
           case SIGFPE:
-            break;
+            // x86 raises SIGFPE for integer divide-by-zero and for trunc
+            // overflow when CVTTSS2SI / CVTTSD2SI return INT_MIN. Both of
+            // these are WASM-level interpreter traps, not memory faults —
+            // report them as wasm_interpreter_exception so outcome matches
+            // what the interpreter/softfloat path produces.
+            PSIZAM_THROW(wasm_interpreter_exception, "floating point error");
           default:
             /* TODO fix this */
             assert(!"??????");
          }
-         PSIZAM_THROW(wasm_memory_exception, "wasm memory out-of-bounds");
       }
 
       char*                           _linear_memory    = nullptr;
