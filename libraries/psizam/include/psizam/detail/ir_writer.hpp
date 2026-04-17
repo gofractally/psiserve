@@ -729,10 +729,16 @@ namespace psizam::detail {
             // pop_if_fixup_to to steal fixups belonging to outer reachable ifs.
             _func->blocks[entry.block_idx].is_if = 1;
             uint32_t cond = _func->vpop();
-            entry.stack_depth = _func->vstack_depth() - param_count; // after popping condition
-            // Save param vregs so emit_else can re-push them for the else branch
-            for (uint32_t i = 0; i < param_count && i < 16; ++i) {
-               entry.param_vregs[i] = _func->vstack[entry.stack_depth + i];
+            if (param_count <= _func->vstack_depth()) {
+               entry.stack_depth = _func->vstack_depth() - param_count;
+               // Save param vregs so emit_else can re-push them for the else branch
+               for (uint32_t i = 0; i < param_count && i < 16; ++i) {
+                  entry.param_vregs[i] = _func->vstack[entry.stack_depth + i];
+               }
+            } else {
+               // Invalid module: not enough values on stack for block params.
+               // Parser validation will catch this; avoid crashing here.
+               entry.stack_depth = _func->vstack_depth();
             }
             ir_inst inst{};
             inst.opcode = ir_op::if_;
