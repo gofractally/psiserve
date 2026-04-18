@@ -13,10 +13,12 @@
 #include <span>       // zero-alloc borrowed list view
 #include <string.h>   // memcpy — libc, not libc++: no fd_write pull-in
 
+// ── WIT custom sections — embedded type metadata for the linker ─────
+PSIO_WIT_SECTION(greeter)
+PSIO_WIT_SECTION(env)
+PSIO_WIT_SECTION(clock_api)
+
 // ── Guest-side import thunks for canonical types ────────────────────
-// PSIO_GUEST_IMPORTS declares the raw 16-wide WASM imports and helper
-// call wrappers. The method bodies below use those to lower C++ args
-// into flat_vals, call the host, and lift the return.
 PSIO_GUEST_IMPORTS(env, log_string, sum_points_host)
 
 void env::log_string(std::string_view msg) {

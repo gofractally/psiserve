@@ -134,18 +134,31 @@ function(psi_add_wasm_module name)
       -fno-rtti
       -O2
       -Wl,--allow-undefined    # host imports resolve at instantiate
-      -Wl,--strip-all)
+      -Wl,--strip-debug        # strip debug but keep custom sections
+      -Wl,--no-gc-sections)    # keep WIT custom sections
+
+   set(_raw_out ${_out}.raw)
 
    add_custom_command(
-      OUTPUT  ${_out}
+      OUTPUT  ${_raw_out}
       COMMAND ${_cxx}
               ${_reactor_flags}
               ${ARG_FLAGS}
               ${_include_flags}
               ${_srcs}
-              -o ${_out}
+              -o ${_raw_out}
       DEPENDS ${_srcs}
       COMMENT "Building wasm guest ${ARG_OUTPUT} (wasi-sdk)"
+      VERBATIM)
+
+   # Post-link: promote PSIO_WIT blobs from data section to custom sections.
+   # Use the native pzam tool from the build tree.
+   set(_pzam ${CMAKE_BINARY_DIR}/bin/pzam)
+   add_custom_command(
+      OUTPUT  ${_out}
+      COMMAND ${_pzam} wit embed ${_raw_out} -o ${_out}
+      DEPENDS ${_raw_out}
+      COMMENT "Embedding WIT custom sections in ${ARG_OUTPUT}"
       VERBATIM)
 
    add_custom_target(${name} ALL DEPENDS ${_out})

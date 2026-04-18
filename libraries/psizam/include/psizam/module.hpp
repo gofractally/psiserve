@@ -42,6 +42,7 @@
 // the supported shape at instantiation time.
 
 #include <psizam/component_proxy.hpp>  // ComponentProxy, flat_val
+#include <psio/wit_constexpr.hpp>      // constexpr WIT generation
 
 #include <boost/preprocessor/cat.hpp>
 #include <boost/preprocessor/seq/for_each.hpp>
@@ -49,6 +50,38 @@
 #include <boost/preprocessor/variadic/to_seq.hpp>
 
 #ifdef __wasm__
+
+// ── PSIO_WIT_SECTION — embed WIT text as a WASM custom section ──────────────
+// Emits a `component-type:NAME` custom section containing the WIT text
+// generated at compile time from the PSIO_INTERFACE reflection. The
+// linker reads this section to discover type signatures for module-to-
+// module wiring.
+//
+//   PSIO_WIT_SECTION(greeter)   // embeds greeter's WIT
+//   PSIO_WIT_SECTION(env)       // embeds env's WIT (imports)
+
+namespace psio::constexpr_wit {
+   template <std::size_t N>
+   struct section_blob {
+      static constexpr std::size_t size = N;
+      char bytes[N];
+   };
+
+   template <typename Tag>
+   consteval auto make_section_blob() {
+      auto arr = wit_array<Tag>();
+      section_blob<wit_size<Tag>()> result{};
+      for (unsigned i = 0; i < result.size; ++i) result.bytes[i] = arr[i];
+      return result;
+   }
+}
+
+#define PSIO_WIT_SECTION(IFACE)                                                \
+   __attribute__((section(".custom_section.component-type:"                    \
+                          BOOST_PP_STRINGIZE(IFACE)),                          \
+                  used))                                                       \
+   static const auto BOOST_PP_CAT(_psio_wit_sec_, IFACE) =                    \
+      ::psio::constexpr_wit::make_section_blob<IFACE>();
 
 // ── guest thunk emission ─────────────────────────────────────────────────────
 // One `extern "C"` function per method, decorated with clang's

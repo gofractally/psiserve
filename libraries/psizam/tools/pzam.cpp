@@ -17,6 +17,7 @@ int pzam_compile_main(int argc, char** argv);
 int pzam_run_main(int argc, char** argv);
 int pzam_inspect_main(int argc, char** argv);
 int pzam_validate_main(int argc, char** argv);
+int pzam_wit_main(int argc, char** argv);
 
 static void usage(const char* prog) {
    std::cerr << "Usage: " << prog << " <command> [options]\n\n"
@@ -25,6 +26,7 @@ static void usage(const char* prog) {
              << "  run       Execute a pre-compiled .pzam module\n"
              << "  inspect   Show metadata and code section info from a .pzam file\n"
              << "  validate  Validate a .wasm or .pzam file\n"
+             << "  wit       Manage WIT custom sections (embed, show)\n"
              << "\n"
              << "Run '" << prog << " <command> --help' for command-specific options.\n";
 }
@@ -49,6 +51,8 @@ int main(int argc, char** argv) {
       return pzam_inspect_main(sub_argc, sub_argv);
    } else if (cmd == "validate") {
       return pzam_validate_main(sub_argc, sub_argv);
+   } else if (cmd == "wit") {
+      return pzam_wit_main(sub_argc, sub_argv);
    } else if (cmd == "--help" || cmd == "-h" || cmd == "help") {
       usage(argv[0]);
       return 0;

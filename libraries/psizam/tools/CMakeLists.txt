@@ -84,6 +84,7 @@ add_executable(pzam
    pzam_run.cpp
    pzam_inspect.cpp
    pzam_validate.cpp
+   pzam_wit.cpp
 )
 target_link_libraries(pzam psizam psizam-exec)
 if(TARGET psizam-llvm)
