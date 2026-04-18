@@ -336,6 +336,24 @@ jit1 was unaffected — it preserves ctx in callee-saved `r12` across the
 setjmp/longjmp and doesn't touch the stack slot at all. jit_llvm uses
 LLVM's own invoke/landingpad mechanism and is also unaffected.
 
+### jit1 native: return_call is not tail-call-optimized (open)
+
+**Status:** open — by-design gap, not yet implemented.
+
+**Reproducer.** `mismatch_179193_seed777777.wasm` (4231 B). interpreter/jit2/jit_llvm run OK; jit1 traps with `interp_trap`.
+
+**Root cause.** `emit_tail_call` in both `x86_64.hpp` (line 571) and `aarch64.hpp` (line 776) forward to `emit_call` — a comment ("Tail calls: desugar to call + return in JIT1 (no frame reuse optimization)") confirms this is deliberate. A deeply nested `return_call` chain (as fuzzer commonly produces) then stack-overflows where the interpreter's true TCO (`execution_context::tail_call`) reuses the frame. The signal handler maps the native stack overflow to `interp_trap`, so it looks like a trap divergence rather than an OOM.
+
+**Fix sketch.** Proper TCO requires tearing down the current activation frame (restore FP, adjust SP to caller-expected state, move args into the callee's expected positions) then `B` (jump) instead of `BL` (call) to the target. Multi-value and host/import callee paths need special handling. Non-trivial — multi-hundred-line change across the prologue/epilogue and call codegen.
+
+### jit_llvm: opaque `unreachable` trap on deeply-nested fuzzer modules (open)
+
+**Status:** open — root cause not narrowed.
+
+**Reproducer.** `mismatch_365607_seed31415926.wasm` (3264 B). interpreter/jit/jit2 run OK; jit_llvm raises `interp_trap (unreachable)`. Minimization via `wasm-reduce` is blocked because binaryen's `wasm-opt` can't round-trip the fuzzer-generated module (validator rejects an `f32`/`i32` type mismatch in an xor inside a block, which psizam's parser accepts). Module uses `try_table`+tail-call+EH+v128 densely; likely a translation/lowering bug in `llvm_ir_translator.cpp` that only triggers on a specific opcode-sequence/type combination.
+
+**Fix sketch.** Hand-minimize (binaryen tooling doesn't work). Alternatively, add a trap-site log to `llvm_ir_translator` that dumps the WASM PC when emitting the unreachable IR, to pinpoint the buggy path.
+
 ### jit2 non-deterministic timeout (counter+try_table loop)
 
 **Status:** open — ~1 mismatch per 10K fuzzed modules; not consistently
