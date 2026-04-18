@@ -480,6 +480,119 @@ struct proxy_adapter
    }
 };
 
+// ── void* host variants ─────────────────────────────────────────────
+// Versions of host_lower_policy and invoke_canonical_export that accept
+// void* host pointers, for use with composition (multi-module) backends
+// where the host type is erased.
+
+template <typename Backend>
+struct void_host_lower_policy
+{
+   Backend* be;
+   void*    host;
+   std::vector<::psio::native_value> flat_values;
+
+   void_host_lower_policy(Backend& b, void* h) : be(&b), host(h) {}
+
+   uint32_t alloc(uint32_t align, uint32_t size)
+   {
+      if (size == 0) return 0;
+      auto ret = be->call_with_return(
+         host, std::string_view{"cabi_realloc"},
+         uint32_t{0}, uint32_t{0}, uint32_t{align}, uint32_t{size});
+      return ret ? ret->to_ui32() : uint32_t{0};
+   }
+
+   char* linear_memory() { return be->get_context().linear_memory(); }
+
+   void store_u8(uint32_t off, uint8_t v)   { std::memcpy(linear_memory() + off, &v, 1); }
+   void store_u16(uint32_t off, uint16_t v) { std::memcpy(linear_memory() + off, &v, 2); }
+   void store_u32(uint32_t off, uint32_t v) { std::memcpy(linear_memory() + off, &v, 4); }
+   void store_u64(uint32_t off, uint64_t v) { std::memcpy(linear_memory() + off, &v, 8); }
+   void store_f32(uint32_t off, float v)    { std::memcpy(linear_memory() + off, &v, 4); }
+   void store_f64(uint32_t off, double v)   { std::memcpy(linear_memory() + off, &v, 8); }
+   void store_bytes(uint32_t off, const char* data, uint32_t len)
+   {
+      if (len > 0) std::memcpy(linear_memory() + off, data, len);
+   }
+
+   void emit_i32(uint32_t v) { ::psio::native_value nv; nv.i64 = 0; nv.i32 = v; flat_values.push_back(nv); }
+   void emit_i64(uint64_t v) { ::psio::native_value nv; nv.i64 = v;              flat_values.push_back(nv); }
+   void emit_f32(float v)    { ::psio::native_value nv; nv.i64 = 0; nv.f32 = v; flat_values.push_back(nv); }
+   void emit_f64(double v)   { ::psio::native_value nv; nv.i64 = 0; nv.f64 = v; flat_values.push_back(nv); }
+};
+
+template <typename Ret, typename Backend, typename... Args>
+auto invoke_canonical_export_void(Backend& be, void* host, std::string_view name, Args&&... args)
+{
+   void_host_lower_policy<Backend> lp{be, host};
+   (canonical_lower_flat(args, lp), ...);
+
+   auto& fv = lp.flat_values;
+   auto slot_u64 = [&](size_t i) -> uint64_t {
+      return i < fv.size() ? fv[i].i64 : uint64_t{0};
+   };
+   auto r = be.call_with_return(
+      host, name,
+      slot_u64(0),  slot_u64(1),  slot_u64(2),  slot_u64(3),
+      slot_u64(4),  slot_u64(5),  slot_u64(6),  slot_u64(7),
+      slot_u64(8),  slot_u64(9),  slot_u64(10), slot_u64(11),
+      slot_u64(12), slot_u64(13), slot_u64(14), slot_u64(15));
+
+   if constexpr (std::is_void_v<Ret>) {
+      return;
+   } else if constexpr (std::is_same_v<std::remove_cvref_t<Ret>, psio::owned<std::string, psio::wit>>) {
+      uint32_t ret_ptr = r ? r->to_ui32() : 0;
+      const uint8_t* mem = reinterpret_cast<const uint8_t*>(be.get_context().linear_memory());
+      uint32_t s_ptr, s_len;
+      std::memcpy(&s_ptr, mem + ret_ptr, 4);
+      std::memcpy(&s_len, mem + ret_ptr + 4, 4);
+      return canonical_result<psio::owned<std::string, psio::wit>>{s_ptr, s_len, mem};
+   } else if constexpr (detail_dispatch::is_wit_vector<std::remove_cvref_t<Ret>>::value) {
+      using E = typename detail_dispatch::is_wit_vector<std::remove_cvref_t<Ret>>::element_type;
+      uint32_t ret_ptr = r ? r->to_ui32() : 0;
+      const uint8_t* mem = reinterpret_cast<const uint8_t*>(be.get_context().linear_memory());
+      uint32_t e_ptr, e_len;
+      std::memcpy(&e_ptr, mem + ret_ptr, 4);
+      std::memcpy(&e_len, mem + ret_ptr + 4, 4);
+      return canonical_result<psio::owned<std::vector<E>, psio::wit>>{e_ptr, e_len, mem};
+   } else {
+      using U = std::remove_cvref_t<Ret>;
+      constexpr size_t rflat = psizam::flat_count_v<U>;
+      host_lift_policy lift{nullptr, reinterpret_cast<const uint8_t*>(be.get_context().linear_memory())};
+      if constexpr (rflat <= psio::MAX_FLAT_RESULTS) {
+         ::psio::native_value slot;
+         slot.i64 = 0;
+         if (r) slot.i64 = r->to_ui64();
+         host_lift_policy s_lift{&slot, reinterpret_cast<const uint8_t*>(be.get_context().linear_memory())};
+         return canonical_lift_flat<U>(s_lift);
+      } else {
+         uint32_t ret_ptr = r ? r->to_ui32() : 0;
+         return psio::canonical_lift_fields<U>(lift, ret_ptr);
+      }
+   }
+}
+
+// Proxy adapter for void* host — used by composition modules
+template <typename Backend, typename Info>
+struct void_proxy_adapter
+{
+   Backend* _backend;
+   void*    _host;
+
+   void_proxy_adapter(Backend& b, void* h) : _backend(&b), _host(h) {}
+
+   template <std::size_t Index, typename Fn, typename... Args>
+   auto call(Args&&... args)
+   {
+      using Traits = free_fn_traits<Fn>;
+      using Ret    = typename Traits::ReturnType;
+      std::string_view name = Info::func_names[Index];
+      return invoke_canonical_export_void<Ret>(*_backend, _host, name,
+                                               std::forward<Args>(args)...);
+   }
+};
+
 }  // namespace detail
 
 // hosted<Impl, BackendKind> — owns a backend instance wired to Impl.

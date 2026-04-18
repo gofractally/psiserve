@@ -700,6 +700,16 @@ namespace psizam {
          }
       }
 
+      /// Call an exported function by name with an opaque host pointer, returning the result.
+      template <typename... Args>
+      inline auto call_with_return(void* host, const std::string_view& func, Args&&... args) {
+         if constexpr (psizam_debug) {
+            return ctx->template execute<tc_t>(host, detail::debug_visitor(*ctx), func, std::forward<Args>(args)...);
+         } else {
+            return ctx->template execute<tc_t>(host, detail::interpret_visitor(*ctx), func, std::forward<Args>(args)...);
+         }
+      }
+
       template<typename Watchdog, typename F>
       inline void timed_run(Watchdog&& wd, F&& f) {
          //timed_run_has_timed_out -- declared in signal handling code because signal handler needs to inspect it on a SEGV too -- is a thread local
