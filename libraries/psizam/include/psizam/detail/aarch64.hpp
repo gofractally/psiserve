@@ -5050,10 +5050,13 @@ namespace psizam::detail {
                // Load v128 from two 16-byte slots at stack top
                emit32(0xF94003E0); // LDR X0, [SP]       (low 64 bits)
                emit32(0xF9400BE1); // LDR X1, [SP, #16]  (high 64 bits)
-               count -= 2;
             } else if (rt != types::pseudo) {
                emit32(0xF94003E0); // LDR X0, [SP]
             }
+            // Add count*16 for both scalar and v128: the re-push below
+            // accounts for the result's own storage, so pre-decrementing
+            // count for v128 would double-subtract the 32 bytes and leave
+            // SP two slots too deep.
             if(count > 0) {
                emit_add_imm_sp(count * 16);
             }
