@@ -2365,18 +2365,29 @@ namespace psizam::detail {
             return true;
          }
          case ir_op::br_if: {
-            uint32_t dc = inst.dest & 0xFFFF;
             uint32_t eh_count = inst.dest >> 16;
             load_vreg_rax(inst.br.src1); // condition
             this->emit(base::TEST, eax, eax);
+            // In regalloc mode WASM operand-stack values live in registers or
+            // spill slots, NOT on the native stack. Passing the IR-level
+            // depth_change here would make emit_branch_multipop emit an
+            // `add rsp, dc*8` that doesn't correspond to anything on rsp,
+            // leaking the native stack every time the branch is taken. The
+            // `br` regalloc path already passes 0; `br_if` must match. Result
+            // value transfer is emitted as explicit mov IR instructions by
+            // ir_writer *before* the branch, so no on-stack fixup is needed.
+            // (Previously, a br_if with dc=5 in a loop-nested try_table
+            // handler — see mismatch_9677_seed1776497367 in KNOWN_ISSUES —
+            // leaked 40 bytes of rsp per iteration, eventually clobbering
+            // invoke_with_signal_handler's jmp_buf.)
             if (eh_count > 0) {
                void* skip = this->emit_branchcc32(base::JZ);
                for (uint32_t i = 0; i < eh_count; ++i)
                   emit_eh_runtime_call(reinterpret_cast<void*>(&__psizam_eh_leave));
-               emit_branch_to_block(func, inst.br.target, dc, inst.type);
+               emit_branch_to_block(func, inst.br.target, 0, types::pseudo);
                base::fix_branch(skip, code);
             } else {
-               emit_branch_cc_to_block(func, inst.br.target, dc, inst.type, base::JNZ);
+               emit_branch_cc_to_block(func, inst.br.target, 0, types::pseudo, base::JNZ);
             }
             return true;
          }

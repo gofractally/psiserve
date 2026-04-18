@@ -3020,14 +3020,21 @@ namespace psizam::detail {
                emit_eh_leave();
             }
 
-            // Emit branch to catch target (unresolved — parser calls fix_branch)
-            // dest must be 0 (not ir_vreg_none) — high 16 bits encode eh_leave_count
-            // which is 0 here since eh_leave instructions are emitted separately above.
+            // Emit branch to catch target (unresolved — parser calls fix_branch).
+            // dest encodes depth_change in the low 16 bits (eh_leave_count is 0 here
+            // because we emitted eh_leave ops separately above). depth_change is
+            // the number of operand-stack slots the target scope expects popped
+            // vs. the operand depth captured at try_table entry — without this,
+            // the JIT's emit_branch_multipop leaves those slots on rsp, leaking
+            // depth_change*8 bytes of native stack per catch-taken execution.
+            // For a loop-targeting catch inside a larger loop, the leak
+            // accumulates every iteration and eventually clobbers the caller's
+            // frame (see mismatch_9677_seed1776497367 in KNOWN_ISSUES.md).
             ir_inst br{};
             br.opcode = ir_op::br;
             br.type = types::pseudo;
             br.flags = IR_SIDE_EFFECT;
-            br.dest = 0;
+            br.dest = clause.depth_change & 0xFFFFu;
             br.br.target = UINT32_MAX;
             br.br.src1 = ir_vreg_none;
             result.push_back(_func->current_inst_index());
