@@ -62,21 +62,6 @@ All pass on interpreter and jit. jit2 is experimental.
 - ~~**rem codegen clobber**: i32/i64 rem_u/rem_s hardcoded W2/X2 as scratch for UDIV/SDIV quotient, clobbering live vregs~~ — fixed: use X16 (intra-procedure-call scratch) instead
 - ~~**IR corruption in dead code**: emit_br/emit_br_if/emit_try_table returned branch index 0 in unreachable code, corrupting IR instruction 0~~ — fixed: return UINT32_MAX instead
 
-### Deferred: jit_llvm softfloat helper ABI mismatch
-
-The LLVM IR translator declares softfloat helpers with integer-typed signatures
-(e.g. `declare i64 @__psizam_sf_f64_promote_f32(i32)`), while the registered
-implementations use float-typed C signatures (`double _psizam_f32_promote(float)`).
-On ARM64 AAPCS and x86_64 System V, integer and floating-point arguments use
-different register classes, so any jit_llvm invocation of a softfloat helper
-passes values through the wrong registers. This is latent today because the
-fuzzer runs jit_llvm only in `fp_mode::hw_deterministic` (which does not emit
-softfloat calls), and nothing exercises `fp_mode::softfloat` for jit_llvm.
-Exposed while investigating `mismatch_84920_seed20260501.wasm` (f64_promote_f32
-NaN payload diverges from the softfloat interpreter in hw_deterministic mode).
-Fix requires either changing the LLVM declarations to float/double types with
-bitcasts on both sides, or adding C wrappers with integer signatures.
-
 ### aarch64 notes
 
 The aarch64 JIT backends do not fully implement SIMD floating-point operations

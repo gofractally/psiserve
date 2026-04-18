@@ -122,7 +122,13 @@ namespace psizam::detail {
          declare_functions();
          // Declare runtime helper functions
          declare_runtime_helpers();
-         if ((opts.fp == fp_mode::softfloat)) {
+         // Softfloat helpers are used in both softfloat and hw_deterministic
+         // modes. hw_deterministic mode calls the softfloat helpers for
+         // NaN-payload-sensitive ops (f64_promote_f32, f32_demote_f64) to match
+         // the interpreter's bit-exact behavior — see interpret_visitor.hpp
+         // which calls _psizam_f32_promote whenever fp != fast. Only `fast`
+         // mode skips softfloat entirely and uses native HW ops.
+         if (opts.fp != fp_mode::fast) {
             declare_softfloat_helpers();
          }
          if (opts.enable_backtrace) {
@@ -373,10 +379,15 @@ namespace psizam::detail {
                                            name, llvm_mod.get());
          };
 
-         auto f32_binop_ty = llvm::FunctionType::get(i32_ty, {i32_ty, i32_ty}, false);
-         auto f32_unop_ty  = llvm::FunctionType::get(i32_ty, {i32_ty}, false);
-         auto f64_binop_ty = llvm::FunctionType::get(i64_ty, {i64_ty, i64_ty}, false);
-         auto f64_unop_ty  = llvm::FunctionType::get(i64_ty, {i64_ty}, false);
+         // Match the C implementation signatures (softfloat.hpp) so LLVM lowers
+         // arguments/returns via the hardware float ABI that matches the registered
+         // C function. Using integer types here would route values through the
+         // wrong register class (int regs vs. SSE/NEON regs) on x86_64 SysV and
+         // ARM64 AAPCS, silently corrupting every softfloat call.
+         auto f32_binop_ty = llvm::FunctionType::get(f32_ty, {f32_ty, f32_ty}, false);
+         auto f32_unop_ty  = llvm::FunctionType::get(f32_ty, {f32_ty}, false);
+         auto f64_binop_ty = llvm::FunctionType::get(f64_ty, {f64_ty, f64_ty}, false);
+         auto f64_unop_ty  = llvm::FunctionType::get(f64_ty, {f64_ty}, false);
 
          sf_f32_add = decl("__psizam_sf_f32_add", f32_binop_ty);
          sf_f32_sub = decl("__psizam_sf_f32_sub", f32_binop_ty);
@@ -410,67 +421,62 @@ namespace psizam::detail {
          sf_f64_trunc   = decl("__psizam_sf_f64_trunc", f64_unop_ty);
          sf_f64_nearest = decl("__psizam_sf_f64_nearest", f64_unop_ty);
 
-         // Conversions: int -> float
+         // Conversions: int -> float. Return type is float/double to match
+         // the registered C implementations (see softfloat.hpp).
          sf_f32_convert_i32s = decl("__psizam_sf_f32_convert_i32s",
-            llvm::FunctionType::get(i32_ty, {i32_ty}, false));
+            llvm::FunctionType::get(f32_ty, {i32_ty}, false));
          sf_f32_convert_i32u = decl("__psizam_sf_f32_convert_i32u",
-            llvm::FunctionType::get(i32_ty, {i32_ty}, false));
+            llvm::FunctionType::get(f32_ty, {i32_ty}, false));
          sf_f32_convert_i64s = decl("__psizam_sf_f32_convert_i64s",
-            llvm::FunctionType::get(i32_ty, {i64_ty}, false));
+            llvm::FunctionType::get(f32_ty, {i64_ty}, false));
          sf_f32_convert_i64u = decl("__psizam_sf_f32_convert_i64u",
-            llvm::FunctionType::get(i32_ty, {i64_ty}, false));
+            llvm::FunctionType::get(f32_ty, {i64_ty}, false));
          sf_f64_convert_i32s = decl("__psizam_sf_f64_convert_i32s",
-            llvm::FunctionType::get(i64_ty, {i32_ty}, false));
+            llvm::FunctionType::get(f64_ty, {i32_ty}, false));
          sf_f64_convert_i32u = decl("__psizam_sf_f64_convert_i32u",
-            llvm::FunctionType::get(i64_ty, {i32_ty}, false));
+            llvm::FunctionType::get(f64_ty, {i32_ty}, false));
          sf_f64_convert_i64s = decl("__psizam_sf_f64_convert_i64s",
-            llvm::FunctionType::get(i64_ty, {i64_ty}, false));
+            llvm::FunctionType::get(f64_ty, {i64_ty}, false));
          sf_f64_convert_i64u = decl("__psizam_sf_f64_convert_i64u",
-            llvm::FunctionType::get(i64_ty, {i64_ty}, false));
+            llvm::FunctionType::get(f64_ty, {i64_ty}, false));
          // float -> float
          sf_f32_demote_f64  = decl("__psizam_sf_f32_demote_f64",
-            llvm::FunctionType::get(i32_ty, {i64_ty}, false));
+            llvm::FunctionType::get(f32_ty, {f64_ty}, false));
          sf_f64_promote_f32 = decl("__psizam_sf_f64_promote_f32",
-            llvm::FunctionType::get(i64_ty, {i32_ty}, false));
+            llvm::FunctionType::get(f64_ty, {f32_ty}, false));
       }
 
-      // Helpers: call softfloat function with automatic bitcasting.
-      // Bitcasts require same-size types; if the caller passed a value of a
-      // different float width (can happen with unreachable-code uses where
+      // Helpers: coerce arbitrary vreg values to a float/double so they match
+      // the softfloat helper's float ABI declaration. If the caller passed a
+      // value of a different width (can happen with unreachable-code uses where
       // load_vreg_as returns a zero of the target type), convert it first.
-      llvm::Value* to_f32_bits(llvm::IRBuilder<>& builder, llvm::Value* a) {
+      llvm::Value* to_f32(llvm::IRBuilder<>& builder, llvm::Value* a) {
          auto* t = a->getType();
-         if (t == i32_ty) return a;
-         if (t == f32_ty) return builder.CreateBitCast(a, i32_ty);
-         if (t == f64_ty) return builder.CreateBitCast(builder.CreateFPTrunc(a, f32_ty), i32_ty);
-         if (t == i64_ty) return builder.CreateTrunc(a, i32_ty);
-         return llvm::Constant::getNullValue(i32_ty);
+         if (t == f32_ty) return a;
+         if (t == i32_ty) return builder.CreateBitCast(a, f32_ty);
+         if (t == f64_ty) return builder.CreateFPTrunc(a, f32_ty);
+         if (t == i64_ty) return builder.CreateBitCast(builder.CreateTrunc(a, i32_ty), f32_ty);
+         return llvm::Constant::getNullValue(f32_ty);
       }
-      llvm::Value* to_f64_bits(llvm::IRBuilder<>& builder, llvm::Value* a) {
+      llvm::Value* to_f64(llvm::IRBuilder<>& builder, llvm::Value* a) {
          auto* t = a->getType();
-         if (t == i64_ty) return a;
-         if (t == f64_ty) return builder.CreateBitCast(a, i64_ty);
-         if (t == f32_ty) return builder.CreateBitCast(builder.CreateFPExt(a, f64_ty), i64_ty);
-         if (t == i32_ty) return builder.CreateZExt(a, i64_ty);
-         return llvm::Constant::getNullValue(i64_ty);
+         if (t == f64_ty) return a;
+         if (t == i64_ty) return builder.CreateBitCast(a, f64_ty);
+         if (t == f32_ty) return builder.CreateFPExt(a, f64_ty);
+         if (t == i32_ty) return builder.CreateBitCast(builder.CreateZExt(a, i64_ty), f64_ty);
+         return llvm::Constant::getNullValue(f64_ty);
       }
       llvm::Value* call_sf_f32_binop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a, llvm::Value* b) {
-         auto* ai = to_f32_bits(builder, a);
-         auto* bi = to_f32_bits(builder, b);
-         return builder.CreateBitCast(builder.CreateCall(fn, {ai, bi}), f32_ty);
+         return builder.CreateCall(fn, {to_f32(builder, a), to_f32(builder, b)});
       }
       llvm::Value* call_sf_f32_unop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a) {
-         auto* ai = to_f32_bits(builder, a);
-         return builder.CreateBitCast(builder.CreateCall(fn, {ai}), f32_ty);
+         return builder.CreateCall(fn, {to_f32(builder, a)});
       }
       llvm::Value* call_sf_f64_binop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a, llvm::Value* b) {
-         auto* ai = to_f64_bits(builder, a);
-         auto* bi = to_f64_bits(builder, b);
-         return builder.CreateBitCast(builder.CreateCall(fn, {ai, bi}), f64_ty);
+         return builder.CreateCall(fn, {to_f64(builder, a), to_f64(builder, b)});
       }
       llvm::Value* call_sf_f64_unop(llvm::IRBuilder<>& builder, llvm::Function* fn, llvm::Value* a) {
-         auto* ai = to_f64_bits(builder, a);
-         return builder.CreateBitCast(builder.CreateCall(fn, {ai}), f64_ty);
+         return builder.CreateCall(fn, {to_f64(builder, a)});
       }
 
       // hw_deterministic NaN canonicalization — replace any NaN result with the WASM
@@ -2886,86 +2892,79 @@ namespace psizam::detail {
                // Float conversions from integers
                case ir_op::f32_convert_s_i32:
                   if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f32_convert_i32s, {load_vreg_as(inst.rr.src1, i32_ty)}), f32_ty));
+                     store_vreg(inst.dest, builder.CreateCall(sf_f32_convert_i32s, {load_vreg_as(inst.rr.src1, i32_ty)}));
                   } else {
                      store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i32_ty), f32_ty));
                   }
                   break;
                case ir_op::f32_convert_u_i32:
                   if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f32_convert_i32u, {load_vreg_as(inst.rr.src1, i32_ty)}), f32_ty));
+                     store_vreg(inst.dest, builder.CreateCall(sf_f32_convert_i32u, {load_vreg_as(inst.rr.src1, i32_ty)}));
                   } else {
                      store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i32_ty), f32_ty));
                   }
                   break;
                case ir_op::f32_convert_s_i64:
                   if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f32_convert_i64s, {load_vreg_as(inst.rr.src1, i64_ty)}), f32_ty));
+                     store_vreg(inst.dest, builder.CreateCall(sf_f32_convert_i64s, {load_vreg_as(inst.rr.src1, i64_ty)}));
                   } else {
                      store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i64_ty), f32_ty));
                   }
                   break;
                case ir_op::f32_convert_u_i64:
                   if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f32_convert_i64u, {load_vreg_as(inst.rr.src1, i64_ty)}), f32_ty));
+                     store_vreg(inst.dest, builder.CreateCall(sf_f32_convert_i64u, {load_vreg_as(inst.rr.src1, i64_ty)}));
                   } else {
                      store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i64_ty), f32_ty));
                   }
                   break;
                case ir_op::f64_convert_s_i32:
                   if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f64_convert_i32s, {load_vreg_as(inst.rr.src1, i32_ty)}), f64_ty));
+                     store_vreg(inst.dest, builder.CreateCall(sf_f64_convert_i32s, {load_vreg_as(inst.rr.src1, i32_ty)}));
                   } else {
                      store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i32_ty), f64_ty));
                   }
                   break;
                case ir_op::f64_convert_u_i32:
                   if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f64_convert_i32u, {load_vreg_as(inst.rr.src1, i32_ty)}), f64_ty));
+                     store_vreg(inst.dest, builder.CreateCall(sf_f64_convert_i32u, {load_vreg_as(inst.rr.src1, i32_ty)}));
                   } else {
                      store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i32_ty), f64_ty));
                   }
                   break;
                case ir_op::f64_convert_s_i64:
                   if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f64_convert_i64s, {load_vreg_as(inst.rr.src1, i64_ty)}), f64_ty));
+                     store_vreg(inst.dest, builder.CreateCall(sf_f64_convert_i64s, {load_vreg_as(inst.rr.src1, i64_ty)}));
                   } else {
                      store_vreg(inst.dest, builder.CreateSIToFP(load_vreg_as(inst.rr.src1, i64_ty), f64_ty));
                   }
                   break;
                case ir_op::f64_convert_u_i64:
                   if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f64_convert_i64u, {load_vreg_as(inst.rr.src1, i64_ty)}), f64_ty));
+                     store_vreg(inst.dest, builder.CreateCall(sf_f64_convert_i64u, {load_vreg_as(inst.rr.src1, i64_ty)}));
                   } else {
                      store_vreg(inst.dest, builder.CreateUIToFP(load_vreg_as(inst.rr.src1, i64_ty), f64_ty));
                   }
                   break;
 
-               // Float promotions/demotions
+               // Float promotions/demotions. Route through the softfloat helper in
+               // both softfloat and hw_deterministic modes: the interpreter uses the
+               // softfloat promote/demote for any `fp != fast` mode (interpret_visitor.hpp),
+               // and the resulting NaN payload is not equivalent to native FPExt/FPTrunc
+               // + NaN canonicalization. Matching the interpreter bit-for-bit requires
+               // calling the same softfloat helper here. `fast` mode keeps native ops.
                case ir_op::f32_demote_f64:
-                  if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f32_demote_f64, {builder.CreateBitCast(load_vreg_as(inst.rr.src1, f64_ty), i64_ty)}), f32_ty));
+                  if (opts.fp != fp_mode::fast) {
+                     store_vreg(inst.dest, builder.CreateCall(sf_f32_demote_f64, {load_vreg_as(inst.rr.src1, f64_ty)}));
                   } else {
-                     store_vreg(inst.dest, maybe_canon_f32(builder,
-                        builder.CreateFPTrunc(load_vreg_as(inst.rr.src1, f64_ty), f32_ty)));
+                     store_vreg(inst.dest, builder.CreateFPTrunc(load_vreg_as(inst.rr.src1, f64_ty), f32_ty));
                   }
                   break;
                case ir_op::f64_promote_f32:
-                  if ((opts.fp == fp_mode::softfloat)) {
-                     store_vreg(inst.dest, builder.CreateBitCast(
-                        builder.CreateCall(sf_f64_promote_f32, {builder.CreateBitCast(load_vreg_as(inst.rr.src1, f32_ty), i32_ty)}), f64_ty));
+                  if (opts.fp != fp_mode::fast) {
+                     store_vreg(inst.dest, builder.CreateCall(sf_f64_promote_f32, {load_vreg_as(inst.rr.src1, f32_ty)}));
                   } else {
-                     store_vreg(inst.dest, maybe_canon_f64(builder,
-                        builder.CreateFPExt(load_vreg_as(inst.rr.src1, f32_ty), f64_ty)));
+                     store_vreg(inst.dest, builder.CreateFPExt(load_vreg_as(inst.rr.src1, f32_ty), f64_ty));
                   }
                   break;
 
@@ -4319,7 +4318,7 @@ namespace psizam::detail {
                         for (int j = 0; j < 4; ++j) {
                            auto* idx = builder.getInt32(j);
                            auto* ae = builder.CreateExtractElement(a, idx);
-                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f32_convert_i32s, {ae}), f32_ty);
+                           auto* fb = builder.CreateCall(sf_f32_convert_i32s, {ae});
                            r = builder.CreateInsertElement(r, fb, idx);
                         }
                      } else {
@@ -4335,7 +4334,7 @@ namespace psizam::detail {
                         for (int j = 0; j < 4; ++j) {
                            auto* idx = builder.getInt32(j);
                            auto* ae = builder.CreateExtractElement(a, idx);
-                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f32_convert_i32u, {ae}), f32_ty);
+                           auto* fb = builder.CreateCall(sf_f32_convert_i32u, {ae});
                            r = builder.CreateInsertElement(r, fb, idx);
                         }
                      } else {
@@ -4369,7 +4368,7 @@ namespace psizam::detail {
                         for (int j = 0; j < 2; ++j) {
                            auto* idx = builder.getInt32(j);
                            auto* ae = builder.CreateExtractElement(a, idx);
-                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f64_convert_i32s, {ae}), f64_ty);
+                           auto* fb = builder.CreateCall(sf_f64_convert_i32s, {ae});
                            r = builder.CreateInsertElement(r, fb, idx);
                         }
                      } else {
@@ -4386,7 +4385,7 @@ namespace psizam::detail {
                         for (int j = 0; j < 2; ++j) {
                            auto* idx = builder.getInt32(j);
                            auto* ae = builder.CreateExtractElement(a, idx);
-                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f64_convert_i32u, {ae}), f64_ty);
+                           auto* fb = builder.CreateCall(sf_f64_convert_i32u, {ae});
                            r = builder.CreateInsertElement(r, fb, idx);
                         }
                      } else {
@@ -4404,8 +4403,7 @@ namespace psizam::detail {
                         for (int j = 0; j < 2; ++j) {
                            auto* idx = builder.getInt32(j);
                            auto* ae = builder.CreateExtractElement(a, idx);
-                           auto* bi = builder.CreateBitCast(ae, i64_ty);
-                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f32_demote_f64, {bi}), f32_ty);
+                           auto* fb = builder.CreateCall(sf_f32_demote_f64, {ae});
                            r = builder.CreateInsertElement(r, fb, idx);
                         }
                      } else {
@@ -4423,8 +4421,7 @@ namespace psizam::detail {
                         for (int j = 0; j < 2; ++j) {
                            auto* idx = builder.getInt32(j);
                            auto* ae = builder.CreateExtractElement(a, idx);
-                           auto* bi = builder.CreateBitCast(ae, i32_ty);
-                           auto* fb = builder.CreateBitCast(builder.CreateCall(sf_f64_promote_f32, {bi}), f64_ty);
+                           auto* fb = builder.CreateCall(sf_f64_promote_f32, {ae});
                            r = builder.CreateInsertElement(r, fb, idx);
                         }
                      } else {

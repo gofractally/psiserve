@@ -12,7 +12,9 @@
 #include <llvm/Support/Error.h>
 #include <llvm/Support/TargetSelect.h>
 
+#include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace psizam::detail {
 
@@ -64,9 +66,25 @@ namespace psizam::detail {
       auto& dl = _impl->jit->getDataLayout();
       auto& jd = _impl->jit->getMainJITDylib();
 
+      // On macOS, LLJIT's symbol lookup applies the target's global prefix
+      // (a leading '_') to every external reference emitted by the generated
+      // module. For registered absolute symbols to resolve, they must be
+      // interned with the same prefix. Linux/ELF has an empty prefix so this
+      // is a no-op there, but getting this wrong produces
+      //   "Symbols not found: [ ___psizam_sf_* ]"
+      // (triple underscore = double-underscore helper + leading '_').
+      const char prefix = dl.getGlobalPrefix();
       llvm::orc::SymbolMap runtime_syms;
       auto add_sym = [&](const char* name, void* addr) {
-         runtime_syms[es.intern(name)] = {
+         std::string mangled;
+         if (prefix) {
+            mangled.reserve(std::strlen(name) + 1);
+            mangled.push_back(prefix);
+            mangled.append(name);
+         } else {
+            mangled = name;
+         }
+         runtime_syms[es.intern(mangled)] = {
             llvm::orc::ExecutorAddr::fromPtr(addr),
             llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable
          };
