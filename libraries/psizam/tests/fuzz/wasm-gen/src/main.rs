@@ -46,15 +46,15 @@ fn main() {
             // Disable proposals not fully supported by all backends
             gc_enabled: false,
             relaxed_simd_enabled: false,
-            wide_arithmetic_enabled: false,
             custom_page_sizes_enabled: false,
             exceptions_enabled: true,
             reference_types_enabled: false,  // JIT assert on ref-typed globals
             memory64_enabled: false,         // limited JIT support
             threads_enabled: false,          // shared memory not supported in fuzzer
-            tail_call_enabled: false,        // may not be fully impl in all backends
-            // Keep well-supported proposals
-            simd_enabled: false,             // v128 stores can hit guard page edge cases
+            // Enabled — we want to surface bugs in these, not hide them
+            wide_arithmetic_enabled: true,
+            tail_call_enabled: true,
+            simd_enabled: true,
             bulk_memory_enabled: true,
             multi_value_enabled: true,
             sign_extension_ops_enabled: true,
