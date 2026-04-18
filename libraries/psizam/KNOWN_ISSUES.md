@@ -57,6 +57,7 @@ All pass on interpreter and jit. jit2 is experimental.
 - ~~**relaxed_madd_nmadd** (2), **relaxed_dot_product** (1): Wrong results~~ — fixed: jit2 regalloc v128_op handler now pushes the 3rd operand for all ternary ops (relaxed fma + dot-add), not just `v128_bitselect`; the missing push was causing softfloat helpers to read garbage for `a.lo/a.hi` and corrupt the stack
 - ~~**multi-value `call` / `call_indirect` rax corruption**~~ — fixed: regalloc paths for direct `call` and `call_indirect` now skip `store_rax_vreg(inst.dest)` for multi-value returns (`ft.return_count > 1`). For multi-value returns the callee writes results to `ctx->_multi_return[]` and the IR writer emits separate `ir_op::multi_return_load` instructions; `rax` is undefined in that case, so storing it into the dest vreg's register could clobber a live vreg that regalloc reused the register for
 - ~~**SIGBUS on nested try_table + regalloc** (fuzzer seed 263 module 174)~~ — worked around: jit2 now skips regalloc for any function that uses exception handling (`eh_data_count > 0`), falling back to stack-mode codegen. See `jit2 regalloc ↔ EH interaction bug` below for the full investigation and why the proper fix is deferred
+- ~~**Unresolved imported function → memory_trap instead of wasm_link_exception**~~ — fixed: populate `_host_trampoline_ptrs[i]` with a stub that throws `wasm_link_exception` for imports that can't be resolved. Without this, the JIT's direct indirect call on `nullptr` produced SIGSEGV which the signal handler mapped to `memory_trap`, diverging from interp/jit_llvm's `rejected` outcome
 
 **aarch64 only:**
 - ~~**rem codegen clobber**: i32/i64 rem_u/rem_s hardcoded W2/X2 as scratch for UDIV/SDIV quotient, clobbering live vregs~~ — fixed: use X16 (intra-procedure-call scratch) instead
@@ -176,3 +177,90 @@ Option (2) is the most tractable first step. If someone picks this up, start
 with a repro via `psizam-fuzz-diff 200 263` and verify the fix keeps
 `[eh]` compliance tests green and the fuzzer clean through seeds 42, 263,
 and a few others.
+
+### jit2 stack-mode fusion: missing `if_`/`br_if` fixup push for fused comparisons
+
+**Status:** not fixed — reverted; the fix exposes a deeper memory-corruption
+bug in jit2 (below).
+
+**Reproducer.**
+
+```wat
+(func
+  global.get 0
+  i32.eqz
+  if unreachable end
+  try_table (catch_all 0)
+    br 1
+  end
+)
+(global (mut i32) (i32.const 100))
+(start 0)
+```
+
+Interp / jit / jit_llvm: `ok`. jit2: `interp_trap (unreachable)`.
+
+**Root cause.** The optimizer fuses a comparison (`i32.eqz`, `i32.eq`, etc.)
+with a following `if_`/`br_if`: it sets `IR_FUSE_NEXT` on the comparison
+and `IR_DEAD` on the consumer. Regalloc-mode codegen handles this via
+`emit_fused_branch`. Stack-mode codegen unconditionally skips `IR_DEAD`
+instructions (jit_codegen.hpp:583) and does not check `IR_FUSE_NEXT` on
+the comparison. Result: the comparison emits `setcc+push` but the
+consumer's `push_if_fixup` is never called. `end_if` then pops an outer
+if's fixup and patches that outer branch to the wrong target, producing
+spurious control-flow divergence.
+
+Because my workaround for `jit2 regalloc ↔ EH interaction` forces stack
+mode for all EH-using functions, this bug surfaces on every fuzzer module
+that combines a counter `if (global==0) unreachable` pattern with
+`try_table` — the majority of the `interp=ok jit2=interp_trap` and
+`interp=memory_trap jit2=interp_trap` fuzz mismatches (~80+% of them).
+
+**Attempted fix.** Adding `if (IR_FUSE_NEXT) emit_fused_branch` to the
+`i32.eqz` / `i64.eqz` stack-mode handlers correctly fixes ~40 of the 60
+mismatches on seed 31337×5K. But it exposes a separate jit2 bug: some
+modules that previously took the wrong (`unreachable`) branch now
+execute the correct path and hit a memory-corruption bug deeper in jit2.
+Symptom: SIGABRT from an assertion in
+`execution_context.hpp:854` ("Unexpected multi-value return type") where
+the captured `const func_type& ft` has garbage `return_count`/`return_type`
+fields after the JIT returned, indicating the JIT wrote outside its
+allocated memory and trashed the module's type table. Also seen:
+assertion `!"Unexpected function return type"` at
+`execution_context.hpp:863`, timeouts (infinite loops), and additional
+`memory_trap` outcomes. Net effect: -40 mismatches, +2 crashes,
++1 timeout, +17 `interp_trap→memory_trap` — crashes are strictly worse
+than mismatches, so the fusion fix is reverted.
+
+**Proper fix requires two commits together:**
+1. Fix stack-mode fusion (the simple one-line add noted above).
+2. Find and fix the jit2 memory-corruption bug it exposes.
+
+Reproducer for (2) once (1) is applied: seed 31337 module 1925
+(`crash_1925_seed31337.wasm`, 4142 bytes) — start function has
+`throw 1` under a `try_table` with matching `catch`; after completion
+the module's `func_type` table has been overwritten. Suspected root cause
+is in the jit2 EH unwind path corrupting adjacent memory; not yet
+diagnosed.
+
+### jit2 float-to-int trap surfaces as SIGSEGV in libgcc unwinder
+
+**Status:** not fixed — diagnosed but requires coordinated fix with the
+jit2 `.eh_frame` registration.
+
+**Reproducer.** Fuzz seed 31337 module 74/656/1692 — any WASM module that
+calls `i32.trunc_f32_u` / `i32.trunc_f64_s` / `i64.trunc_f32_u` with a
+NaN or out-of-range input via jit2's stack-mode path.
+
+**Symptom.** interp reports `interp_trap (Error, f32.convert_u/i32
+unrepresentable)`; jit2 reports `memory_trap`. Inside jit2, the softfloat
+helper `_psizam_f32_trunc_i32u` correctly throws `wasm_interpreter_exception`,
+but libgcc's `_Unwind_RaiseException` faults on a misaligned `movaps`
+during its own stack scan. The exception is wrapped by
+`longjmp_on_exception` *inside* the helper, so unwinding should not need
+to walk JIT frames — yet the unwinder is walking past the handler,
+suggesting an `.eh_frame` or LSDA mismatch for the stub helper.
+
+**Note:** applies only on stack-mode codegen (active for EH-using
+functions under the current workaround). Regalloc-mode is not tested for
+this pattern but may or may not be affected.
