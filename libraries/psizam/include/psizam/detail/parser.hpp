@@ -1709,6 +1709,21 @@ namespace psizam::detail {
                   for(auto rt : target_ft.return_types)
                      op_stack.push(rt);
                   code_writer.emit_tail_call(target_ft, funcnum);
+                  // Single-pass JITs desugar tail_call to call+return, so the
+                  // "unreachable" bytes after return_call would otherwise execute
+                  // once the callee returns. Emit a function-level return branch.
+                  // Backends that implement real tail calls (ir_writer,
+                  // bitcode_writer) no-op this because they track reachability
+                  // internally once emit_tail_call fires.
+                  {
+                     uint32_t label = pc_stack.size() - 1;
+                     emit_eh_leaves_for_branch(label);
+                     auto [depth_change,rt,rc] = compute_depth_change(label);
+                     if (ft.return_count > 1)
+                        set_pending_result_types(ft.return_types.data(), static_cast<uint32_t>(ft.return_types.size()));
+                     auto branch = code_writer.emit_return(depth_change, rt, rc);
+                     handle_branch_target(label, branch);
+                  }
                   op_stack.start_unreachable();
                } break;
                case 0x13: { // return_call_indirect
@@ -1727,6 +1742,16 @@ namespace psizam::detail {
                   PSIZAM_ASSERT(table_idx < _mod->tables.size(), wasm_parse_exception, "return_call_indirect table index out of range");
                   PSIZAM_ASSERT(_mod->tables[table_idx].element_type == types::funcref, wasm_parse_exception, "return_call_indirect requires funcref table");
                   code_writer.emit_tail_call_indirect(target_ft, type_aliases[functypeidx], table_idx);
+                  // See return_call comment above.
+                  {
+                     uint32_t label = pc_stack.size() - 1;
+                     emit_eh_leaves_for_branch(label);
+                     auto [depth_change,rt,rc] = compute_depth_change(label);
+                     if (ft.return_count > 1)
+                        set_pending_result_types(ft.return_types.data(), static_cast<uint32_t>(ft.return_types.size()));
+                     auto branch = code_writer.emit_return(depth_change, rt, rc);
+                     handle_branch_target(label, branch);
+                  }
                   op_stack.start_unreachable();
                } break;
                case opcodes::try_table_: {
