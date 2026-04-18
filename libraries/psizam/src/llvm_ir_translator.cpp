@@ -1222,6 +1222,10 @@ namespace psizam::detail {
 
                case ir_op::br_if: {
                   uint32_t target = inst.br.target;
+                  // High 16 bits of inst.dest hold eh_leave_count for try_table
+                  // scopes crossed by this branch. Must emit eh_leave on the
+                  // taken path so the catch frame is popped before we jump.
+                  uint32_t eh_count = inst.dest >> 16;
                   llvm::Value* cond = load_vreg(inst.br.src1);
                   if (!cond || target >= func.block_count) break;
                   llvm::Value* cmp = builder.CreateICmpNE(cond,
@@ -1230,7 +1234,17 @@ namespace psizam::detail {
                      ? block_entries[target]
                      : block_exits[target];
                   auto* cont_bb = llvm::BasicBlock::Create(*ctx, "br_if_cont", fn);
-                  builder.CreateCondBr(cmp, target_bb, cont_bb);
+                  if (eh_count > 0) {
+                     auto* taken_bb = llvm::BasicBlock::Create(*ctx, "br_if_taken", fn);
+                     builder.CreateCondBr(cmp, taken_bb, cont_bb);
+                     builder.SetInsertPoint(taken_bb);
+                     for (uint32_t i = 0; i < eh_count; ++i) {
+                        builder.CreateCall(rt_eh_leave, {ctx_ptr});
+                     }
+                     builder.CreateBr(target_bb);
+                  } else {
+                     builder.CreateCondBr(cmp, target_bb, cont_bb);
+                  }
                   builder.SetInsertPoint(cont_bb);
                   break;
                }
@@ -1252,12 +1266,13 @@ namespace psizam::detail {
                   // Each case can have zero or more mov instructions before the br.
                   struct bt_case {
                      uint32_t br_target;
+                     uint32_t eh_count; // high 16 bits of each br's dest field
                      std::vector<std::pair<uint32_t, uint32_t>> movs; // dest, src pairs
                   };
                   std::vector<bt_case> cases;
                   uint32_t scan = ip + 1;
                   while (scan < func.inst_count && cases.size() <= bt_size) {
-                     bt_case c;
+                     bt_case c{};
                      // Collect movs before br
                      while (scan < func.inst_count && func.insts[scan].opcode == ir_op::mov) {
                         auto& mi = func.insts[scan];
@@ -1267,6 +1282,7 @@ namespace psizam::detail {
                      // Expect a br
                      if (scan < func.inst_count && func.insts[scan].opcode == ir_op::br) {
                         c.br_target = func.insts[scan].br.target;
+                        c.eh_count = func.insts[scan].dest >> 16;
                         cases.push_back(std::move(c));
                         scan++;
                      } else {
@@ -1284,10 +1300,11 @@ namespace psizam::detail {
                      // Last case is the default
                      auto& default_case = cases.back();
 
-                     // Create per-case blocks if any case has movs
+                     // Create per-case blocks if any case has movs OR crosses
+                     // try_table scopes (needs eh_leave calls before the jump).
                      bool need_case_blocks = false;
                      for (auto& c : cases) {
-                        if (!c.movs.empty()) { need_case_blocks = true; break; }
+                        if (!c.movs.empty() || c.eh_count > 0) { need_case_blocks = true; break; }
                      }
 
                      if (need_case_blocks) {
@@ -1310,6 +1327,10 @@ namespace psizam::detail {
                            for (auto& [dest, src] : cases[c].movs) {
                               llvm::Value* val = load_vreg(src);
                               if (val) store_vreg(dest, val);
+                           }
+                           // Pop try_table catch frames this branch crosses
+                           for (uint32_t i = 0; i < cases[c].eh_count; ++i) {
+                              builder.CreateCall(rt_eh_leave, {ctx_ptr});
                            }
                            auto* target = resolve_br_target(cases[c].br_target);
                            if (target) builder.CreateBr(target);
