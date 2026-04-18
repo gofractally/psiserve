@@ -592,9 +592,40 @@ namespace psizam::detail {
          return *code++;
       }
 
+      // Parse a reference type: 0x70 funcref, 0x6F externref, or the typed
+      // reference encoding `0x64 heaptype` (non-null ref) / `0x63 heaptype`
+      // (nullable ref). Concrete type indices in the heap type slot collapse
+      // to funcref since psizam's runtime doesn't track per-slot signatures.
+      // Out-param `non_null` reports whether the encoding was `0x64` (strict
+      // non-null reference), which callers need to enforce init-value
+      // constraints on non-null tables/globals/elem segments.
+      uint8_t parse_reftype(wasm_code_ptr& code, bool* non_null = nullptr) {
+         if (non_null) *non_null = false;
+         uint8_t b = *code++;
+         if (b == types::funcref || b == types::externref) return b;
+         if (b == 0x64 || b == 0x63) {
+            if (non_null && b == 0x64) *non_null = true;
+            uint8_t heap = *code++;
+            if (heap == 0x70) return types::funcref;
+            if (heap == 0x6F) return types::externref;
+            if (heap >= 0x80) { while (*code++ & 0x80) {} }
+            return types::funcref;
+         }
+         PSIZAM_ASSERT(false, wasm_parse_exception, "table must have type funcref or externref");
+         return types::funcref;
+      }
+
       void parse_table_type(wasm_code_ptr& code, table_type& tt) {
-         tt.element_type   = *code++;
-         PSIZAM_ASSERT(tt.element_type == types::funcref || tt.element_type == types::externref, wasm_parse_exception, "table must have type funcref or externref");
+         bool has_init_expr = false;
+         if (*code == 0x40) {
+            ++code;
+            PSIZAM_ASSERT(*code == 0x00, wasm_parse_exception, "expected 0x00 after 0x40 in table type");
+            ++code;
+            has_init_expr = true;
+         }
+         bool non_null = false;
+         tt.element_type   = parse_reftype(code, &non_null);
+         _table_non_null.push_back(non_null);
          auto raw_flags    = parse_flags(code);
          PSIZAM_ASSERT(raw_flags <= 0x01, wasm_parse_exception, "invalid table limits flags");
          tt.limits.flags   = raw_flags;
@@ -604,6 +635,10 @@ namespace psizam::detail {
             PSIZAM_ASSERT(tt.limits.initial <= tt.limits.maximum, wasm_parse_exception, "table max size less than min size");
          }
          PSIZAM_ASSERT(tt.limits.initial <= get_max_table_elements(_options), wasm_parse_exception, "table size exceeds limit");
+         if (has_init_expr) {
+            init_expr ie;
+            parse_init_expr(code, ie, tt.element_type, _mod->globals.size());
+         }
       }
 
       void parse_global_variable(wasm_code_ptr& code, global_variable& gv, uint32_t idx) {
@@ -789,17 +824,26 @@ namespace psizam::detail {
             }
          }
          uint8_t elem_reftype = types::funcref; // default for flags 0, 4
+         // Flags with bit 2 == 0 (0..3) enumerate function indices directly.
+         // Those produce non-null refs by construction, so their effective
+         // segment reftype is `(ref func)`, not nullable funcref. Flag 4
+         // (init-expr form with default reftype) is nullable funcref.
+         bool elem_non_null = (flags < 4);
          if (flags == 1 || flags == 2 || flags == 3) {
             auto elemkind = *code++;
             PSIZAM_ASSERT(elemkind == 0x00, wasm_parse_exception, "elemkind must be funcref");
             elem_reftype = types::funcref;
          } else if (flags == 5 || flags == 6 || flags == 7) {
-            elem_reftype = *code++;
-            PSIZAM_ASSERT(elem_reftype == types::funcref || elem_reftype == types::externref, wasm_parse_exception, "elem type must be funcref or externref");
+            elem_reftype = parse_reftype(code, &elem_non_null);
          }
-         // For active segments, element type must match target table's element type
+         // For active segments, element type must match target table's element type.
+         // A non-null table cannot be initialized by a nullable elem segment: its
+         // stored reference must be guaranteed non-null at every index.
          if (tt) {
             PSIZAM_ASSERT(elem_reftype == tt->element_type, wasm_parse_exception, "type mismatch");
+            if (es.index < _table_non_null.size() && _table_non_null[es.index] && !elem_non_null) {
+               PSIZAM_ASSERT(false, wasm_parse_exception, "type mismatch");
+            }
          }
          uint32_t           size  = parse_varuint32(code);
          PSIZAM_ASSERT(size <= get_max_element_segment_elements(_options), wasm_parse_exception, "elem segment too large");
@@ -1112,6 +1156,7 @@ namespace psizam::detail {
             PSIZAM_ASSERT(state.empty(), wasm_parse_exception, "stack not empty at scope end");
          }
          uint32_t depth() const { return operand_depth; }
+         bool is_polymorphic() const { return !state.empty() && state.back() == unreachable_tag; }
       };
 
       struct local_types_t {
@@ -1354,6 +1399,12 @@ namespace psizam::detail {
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in block");
                      single_type = first_byte;
+                  } else if (first_byte == 0x63 || first_byte == 0x64) {
+                     // typed reference blocktype: 0x63 heap (ref null HT) / 0x64 heap (ref HT)
+                     code++; // consume 0x63/0x64
+                     uint8_t heap = *code++;
+                     if (heap >= 0x80) { while (*code++ & 0x80) {} } // multi-byte LEB128 type idx
+                     single_type = (heap == types::externref) ? types::externref : types::funcref;
                   } else {
                      // s33 type index (multi-value block type)
                      int32_t type_idx = parse_varint32(code);
@@ -1405,6 +1456,11 @@ namespace psizam::detail {
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in loop");
                      single_type = first_byte;
+                  } else if (first_byte == 0x63 || first_byte == 0x64) {
+                     code++;
+                     uint8_t heap = *code++;
+                     if (heap >= 0x80) { while (*code++ & 0x80) {} }
+                     single_type = (heap == types::externref) ? types::externref : types::funcref;
                   } else {
                      int32_t type_idx = parse_varint32(code);
                      PSIZAM_ASSERT(type_idx >= 0 && static_cast<uint32_t>(type_idx) < _mod->types.size(),
@@ -1456,6 +1512,11 @@ namespace psizam::detail {
                                    first_byte == types::pseudo, wasm_parse_exception,
                                    "Invalid type code in if");
                      single_type = first_byte;
+                  } else if (first_byte == 0x63 || first_byte == 0x64) {
+                     code++;
+                     uint8_t heap = *code++;
+                     if (heap >= 0x80) { while (*code++ & 0x80) {} }
+                     single_type = (heap == types::externref) ? types::externref : types::funcref;
                   } else {
                      int32_t type_idx = parse_varint32(code);
                      PSIZAM_ASSERT(type_idx >= 0 && static_cast<uint32_t>(type_idx) < _mod->types.size(),
@@ -1664,39 +1725,66 @@ namespace psizam::detail {
                   check_in_bounds();
                   size_t table_size = parse_varuint32(code);
                   PSIZAM_ASSERT(table_size <= get_max_br_table_elements(_options), wasm_parse_exception, "Too many labels in br_table");
-                  uint8_t result_type = 0;
                   op_stack.pop(types::i32);
+                  // Record polymorphic state BEFORE per-label validation. In
+                  // polymorphic (unreachable) state, br_table labels may differ
+                  // in value types — dead code validates under any hypothetical
+                  // stack — but arity must still match across labels.
+                  bool polymorphic = op_stack.is_polymorphic();
                   auto handler = code_writer.emit_br_table(table_size);
+                  // Collect labels and validate each one's structure against the
+                  // default. We parse the default last, so store case labels
+                  // first and resolve after.
+                  std::vector<uint32_t> case_labels(table_size);
+                  for (size_t i = 0; i < table_size; i++)
+                     case_labels[i] = parse_varuint32(code);
+                  uint32_t default_label = parse_varuint32(code);
+                  PSIZAM_ASSERT(default_label < pc_stack.size(), wasm_parse_exception, "invalid label");
+                  const pc_element_t& def_tgt = pc_stack[pc_stack.size() - default_label - 1];
+                  uint32_t def_rc = !def_tgt.label_results.empty()
+                                    ? static_cast<uint32_t>(def_tgt.label_results.size())
+                                    : (def_tgt.label_result != types::pseudo ? 1u : 0u);
+                  uint8_t def_result = def_tgt.label_result;
+                  // Validate each case label's structure matches default's.
                   for (size_t i = 0; i < table_size; i++) {
-                     uint32_t label = parse_varuint32(code);
+                     uint32_t label = case_labels[i];
+                     PSIZAM_ASSERT(label < pc_stack.size(), wasm_parse_exception, "invalid label");
+                     const pc_element_t& tgt = pc_stack[pc_stack.size() - label - 1];
+                     uint32_t rc = !tgt.label_results.empty()
+                                   ? static_cast<uint32_t>(tgt.label_results.size())
+                                   : (tgt.label_result != types::pseudo ? 1u : 0u);
+                     PSIZAM_ASSERT(rc == def_rc, wasm_parse_exception, "br_table labels must have the same arity");
+                     if (!polymorphic) {
+                        PSIZAM_ASSERT(tgt.label_result == def_result, wasm_parse_exception, "br_table labels must have the same type");
+                     }
+                  }
+                  // Emit case branches (no stack modification).
+                  for (size_t i = 0; i < table_size; i++) {
+                     uint32_t label = case_labels[i];
                      uint32_t eh_count = count_eh_leaves_for_branch(label);
-                     auto [depth_change,rt,rc] = compute_depth_change(label);
-                     if (rc > 1) {
-                        const auto& tgt = pc_stack[pc_stack.size() - label - 1];
+                     const pc_element_t& tgt = pc_stack[pc_stack.size() - label - 1];
+                     uint32_t result = op_stack.depth() - tgt.operand_depth;
+                     uint32_t rc = !tgt.label_results.empty()
+                                   ? static_cast<uint32_t>(tgt.label_results.size())
+                                   : (tgt.label_result != types::pseudo ? 1u : 0u);
+                     uint8_t rt = !tgt.label_results.empty() ? tgt.label_results[0]
+                                                              : static_cast<uint8_t>(tgt.label_result);
+                     if (rc > 1)
                         set_pending_result_types(tgt.label_results.data(),
                                                  static_cast<uint32_t>(tgt.label_results.size()));
-                     }
-                     auto branch = handler.emit_case(depth_change, rt, label, rc, eh_count);
+                     auto branch = handler.emit_case(result, rt, label, rc, eh_count);
                      handle_branch_target(label, branch);
-                     uint8_t one_result = pc_stack[pc_stack.size() - label - 1].label_result;
-                     if(i == 0) {
-                        result_type = one_result;
-                     } else {
-                        PSIZAM_ASSERT(result_type == one_result, wasm_parse_exception, "br_table labels must have the same type");
-                     }
                   }
-                  uint32_t label = parse_varuint32(code);
-                  uint32_t eh_count = count_eh_leaves_for_branch(label);
-                  auto [depth_change,rt,rc] = compute_depth_change(label);
-                  if (rc > 1) {
-                     const auto& tgt = pc_stack[pc_stack.size() - label - 1];
-                     set_pending_result_types(tgt.label_results.data(),
-                                              static_cast<uint32_t>(tgt.label_results.size()));
-                  }
-                  auto branch = handler.emit_default(depth_change, rt, label, rc, eh_count);
-                  handle_branch_target(label, branch);
-                  PSIZAM_ASSERT(table_size == 0 || result_type == pc_stack[pc_stack.size() - label - 1].label_result,
-                                wasm_parse_exception, "br_table labels must have the same type");
+                  // Default label — this pops the result types from the stack (via
+                  // compute_depth_change). After this, start_unreachable will clear
+                  // whatever remains up to the enclosing scope.
+                  uint32_t eh_count_def = count_eh_leaves_for_branch(default_label);
+                  auto [def_depth,def_rt,def_rc_tuple] = compute_depth_change(default_label);
+                  if (def_rc_tuple > 1)
+                     set_pending_result_types(def_tgt.label_results.data(),
+                                              static_cast<uint32_t>(def_tgt.label_results.size()));
+                  auto def_branch = handler.emit_default(def_depth, def_rt, default_label, def_rc_tuple, eh_count_def);
+                  handle_branch_target(default_label, def_branch);
                   op_stack.start_unreachable();
                } break;
                case opcodes::call: {
@@ -2005,9 +2093,16 @@ namespace psizam::detail {
                } break;
                case opcodes::ref_null: {
                   check_in_bounds();
-                  uint8_t ref_type = *code++;
-                  PSIZAM_ASSERT(ref_type == types::funcref || ref_type == types::externref,
-                                wasm_parse_exception, "ref.null requires funcref or externref type");
+                  uint8_t first = *code++;
+                  uint8_t ref_type;
+                  if (first == types::externref) ref_type = types::externref;
+                  else if (first == types::funcref) ref_type = types::funcref;
+                  else if (first < 0x80) ref_type = types::funcref; // positive single-byte type index
+                  else {
+                     // multi-byte LEB128 type index — consume continuation
+                     while (*code++ & 0x80) {}
+                     ref_type = types::funcref;
+                  }
                   op_stack.push(ref_type);
                   code_writer.emit_ref_null(ref_type);
                } break;
@@ -3338,6 +3433,7 @@ namespace psizam::detail {
       typename DebugInfo::builder imap;
       std::vector<uint32_t> type_aliases;
       std::vector<uint32_t> fast_functions;
+      std::vector<bool>     _table_non_null;
       std::unordered_map<uint32_t, std::vector<branch_hint>> _branch_hints_temp;
    };
 } // namespace psizam::detail

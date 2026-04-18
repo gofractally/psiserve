@@ -4,7 +4,7 @@
 
 | Platform | Failures | Total | Pass Rate |
 |----------|----------|-------|-----------|
-| macOS aarch64 | 65 | 17,709 | 99.6% |
+| macOS aarch64 | 4 | 12,576 | 99.97% |
 | Linux x86_64 | (stale — re-measure after submodule bump) | | |
 
 The spec testsuite submodule was bumped to `51279a9` and the SIMD block now
@@ -15,25 +15,41 @@ failures no longer reproduce (the newer testsuite wraps those cases in
 `assert_unlinkable` / `register`, which the generator now skips cleanly).
 The categories below describe what remains.
 
-### Reftype parser gap — 60 failures (15 tests × 4 backends)
+### ~~Reftype parser gap — 60 failures~~ — fixed
 
-Tests use `table` declarations with non-funcref/externref reftypes (the
-full typed-reference proposal). The parser rejects with
-`"table must have type funcref or externref"`.
+Parser now accepts the typed-reference proposal encodings
+(`0x64 heaptype` for `(ref HT)`, `0x63 heaptype` for `(ref null HT)`)
+wherever reftypes appear: table element types, block signatures
+(`block`/`loop`/`if`), element-segment reftypes, `ref.null`, and the
+table-type init-expr prefix (`0x40 0x00 …`). Concrete type indices in
+the heap-type slot collapse to `funcref`/`externref` since psizam's
+runtime doesn't track per-slot signatures.
 
-- **elem_47..54** (8), **elem_57..62** (6), **br_table_0** (1)
+Non-null tables now also reject initializers whose reftype is nullable:
+`parse_reftype` reports a `non_null` flag, `parse_table_type` records
+it per-table, and `parse_elem_segment` enforces `(ref func)`-table ↔
+`(ref func)`-segment (elem segments with flags 0–3 are implicitly
+non-null because they enumerate function indices, which can't be null).
 
-Fixing requires extending `parser.hpp` to parse the remaining reftype
-encodings and teaching validation + the backends to handle them. Not
-yet prioritized.
+Also extended `br_table` validation to accept multi-type labels in
+polymorphic (unreachable) state while still checking arity, so
+`br_table_0` func 70's `block(result f64){block(result f32){unreachable;
+i32.const 1; br_table 0 1 1}}` pattern parses cleanly, and the legacy
+arity-mismatch rejection on `unreached-invalid.86` still fires.
 
-### Memory section limit — 4 failures (1 test × 4 backends)
+Cleared: **elem_47..56** (10), **elem_57..62** (6), **br_table_0** (1),
+**unreached-invalid_86/107/108/109** (4), and table-init-expr side
+cases — 60+ failures across 4 backends.
 
-- **memory_grow_2** (1 test): calls `memory.grow` against a module with
-  4 memories; fails at parse with `"memory.grow must end with 0x00"`.
-  Multi-memory's `memory.grow` encoding includes a memidx byte
-  instead of the zero reserved byte; blocked on multi-memory runtime
-  support.
+### Multi-memory proposal — 4 failures (1 test × 4 backends)
+
+- **memory_grow_2** (1 test): exports `grow1`/`grow2` over two
+  memories and issues `memory.grow $mem2` (encoded `0x40 0x01`). The
+  parser rejects with `"memory.grow must end with 0x00"`. The
+  `memory.size`/`memory.grow` parsers hardcode the reserved byte to
+  `0x00`; the multi-memory proposal replaces it with a memidx.
+  Blocked on full multi-memory runtime support (load/store/init/copy
+  operand encodings and per-memory dispatch in all five backends).
 
 ### ~~spectest harness imports~~ — fixed
 
