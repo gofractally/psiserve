@@ -740,6 +740,12 @@ namespace psizam::detail {
 
          const auto& ft = _mod->get_function_type(func_index);
          this->template type_check_args<TC>(ft, std::forward<Args>(args)... ); // args not modified by type_check_args
+         // Capture return metadata as primitives — the `ft` reference is stored
+         // as a pointer on this stack frame, and jit backends under fuzz stress
+         // have been observed to overwrite that slot. Post-JIT reads of ft.*
+         // would deref garbage; local copies keep the return-dispatch correct.
+         const uint8_t ft_return_count = ft.return_count;
+         const uint8_t ft_return_type  = ft.return_type;
          native_value_extended result;
 
 #pragma GCC diagnostic push
@@ -841,12 +847,12 @@ namespace psizam::detail {
             return {};
          }
 
-         if(!ft.return_count)
+         if(!ft_return_count)
             return {};
-         else if (ft.return_count > 1) {
+         else if (ft_return_count > 1) {
             // Multi-value return: JIT backends store all values to _multi_return[]
             auto& val = this->_multi_return[0];
-            switch (ft.return_type) {
+            switch (ft_return_type) {
                case i32: return {i32_const_t{val.i32}};
                case i64: return {i64_const_t{val.i64}};
                case f32: return {f32_const_t{val.f32}};
@@ -854,7 +860,7 @@ namespace psizam::detail {
                default: assert(!"Unexpected multi-value return type");
             }
          }
-         else switch (ft.return_type) {
+         else switch (ft_return_type) {
             case i32: return {i32_const_t{result.scalar.i32}};
             case i64: return {i64_const_t{result.scalar.i64}};
             case f32: return {f32_const_t{result.scalar.f32}};

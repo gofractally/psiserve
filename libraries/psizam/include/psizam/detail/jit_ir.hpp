@@ -389,6 +389,15 @@ namespace psizam::detail {
       int8_t   phys_xmm;
       int16_t  spill_slot;
       uint8_t  type;
+      // True if the live range crosses an ir_op::eh_setjmp. Standard
+      // setjmp/longjmp preserves callee-saved GPRs, but a callee-saved reg
+      // that's reused for different vregs on either side of a setjmp would
+      // have its setjmp-time value after longjmp — not the value the
+      // post-setjmp / catch-handler code expects. Force-spill these vregs
+      // to memory so every use reads the current definition, not a stale
+      // register. XMM regs are caller-saved on SysV (all XMM) so they are
+      // never safe across setjmp regardless.
+      uint8_t  crosses_setjmp = 0;
    };
    static_assert(std::is_trivially_copyable_v<ir_live_interval>);
 

@@ -313,6 +313,30 @@ namespace psizam::detail {
                break;
             }
          }
+
+         // Mark intervals that cross any eh_setjmp instruction as force-spill.
+         // See ir_live_interval::crosses_setjmp for rationale.
+         bool has_setjmp = false;
+         for (uint32_t i = 0; i < func.inst_count; ++i) {
+            if (func.insts[i].opcode == ir_op::eh_setjmp) { has_setjmp = true; break; }
+         }
+         if (has_setjmp) {
+            for (uint32_t i = 0; i < func.inst_count; ++i) {
+               if (func.insts[i].opcode != ir_op::eh_setjmp) continue;
+               uint32_t pos = i;
+               for (uint32_t v = 0; v < num_vregs; ++v) {
+                  auto& iv = func.intervals[v];
+                  if (iv.start == UINT32_MAX) continue;
+                  // An interval "crosses" setjmp if the setjmp is strictly
+                  // inside it (not just at one endpoint). start == pos means
+                  // this interval's own definition is the setjmp itself
+                  // (the sjresult vreg) — that one is safe, don't force-spill.
+                  if (iv.start < pos && pos < iv.end) {
+                     iv.crosses_setjmp = 1;
+                  }
+               }
+            }
+         }
       }
 
       // Perform linear scan register allocation.
@@ -459,6 +483,14 @@ namespace psizam::detail {
 #ifndef __aarch64__
             if (interval.type == types::f32 || interval.type == types::f64) continue;
 #endif
+
+            // Vregs whose live range spans an eh_setjmp must live in memory —
+            // see ir_live_interval::crosses_setjmp.
+            if (interval.crosses_setjmp) {
+               interval.phys_reg = -1;
+               interval.spill_slot = static_cast<int16_t>(next_spill_slot++);
+               continue;
+            }
 
             // Branchless bitmap check: any call in (start, end)?
             bool crosses_call = false;
@@ -648,6 +680,16 @@ namespace psizam::detail {
             if (interval.type != types::v128 && interval.type != types::f32
                 && interval.type != types::f64) continue;
 #endif
+
+            // Cross-setjmp vregs must go to memory. All XMM regs are caller-saved
+            // on SysV x86_64 (and NEON regs behave the same through longjmp), so
+            // no XMM assignment would survive a longjmp return to catch.
+            if (interval.crosses_setjmp) {
+               interval.phys_xmm = -1;
+               interval.spill_slot = static_cast<int16_t>(next_spill_slot);
+               next_spill_slot += (interval.type == types::v128) ? 2 : 1;
+               continue;
+            }
 
             // Expire old XMM intervals
             for (int j = 0; j < num_xmm_active; ) {
