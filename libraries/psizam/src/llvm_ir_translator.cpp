@@ -846,6 +846,12 @@ namespace psizam::detail {
                      is_v128[sinst.dest] = true;
                   if (sinst.sel.val1 < func.next_vreg) is_v128[sinst.sel.val1] = true;
                   if (sinst.sel.val2 < func.next_vreg) is_v128[sinst.sel.val2] = true;
+               } else if (sinst.opcode == ir_op::multi_return_load && sinst.type == types::v128 &&
+                           sinst.dest != ir_vreg_none && sinst.dest < func.next_vreg) {
+                  is_v128[sinst.dest] = true;
+               } else if (sinst.opcode == ir_op::multi_return_store && sinst.type == types::v128 &&
+                           sinst.ri.src1 != ir_vreg_none && sinst.ri.src1 < func.next_vreg) {
+                  is_v128[sinst.ri.src1] = true;
                }
             }
             // Pass 2: propagate through movs (repeat until stable)
