@@ -821,6 +821,17 @@ namespace psizam::detail {
 #endif
                auto fn = reinterpret_cast<native_value (*)(void*, void*)>(_mod->code[func_index - _mod->get_imported_functions_size()].jit_code_offset + _mod->allocator._code_base);
 
+               // Save/restore _remaining_call_depth. jit2 writes the field on
+               // every call via `mov [rdi+16], ecx; dec ecx; mov ecx, [rdi+16]`
+               // (jit1 keeps it in a register and never touches the field),
+               // and a stack_overflow longjmp skips the generated inc cleanup.
+               // Without this guard, the first call that exhausts the budget
+               // leaves the field at zero and all subsequent calls on the
+               // same context wrap past 0 on dec and never re-trigger the
+               // check — the JIT stops enforcing stack-overflow entirely.
+               auto saved_call_depth = this->_remaining_call_depth;
+               auto depth_guard = scope_guard([&](){ this->_remaining_call_depth = saved_call_depth; });
+
                // Register the stack guard page so the signal handler catches overflow
                if (alt_stack.guard_base()) {
                   stack_guard_range = std::span<std::byte>(
