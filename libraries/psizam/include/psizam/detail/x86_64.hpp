@@ -367,7 +367,9 @@ namespace psizam::detail {
             if (eh_leave_count == 0 && is_simple_multipop(depth_change, rt, result_count)) {
                return emit_branchcc32(cond->branchop);
             } else {
-               void* skip = emit_branch8(reverse_condition(cond->branchop));
+               // Skip jump must be 32-bit: eh_leave calls and multi-value
+               // multipop can exceed the 127-byte 8-bit branch range.
+               void* skip = emit_branchcc32(reverse_condition(cond->branchop));
                for (uint32_t i = 0; i < eh_leave_count; ++i)
                   emit_eh_leave();
                if (result_count > 1)
@@ -376,19 +378,20 @@ namespace psizam::detail {
                   emit_multipop(depth_change, rt);
                emit(JMP_32);
                void* result = emit_branch_target32();
-               fix_branch8(skip, code);
+               fix_branch(skip, code);
                return result;
             }
          }
          COUNT_INSTR();
-         auto icount = variable_size_instr(9, result_count > 1 ? 9 + result_count * 16 + 17 : 27);
+         auto icount = variable_size_instr(13, result_count > 1 ? 13 + result_count * 16 + 17 : 31);
          emit_pop(rax);
          emit(TEST, eax, eax);
 
          if(eh_leave_count == 0 && is_simple_multipop(depth_change, rt, result_count)) {
             return emit_branchcc32(JNZ);
          } else {
-            void* skip = emit_branch8(JZ);
+            // 32-bit skip: see comment above.
+            void* skip = emit_branchcc32(JZ);
             for (uint32_t i = 0; i < eh_leave_count; ++i)
                emit_eh_leave();
             // add depth_change*8, %rsp
@@ -399,7 +402,7 @@ namespace psizam::detail {
             emit(JMP_32);
             void* result = emit_branch_target32();
             // SKIP:
-            fix_branch8(skip, code);
+            fix_branch(skip, code);
             return result;
          }
       }
