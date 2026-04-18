@@ -42,7 +42,7 @@ namespace
 // test — production composition happens inside psiserve's Linker.
 PSIO_WORLD(cli_env_canary,
            imports(),
-           exports(environment_interface_tag))
+           exports(::environment))
 
 TEST_CASE("wasi:cli/environment — header reflects into a Schema",
           "[wasi][cli][round_trip]")

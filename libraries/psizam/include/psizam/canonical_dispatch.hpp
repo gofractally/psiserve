@@ -20,8 +20,68 @@
 //   buffer_lift_policy   — standalone testing (buffer + flat_values array)
 
 #include <psio/canonical_abi.hpp>
+#include <psio/wit_owned.hpp>
+
+#include <span>
 
 namespace psizam {
+
+   namespace detail_dispatch {
+      template <typename T>
+      struct is_std_span : std::false_type {};
+      template <typename T, std::size_t N>
+      struct is_std_span<std::span<T, N>> : std::true_type {
+         using element_type = T;
+      };
+
+      template <typename T>
+      struct is_wit_vector : std::false_type {};
+      template <typename E>
+      struct is_wit_vector<psio::owned<std::vector<E>, psio::wit>> : std::true_type {
+         using element_type = E;
+      };
+   }
+
+   // ── flat_count helper ──────────────────────────────────────────────────────
+   // Both `wit::string` and `std::string_view` lower to 2 flat slots
+   // (i32 ptr, i32 len), but psio::canonical_flat_count_v refuses them —
+   // wit::string isn't PSIO_REFLECT'd, and string_view isn't recognized
+   // as a canonical "string" by psio (which only sees std::basic_string).
+   // Special-case both here; everything else delegates to psio. The
+   // partial specialization form short-circuits — a plain ternary over
+   // variable templates would instantiate the false arm eagerly and trip
+   // psio's static_assert for the string_view case.
+
+   namespace detail {
+      template <typename T>
+      struct flat_count_impl {
+         static constexpr size_t value = psio::canonical_flat_count_v<T>;
+      };
+
+      template <>
+      struct flat_count_impl<psio::owned<std::string, psio::wit>> {
+         static constexpr size_t value = 2;
+      };
+
+      template <>
+      struct flat_count_impl<std::string_view> {
+         static constexpr size_t value = 2;
+      };
+
+      template <typename T, std::size_t N>
+      struct flat_count_impl<std::span<T, N>> {
+         static constexpr size_t value = 2;
+      };
+
+      template <typename E>
+      struct flat_count_impl<psio::owned<std::vector<E>, psio::wit>> {
+         static constexpr size_t value = 2;
+      };
+   }
+
+   template <typename T>
+   inline constexpr size_t flat_count_v =
+      detail::flat_count_impl<std::remove_cvref_t<T>>::value;
 
    // =========================================================================
    // Policy concepts — calling convention (extends psio wire-format policies)
@@ -67,10 +127,27 @@ namespace psizam {
          p.emit_f64(value);
       else if constexpr (std::is_enum_v<U>)
          canonical_lower_flat(static_cast<std::underlying_type_t<U>>(value), p);
-      else if constexpr (is_std_string_ct<U>::value) {
+      else if constexpr (is_std_string_ct<U>::value ||
+                         std::is_same_v<U, std::string_view>) {
          uint32_t ptr = p.alloc(1, static_cast<uint32_t>(value.size()));
          p.store_bytes(ptr, value.data(), static_cast<uint32_t>(value.size()));
          p.emit_i32(ptr);
+         p.emit_i32(static_cast<uint32_t>(value.size()));
+      }
+      else if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>) {
+         // The wit::string's buffer already lives in the owning allocator's
+         // address space (guest linear memory on __wasm__, host heap otherwise).
+         // Emit the existing (ptr, len) pair directly — no alloc, no copy.
+         // Ownership is surrendered to the wire: the caller must ensure this
+         // is the last use of `value` before it goes out of scope. ComponentProxy
+         // does so by release()-ing the result immediately after lowering.
+         p.emit_i32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(value.data())));
+         p.emit_i32(static_cast<uint32_t>(value.size()));
+      }
+      else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
+         // Same surrender-to-the-wire semantics as wit::string; the
+         // backing buffer is already laid out canonically.
+         p.emit_i32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(value.data())));
          p.emit_i32(static_cast<uint32_t>(value.size()));
       }
       else if constexpr (is_std_vector_ct<U>::value) {
@@ -152,6 +229,43 @@ namespace psizam {
          uint32_t len = p.next_i32();
          const char* data = p.load_bytes(ptr, len);
          return std::string(data, len);
+      }
+      else if constexpr (std::is_same_v<U, std::string_view>) {
+         // Borrowed view over memory the caller owns for the call's duration.
+         uint32_t ptr = p.next_i32();
+         uint32_t len = p.next_i32();
+         return std::string_view(p.load_bytes(ptr, len), len);
+      }
+      else if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>) {
+         // Adopt the buffer the caller allocated via the local cabi_realloc.
+         // Ownership transfers here; the returned wit::string will free it.
+         uint32_t ptr = p.next_i32();
+         uint32_t len = p.next_i32();
+         return psio::owned<std::string, psio::wit>::adopt(
+            const_cast<char*>(p.load_bytes(ptr, len)), len);
+      }
+      else if constexpr (detail_dispatch::is_std_span<U>::value) {
+         // Borrowed list view. No allocation — just resolve (ptr, len) into
+         // a span over the caller's linear-memory buffer. The element type
+         // must match the canonical layout (trivially-copyable, fixed size).
+         using E = typename detail_dispatch::is_std_span<U>::element_type;
+         uint32_t ptr = p.next_i32();
+         uint32_t len = p.next_i32();
+         auto*    base = reinterpret_cast<E*>(
+            const_cast<char*>(p.load_bytes(ptr, len * sizeof(E))));
+         return std::span<E>(base, len);
+      }
+      else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
+         // Adopt the (ptr, len) pair into an owning wit::vector. Ownership
+         // transfers to the callee — on the guest side, the returned vector's
+         // destructor will cabi_realloc(0) the buffer when it goes out of
+         // scope, matching the contract of the canonical ABI.
+         using E = typename detail_dispatch::is_wit_vector<U>::element_type;
+         uint32_t ptr = p.next_i32();
+         uint32_t len = p.next_i32();
+         auto*    base = reinterpret_cast<E*>(
+            const_cast<char*>(p.load_bytes(ptr, len * sizeof(E))));
+         return psio::owned<std::vector<E>, psio::wit>::adopt(base, len);
       }
       else if constexpr (is_std_vector_ct<U>::value) {
          using E = typename vector_elem_ct<U>::type;

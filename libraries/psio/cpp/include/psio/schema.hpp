@@ -2188,7 +2188,7 @@ namespace psio
                 std::make_index_sequence<std::tuple_size_v<typename info::types>>{});
             add_interface_funcs<info>(
                 iface,
-                std::make_index_sequence<std::tuple_size_v<decltype(info::funcs)>>{});
+                std::make_index_sequence<std::tuple_size_v<typename info::func_types>>{});
             schema.interfaces.push_back(std::move(iface));
             world.exports.push_back(std::string{info::name});
          }
@@ -2202,23 +2202,53 @@ namespace psio
          template <typename Info, std::size_t I>
          void add_interface_func(Interface& iface)
          {
-            constexpr auto     ptr       = std::get<I>(Info::funcs);
-            std::string_view   qualified = Info::func_names[I];
-            // Strip any `ns::ns::name` prefix — WIT names are bare.
+            // We reflect off the function-pointer *type*, not its value,
+            // so the interface's anchor struct can be a pure declaration
+            // (no link-time definition required). See PSIO_IFACE_FN_TYPE.
+            using Fn = std::tuple_element_t<I, typename Info::func_types>;
+            std::string_view qualified = Info::func_names[I];
             auto colons = qualified.rfind("::");
             std::string short_name =
                 std::string(colons == std::string_view::npos
                                 ? qualified
                                 : qualified.substr(colons + 2));
-            iface.funcs.push_back(make_func_from_ptr(std::move(short_name), ptr));
+            iface.funcs.push_back(make_func_from_type<Fn>(std::move(short_name)));
+         }
+
+         // Deduce WIT Func shape from a pointer-to-(static-or-member)-
+         // function type. Two partial specializations cover both forms;
+         // both flow into the same params/result emission.
+         template <typename Fn>
+         Func make_func_from_type(std::string name)
+         {
+            return make_func_from_type_impl(std::move(name),
+                                            static_cast<Fn>(nullptr));
          }
 
          template <typename R, typename... Args>
-         Func make_func_from_ptr(std::string name, R (*)(Args...))
+         Func make_func_from_type_impl(std::string name, R (*)(Args...))
+         {
+            return make_func_from_sig<R, Args...>(std::move(name));
+         }
+
+         template <typename R, typename C, typename... Args>
+         Func make_func_from_type_impl(std::string name, R (C::*)(Args...))
+         {
+            return make_func_from_sig<R, Args...>(std::move(name));
+         }
+
+         template <typename R, typename C, typename... Args>
+         Func make_func_from_type_impl(std::string name, R (C::*)(Args...) const)
+         {
+            return make_func_from_sig<R, Args...>(std::move(name));
+         }
+
+         template <typename R, typename... Args>
+         Func make_func_from_sig(std::string name)
          {
             Func func;
             func.name = std::move(name);
-            // Parameter names aren't reflected from free functions;
+            // Parameter names aren't reflected from types alone;
             // synthesize `arg0`, `arg1`, … so the WIT output is
             // syntactically valid.
             std::size_t idx = 0;

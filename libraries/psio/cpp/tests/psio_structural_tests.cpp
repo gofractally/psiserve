@@ -59,48 +59,49 @@ namespace structural_test
       int nonce;
    };
    PSIO_REFLECT(Transaction, nonce)
-
-   inline int submit_tx(int x)
-   {
-      return x + 1;
-   }
-   inline int query_chain()
-   {
-      return 42;
-   }
 }  // namespace structural_test
+
+// The interface tag is a global-scope class whose static members are
+// the interface's operations. PSIO_INTERFACE addresses them directly
+// (`&kernel::submit_tx`) — no separate anchor namespace is involved.
+struct kernel
+{
+   static int submit_tx(int x) { return x + 1; }
+   static int query_chain()    { return 42; }
+};
 
 PSIO_INTERFACE(kernel,
                types(structural_test::Block, structural_test::Transaction),
-               funcs(structural_test::submit_tx, structural_test::query_chain))
+               funcs(func(submit_tx, x), func(query_chain)))
 
 TEST_CASE("PSIO_INTERFACE: interface_info carries name, package, types, funcs",
           "[psio][structural][interface]")
 {
-   using tag  = psio::detail::kernel_interface_tag;
-   using info = psio::detail::interface_info<tag>;
+   using info = psio::detail::interface_info<kernel>;
 
    REQUIRE(std::string_view{info::name} == "kernel");
    STATIC_REQUIRE(std::string_view{info::package::name} == "psibase");
    STATIC_REQUIRE(
        std::is_same_v<info::types,
                       std::tuple<structural_test::Block, structural_test::Transaction>>);
-   STATIC_REQUIRE(std::tuple_size_v<decltype(info::funcs)> == 2);
-
-   auto submit = std::get<0>(info::funcs);
-   auto query  = std::get<1>(info::funcs);
-   REQUIRE(submit(10) == 11);
-   REQUIRE(query() == 42);
+   // Reflection is type-based (decltype), not value-based: the anchor
+   // struct doesn't have to define its static members for
+   // interface_info to materialize. Signatures are checked via the
+   // pointer TYPE; the pointer value is never taken.
+   STATIC_REQUIRE(std::tuple_size_v<typename info::func_types> == 2);
+   STATIC_REQUIRE(std::is_same_v<std::tuple_element_t<0, info::func_types>,
+                                 int (*)(int)>);
+   STATIC_REQUIRE(std::is_same_v<std::tuple_element_t<1, info::func_types>,
+                                 int (*)()>);
 }
 
 TEST_CASE("PSIO_INTERFACE: interface_of<T> reverse lookup points back at the tag",
           "[psio][structural][interface]")
 {
-   using tag = psio::detail::kernel_interface_tag;
    STATIC_REQUIRE(
-       std::is_same_v<psio::interface_of<structural_test::Block>::type, tag>);
+       std::is_same_v<psio::interface_of<structural_test::Block>::type, kernel>);
    STATIC_REQUIRE(
-       std::is_same_v<psio::interface_of<structural_test::Transaction>::type, tag>);
+       std::is_same_v<psio::interface_of<structural_test::Transaction>::type, kernel>);
 }
 
 TEST_CASE("PSIO_INTERFACE: package_of<T> resolves transitively",
@@ -117,7 +118,7 @@ PSIO_USE(wasi, clocks, "0.2.0")
 
 PSIO_WORLD(node,
            imports(wasi_streams_use_tag, wasi_clocks_use_tag),
-           exports(kernel_interface_tag))
+           exports(::kernel))
 
 TEST_CASE("PSIO_USE: use_info carries package, interface, and version",
           "[psio][structural][use]")
@@ -149,7 +150,7 @@ TEST_CASE("PSIO_WORLD: world_info composes package, imports, exports",
                                  psio::detail::wasi_clocks_use_tag>>);
    STATIC_REQUIRE(
        std::is_same_v<world::exports,
-                      std::tuple<psio::detail::kernel_interface_tag>>);
+                      std::tuple<kernel>>);
 }
 
 // ── SchemaBuilder::insert_world ──────────────────────────────────────────
@@ -259,7 +260,7 @@ TEST_CASE("AnyType::Resource: survives FracPack round-trip",
    REQUIRE(res->methods[0].params.size() == 1);
 }
 
-// ── PSIO_IMPL(...) ──────────────────────────────────────────────────────
+// ── PSIO_HOST_MODULE(...) ──────────────────────────────────────────────────────
 //
 // Binds a host C++ implementation class to an interface/use tag so a
 // linker can resolve `provide(impl)` back to the correct slot by type.
@@ -275,26 +276,23 @@ namespace structural_test
    };
 }  // namespace structural_test
 
-PSIO_IMPL(structural_test::KernelImpl,
-          kernel_interface_tag,
-          submit_tx,
-          query_chain)
+PSIO_HOST_MODULE(structural_test::KernelImpl,
+          interface(kernel, submit_tx, query_chain))
 
-TEST_CASE("PSIO_IMPL: impl_of reverse-maps the impl class to its tag",
+TEST_CASE("PSIO_HOST_MODULE: impl_of reverse-maps the impl class to its tag list",
           "[psio][structural][impl]")
 {
    STATIC_REQUIRE(
        std::is_same_v<psio::impl_of<structural_test::KernelImpl>::type,
-                      psio::detail::kernel_interface_tag>);
+                      std::tuple<kernel>>);
 }
 
-TEST_CASE("PSIO_IMPL: impl_info carries tag, method pointers, and names",
+TEST_CASE("PSIO_HOST_MODULE: iface_impl carries tag, method pointers, and names",
           "[psio][structural][impl]")
 {
-   using info = psio::detail::impl_info<structural_test::KernelImpl>;
+   using info = psio::detail::iface_impl<structural_test::KernelImpl, kernel>;
 
-   STATIC_REQUIRE(
-       std::is_same_v<info::tag, psio::detail::kernel_interface_tag>);
+   STATIC_REQUIRE(std::is_same_v<info::tag, kernel>);
 
    STATIC_REQUIRE(std::tuple_size_v<decltype(info::methods)> == 2);
    REQUIRE(info::names.size() == 2);
@@ -308,6 +306,16 @@ TEST_CASE("PSIO_IMPL: impl_info carries tag, method pointers, and names",
    auto query  = std::get<1>(info::methods);
    REQUIRE((k.*submit)(3) == 103);
    REQUIRE((k.*query)() == 7);
+}
+
+TEST_CASE("PSIO_HOST_MODULE: impl_info aggregates interfaces for an Impl",
+          "[psio][structural][impl]")
+{
+   using info = psio::detail::impl_info<structural_test::KernelImpl>;
+   STATIC_REQUIRE(
+       std::is_same_v<info::interfaces,
+                      std::tuple<psio::detail::iface_impl<
+                          structural_test::KernelImpl, kernel>>>);
 }
 
 // ── emit_wit ────────────────────────────────────────────────────────────

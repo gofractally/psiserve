@@ -7,6 +7,7 @@
 add_executable(wasi_cpp_tests
    main.cpp
    round_trip.cpp
+   string_tests.cpp
 )
 
 target_link_libraries(wasi_cpp_tests PRIVATE wasi-cpp psio)

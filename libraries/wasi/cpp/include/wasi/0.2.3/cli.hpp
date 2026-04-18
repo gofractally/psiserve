@@ -10,9 +10,15 @@
 // in emit_wit output; canonical WIT requires `wasi:cli`. PSIO
 // packages are currently keyed by a C++ identifier, so the colon
 // separator isn't expressible yet. A follow-up in PSIO (string-form
-// PSIO_PACKAGE or an explicit namespace field) will close that gap;
-// until then the test uses structural checks rather than byte-equal
-// diffs.
+// PSIO_PACKAGE or an explicit namespace field) will close that gap.
+//
+// Interface tag note: PSIO_INTERFACE takes the interface's own class
+// as its tag, and the class name becomes the WIT interface name.
+// Placing `struct environment { … }` at global scope is deliberate —
+// any alternative (namespacing it, aliasing it) would either desync
+// the WIT name or require a new macro variant. Consumers that want
+// their own `environment` type should wrap the include in their own
+// namespace or #undef/redefine.
 
 #include <psio/reflect.hpp>
 #include <psio/structural.hpp>
@@ -22,26 +28,26 @@
 #include <tuple>
 #include <vector>
 
-namespace wasi::cli::environment_ns
+// Definitions exist so the address-of in PSIO_INTERFACE resolves.
+// Real host bindings for these live in psiserve; these bodies are
+// never called at runtime because psiserve's Linker wires the imports
+// to host_function closures before instantiation.
+struct environment
 {
-   // Definitions exist so the address-of in PSIO_INTERFACE resolves.
-   // Real host bindings for these live in psiserve; these bodies are
-   // never called at runtime because psiserve's Linker wires the
-   // imports to host_function closures before instantiation.
-   inline std::vector<std::tuple<std::string, std::string>> get_environment()
+   static inline std::vector<std::tuple<std::string, std::string>> get_environment()
    {
       return {};
    }
 
-   inline std::vector<std::string> get_arguments() { return {}; }
+   static inline std::vector<std::string> get_arguments() { return {}; }
 
-   inline std::optional<std::string> initial_cwd() { return std::nullopt; }
-}  // namespace wasi::cli::environment_ns
+   static inline std::optional<std::string> initial_cwd() { return std::nullopt; }
+};
 
 PSIO_PACKAGE(wasi_cli, "0.2.3");
 
 PSIO_INTERFACE(environment,
                types(),
-               funcs(wasi::cli::environment_ns::get_environment,
-                     wasi::cli::environment_ns::get_arguments,
-                     wasi::cli::environment_ns::initial_cwd))
+               funcs(func(get_environment),
+                     func(get_arguments),
+                     func(initial_cwd)))

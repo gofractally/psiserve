@@ -920,8 +920,13 @@ namespace psio {
       float    load_f32(uint32_t off) { float v; std::memcpy(&v, buf + off, 4); return v; }
       double   load_f64(uint32_t off) { double v; std::memcpy(&v, buf + off, 8); return v; }
       const char* load_bytes(uint32_t off, uint32_t len) {
-         if (static_cast<uint64_t>(off) + len > buf_size)
+         if (static_cast<uint64_t>(off) + len > buf_size) {
+#ifdef __cpp_exceptions
             throw std::runtime_error("load_bytes: out of bounds");
+#else
+            __builtin_trap();
+#endif
+         }
          return reinterpret_cast<const char*>(buf + off);
       }
    };

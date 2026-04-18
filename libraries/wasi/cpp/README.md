@@ -33,7 +33,7 @@ become regenerated output and hand-maintenance goes away.
 #include <wasi/0.2.3/io.hpp>
 #include <wasi/0.2.3/sockets.hpp>
 
-// Psiserve implements these via PSIO_IMPL'd classes;
+// Psiserve implements these via PSIO_HOST_MODULE'd classes;
 // Linker<world> wires impls to imports at composition time.
 ```
 

@@ -47,7 +47,7 @@
 // each import slot to exactly one provider, where a provider is any
 // of:
 //
-//   (a) a host implementation type registered with PSIO_IMPL — the
+//   (a) a host implementation type registered with PSIO_HOST_MODULE — the
 //       impl's tag is found by `psio::impl_of<T>::type`;
 //   (b) another module in the same composition, whose PSIO-reflected
 //       export interfaces declare their tags;
@@ -493,7 +493,7 @@ namespace psiserve
 
       /// Register a host implementation. Slot is resolved via
       /// `psio::impl_of<T>::type`, so the impl class must have been
-      /// declared with PSIO_IMPL. Fails to compile if it wasn't.
+      /// declared with PSIO_HOST_MODULE. Fails to compile if it wasn't.
       template <typename Impl>
       Linker& provide(Impl& impl);
 

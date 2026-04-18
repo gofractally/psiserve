@@ -51,6 +51,8 @@ option(PSIZAM_ENABLE_TESTS
    "Build psizam unit tests and spec tests" OFF)
 option(PSIZAM_ENABLE_BENCHMARKS
    "Build comparative benchmark suite" OFF)
+option(PSIZAM_ENABLE_EXAMPLES
+   "Build psizam examples (authoring-pipeline walkthroughs)" ${PSIZAM_IS_TOPLEVEL})
 
 cmake_dependent_option(PSIZAM_ENABLE_SPEC_TESTS
    "Enable wasm spec tests" ON "PSIZAM_ENABLE_TESTS" ON)
@@ -235,6 +237,11 @@ endif()
 # ── Benchmarks ─────────────────────────────────────────────────────────────────
 if(PSIZAM_ENABLE_BENCHMARKS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    add_subdirectory(benchmarks)
+endif()
+
+# ── Examples ───────────────────────────────────────────────────────────────────
+if(PSIZAM_ENABLE_EXAMPLES AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
+   add_subdirectory(examples)
 endif()
 
 # ── Tests ──────────────────────────────────────────────────────────────────────

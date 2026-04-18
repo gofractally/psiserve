@@ -40,6 +40,16 @@ if(NOT PSISERVE_WASI)
    find_package(Threads REQUIRED)
 endif()
 
+# Boost::headers is promoted to root scope so psi_add_wasm_module can
+# walk `psio`'s PUBLIC Boost dep and resolve the include path in any
+# subdirectory — imported targets created by find_package() are
+# otherwise scoped to the directory that called find_package().
+find_package(Boost REQUIRED)
+
+# CMake helpers (e.g. psi_add_wasm_module for wasi-sdk guest builds).
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(PsiWasmModule)
+
 # ── Testing ────────────────────────────────────────────────────────────────────
 if(NOT PSISERVE_WASI)
    enable_testing()
@@ -51,11 +61,11 @@ if(NOT PSISERVE_WASI)
    add_subdirectory(external/psitri/libraries/ucc)
    add_subdirectory(external/quill)
 endif()
+add_subdirectory(libraries/wasi)
+
 add_subdirectory(libraries/psizam)
 
 add_subdirectory(libraries/psiber)
-
-add_subdirectory(libraries/wasi)
 
 option(PSISERVE_ENABLE "Build psiserve library and CLI" OFF)
 if(PSISERVE_ENABLE AND NOT PSISERVE_WASI)
