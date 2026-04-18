@@ -5000,12 +5000,40 @@ namespace psizam::detail {
       // Multi-value multipop: copy result_count values from top of stack
       // past (depth_change - result_count) garbage slots, then adjust SP
       // Each value occupies 16 bytes on the aarch64 JIT stack
+    public:
+      // Parser hook — called right before a multi-value branch so the
+      // multipop path can honor v128 slot sizes. Copied into a fixed buffer
+      // because the parser's source vector goes out of scope after the emit.
+      // Must be public so the parser's requires-clause detects it.
+      void set_pending_result_types(const uint8_t* types, uint32_t count) {
+         _pending_result_count = count;
+         uint32_t n = count > 16 ? 16 : count;
+         for (uint32_t i = 0; i < n; ++i) _pending_result_types[i] = types[i];
+      }
+
+    private:
       void emit_multipop_multivalue(uint32_t depth_change, uint32_t result_count) {
-         uint32_t gap = depth_change - result_count;
+         // depth_change counts v128 as 2 native 16-byte slots. result_count is
+         // wasm value count (v128 counted once). To compute the gap correctly
+         // we need native slot counts on both sides, so derive the result's
+         // native-slot footprint from the pending result types. Without this,
+         // a v128 in the result set leaves the gap miscounted (too large by
+         // 16 bytes per v128), which on return_call of a multi-value function
+         // slides results over onto garbage and reads garbage back at the
+         // epilogue.
+         uint32_t result_native_slots = result_count;
+         if (_pending_result_count == result_count) {
+            result_native_slots = 0;
+            for (uint32_t i = 0; i < result_count; ++i) {
+               result_native_slots += (_pending_result_types[i] == types::v128) ? 2u : 1u;
+            }
+         }
+         uint32_t gap = depth_change - result_native_slots;
          if (gap == 0) return;
-         // Copy in reverse order (deepest result first) to avoid overwriting
-         // source slots that haven't been read yet.
-         for (uint32_t i = result_count; i > 0; i--) {
+         // Copy in reverse order (deepest result slot first) to avoid
+         // overwriting source slots that haven't been read yet. We copy
+         // per-16-byte-slot, so v128's two halves get moved independently.
+         for (uint32_t i = result_native_slots; i > 0; i--) {
             uint32_t src_offset = (i - 1) * 16;
             uint32_t dst_offset = (i - 1 + gap) * 16;
             // LDR X0, [SP, #src_offset]
@@ -5552,6 +5580,12 @@ namespace psizam::detail {
       void* stack_overflow_handler = nullptr;
       void* memory_handler = nullptr;
       uint64_t _local_count = 0;
+
+      // Result types stashed by the parser before a multi-value branch so
+      // emit_multipop_multivalue can size v128 slots correctly (v128 = 2
+      // native 16-byte slots on the operand stack).
+      uint8_t _pending_result_types[16] = {};
+      uint32_t _pending_result_count = 0;
 
       std::uint32_t stack_usage = 0;
       void* stack_limit_entry = nullptr;
