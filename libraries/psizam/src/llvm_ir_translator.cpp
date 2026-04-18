@@ -751,9 +751,17 @@ namespace psizam::detail {
          }
          for (uint32_t i = 0; i < func.inst_count; i++) {
             const auto& inst = func.insts[i];
+            // Skip ops that repurpose inst.dest as a non-vreg integer payload
+            // (depth-change for br/br_if, result_count for multi-value return_,
+            // simd_sub enum for v128_op, etc.). If we don't skip them, a numeric
+            // collision with a real vreg index wrongly imprints the op's
+            // inst.type onto an unrelated vreg (observed: br with rt=f32 and
+            // dc=9 typing v9 as f32, triggering `trunc float to i32` verify
+            // failures downstream).
             if (inst.dest != ir_vreg_none && inst.dest < func.next_vreg &&
                 inst.opcode != ir_op::block_start && inst.opcode != ir_op::block_end &&
-                inst.opcode != ir_op::br_table) {
+                inst.opcode != ir_op::br_table && inst.opcode != ir_op::br &&
+                inst.opcode != ir_op::br_if && inst.opcode != ir_op::return_) {
                if (inst.type != types::pseudo && inst.type != types::ret_void &&
                    inst.type != types::v128 && vreg_types[inst.dest] == 0) {
                   vreg_types[inst.dest] = inst.type;
