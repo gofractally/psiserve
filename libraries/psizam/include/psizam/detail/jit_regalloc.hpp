@@ -316,28 +316,25 @@ namespace psizam::detail {
             }
          }
 
-         // Mark intervals that cross any eh_setjmp instruction as force-spill.
-         // See ir_live_interval::crosses_setjmp for rationale.
-         bool has_setjmp = false;
+         // Force-spill all vregs in functions that contain any ir_op::eh_setjmp.
+         // See ir_live_interval::crosses_setjmp. A narrower criterion (only
+         // intervals strictly spanning the setjmp) is insufficient: vregs
+         // defined after a setjmp can still be read from the catch handler
+         // via the longjmp edge, which regalloc's linear scan doesn't model —
+         // at catch entry, callee-saved regs hold setjmp-time values and
+         // caller-saved regs are undefined. Forcing every vreg to memory
+         // makes every use reload from its spill slot, sidestepping the
+         // register-state mismatch entirely. Performance cost: EH-using
+         // functions run with memory-backed data flow, comparable to the
+         // previous 'skip regalloc for EH' workaround but via the regalloc
+         // path (so fusion, multi-value dispatch, etc. stay correct).
          for (uint32_t i = 0; i < func.inst_count; ++i) {
-            if (func.insts[i].opcode == ir_op::eh_setjmp) { has_setjmp = true; break; }
-         }
-         if (has_setjmp) {
-            for (uint32_t i = 0; i < func.inst_count; ++i) {
-               if (func.insts[i].opcode != ir_op::eh_setjmp) continue;
-               uint32_t pos = i;
-               for (uint32_t v = 0; v < num_vregs; ++v) {
-                  auto& iv = func.intervals[v];
-                  if (iv.start == UINT32_MAX) continue;
-                  // An interval "crosses" setjmp if the setjmp is strictly
-                  // inside it (not just at one endpoint). start == pos means
-                  // this interval's own definition is the setjmp itself
-                  // (the sjresult vreg) — that one is safe, don't force-spill.
-                  if (iv.start < pos && pos < iv.end) {
-                     iv.crosses_setjmp = 1;
-                  }
-               }
+            if (func.insts[i].opcode != ir_op::eh_setjmp) continue;
+            for (uint32_t v = 0; v < num_vregs; ++v) {
+               if (func.intervals[v].start != UINT32_MAX)
+                  func.intervals[v].crosses_setjmp = 1;
             }
+            break;
          }
       }
 
