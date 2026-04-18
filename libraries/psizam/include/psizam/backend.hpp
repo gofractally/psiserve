@@ -154,6 +154,10 @@ namespace psizam {
       using parser = detail::binary_parser<detail::machine_code_writer, Options, DebugInfo>;
       static constexpr bool is_jit = true;
       static constexpr bool enable_backtrace = false;
+      // native JIT pushes wasm args in WASM stack order — which means the
+      // deepest arg is at the higher address and args[0] is the LAST param.
+      // The host-call trampoline must read reverse-order args.
+      static constexpr bool reverse_host_args = true;
    };
 
    struct jit_profile {
@@ -162,6 +166,7 @@ namespace psizam {
       using parser = detail::binary_parser<detail::machine_code_writer, Options, DebugInfo>;
       static constexpr bool is_jit = true;
       static constexpr bool enable_backtrace = true;
+      static constexpr bool reverse_host_args = true;
    };
 
 #endif
@@ -173,6 +178,7 @@ namespace psizam {
       using parser = detail::binary_parser<detail::ir_writer, Options, DebugInfo>;
       static constexpr bool is_jit = true;
       static constexpr bool enable_backtrace = false;
+      static constexpr bool reverse_host_args = true;
    };
 #endif
 
@@ -183,6 +189,9 @@ namespace psizam {
       using parser = detail::binary_parser<detail::ir_writer_llvm, Options, DebugInfo>;
       static constexpr bool is_jit = true;
       static constexpr bool enable_backtrace = false;
+      // LLVM emits normal C-ABI-style calls to __psizam_call_host with args
+      // in WASM parameter order (forward). The trampoline must match.
+      static constexpr bool reverse_host_args = false;
    };
 #endif
 
@@ -357,14 +366,22 @@ namespace psizam {
                   PSIZAM_ASSERT(false, wasm_link_exception, "unresolved imported function");
                   return native_value{uint64_t{0}};
                };
+            // Backends that push wasm args onto the native stack and pass it
+            // straight to the trampoline (jit, jit2) want reverse-order
+            // trampolines; backends that marshal args into a buffer in WASM
+            // parameter order (jit_llvm) want forward ones. Pick at compile
+            // time based on Impl::reverse_host_args.
+            constexpr bool want_rev = requires { Impl::reverse_host_args; } && Impl::reverse_host_args;
             for (uint32_t i = 0; i < num_imports; i++) {
                uint32_t mapped = mod->import_functions[i];
                if (mapped < _host_table.size()) {
                   auto& entry = _host_table.get_entry(mapped);
                   _direct_ptrs[i] = entry.raw_func_ptr;
-                  // Prefer reverse-order trampoline for JIT (zero-copy stack pass).
-                  // Fall back to forward-order trampoline for functions with custom type converters.
-                  _trampoline_ptrs[i] = entry.rev_trampoline ? entry.rev_trampoline : entry.trampoline;
+                  if constexpr (want_rev) {
+                     _trampoline_ptrs[i] = entry.rev_trampoline ? entry.rev_trampoline : entry.trampoline;
+                  } else {
+                     _trampoline_ptrs[i] = entry.trampoline ? entry.trampoline : entry.rev_trampoline;
+                  }
                } else {
                   _trampoline_ptrs[i] = unresolved_trampoline;
                }
