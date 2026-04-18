@@ -489,3 +489,114 @@ condition is evaluated wrong, or the `br_if` direction is reversed in
 the JIT. Trace `global.get`/`global.set` and `i32.eqz`/`br_if` codegen
 in regalloc-mode for functions with `eh_data_count > 0` and large
 operand stacks.
+
+### jit2 ctx pointer corrupted after throw+catch into helper calls
+
+**Status:** open — 3 reproducers in saved fuzz corpus.
+
+**Reproducers.**
+`/tmp/fuzz/mismatch_308_seed100.wasm`,
+`mismatch_6998_seed1776497367.wasm`,
+`mismatch_9677_seed1776497367.wasm`.
+All three: interpreter, jit1, and jit_llvm emit `interp_trap
+(unreachable)` cleanly; jit2 returns `memory_trap`.
+
+**Symptom.** gdb at the point of the fault:
+`drop_elem (this=0x7fffffffcd18, x=0)`, with `this` being a stack
+address rather than the heap-allocated `jit_execution_context*`. The
+crash is a SIGSEGV inside `_Bit_reference::operator=` when the
+vector<bool> access dereferences a data pointer that was never
+populated by reset(). Upstream in the stack, `rdi` (the JIT's
+ctx-pointer convention register) is a stack address at the call site
+of `elem_drop_impl`.
+
+**Investigation.** The commit `5c8d694` fix closed one `rdi`-
+corruption path: `eh_setjmp` used to save `rdi`/`rsi`/pre-align-`rsp`
+on top of the native stack and `__psizam_eh_throw`'s
+`push rbp; push rbx; sub $0xd8, %rsp` prologue would land on those
+saved slots, so on longjmp the `pop rsp` read rbx's value. After the
+fix those saves live in rbp-relative frame slots. But there is
+evidently at least one more path through the catch-dispatch sequence
+that lets a different caller-saved value end up in `rdi` before the
+next helper call. All three reproducers have many `elem.drop 0` and
+`throw 0` calls interspersed with deep `try_table` nesting.
+
+**Workaround already landed.** `drop_elem` now throws
+`wasm_interpreter_exception("elem segment index out of range")`
+instead of asserting (commit `7565fa1`), so a corrupted ctx doesn't
+auto-silence the bug in release builds — but this still reports a
+memory trap outcome.
+
+### interpreter=ok vs all-JITs trap (`unreachable`)
+
+**Status:** open — 1 reproducer.
+
+`/tmp/fuzz/mismatch_17201_seed1776497367.wasm` (1096 B): interpreter
+returns `ok`; jit, jit2, and jit_llvm all report
+`interp_trap (unreachable)`. Since the three JITs AGREE and only the
+interpreter disagrees, this is most likely an interpreter bug (or a
+wasm-gen bug producing a module that falls into UB by spec). Not
+critical — matching behaviour across JITs means no
+backend-consistency issue. Worth tracing if someone is already in
+`interpret_visitor` for something else.
+
+### interp/jit/jit2 timeout vs jit_llvm trap
+
+**Status:** open — 2 reproducers.
+
+`/tmp/fuzz/mismatch_18536_seed1776497367.wasm`,
+`/tmp/fuzz/mismatch_2190_seed1776492783.wasm`: interpreter, jit1, and
+jit2 all time out on the fuzz watchdog; jit_llvm reports
+`interp_trap (unreachable)`. jit_llvm's constant folding likely
+resolves the loop-exit condition and hits `unreachable` directly,
+while the others run the counter out. Not a correctness divergence
+per se (all eventually would trap), but the fuzzer flags it.
+
+### select validation: mismatched numeric types
+
+**Status:** open — `spec/select_tests.cpp:318`
+(select_7_wasm).
+
+The testsuite's `select.7.wasm` has an untyped `select` with an
+`i32` on top of an `f64`. The parser rejects with
+`"incorrect types for select"`; the test expects validation to
+succeed. Need to double-check the current spec: untyped `select`
+probably requires both operands to be the same numeric type, and the
+test expectation is stale. If the parser is too strict on some legal
+combination, fix there instead.
+
+### unit_tests heap corruption running full suite
+
+**Status:** pre-existing, not an engine bug.
+
+`./bin/unit_tests` (running every test) aborts near the end with
+`corrupted double-linked list` / `corrupted size vs. prev_size` /
+`malloc(): unaligned tcache chunk detected`. Individual test-case
+groups all pass clean when run in isolation. Catch2 v2.7.2 (the
+version shipped under `external/Catch2/`) has known fixture-cleanup
+ordering issues; the crash reproduces independent of the JIT code
+path. Upgrading Catch2 is the likely fix.
+
+### ~150 spec_test "wasm file not found" failures
+
+**Status:** needs wabt upgrade.
+
+Local `wast2json` doesn't recognize `--enable-custom-page-sizes` or
+`--enable-wide-arithmetic`, so those .wast files fail to generate
+their .wasm outputs. The build now tolerates this (commit `47eee1c`)
+instead of cascading through the whole spec-test build, but the
+downstream test cases reference `.wasm` filenames that were never
+produced, hence the "file not found" runtime failures. Install a
+newer `wabt` (>= the one supporting those features) to clear these.
+
+### ~150 spec_test multi-module import failures
+
+**Status:** open — requires multi-module linking support.
+
+`table_copy_*`, `table_init_*`, `elem_18..21`, `elem_59`, `elem_60`,
+`elem_68`, `data_25`, `data_26`: all fail at runtime with
+`"wasm file not found"` / `"cannot execute function, function not
+found"` / `"function index out of range"` because these tests import
+functions or shared tables/memories from a second module that
+psiserve's harness doesn't set up. Multi-module linking is
+Layer-4-ish work per `plans/master-plan.md`.
