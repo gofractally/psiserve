@@ -59,7 +59,8 @@ namespace psizam::detail {
          func.intervals = alloc.alloc<ir_live_interval>(num_vregs);
          func.interval_count = num_vregs;
 
-         // Initialize: start = MAX, end = 0
+         // Initialize: start = MAX, end = 0. scratch allocator gives us raw
+         // memory — zero every field to avoid garbage in crosses_setjmp etc.
          for (uint32_t i = 0; i < num_vregs; ++i) {
             func.intervals[i].vreg = i;
             func.intervals[i].start = UINT32_MAX;
@@ -68,6 +69,7 @@ namespace psizam::detail {
             func.intervals[i].phys_xmm = -1;
             func.intervals[i].spill_slot = -1;
             func.intervals[i].type = 0;
+            func.intervals[i].crosses_setjmp = 0;
          }
 
          // Extend the return value vreg's interval to the end of the function.
