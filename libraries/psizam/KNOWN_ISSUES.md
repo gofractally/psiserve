@@ -285,31 +285,52 @@ suggesting an `.eh_frame` or LSDA mismatch for the stub helper.
 functions under the current workaround). Regalloc-mode is not tested for
 this pattern but may or may not be affected.
 
-### jit2 ctx-object vector state corruption (deeply nested try_table)
+### jit2 ctx-object vector state corruption (deeply nested try_table) — FIXED
 
-**Status:** open — ~3 crashes per 15K fuzzed modules.
+**Status:** fixed.
 
-**Reproducers:** fuzz modules `crash_887_seed31337.wasm` (5048 B),
-`crash_601_seed9000.wasm` (3201 B), `crash_1517_seed5678.wasm` (1859 B).
-All interpreter / jit / jit_llvm report `interp_trap (unreachable)`; jit2
-crashes with SIGSEGV or SIGABRT.
+**Symptom was:** crash inside `jit_execution_context::jit_eh_leave()` at
+`_jit_eh_catches.resize(frame.first_catch_idx)` with garbage state, for
+modules with nested `try_table` / `throw` / `catch` constructs. A minimal
+repro is three nested `try_table (catch_all 0)` blocks containing a
+`throw 0`.
 
-**Symptom.** Crash inside `jit_execution_context::jit_eh_leave()` at
-`_jit_eh_catches.resize(frame.first_catch_idx)`, where
-`_jit_eh_stack.size()` is a huge garbage number and the vector's
-internal pointers point at unmapped memory. The ctx object's heap memory
-has been overwritten between valid operation and this crash point.
+**Root cause.** `emit_ir_inst`'s `eh_setjmp` emitted the sequence
 
-All failing modules share a pattern: heavy nesting of `try_table` /
-`throw` / `catch` (20–50+ nested levels), plus either `memory.size` on a
-zero-page memory, deep `call_indirect` chains, or multi-value block
-results. The offending write hasn't been located yet.
+```
+push rdi        ; save ctx
+push rsi        ; save mem
+mov  rax, rdi   ; jmpbuf → arg1
+mov  rsp, rax
+and  rsp, -16
+push rax        ; save pre-align rsp  ← stored at [rsp] = S
+call __psizam_setjmp
+pop  rsp        ; reads [S]
+pop  rsi
+pop  rdi
+```
 
-**Ruled out:** not a regalloc assignment issue (force-spilling every vreg
-in EH functions doesn't help); not a multi-value return buffer overflow
-(modules use 0 or ≤ 5 returns); not native-stack overflow
-(`stack_allocator` with guard pages doesn't trigger).
+`__psizam_setjmp` is a naked tail-jump to glibc `setjmp`, which saves
+`rsp+8` (post-ret) as the jmpbuf's rsp — pointing at the slot just
+written by `push rax`. On longjmp return, `pop rsp` must read that slot.
 
-**Investigation hint:** the ctx's `_jit_eh_stack` field is at offset ~624
-from the ctx base. Set a hardware watchpoint on `(char*)ctx + 624` early
-in execution and re-run to catch the write at its source.
+But `__psizam_eh_throw` is a normal C++ function whose prologue runs
+`push rbp; push rbx; sub $0xd8, rsp`. Called from the JIT at the same
+rsp that was current before the setjmp sequence, its `push rbx` lands
+*exactly* on the slot where the pre-align rsp was saved — overwriting it
+with caller-preserved rbx. On longjmp, `pop rsp` then loads rbx's value
+into rsp, and the subsequent `pop rsi` / `pop rdi` read from random
+stack addresses. The observed symptom was `rdi = ctx + 0x170`, which
+corresponds to `&ctx->_dropped_elems` — a coincidence of whatever
+garbage the corrupted rsp happened to land on.
+
+**Fix.** Reserve three rbp-relative frame slots (at the bottom of the
+function's local frame, below the spill slots and callee-saved saves),
+allocated only when `func.eh_data_count > 0`. `eh_setjmp` now saves
+rdi/rsi/pre-align-rsp to those slots and reloads from them after the
+call, replacing the push/pop dance. Frame-relative slots are above any
+rsp the helper calls can reach, so they survive the throw path intact.
+
+jit1 was unaffected — it preserves ctx in callee-saved `r12` across the
+setjmp/longjmp and doesn't touch the stack slot at all. jit_llvm uses
+LLVM's own invoke/landingpad mechanism and is also unaffected.

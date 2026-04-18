@@ -554,8 +554,17 @@ namespace psizam::detail {
          _callee_saved_used = func.callee_saved_used;
          _callee_saved_count = __builtin_popcount(_callee_saved_used);
 
-         // Allocate and zero-initialize: body locals + spill slots + callee-saved saves
-         uint32_t total_slots = body_local_slots + _num_spill_slots + _callee_saved_count;
+         // Reserve 3 slots at the bottom of the frame for eh_setjmp save/restore
+         // of rdi (ctx), rsi (mem), and rsp (pre-align). Using stack-top
+         // (push rax) for these would be unsafe: on longjmp from a nested
+         // __psizam_eh_throw, the throw's prologue (push rbp, push rbx, sub $0xd8)
+         // overwrites the slot setjmp saved rsp points to, corrupting the
+         // restored rsp and everything that flows from it. Frame-relative
+         // slots are above the lowest rsp we'll ever reach, so they're safe.
+         _eh_save_slots = (func.eh_data_count > 0) ? 3 : 0;
+
+         // Allocate and zero-initialize: body locals + spill slots + callee-saved + EH saves
+         uint32_t total_slots = body_local_slots + _num_spill_slots + _callee_saved_count + _eh_save_slots;
          if (total_slots > 0) {
             this->emit_xor(eax, eax);
             for (uint32_t i = 0; i < total_slots; ++i) {
@@ -573,6 +582,16 @@ namespace psizam::detail {
             if (_callee_saved_used & 16) { this->emit_mov(r15, *(rbp + save_offset)); save_offset -= 8; }
          }
       }
+
+      // EH save-slot offsets from rbp. Valid only when _eh_save_slots > 0.
+      // Slot 0: saved rdi (ctx). Slot 1: saved rsi (mem). Slot 2: saved pre-align rsp.
+      int32_t eh_save_slot_offset(uint32_t slot) const {
+         return -static_cast<int32_t>(
+            (_body_locals + _num_spill_slots + _callee_saved_count + slot + 1) * 8);
+      }
+      int32_t eh_ctx_save_offset() const { return eh_save_slot_offset(0); }
+      int32_t eh_mem_save_offset() const { return eh_save_slot_offset(1); }
+      int32_t eh_rsp_save_offset() const { return eh_save_slot_offset(2); }
 
       // ──────── IR instruction emission (naive: everything via stack) ────────
       // For Phase 3, this emits the same push/pop stack-machine code as the
@@ -1885,19 +1904,21 @@ namespace psizam::detail {
             break;
          }
          case ir_op::eh_setjmp: {
+            // Save rdi/rsi/rsp to frame slots (NOT on the top of stack) so that
+            // throw's prologue pushes inside __psizam_eh_throw cannot corrupt
+            // them between setjmp and longjmp. See comment on _eh_save_slots.
             this->emit_pop_raw(rax); // jmpbuf ptr
-            this->emit_push_raw(rdi);
-            this->emit_push_raw(rsi);
+            this->emit_mov(rdi, *(rbp + eh_ctx_save_offset()));
+            this->emit_mov(rsi, *(rbp + eh_mem_save_offset()));
             this->emit_mov(rax, rdi); // jmpbuf → arg1
-            this->emit_mov(rsp, rax);
+            this->emit_mov(rsp, *(rbp + eh_rsp_save_offset()));
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
-            this->emit_push_raw(rax);
             this->emit_bytes(0x48, 0xb8);
             this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_setjmp));
             this->emit_bytes(0xff, 0xd0); // call *%rax
-            this->emit_pop_raw(rsp);
-            this->emit_pop_raw(rsi);
-            this->emit_pop_raw(rdi);
+            this->emit_mov(*(rbp + eh_rsp_save_offset()), rsp);
+            this->emit_mov(*(rbp + eh_mem_save_offset()), rsi);
+            this->emit_mov(*(rbp + eh_ctx_save_offset()), rdi);
             this->emit_push_raw(rax); // push result (0 or non-zero)
             break;
          }
@@ -3548,19 +3569,22 @@ namespace psizam::detail {
             return true;
          }
          case ir_op::eh_setjmp: {
+            // Save rdi/rsi/rsp to frame slots (not stack top). See comment on
+            // _eh_save_slots — push-based save is unsafe because throw's
+            // prologue inside __psizam_eh_throw overwrites the saved rsp slot
+            // that setjmp's pop rsp would read from on longjmp return.
             load_vreg_rax(inst.rr.src1); // jmpbuf ptr
-            this->emit_push_raw(rdi);
-            this->emit_push_raw(rsi);
+            this->emit_mov(rdi, *(rbp + eh_ctx_save_offset()));
+            this->emit_mov(rsi, *(rbp + eh_mem_save_offset()));
             this->emit_mov(rax, rdi);
-            this->emit_mov(rsp, rax);
+            this->emit_mov(rsp, *(rbp + eh_rsp_save_offset()));
             this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
-            this->emit_push_raw(rax);
             this->emit_bytes(0x48, 0xb8);
             this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_setjmp));
             this->emit_bytes(0xff, 0xd0);
-            this->emit_pop_raw(rsp);
-            this->emit_pop_raw(rsi);
-            this->emit_pop_raw(rdi);
+            this->emit_mov(*(rbp + eh_rsp_save_offset()), rsp);
+            this->emit_mov(*(rbp + eh_mem_save_offset()), rsi);
+            this->emit_mov(*(rbp + eh_ctx_save_offset()), rdi);
             store_rax_vreg(inst.dest);
             return true;
          }
@@ -7115,6 +7139,11 @@ namespace psizam::detail {
       bool _use_regalloc = false;
       uint32_t _callee_saved_used = 0;
       uint32_t _callee_saved_count = 0;
+      // EH save slots for eh_setjmp. Reserved at bottom of frame so that
+      // throw's prologue pushes (push rbp, push rbx, sub $N) can't overwrite
+      // the setjmp-saved rsp slot — which is the bug the old push-rax pattern
+      // suffered from. Non-zero only when the function contains try_table.
+      uint32_t _eh_save_slots = 0;
       // SSA info from optimizer (for const-operand fusion)
       uint32_t* _func_def_inst = nullptr;
       uint16_t* _func_use_count = nullptr;
