@@ -55,6 +55,8 @@ add_subdirectory(libraries/psizam)
 
 add_subdirectory(libraries/psiber)
 
+add_subdirectory(libraries/wasi)
+
 option(PSISERVE_ENABLE "Build psiserve library and CLI" OFF)
 if(PSISERVE_ENABLE AND NOT PSISERVE_WASI)
    add_subdirectory(libraries/psiserve)

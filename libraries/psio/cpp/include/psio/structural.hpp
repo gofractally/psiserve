@@ -230,12 +230,32 @@ struct package_of
       using type = TAG;                                              \
    };
 
-#define PSIO_INTERFACE(NAME, TYPES_SPEC, FUNCS_SPEC)                               \
-   PSIO_INTERFACE_I(NAME,                                                          \
-                    BOOST_PP_VARIADIC_TO_SEQ(PSIO_IFACE_UNWRAP_TYPES(TYPES_SPEC)), \
-                    BOOST_PP_VARIADIC_TO_SEQ(PSIO_IFACE_UNWRAP_FUNCS(FUNCS_SPEC)))
+// Interfaces can legitimately list zero records — a WASI-style
+// interface made up purely of functions (`types()`) is common. We
+// dispatch on emptiness of the raw unwrapped types() variadic BEFORE
+// converting to a seq, because `BOOST_PP_VARIADIC_TO_SEQ()` of empty
+// variadics produces a one-empty-element seq that CHECK_EMPTY does
+// not recognize as empty.
 
-#define PSIO_INTERFACE_I(NAME, TYPES_SEQ, FUNCS_SEQ)                                 \
+#define PSIO_INTERFACE(NAME, TYPES_SPEC, FUNCS_SPEC)                     \
+   BOOST_PP_IIF(BOOST_PP_CHECK_EMPTY(PSIO_IFACE_UNWRAP_TYPES(TYPES_SPEC)), \
+                PSIO_INTERFACE_NO_TYPES,                                 \
+                PSIO_INTERFACE_WITH_TYPES)(NAME, TYPES_SPEC, FUNCS_SPEC)
+
+#define PSIO_INTERFACE_WITH_TYPES(NAME, TYPES_SPEC, FUNCS_SPEC)                     \
+   PSIO_INTERFACE_BODY(NAME,                                                        \
+                       ::std::tuple<PSIO_IFACE_UNWRAP_TYPES(TYPES_SPEC)>,           \
+                       BOOST_PP_VARIADIC_TO_SEQ(PSIO_IFACE_UNWRAP_FUNCS(FUNCS_SPEC))) \
+   BOOST_PP_SEQ_FOR_EACH(PSIO_IFACE_REV_LOOKUP,                                     \
+                         ::psio::detail::BOOST_PP_CAT(NAME, _interface_tag),        \
+                         BOOST_PP_VARIADIC_TO_SEQ(PSIO_IFACE_UNWRAP_TYPES(TYPES_SPEC)))
+
+#define PSIO_INTERFACE_NO_TYPES(NAME, TYPES_SPEC, FUNCS_SPEC) \
+   PSIO_INTERFACE_BODY(NAME,                                  \
+                       ::std::tuple<>,                        \
+                       BOOST_PP_VARIADIC_TO_SEQ(PSIO_IFACE_UNWRAP_FUNCS(FUNCS_SPEC)))
+
+#define PSIO_INTERFACE_BODY(NAME, TYPES_TUPLE, FUNCS_SEQ)                            \
    namespace psio::detail                                                            \
    {                                                                                 \
       struct BOOST_PP_CAT(NAME, _interface_tag)                                      \
@@ -246,7 +266,7 @@ struct package_of
       {                                                                              \
          static constexpr ::psio::FixedString name = #NAME;                          \
          using package                             = ::psio_current_package;         \
-         using types = ::std::tuple<PSIO_SEQ_TO_VA_ARGS(TYPES_SEQ)>;                 \
+         using types                               = TYPES_TUPLE;                    \
          static constexpr auto funcs = ::std::tuple{PSIO_SEQ_TO_VA_ARGS(             \
              BOOST_PP_SEQ_TRANSFORM(PSIO_IFACE_ADDR_OF, _, FUNCS_SEQ))};             \
          static constexpr ::std::array<::std::string_view,                           \
@@ -256,10 +276,7 @@ struct package_of
       };                                                                             \
       inline constexpr interface_marker<BOOST_PP_CAT(NAME, _interface_tag)>          \
           BOOST_PP_CAT(_psio_iface_, NAME){};                                        \
-   }                                                                                 \
-   BOOST_PP_SEQ_FOR_EACH(PSIO_IFACE_REV_LOOKUP,                                      \
-                         ::psio::detail::BOOST_PP_CAT(NAME, _interface_tag),         \
-                         TYPES_SEQ)
+   }
 
 // ── PSIO_USE(package, interface, version) ────────────────────────────────
 //
