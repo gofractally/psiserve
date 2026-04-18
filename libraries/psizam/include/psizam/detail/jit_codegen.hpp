@@ -6981,15 +6981,79 @@ namespace psizam::detail {
       static uint64_t trunc_sat_f64_i64s(uint64_t v) { double f; memcpy(&f, &v, 8); if (f != f) return 0; if (f >= 9223372036854775808.0) return (uint64_t)INT64_MAX; if (f <= -9223372036854775809.0) return (uint64_t)INT64_MIN; return (uint64_t)(int64_t)f; }
       static uint64_t trunc_sat_f64_i64u(uint64_t v) { double f; memcpy(&f, &v, 8); if (f != f) return 0; if (f >= 18446744073709551616.0) return UINT64_MAX; if (f <= -1.0) return 0; return (uint64_t)f; }
 
-      // Trapping float-to-int conversions via softfloat (longjmp on overflow/NaN)
-      static uint64_t trunc_f32_i32s(uint64_t v) { uint64_t r = 0; float f; memcpy(&f, &v, 4); longjmp_on_exception([&](){ r = static_cast<uint32_t>(_psizam_f32_trunc_i32s(f)); }); return r; }
-      static uint64_t trunc_f32_i32u(uint64_t v) { uint64_t r = 0; float f; memcpy(&f, &v, 4); longjmp_on_exception([&](){ r = _psizam_f32_trunc_i32u(f); }); return r; }
-      static uint64_t trunc_f64_i32s(uint64_t v) { uint64_t r = 0; double f; memcpy(&f, &v, 8); longjmp_on_exception([&](){ r = static_cast<uint32_t>(_psizam_f64_trunc_i32s<true>(f)); }); return r; }
-      static uint64_t trunc_f64_i32u(uint64_t v) { uint64_t r = 0; double f; memcpy(&f, &v, 8); longjmp_on_exception([&](){ r = _psizam_f64_trunc_i32u(f); }); return r; }
-      static uint64_t trunc_f32_i64s(uint64_t v) { uint64_t r = 0; float f; memcpy(&f, &v, 4); longjmp_on_exception([&](){ r = static_cast<uint64_t>(_psizam_f32_trunc_i64s(f)); }); return r; }
-      static uint64_t trunc_f32_i64u(uint64_t v) { uint64_t r = 0; float f; memcpy(&f, &v, 4); longjmp_on_exception([&](){ r = static_cast<uint64_t>(_psizam_f32_trunc_i64u(f)); }); return r; }
-      static uint64_t trunc_f64_i64s(uint64_t v) { uint64_t r = 0; double f; memcpy(&f, &v, 8); longjmp_on_exception([&](){ r = static_cast<uint64_t>(_psizam_f64_trunc_i64s(f)); }); return r; }
-      static uint64_t trunc_f64_i64u(uint64_t v) { uint64_t r = 0; double f; memcpy(&f, &v, 8); longjmp_on_exception([&](){ r = static_cast<uint64_t>(_psizam_f64_trunc_i64u(f)); }); return r; }
+      // Trapping float-to-int conversions. Use signal_throw (longjmp-based)
+      // for the NaN/overflow traps instead of the underlying softfloat
+      // helper's PSIZAM_ASSERT (throw-based). The throw path requires C++
+      // exception unwinding through the JIT's host-call frame (emit_c_call),
+      // which has no .eh_frame data in jit2's generated code — fuzz testing
+      // shows this path faults in libgcc's _Unwind_RaiseException
+      // (misaligned movaps during its own frame setup). signal_throw
+      // sidesteps unwinding entirely by longjmping straight to trap_jmp_ptr.
+      static uint64_t trunc_f32_i32s(uint64_t v) {
+         float f; memcpy(&f, &v, 4);
+         if (is_nan(to_softfloat32(f)))
+            signal_throw<wasm_interpreter_exception>("Error, f32.convert_s/i32 unrepresentable");
+         if (_psizam_f32_ge(f, 2147483648.0f) || _psizam_f32_lt(f, -2147483648.0f))
+            signal_throw<wasm_interpreter_exception>("Error, f32.convert_s/i32 overflow");
+         return static_cast<uint32_t>(f32_to_i32(to_softfloat32(_psizam_f32_trunc<false>(f)), 0, false));
+      }
+      static uint64_t trunc_f32_i32u(uint64_t v) {
+         float f; memcpy(&f, &v, 4);
+         if (is_nan(to_softfloat32(f)))
+            signal_throw<wasm_interpreter_exception>("Error, f32.convert_u/i32 unrepresentable");
+         if (_psizam_f32_ge(f, 4294967296.0f) || _psizam_f32_le(f, -1.0f))
+            signal_throw<wasm_interpreter_exception>("Error, f32.convert_u/i32 overflow");
+         return f32_to_ui32(to_softfloat32(_psizam_f32_trunc<false>(f)), 0, false);
+      }
+      static uint64_t trunc_f64_i32s(uint64_t v) {
+         double f; memcpy(&f, &v, 8);
+         if (is_nan(to_softfloat64(f)))
+            signal_throw<wasm_interpreter_exception>("Error, f64.convert_s/i32 unrepresentable");
+         // FixedBound variant: matches _psizam_f64_trunc_i32s<true>
+         if (_psizam_f64_ge(f, 2147483648.0) || _psizam_f64_le(f, -2147483649.0))
+            signal_throw<wasm_interpreter_exception>("Error, f64.convert_s/i32 overflow");
+         return static_cast<uint32_t>(f64_to_i32(to_softfloat64(_psizam_f64_trunc<false>(f)), 0, false));
+      }
+      static uint64_t trunc_f64_i32u(uint64_t v) {
+         double f; memcpy(&f, &v, 8);
+         if (is_nan(to_softfloat64(f)))
+            signal_throw<wasm_interpreter_exception>("Error, f64.convert_u/i32 unrepresentable");
+         if (_psizam_f64_ge(f, 4294967296.0) || _psizam_f64_le(f, -1.0))
+            signal_throw<wasm_interpreter_exception>("Error, f64.convert_u/i32 overflow");
+         return f64_to_ui32(to_softfloat64(_psizam_f64_trunc<false>(f)), 0, false);
+      }
+      static uint64_t trunc_f32_i64s(uint64_t v) {
+         float f; memcpy(&f, &v, 4);
+         if (is_nan(to_softfloat32(f)))
+            signal_throw<wasm_interpreter_exception>("Error, f32.convert_s/i64 unrepresentable");
+         if (_psizam_f32_ge(f, 9223372036854775808.0f) || _psizam_f32_lt(f, -9223372036854775808.0f))
+            signal_throw<wasm_interpreter_exception>("Error, f32.convert_s/i64 overflow");
+         return static_cast<uint64_t>(f32_to_i64(to_softfloat32(_psizam_f32_trunc<false>(f)), 0, false));
+      }
+      static uint64_t trunc_f32_i64u(uint64_t v) {
+         float f; memcpy(&f, &v, 4);
+         if (is_nan(to_softfloat32(f)))
+            signal_throw<wasm_interpreter_exception>("Error, f32.convert_u/i64 unrepresentable");
+         if (_psizam_f32_ge(f, 18446744073709551616.0f) || _psizam_f32_le(f, -1.0f))
+            signal_throw<wasm_interpreter_exception>("Error, f32.convert_u/i64 overflow");
+         return f32_to_ui64(to_softfloat32(_psizam_f32_trunc<false>(f)), 0, false);
+      }
+      static uint64_t trunc_f64_i64s(uint64_t v) {
+         double f; memcpy(&f, &v, 8);
+         if (is_nan(to_softfloat64(f)))
+            signal_throw<wasm_interpreter_exception>("Error, f64.convert_s/i64 unrepresentable");
+         if (_psizam_f64_ge(f, 9223372036854775808.0) || _psizam_f64_lt(f, -9223372036854775808.0))
+            signal_throw<wasm_interpreter_exception>("Error, f64.convert_s/i64 overflow");
+         return static_cast<uint64_t>(f64_to_i64(to_softfloat64(_psizam_f64_trunc<false>(f)), 0, false));
+      }
+      static uint64_t trunc_f64_i64u(uint64_t v) {
+         double f; memcpy(&f, &v, 8);
+         if (is_nan(to_softfloat64(f)))
+            signal_throw<wasm_interpreter_exception>("Error, f64.convert_u/i64 unrepresentable");
+         if (_psizam_f64_ge(f, 18446744073709551616.0) || _psizam_f64_le(f, -1.0))
+            signal_throw<wasm_interpreter_exception>("Error, f64.convert_u/i64 overflow");
+         return f64_to_ui64(to_softfloat64(_psizam_f64_trunc<false>(f)), 0, false);
+      }
       static void on_call_indirect_error() { signal_throw<wasm_interpreter_exception>("call_indirect out of range"); }
       static void on_type_error() { signal_throw<wasm_interpreter_exception>("call_indirect incorrect function type"); }
       static void on_stack_overflow() { signal_throw<wasm_interpreter_exception>("stack overflow"); }
