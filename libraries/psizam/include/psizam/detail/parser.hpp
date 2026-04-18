@@ -1629,6 +1629,11 @@ namespace psizam::detail {
                   // Pop EH frames for any try_table scopes crossed by this branch
                   emit_eh_leaves_for_branch(label);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
+                  if (rc > 1) {
+                     const auto& tgt = pc_stack[pc_stack.size() - label - 1];
+                     set_pending_result_types(tgt.label_results.data(),
+                                              static_cast<uint32_t>(tgt.label_results.size()));
+                  }
                   auto branch = code_writer.emit_br(depth_change, rt, label, rc);
                   handle_branch_target(label, branch);
                   op_stack.start_unreachable();
@@ -1639,6 +1644,11 @@ namespace psizam::detail {
                   op_stack.pop(types::i32);
                   uint32_t eh_count = count_eh_leaves_for_branch(label);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
+                  if (rc > 1) {
+                     const auto& tgt = pc_stack[pc_stack.size() - label - 1];
+                     set_pending_result_types(tgt.label_results.data(),
+                                              static_cast<uint32_t>(tgt.label_results.size()));
+                  }
                   auto branch = code_writer.emit_br_if(depth_change, rt, label, rc, eh_count);
                   handle_branch_target(label, branch);
                } break;
@@ -1653,6 +1663,11 @@ namespace psizam::detail {
                      uint32_t label = parse_varuint32(code);
                      uint32_t eh_count = count_eh_leaves_for_branch(label);
                      auto [depth_change,rt,rc] = compute_depth_change(label);
+                     if (rc > 1) {
+                        const auto& tgt = pc_stack[pc_stack.size() - label - 1];
+                        set_pending_result_types(tgt.label_results.data(),
+                                                 static_cast<uint32_t>(tgt.label_results.size()));
+                     }
                      auto branch = handler.emit_case(depth_change, rt, label, rc, eh_count);
                      handle_branch_target(label, branch);
                      uint8_t one_result = pc_stack[pc_stack.size() - label - 1].label_result;
@@ -1665,6 +1680,11 @@ namespace psizam::detail {
                   uint32_t label = parse_varuint32(code);
                   uint32_t eh_count = count_eh_leaves_for_branch(label);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
+                  if (rc > 1) {
+                     const auto& tgt = pc_stack[pc_stack.size() - label - 1];
+                     set_pending_result_types(tgt.label_results.data(),
+                                              static_cast<uint32_t>(tgt.label_results.size()));
+                  }
                   auto branch = handler.emit_default(depth_change, rt, label, rc, eh_count);
                   handle_branch_target(label, branch);
                   PSIZAM_ASSERT(table_size == 0 || result_type == pc_stack[pc_stack.size() - label - 1].label_result,
