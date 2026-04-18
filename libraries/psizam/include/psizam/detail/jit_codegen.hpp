@@ -1928,7 +1928,19 @@ namespace psizam::detail {
             this->emit_mov(rsi, *(rbp + eh_mem_save_offset()));
             this->emit_mov(rax, rdi); // jmpbuf → arg1
             this->emit_mov(rsp, *(rbp + eh_rsp_save_offset()));
-            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0); // andq $-16, %rsp
+            // Force rsp to a 16-byte aligned slot BELOW all eh save slots
+            // before the setjmp call. Using `and $-16, %rsp` alone doesn't
+            // guarantee this: when body regalloc raises rsp to a position
+            // inside the save-slot range (observed in jit2 fuzz modules
+            // with nested try_tables), the aligned rsp can land exactly on
+            // a save slot, and `call` writes the return address ONTO the
+            // mem-save slot — longjmp then restores rsi to that return
+            // address, and the next `[rsi-0x1008]` global access segfaults.
+            {
+               uint32_t abs_off = static_cast<uint32_t>(-eh_rsp_save_offset()) + 16u;
+               abs_off = (abs_off + 15u) & ~15u;
+               this->emit(LEA, *(rbp - static_cast<int32_t>(abs_off)), rsp);
+            }
             this->emit_bytes(0x48, 0xb8);
             this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_setjmp));
             this->emit_bytes(0xff, 0xd0); // call *%rax
@@ -3594,7 +3606,15 @@ namespace psizam::detail {
             this->emit_mov(rsi, *(rbp + eh_mem_save_offset()));
             this->emit_mov(rax, rdi);
             this->emit_mov(rsp, *(rbp + eh_rsp_save_offset()));
-            this->emit_bytes(0x48, 0x83, 0xe4, 0xf0);
+            // Force rsp to a 16-byte aligned slot BELOW all eh save slots
+            // (see jit1 eh_setjmp for full explanation — `and $-16, %rsp`
+            // alone can leave rsp inside the save-slot range and let `call`
+            // clobber a save slot with its return address).
+            {
+               uint32_t abs_off = static_cast<uint32_t>(-eh_rsp_save_offset()) + 16u;
+               abs_off = (abs_off + 15u) & ~15u;
+               this->emit(LEA, *(rbp - static_cast<int32_t>(abs_off)), rsp);
+            }
             this->emit_bytes(0x48, 0xb8);
             this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_setjmp));
             this->emit_bytes(0xff, 0xd0);
