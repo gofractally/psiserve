@@ -310,6 +310,9 @@ private:
       using info = ::psio::detail::interface_info<InterfaceTag>;
       using func_types = typename info::func_types;
       using FnPtr = std::tuple_element_t<I, func_types>;
+      using Traits = detail::bridge_fn_traits<FnPtr>;
+      using Ret = typename Traits::ReturnType;
+      using ArgTypes = typename Traits::ArgTypes;
 
       std::string iface_name{info::name};
       std::string fn_name{info::func_names[I]};
@@ -320,17 +323,55 @@ private:
       e.signature.params.assign(16, types::i64);
       e.signature.ret = {types::i64};
 
-      // Capture provider pointer for the bridge closure
       instance_t* provider_ptr = &provider;
       instance_t* consumer_ptr = &consumer;
 
-      e.slow_dispatch = [provider_ptr, consumer_ptr, fn_name](
-         void* host_void, native_value* args, char* consumer_memory) -> native_value
-      {
-         return bridge_call<FnPtr>(
-            provider_ptr, consumer_ptr,
-            host_void, args, consumer_memory, fn_name);
-      };
+      // Detect scalar-only signatures at compile time.
+      // Scalar bridge: forward args directly — no lift, no lower, no copy.
+      constexpr bool all_args_scalar = []<typename... As>(::psio::TypeList<As...>) {
+         return (detail::is_scalar_wasm_type_v<As> && ...);
+      }(ArgTypes{});
+      constexpr bool ret_scalar = detail::is_scalar_wasm_type_v<Ret> ||
+                                  std::is_void_v<Ret>;
+
+      if constexpr (all_args_scalar && ret_scalar) {
+         // FAST PATH: scalar-only — just forward the 16 args to provider
+         e.slow_dispatch = [provider_ptr, fn_name](
+            void* host_void, native_value* args, char*) -> native_value
+         {
+            char* provider_mem = provider_ptr->be->get_context().linear_memory();
+            auto r = provider_ptr->be->call_with_return(
+               host_void, std::string_view{fn_name},
+               static_cast<uint64_t>(args[0].i64),
+               static_cast<uint64_t>(args[1].i64),
+               static_cast<uint64_t>(args[2].i64),
+               static_cast<uint64_t>(args[3].i64),
+               static_cast<uint64_t>(args[4].i64),
+               static_cast<uint64_t>(args[5].i64),
+               static_cast<uint64_t>(args[6].i64),
+               static_cast<uint64_t>(args[7].i64),
+               static_cast<uint64_t>(args[8].i64),
+               static_cast<uint64_t>(args[9].i64),
+               static_cast<uint64_t>(args[10].i64),
+               static_cast<uint64_t>(args[11].i64),
+               static_cast<uint64_t>(args[12].i64),
+               static_cast<uint64_t>(args[13].i64),
+               static_cast<uint64_t>(args[14].i64),
+               static_cast<uint64_t>(args[15].i64));
+            native_value rv;
+            rv.i64 = r ? r->to_ui64() : 0;
+            return rv;
+         };
+      } else {
+         // CANONICAL PATH: complex types — full lift/lower/copy bridge
+         e.slow_dispatch = [provider_ptr, consumer_ptr, fn_name](
+            void* host_void, native_value* args, char* consumer_memory) -> native_value
+         {
+            return bridge_call<FnPtr>(
+               provider_ptr, consumer_ptr,
+               host_void, args, consumer_memory, fn_name);
+         };
+      }
 
       consumer.table.add_entry(std::move(e));
    }
