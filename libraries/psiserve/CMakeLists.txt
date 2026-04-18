@@ -3,6 +3,7 @@
 add_library(psiserve
    src/host_api.cpp
    src/log.cpp
+   src/module_store.cpp
    src/runtime.cpp
 )
 
