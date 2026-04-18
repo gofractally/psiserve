@@ -343,6 +343,15 @@ namespace psizam {
       std::vector<data_segment>       data;
       std::vector<tag_type>           tags;
 
+      // True if the module's code contains any WASM exception-handling
+      // construct (try_table / throw / throw_ref / rethrow) OR declares any
+      // tag. Set during parsing. Lets hosts / downstream passes decide
+      // up-front whether they can take fast paths that assume no EH (e.g.
+      // jit2's force-spill of all vregs in EH-using functions, or a host
+      // that wants to refuse EH-using modules). Per-function granularity
+      // is still available via ir_function::eh_data_count during IR build.
+      bool                     has_exception_handling = false;
+
       // Custom sections:
       std::optional<name_section> names;
 

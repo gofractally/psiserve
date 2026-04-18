@@ -195,7 +195,18 @@ namespace psizam::detail {
    PARSER_OPTION(enable_bulk_memory, true, bool)
    PARSER_OPTION(enable_sign_ext, true, bool)
    PARSER_OPTION(enable_nontrapping_fptoint, true, bool)
+   // Compile-time hard disable: PSIZAM_DISABLE_EH on the command line forces
+   // enable_exception_handling to false regardless of the Options object, so
+   // the parser is guaranteed to reject every try_table / throw / throw_ref /
+   // rethrow and the backend never has to run any EH-aware codegen path.
+   // Without PSIZAM_DISABLE_EH, behaviour is runtime-configurable via the
+   // Options object (default true).
+#ifdef PSIZAM_DISABLE_EH
+   template<typename Options>
+   constexpr bool get_enable_exception_handling(const Options&) { return false; }
+#else
    PARSER_OPTION(enable_exception_handling, true, bool)
+#endif
    PARSER_OPTION(compile_threads, static_cast<std::uint32_t>(0), std::uint32_t)
 
 #undef MAX_ELEMENTS
@@ -562,6 +573,8 @@ namespace psizam::detail {
                break;
             }
             case external_kind::Tag: {
+               PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
+               _mod->has_exception_handling = true;
                auto type = parse_varuint32(code);
                PSIZAM_ASSERT(type == 0, wasm_parse_exception, "invalid tag attribute");
                uint32_t tag_type_index = parse_varuint32(code);
@@ -1553,6 +1566,7 @@ namespace psizam::detail {
                case opcodes::throw_: {
                   check_in_bounds();
                   PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
+                  _mod->has_exception_handling = true;
                   uint32_t tag_index = parse_varuint32(code);
                   PSIZAM_ASSERT(tag_index < _mod->tags.size(), wasm_parse_exception, "invalid tag index");
                   // Pop the tag's parameter types from the stack
@@ -1564,6 +1578,8 @@ namespace psizam::detail {
                } break;
                case opcodes::rethrow_: {
                   check_in_bounds();
+                  PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
+                  _mod->has_exception_handling = true;
                   uint32_t label = parse_varuint32(code);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
                   code_writer.emit_rethrow(depth_change, rt, label, rc);
@@ -1572,6 +1588,7 @@ namespace psizam::detail {
                case opcodes::throw_ref_: {
                   check_in_bounds();
                   PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
+                  _mod->has_exception_handling = true;
                   op_stack.pop(types::exnref);
                   code_writer.emit_throw_ref();
                   op_stack.start_unreachable();
@@ -1715,6 +1732,7 @@ namespace psizam::detail {
                case opcodes::try_table_: {
                   check_in_bounds();
                   PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
+                  _mod->has_exception_handling = true;
                   // Parse block type (same as block/if/try)
                   uint8_t first_byte = *code;
                   uint8_t single_type = types::pseudo;
@@ -3199,11 +3217,13 @@ namespace psizam::detail {
       inline void parse_section(wasm_code_ptr& code, std::vector<tag_type>& elems) {
          parse_section_impl(code, elems, get_max_section_elements(_options),
                             [&](wasm_code_ptr& code, tag_type& tt, std::size_t /*idx*/) {
+            PSIZAM_ASSERT(get_enable_exception_handling(_options), wasm_parse_exception, "Exception handling not enabled");
             tt.attribute = *code++;
             PSIZAM_ASSERT(tt.attribute == 0, wasm_parse_exception, "invalid tag attribute");
             tt.type_index = parse_varuint32(code);
             PSIZAM_ASSERT(tt.type_index < _mod->types.size(), wasm_parse_exception, "invalid tag type index");
          });
+         if (!elems.empty()) _mod->has_exception_handling = true;
       }
 
       template <size_t N>
