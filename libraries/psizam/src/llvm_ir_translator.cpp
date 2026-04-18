@@ -3131,9 +3131,11 @@ namespace psizam::detail {
                case ir_op::memory_init: {
                   // call_args: [dest, src, count]; inst.ri.imm = segment index
                   if (call_args.size() >= 3) {
+                     auto* dest = convert_type(call_args[0], i32_ty);
+                     auto* src  = convert_type(call_args[1], i32_ty);
+                     auto* n    = convert_type(call_args[2], i32_ty);
                      builder.CreateCall(rt_memory_init,
-                        {ctx_ptr, builder.getInt32(inst.ri.imm),
-                         call_args[0], call_args[1], call_args[2]});
+                        {ctx_ptr, builder.getInt32(inst.ri.imm), dest, src, n});
                   }
                   call_args.clear();
                   break;
@@ -3146,8 +3148,10 @@ namespace psizam::detail {
 
                case ir_op::memory_copy: {
                   if (call_args.size() >= 3) {
-                     builder.CreateCall(rt_memory_copy,
-                        {ctx_ptr, call_args[0], call_args[1], call_args[2]});
+                     auto* dest = convert_type(call_args[0], i32_ty);
+                     auto* src  = convert_type(call_args[1], i32_ty);
+                     auto* n    = convert_type(call_args[2], i32_ty);
+                     builder.CreateCall(rt_memory_copy, {ctx_ptr, dest, src, n});
                   }
                   call_args.clear();
                   break;
@@ -3155,8 +3159,10 @@ namespace psizam::detail {
 
                case ir_op::memory_fill: {
                   if (call_args.size() >= 3) {
-                     builder.CreateCall(rt_memory_fill,
-                        {ctx_ptr, call_args[0], call_args[1], call_args[2]});
+                     auto* dest = convert_type(call_args[0], i32_ty);
+                     auto* val  = convert_type(call_args[1], i32_ty);
+                     auto* n    = convert_type(call_args[2], i32_ty);
+                     builder.CreateCall(rt_memory_fill, {ctx_ptr, dest, val, n});
                   }
                   call_args.clear();
                   break;
@@ -3166,9 +3172,12 @@ namespace psizam::detail {
                   if (call_args.size() >= 3) {
                      uint32_t elem_idx = static_cast<uint32_t>(inst.ri.imm) & 0xFFFF;
                      uint32_t table_idx = static_cast<uint32_t>(inst.ri.imm) >> 16;
+                     auto* dest = convert_type(call_args[0], i32_ty);
+                     auto* src  = convert_type(call_args[1], i32_ty);
+                     auto* n    = convert_type(call_args[2], i32_ty);
                      builder.CreateCall(rt_table_init,
                         {ctx_ptr, builder.getInt32(elem_idx),
-                         call_args[0], call_args[1], call_args[2],
+                         dest, src, n,
                          builder.getInt32(table_idx)});
                   }
                   call_args.clear();
@@ -3184,8 +3193,11 @@ namespace psizam::detail {
                   if (call_args.size() >= 3) {
                      uint32_t dst_table = static_cast<uint32_t>(inst.ri.imm) & 0xFFFF;
                      uint32_t src_table = static_cast<uint32_t>(inst.ri.imm) >> 16;
+                     auto* dest = convert_type(call_args[0], i32_ty);
+                     auto* src  = convert_type(call_args[1], i32_ty);
+                     auto* n    = convert_type(call_args[2], i32_ty);
                      builder.CreateCall(rt_table_copy,
-                        {ctx_ptr, call_args[0], call_args[1], call_args[2],
+                        {ctx_ptr, dest, src, n,
                          builder.getInt32(dst_table), builder.getInt32(src_table)});
                   }
                   call_args.clear();
