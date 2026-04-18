@@ -705,7 +705,11 @@ namespace psizam::detail {
          ft.param_types  = std::move(param_types);
          uint32_t return_count = parse_varuint32(code);
          PSIZAM_ASSERT(return_count <= code.bounds() - code.offset(), wasm_parse_exception, "return count exceeds section");
+         // Capped at the fixed-size scratch arrays used by IR/codegen emit paths.
+         // (The _multi_return buffer in execution_context also bounds byte size; see below.)
+         PSIZAM_ASSERT(return_count <= 16, wasm_parse_exception, "function return count exceeds implementation limit (16)");
          ft.return_types.resize(return_count);
+         uint32_t return_bytes = 0;
          for (uint32_t i = 0; i < return_count; ++i) {
             uint8_t rt = *code++;
             ft.return_types[i] = rt;
@@ -713,7 +717,10 @@ namespace psizam::detail {
                           rt == types::funcref || rt == types::externref || rt == types::exnref ||
                           (rt == types::v128 && get_enable_simd(_options)),
                           wasm_parse_exception, "invalid function return type");
+            return_bytes += (rt == types::v128) ? 16u : 8u;
          }
+         // _multi_return buffer holds 16 native_values = 128 bytes (execution_context.hpp).
+         PSIZAM_ASSERT(return_bytes <= 128, wasm_parse_exception, "function multi-value return byte size exceeds implementation limit (128)");
          ft.finalize_returns();
       }
 

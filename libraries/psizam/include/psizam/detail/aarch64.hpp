@@ -410,25 +410,19 @@ namespace psizam::detail {
             // Multi-value return: copy N values from operand stack to ctx->_multi_return.
             // Each operand stack slot is 16 bytes; v128 uses two slots (low at lower addr).
             // _multi_return layout is packed: scalar=8 bytes, v128=16 bytes (low then high).
-            uint32_t sp_size_for[16] = {};
-            uint32_t mr_off_for[16] = {};
+            // SP top-down: last return is at SP+0, so walk SP-offsets down from total.
+            const size_t n = ft.return_types.size();
+            uint32_t sp_total = 0;
+            for (size_t i = 0; i < n; i++) {
+               sp_total += (ft.return_types[i] == types::v128) ? 32u : 16u;
+            }
+            uint32_t sp_accum = sp_total;
             uint32_t mr_accum = 0;
-            for (size_t i = 0; i < ft.return_types.size(); i++) {
-               mr_off_for[i] = mr_accum;
-               mr_accum += (ft.return_types[i] == types::v128) ? 16u : 8u;
-               sp_size_for[i] = (ft.return_types[i] == types::v128) ? 32u : 16u;
-            }
-            // SP top-down: last return at SP+0. Compute SP offsets by accumulating
-            // from the top (last return = offset 0).
-            uint32_t sp_off_for[16] = {};
-            uint32_t sp_accum = 0;
-            for (int i = (int)ft.return_types.size() - 1; i >= 0; i--) {
-               sp_off_for[i] = sp_accum;
-               sp_accum += sp_size_for[i];
-            }
-            for (size_t i = 0; i < ft.return_types.size(); i++) {
-               uint32_t sp_off = sp_off_for[i];
-               uint32_t mr_off = multi_return_offset + mr_off_for[i];
+            for (size_t i = 0; i < n; i++) {
+               uint32_t sp_size = (ft.return_types[i] == types::v128) ? 32u : 16u;
+               sp_accum -= sp_size;
+               uint32_t sp_off = sp_accum;
+               uint32_t mr_off = multi_return_offset + mr_accum;
                if (ft.return_types[i] == types::v128) {
                   // v128 on stack: low at sp_off, high at sp_off+16.
                   // Pack into _multi_return as low@mr_off, high@mr_off+8.
@@ -436,9 +430,11 @@ namespace psizam::detail {
                   emit32(0xF9000260 | ((mr_off / 8) << 10));          // STR X0, [X19, #mr_off]
                   emit32(0xF94003E0 | (((sp_off + 16) / 8) << 10));   // LDR X0, [SP, #sp_off+16]
                   emit32(0xF9000260 | (((mr_off + 8) / 8) << 10));    // STR X0, [X19, #mr_off+8]
+                  mr_accum += 16;
                } else {
                   emit32(0xF94003E0 | ((sp_off / 8) << 10));          // LDR X0, [SP, #sp_off]
                   emit32(0xF9000260 | ((mr_off / 8) << 10));          // STR X0, [X19, #mr_off]
+                  mr_accum += 8;
                }
             }
          } else if(ft.return_count != 0) {
