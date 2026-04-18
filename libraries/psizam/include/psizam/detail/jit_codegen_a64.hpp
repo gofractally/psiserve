@@ -833,12 +833,17 @@ namespace psizam::detail {
          }
       }
 
-      void emit_function_epilogue(ir_function& func) {
+      // skip_return_fetch=true is used by tail_call paths, where X0 (and X1
+      // for v128) already hold the callee's return value from BL — the epilogue
+      // must not reload them from the vstack/stack or it will clobber the result.
+      void emit_function_epilogue(ir_function& func, bool skip_return_fetch = false) {
          if (func.type->return_count > 1) {
             // Multi-value return: values already stored to _multi_return by
             // multi_return_store IR ops (emitted in emit_end/emit_return).
             // Nothing to do here — the stores are in the IR so regalloc
             // correctly tracks their liveness.
+         } else if (skip_return_fetch) {
+            // X0/X1 are already live; no fetch needed.
          } else if (_use_regalloc) {
             if (func.type->return_count != 0 && func.vstack_top > 0) {
                if (func.type->return_type == types::v128) {
@@ -2014,20 +2019,9 @@ namespace psizam::detail {
             if (arg_bytes > 0) emit_add_imm(SP, SP, arg_bytes);
             emit_call_depth_inc();
             // Callee returned with X0 (and X1 for v128) holding the result.
-            // The epilogue expects the result on the native stack (it reloads
-            // X0/X1 from [SP] for v128, or pops X0 for scalar in non-regalloc
-            // mode; in regalloc mode it still ldrs v128 when func.vstack_top
-            // is the end-of-function value rather than the live value here).
-            // Materialize X0/X1 on the stack so the epilogue sees them.
-            if (ft.return_count == 1) {
-               if (ft.return_type == types::v128) {
-                  emit_push(X1);
-                  emit_push(X0);
-               } else if (!_use_regalloc) {
-                  emit_push(X0);
-               }
-            }
-            emit_function_epilogue(func);
+            // Skip the epilogue's return-value fetch so it doesn't clobber
+            // X0/X1 by reloading from a stale vreg or empty stack.
+            emit_function_epilogue(func, /*skip_return_fetch=*/true);
             break;
          }
          case ir_op::tail_call_indirect: {
@@ -2090,18 +2084,8 @@ namespace psizam::detail {
                arg_bytes += (ft.param_types[p] == types::v128) ? 32 : 16;
             if (arg_bytes > 0) emit_add_imm(SP, SP, arg_bytes);
             emit_call_depth_inc();
-            // Callee returned with X0 (and X1 for v128) holding the result.
-            // Push onto the native stack so the epilogue reloads the correct
-            // values (see ir_op::tail_call for the full explanation).
-            if (ft.return_count == 1) {
-               if (ft.return_type == types::v128) {
-                  emit_push(X1);
-                  emit_push(X0);
-               } else if (!_use_regalloc) {
-                  emit_push(X0);
-               }
-            }
-            emit_function_epilogue(func);
+            // See ir_op::tail_call for the explanation of skip_return_fetch.
+            emit_function_epilogue(func, /*skip_return_fetch=*/true);
             break;
          }
 
