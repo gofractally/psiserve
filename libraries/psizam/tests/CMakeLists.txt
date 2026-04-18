@@ -23,32 +23,54 @@ set(SPEC_TESTS)
 # wast2json features: match --enable-all *except* --enable-compact-imports, a
 # WABT-specific non-standard multi-import encoding that psizam's parser does
 # not accept. Newer testsuite .wast files rely on most of the other features.
-set(WAST2JSON_FEATURES
-   --enable-exceptions
-   --enable-threads
-   --enable-function-references
-   --enable-tail-call
-   --enable-annotations
-   --enable-code-metadata
-   --enable-gc
-   --enable-memory64
-   --enable-multi-memory
-   --enable-extended-const
-   --enable-relaxed-simd
-   --enable-custom-page-sizes
-   --enable-wide-arithmetic
-)
+#
+# Probe each flag against the installed wast2json — older wabt builds reject
+# unknown flags entirely (whole invocation fails), which used to make the
+# "missing wast2json features" failure cascade through the whole spec-test
+# build and block everything else. Drop unsupported flags so the build only
+# loses the .wast files that genuinely need them.
+execute_process(COMMAND ${WAST2JSON} --help OUTPUT_VARIABLE _wast2json_help ERROR_QUIET)
+set(WAST2JSON_FEATURES "")
+foreach(_feat
+      enable-exceptions
+      enable-threads
+      enable-function-references
+      enable-tail-call
+      enable-annotations
+      enable-code-metadata
+      enable-gc
+      enable-memory64
+      enable-multi-memory
+      enable-extended-const
+      enable-relaxed-simd
+      enable-custom-page-sizes
+      enable-wide-arithmetic)
+   if(_wast2json_help MATCHES "--${_feat}( |\n)")
+      list(APPEND WAST2JSON_FEATURES "--${_feat}")
+   else()
+      message(STATUS "wast2json: skipping unsupported flag --${_feat}")
+   endif()
+endforeach()
+set(SPEC_TEST_HELPER ${CMAKE_CURRENT_SOURCE_DIR}/spec_test_helpers.sh)
 
 macro(add_spec_test_impl name source)
    list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp)
+   # Generated .json. wast2json can fail on .wast files using features the
+   # installed wabt doesn't support (e.g. memory64 alignment values too large
+   # for older wabts). The helper script tolerates failure by emitting an
+   # empty .json so downstream targets can detect "regen unavailable" and
+   # fall back to the existing checked-in *_tests.cpp without taking the
+   # whole build down.
    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
-      COMMAND ${WAST2JSON} ${WAST2JSON_FEATURES} --no-check ${source} -o ${name}.json && mv ${name}.json ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
+      COMMAND ${SPEC_TEST_HELPER} wast2json ${WAST2JSON} ${WAST2JSON_FEATURES} --no-check ${source} ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json
       WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
-      DEPENDS ${source}
+      DEPENDS ${source} ${SPEC_TEST_HELPER}
    )
+   # _tests.cpp regen: re-runs only when .json is non-empty (wast2json
+   # succeeded). Empty json means we keep the checked-in cpp.
    add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
-      COMMAND spec_test_generator ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json ${CMAKE_BINARY_DIR}/wasms > ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
-      DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json spec_test_generator)
+      COMMAND ${SPEC_TEST_HELPER} gen_tests $<TARGET_FILE:spec_test_generator> ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json ${CMAKE_BINARY_DIR}/wasms ${CMAKE_CURRENT_SOURCE_DIR}/spec/${name}_tests.cpp
+      DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/spec/${name}.json spec_test_generator ${SPEC_TEST_HELPER})
 endmacro()
 
 macro(add_spec_test name)
