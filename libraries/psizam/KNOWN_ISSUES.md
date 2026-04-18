@@ -354,6 +354,16 @@ LLVM's own invoke/landingpad mechanism and is also unaffected.
 
 **Fix sketch.** Hand-minimize (binaryen tooling doesn't work). Alternatively, add a trap-site log to `llvm_ir_translator` that dumps the WASM PC when emitting the unreachable IR, to pinpoint the buggy path.
 
+### jit2 + jit_llvm: uncaught-exception trap classified as memory_trap (open)
+
+**Status:** open — likely classification bug on EH unwind through deep `return_call` chains.
+
+**Reproducer.** `mismatch_140231_seed4242424.wasm` (4176 B). interpreter raises `interp_trap` with `"unhandled wasm exception"`; jit2 and jit_llvm both report `memory_trap`.
+
+**Shape.** Module is dense `try_table` + `throw 0` + `return_call`/`return_call_indirect` — a WASM `throw` propagates through several tail-call frames with no matching catch, so it's legitimately uncaught. The interpreter correctly surfaces the WASM trap; both JITs fault via the memory guard page (either their throw helper touches an unmapped page during unwind, or the deep tail-call chain stack-overflows before the unwind completes).
+
+**Fix sketch.** Inspect the throw-helper path in jit2 (`jit_throw_table.cpp` or equivalent) and the personality-function path in jit_llvm — both should raise a non-memory exception class when the unwind finds no matching handler. Alternatively, re-classify the memory_trap → interp_trap if the underlying fault originated from within the EH runtime.
+
 ### jit2 non-deterministic timeout (counter+try_table loop)
 
 **Status:** open — ~1 mismatch per 10K fuzzed modules; not consistently
