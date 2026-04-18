@@ -4,7 +4,7 @@
 
 | Platform | Failures | Total | Pass Rate |
 |----------|----------|-------|-----------|
-| macOS aarch64 | 117 | 17,713 | 99.3% |
+| macOS aarch64 | 97 | 17,713 | 99.5% |
 | Linux x86_64 | (stale — re-measure after submodule bump) | | |
 
 The spec testsuite submodule was bumped to `51279a9` and the SIMD block now
@@ -27,30 +27,33 @@ Fixing requires extending `parser.hpp` to parse the remaining reftype
 encodings and teaching validation + the backends to handle them. Not
 yet prioritized.
 
-### Memory section limit — 36 failures (9 tests × 4 backends)
+### Memory section limit — 32 failures (8 tests × 4 backends)
 
-Tests that declare multiple memories (or otherwise exceed the
-engine-configured section-count budget). The parser throws
-`"number of section elements exceeded limit"`.
+Tests that declare multiple memories or large memory definitions. The
+parser's per-section element cap was bumped from hardcoded `1` to a
+configurable default of `16` (`max_memory_section_elements` in
+`options.hpp`; accessor in `parser.hpp`). That cleared `memory_grow_0`.
+What remains:
 
-- **memory_6..10** (5), **memory_25, memory_29** (2),
-  **memory_grow_0, memory_grow_2** (2)
+- **memory_6..10** (5): stale `.wasm` files in `build/Debug/wasms/`
+  from before a test regen — the checked-in `memory_tests.cpp`
+  expects a `memsize` export those `.wasm` files don't have. Needs a
+  full `wast2json` regeneration step.
+- **memory_25** (1): fails with `"maximum memory out of range"` —
+  past the parse-limit gate now, blocked on a separate memory-size
+  validation (likely Memory64 proposal).
+- **memory_29** (1): multi-memory test (4 memories with `mem1`/`mem2`
+  exports, `size1`/`size2`/`grow1`/`grow2` funcs); blocked on
+  multi-memory runtime support.
+- **memory_grow_2** (1): same as memory_29 — multi-memory proposal.
 
-Multi-memory is a post-1.0 proposal. Either lift the per-section
-element cap or opt the multi-memory tests out until the proposal is
-implemented.
+### ~~spectest harness imports~~ — fixed
 
-### spectest harness imports — 16 failures (4 tests × 4 backends)
-
-Testsuite modules that import `spectest.print_i32` / `spectest.print`
-from the spec harness. The `standalone_function_t` host class used by
-the spec test harness doesn't map them, so the backends throw
-`"no mapping for imported function print_i32"`.
-
-- **binary-leb128_10..12** (3), **token_11** (1)
-
-Add `print`, `print_i32`, `print_i64`, `print_f32`, `print_f64`
-as no-op host functions in the spec test harness to clear these.
+`spectest_host_t` in `tests/utils.hpp` now provides `print` / `print_i32`
+/ `print_i64` / `print_f32` / `print_f64` / `print_i32_f32` /
+`print_f64_f64` as no-op member functions, registered via
+`spectest_rhf::add<&spectest_host_t::print_i32>(...)`. This cleared
+**binary-leb128_10..12** (3) and **token_11** (1) — 16 failures total.
 
 ### ~~Stale test code~~ — fixed in tree
 

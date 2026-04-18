@@ -85,6 +85,7 @@ namespace psizam::detail {
 
    MAX_ELEMENTS(max_element_segment_elements, 0xFFFFFFFFu)
    MAX_ELEMENTS(max_data_segment_bytes, 0xFFFFFFFFu)
+   MAX_ELEMENTS(max_memory_section_elements, 16u)
 
    PARSER_OPTION(max_linear_memory_init, 0xFFFFFFFFFFFFFFFFu, std::uint64_t)
    PARSER_OPTION(max_func_local_bytes_flags, max_func_local_bytes_flags_t::locals | max_func_local_bytes_flags_t::stack, max_func_local_bytes_flags_t);
@@ -3148,8 +3149,9 @@ namespace psizam::detail {
       inline void parse_section(wasm_code_ptr&            code,
                                 std::vector<memory_type>& elems) {
          auto count = parse_varuint32(code);
-         PSIZAM_ASSERT(count <= 1, wasm_parse_exception, "number of section elements exceeded limit");
-         PSIZAM_ASSERT(elems.size() + count <= 1, wasm_parse_exception, "only one memory is permitted");
+         auto limit = get_max_memory_section_elements(_options);
+         PSIZAM_ASSERT(count <= limit, wasm_parse_exception, "number of section elements exceeded limit");
+         PSIZAM_ASSERT(elems.size() + count <= limit, wasm_parse_exception, "only one memory is permitted");
          auto base = elems.size();
          elems.resize(base + count);
          for (size_t i = 0; i < count; i++) { parse_memory_type(code, elems.at(base + i)); }

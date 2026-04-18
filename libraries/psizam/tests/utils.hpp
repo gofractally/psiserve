@@ -191,8 +191,16 @@ extern template class psizam::backend<psizam::standalone_function_t, psizam::jit
 #endif
 
 // Spectest host: provides the standard spectest module imports
-// (tables, memories, globals) required by WASM spec test modules.
-struct spectest_host_t {};
+// (tables, memories, globals, print functions) required by WASM spec test modules.
+struct spectest_host_t {
+   void print()                            {}
+   void print_i32(int32_t)                 {}
+   void print_i64(int64_t)                 {}
+   void print_f32(float)                   {}
+   void print_f64(double)                  {}
+   void print_i32_f32(int32_t, float)      {}
+   void print_f64_f64(double, double)      {}
+};
 using spectest_rhf = psizam::registered_host_functions<spectest_host_t>;
 
 inline void register_spectest_imports() {
@@ -211,6 +219,14 @@ inline void register_spectest_imports() {
    spectest_rhf::add_global("spectest", "global_f32", psizam::types::f32, 0x4426999a);
    // spectest.global_f64: f64 global (666.6 bit pattern)
    spectest_rhf::add_global("spectest", "global_f64", psizam::types::f64, 0x4084d33333333333ULL);
+   // spectest print functions (no-ops; the spec testsuite uses them as side-effect-free imports)
+   spectest_rhf::add<&spectest_host_t::print>("spectest", "print");
+   spectest_rhf::add<&spectest_host_t::print_i32>("spectest", "print_i32");
+   spectest_rhf::add<&spectest_host_t::print_i64>("spectest", "print_i64");
+   spectest_rhf::add<&spectest_host_t::print_f32>("spectest", "print_f32");
+   spectest_rhf::add<&spectest_host_t::print_f64>("spectest", "print_f64");
+   spectest_rhf::add<&spectest_host_t::print_i32_f32>("spectest", "print_i32_f32");
+   spectest_rhf::add<&spectest_host_t::print_f64_f64>("spectest", "print_f64_f64");
 }
 
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
