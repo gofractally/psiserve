@@ -1040,7 +1040,12 @@ namespace psizam::detail {
             if (state.back() != unreachable_tag) {
                PSIZAM_ASSERT(state.back() == expected || state.back() == any_type, wasm_parse_exception, "wrong type");
                local_bytes_checker.pop_stack(options, expected);
-               operand_depth -= Writer::get_depth_for_type(expected);
+               // Subtract the depth of what was actually pushed (state.back()),
+               // not of the expected type. These can differ when state.back() is
+               // any_type (pushed with depth 1) while expected is v128 (depth 2
+               // in writers that distinguish v128) — subtracting the wrong one
+               // underflows operand_depth across unreachable code paths.
+               operand_depth -= Writer::get_depth_for_type(state.back());
                state.pop_back();
             }
          }
