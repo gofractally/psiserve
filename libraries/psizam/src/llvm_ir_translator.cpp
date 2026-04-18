@@ -900,21 +900,42 @@ namespace psizam::detail {
          }
 
          // ── Pre-scan: max host call args (for entry-block alloca) ──
+         // The alloca must also fit return values written back by the callee
+         // (e.g. entry wrapper stores v128 return — 2 i64 slots — into args).
          uint32_t max_host_args = 0;
          {
             uint32_t num_imports = wasm_mod.get_imported_functions_size();
             uint32_t pending_call_args = 0;
+            auto update_for_call = [&](bool uses_args_buf, uint32_t type_idx_or_funcnum, bool is_indirect) {
+               if (uses_args_buf && pending_call_args > max_host_args)
+                  max_host_args = pending_call_args;
+               // Return value can be written back via the args buffer (v128 = 2 slots).
+               const func_type* ft = nullptr;
+               if (is_indirect) {
+                  uint32_t tidx = type_idx_or_funcnum & 0xFFFF;
+                  if (tidx < wasm_mod.types.size())
+                     ft = &wasm_mod.types[tidx];
+               } else if (type_idx_or_funcnum < wasm_mod.get_functions_total()) {
+                  ft = &wasm_mod.get_function_type(type_idx_or_funcnum);
+               }
+               if (ft && ft->return_count > 0 && ft->return_type == types::v128 && max_host_args < 2)
+                  max_host_args = 2;
+            };
             for (uint32_t i = 0; i < func.inst_count; i++) {
                const auto& inst = func.insts[i];
                if (inst.opcode == ir_op::arg) {
                   pending_call_args++;
                } else if (inst.opcode == ir_op::call) {
-                  if (inst.call.index < num_imports && pending_call_args > max_host_args)
-                     max_host_args = pending_call_args;
+                  update_for_call(inst.call.index < num_imports, inst.call.index, false);
                   pending_call_args = 0;
                } else if (inst.opcode == ir_op::call_indirect) {
-                  if (pending_call_args > max_host_args)
-                     max_host_args = pending_call_args;
+                  update_for_call(true, inst.call.index, true);
+                  pending_call_args = 0;
+               } else if (inst.opcode == ir_op::tail_call) {
+                  update_for_call(inst.call.index < num_imports, inst.call.index, false);
+                  pending_call_args = 0;
+               } else if (inst.opcode == ir_op::tail_call_indirect) {
+                  update_for_call(true, inst.call.index, true);
                   pending_call_args = 0;
                }
             }
@@ -1902,6 +1923,16 @@ namespace psizam::detail {
                      // Return the result
                      if (fn->getReturnType()->isVoidTy()) {
                         builder.CreateRetVoid();
+                     } else if (fn->getReturnType() == v128_ty) {
+                        // Host trampoline returns scalar low i64; the full v128
+                        // is not currently written back by host calls. Fall back
+                        // to splatting the low half into the vector so the IR
+                        // typechecks. Host v128 returns are a known gap.
+                        auto* vec = builder.CreateInsertElement(
+                           llvm::UndefValue::get(v128_ty), raw, builder.getInt32(0));
+                        vec = builder.CreateInsertElement(vec,
+                           llvm::ConstantInt::get(i64_ty, 0), builder.getInt32(1));
+                        builder.CreateRet(vec);
                      } else {
                         llvm::Value* result = convert_type(raw, fn->getReturnType());
                         builder.CreateRet(result);
@@ -1976,6 +2007,12 @@ namespace psizam::detail {
                   // Return
                   if (fn->getReturnType()->isVoidTy()) {
                      builder.CreateRetVoid();
+                  } else if (fn->getReturnType() == v128_ty) {
+                     // Callee's entry wrapper stores the v128 first-return into
+                     // host_args_alloca before returning the scalar low i64.
+                     // Reload the full vector to honor this function's v128 ABI.
+                     auto* vec = builder.CreateAlignedLoad(v128_ty, host_args_alloca, llvm::Align(8));
+                     builder.CreateRet(vec);
                   } else {
                      builder.CreateRet(convert_type(raw, fn->getReturnType()));
                   }
