@@ -85,6 +85,25 @@ namespace psizam::detail {
 
    inline void signal_handler(int sig, siginfo_t* info, void* uap) {
       if (trap_jmp_ptr) {
+         // SIGFPE from x86 `idiv` / `div` carries si_code distinguishing
+         // integer-divide-by-zero from integer-overflow (INT_MIN/-1). Both
+         // map to WASM traps, but with different messages that match the
+         // interpreter's per-op messages. Package the right exception here;
+         // longjmp(-1) tells invoke_with_signal_handler to rethrow
+         // saved_exception instead of calling the generic error handler.
+         if (sig == SIGFPE) {
+            if (info->si_code == FPE_INTDIV) {
+               saved_exception = std::make_exception_ptr(
+                  wasm_interpreter_exception{"integer divide by zero"});
+            } else if (info->si_code == FPE_INTOVF) {
+               saved_exception = std::make_exception_ptr(
+                  wasm_interpreter_exception{"integer overflow"});
+            } else {
+               saved_exception = std::make_exception_ptr(
+                  wasm_interpreter_exception{"floating point error"});
+            }
+            longjmp(*trap_jmp_ptr, -1);
+         }
          const void* addr = info->si_addr;
 
 #if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS) && defined(__aarch64__) && defined(__APPLE__)
