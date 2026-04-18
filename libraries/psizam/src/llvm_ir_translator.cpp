@@ -729,6 +729,20 @@ namespace psizam::detail {
          // Determine vreg types by scanning instructions.
          // Take the first non-pseudo type assignment for each vreg.
          std::vector<uint8_t> vreg_types(func.next_vreg, 0); // 0 = unset
+         // Pre-seed v0 with the function's return type. ir_writer's
+         // emit_function_prologue allocates v0 first via alloc_vreg(result_type)
+         // so v0 is the merge vreg for a single-result function return. If we
+         // let inference pick the type from the first dest-write (which may be
+         // an i32 store for a truncated f64 merge), the alloca ends up 32-bit
+         // and f64 consts get silently truncated on the way out.
+         // v128 is handled separately via is_v128[0] / v128_slots.
+         {
+            const auto& fnty = *func.type;
+            if (fnty.return_count == 1 && func.next_vreg > 0 &&
+                fnty.return_type != types::v128) {
+               vreg_types[0] = fnty.return_type;
+            }
+         }
          for (uint32_t i = 0; i < func.inst_count; i++) {
             const auto& inst = func.insts[i];
             if (inst.dest != ir_vreg_none && inst.dest < func.next_vreg &&
