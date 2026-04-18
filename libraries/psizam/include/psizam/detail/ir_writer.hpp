@@ -859,13 +859,22 @@ namespace psizam::detail {
                // emit a mov to the merge vreg so both branches write the same destination.
                if (!_unreachable && _func->vstack_depth() > entry.stack_depth) {
                   if (entry.result_count > 1) {
-                     // Multi-value: pop N results and mov to merge vregs
+                     // Multi-value: pop N results (skipping v128 ghost slots)
+                     // and mov to merge vregs with correct per-result type.
+                     // Must mirror emit_end's non-function path — otherwise the
+                     // then-branch writes the wrong values to merge_vregs and
+                     // the else-branch (which does pop ghosts correctly) then
+                     // overwrites only its own branch, leaving the joined
+                     // control flow with swapped/undefined v128 results when
+                     // the then-branch is taken.
                      for (int i = static_cast<int>(entry.result_count) - 1; i >= 0; --i) {
+                        uint8_t rt = entry.result_types[i];
+                        if (rt == types::v128) _func->vpop();  // ghost slot
                         uint32_t src = _func->vpop();
                         if (src != entry.merge_vregs[i]) {
                            ir_inst mov{};
                            mov.opcode = ir_op::mov;
-                           mov.type = types::i64;
+                           mov.type = rt;
                            mov.flags = IR_NONE;
                            mov.dest = entry.merge_vregs[i];
                            mov.rr.src1 = src;
