@@ -354,15 +354,13 @@ LLVM's own invoke/landingpad mechanism and is also unaffected.
 
 **Fix sketch.** Hand-minimize (binaryen tooling doesn't work). Alternatively, add a trap-site log to `llvm_ir_translator` that dumps the WASM PC when emitting the unreachable IR, to pinpoint the buggy path.
 
-### jit2 + jit_llvm: uncaught-exception trap classified as memory_trap (open)
+### ~~jit2 + jit_llvm: uncaught-exception trap classified as memory_trap~~ — fixed
 
-**Status:** open — likely classification bug on EH unwind through deep `return_call` chains.
+**Status:** fixed — `signals.hpp` signal handler now reads the faulting PC and only classifies as `memory_trap` when the PC is inside the JIT code range. If the PC is outside the code range (a corrupted return address landing on the stack, a helper-function fault, or any LLVM-JIT PC — which isn't registered in `code_memory_range`), the handler sets `saved_exception = wasm_interpreter_exception{"jit control-flow corruption or stack overflow"}` and longjmps with `-1` so it surfaces as `interp_trap` instead of going through `handle_signal`'s `SIGSEGV → wasm_memory_exception` mapping.
 
-**Reproducer.** `mismatch_140231_seed4242424.wasm` (4176 B). interpreter raises `interp_trap` with `"unhandled wasm exception"`; jit2 and jit_llvm both report `memory_trap`.
+**Reproducer.** `mismatch_140231_seed4242424.wasm` (4176 B). Now all backends agree on `interp_trap`.
 
-**Shape.** Module is dense `try_table` + `throw 0` + `return_call`/`return_call_indirect` — a WASM `throw` propagates through several tail-call frames with no matching catch, so it's legitimately uncaught. The interpreter correctly surfaces the WASM trap; both JITs fault via the memory guard page (either their throw helper touches an unmapped page during unwind, or the deep tail-call chain stack-overflows before the unwind completes).
-
-**Fix sketch.** Inspect the throw-helper path in jit2 (`jit_throw_table.cpp` or equivalent) and the personality-function path in jit_llvm — both should raise a non-memory exception class when the unwind finds no matching handler. Alternatively, re-classify the memory_trap → interp_trap if the underlying fault originated from within the EH runtime.
+**Shape.** Module is dense `try_table` + `throw 0` + `return_call`/`return_call_indirect` — a WASM `throw` propagates through several tail-call frames with no matching catch, so it's legitimately uncaught. The jit2 fault signature was `LR=PC=fault_addr=stack_address` (RET through a stomped LR slot); the jit_llvm fault was `LDR X8,[X8,#8]` with `X8=0` inside its personality/unwind helper. Both now classify cleanly as interp_trap.
 
 ### jit2 non-deterministic timeout (counter+try_table loop)
 

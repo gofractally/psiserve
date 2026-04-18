@@ -191,38 +191,37 @@ namespace psizam::detail {
             longjmp(*trap_jmp_ptr, sig);
          }
 
-         // If the PC (not the fault address) is in the code range, the fault
-         // was caused by JIT code accessing an address outside any known range.
-         // This is still a WASM trap — longjmp out rather than terminating.
+         // Read the faulting PC to classify the trap.  If the PC is inside
+         // the JIT code range, the fault was caused by JIT code dereferencing
+         // an unknown address — treat as memory_trap.  If the PC is outside
+         // the JIT code range, the control flow itself has been corrupted
+         // (e.g., a RET through a stomped LR/return slot, or a tail-call chain
+         // overflowing the native stack).  Match the interpreter's behavior
+         // by surfacing this as wasm_interpreter_exception instead of the
+         // default SIGSEGV → wasm_memory_exception mapping.
+         uint64_t pc_val = 0;
 #if defined(__aarch64__) && defined(__APPLE__)
-         {
-            ucontext_t* uc = (ucontext_t*)uap;
-            uint64_t pc_val = uc->uc_mcontext->__ss.__pc;
-            if (!code_memory_range.empty() &&
-                pc_val >= (uint64_t)code_memory_range.data() &&
-                pc_val < (uint64_t)code_memory_range.data() + code_memory_range.size())
-               longjmp(*trap_jmp_ptr, sig);
-         }
+         pc_val = ((ucontext_t*)uap)->uc_mcontext->__ss.__pc;
+#elif defined(__x86_64__) && defined(__APPLE__)
+         pc_val = ((ucontext_t*)uap)->uc_mcontext->__ss.__rip;
 #elif defined(__x86_64__)
-         {
-            ucontext_t* uc = (ucontext_t*)uap;
-#if defined(__APPLE__)
-            uint64_t pc_val = uc->uc_mcontext->__ss.__rip;
-#else
-            uint64_t pc_val = uc->uc_mcontext.gregs[REG_RIP];
+         pc_val = ((ucontext_t*)uap)->uc_mcontext.gregs[REG_RIP];
+#elif defined(__aarch64__)
+         pc_val = ((ucontext_t*)uap)->uc_mcontext.pc;
 #endif
-            if (!code_memory_range.empty() &&
-                pc_val >= (uint64_t)code_memory_range.data() &&
-                pc_val < (uint64_t)code_memory_range.data() + code_memory_range.size())
-               longjmp(*trap_jmp_ptr, sig);
-         }
-#endif
+         if (pc_val != 0 && !code_memory_range.empty() &&
+             pc_val >= (uint64_t)code_memory_range.data() &&
+             pc_val < (uint64_t)code_memory_range.data() + code_memory_range.size())
+            longjmp(*trap_jmp_ptr, sig);
 
-         // Fallback: if we're in a WASM execution context (trap_jmp_ptr set) but
-         // no known range matched, this is likely a fault in a C helper function
-         // called from JIT code (e.g., due to operand stack underflow producing
-         // garbage values). Trap cleanly rather than crashing the host process.
-         longjmp(*trap_jmp_ptr, sig);
+         // PC is outside the JIT code range (or we could not read it).  This
+         // is either a corrupted return address landing on the stack or a
+         // fault deep inside a C helper called from JIT code — in both cases
+         // the interpreter would surface a wasm_exception / call-depth-exceeded
+         // rather than a memory fault.  Classify as interp_trap.
+         saved_exception = std::make_exception_ptr(
+            psizam::wasm_interpreter_exception{"jit control-flow corruption or stack overflow"});
+         longjmp(*trap_jmp_ptr, -1);
       }
 
       struct sigaction* prev_action;
