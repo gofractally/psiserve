@@ -492,40 +492,78 @@ operand stacks.
 
 ### jit2 ctx pointer corrupted after throw+catch into helper calls
 
-**Status:** open — 3 reproducers in saved fuzz corpus.
+**Status:** mostly fixed by commit `371db25` (see below). One
+reproducer remains open with a different-mechanism failure.
 
 **Reproducers.**
-`/tmp/fuzz/mismatch_308_seed100.wasm`,
-`mismatch_6998_seed1776497367.wasm`,
-`mismatch_9677_seed1776497367.wasm`.
-All three: interpreter, jit1, and jit_llvm emit `interp_trap
-(unreachable)` cleanly; jit2 returns `memory_trap`.
+- `mismatch_308_seed100.wasm` — **fixed**.
+- `mismatch_6998_seed1776497367.wasm` — **fixed**.
+- `mismatch_9677_seed1776497367.wasm` — **still open**, now crashes
+  inside `__longjmp` instead of returning `memory_trap`. Orthogonal
+  stack-inversion bug; see below.
 
-**Symptom.** gdb at the point of the fault:
-`drop_elem (this=0x7fffffffcd18, x=0)`, with `this` being a stack
-address rather than the heap-allocated `jit_execution_context*`. The
-crash is a SIGSEGV inside `_Bit_reference::operator=` when the
-vector<bool> access dereferences a data pointer that was never
-populated by reset(). Upstream in the stack, `rdi` (the JIT's
-ctx-pointer convention register) is a stack address at the call site
-of `elem_drop_impl`.
+All three historically: interpreter, jit1, and jit_llvm emit
+`interp_trap (unreachable)` cleanly; jit2 returned `memory_trap`.
 
-**Investigation.** The commit `5c8d694` fix closed one `rdi`-
-corruption path: `eh_setjmp` used to save `rdi`/`rsi`/pre-align-`rsp`
-on top of the native stack and `__psizam_eh_throw`'s
-`push rbp; push rbx; sub $0xd8, %rsp` prologue would land on those
-saved slots, so on longjmp the `pop rsp` read rbx's value. After the
-fix those saves live in rbp-relative frame slots. But there is
-evidently at least one more path through the catch-dispatch sequence
-that lets a different caller-saved value end up in `rdi` before the
-next helper call. All three reproducers have many `elem.drop 0` and
-`throw 0` calls interspersed with deep `try_table` nesting.
+**Root cause (308/6998).** `eh_setjmp`'s `and $-16, %rsp` before the
+setjmp call was not sufficient to keep the `call`'s pushed return
+address out of the 3-slot `eh_save_slots` region. When body regalloc
+raised rsp above the post-prologue floor (nested `try_table` patterns
+in these modules did this), the aligned rsp could land exactly on the
+ctx-save slot, and the call's push wrote the return address onto the
+mem-save slot. On longjmp, rsi was restored from that corrupted
+slot — rsi then pointed into JIT code, and the next `[rsi-0x1008]`
+global access segfaulted. Signal handler classified as memory_trap
+while the interpreter cleanly reported interp_trap.
+
+**Fix (371db25).** Replace `and $-16, %rsp` with
+`lea -abs_off(%rbp), %rsp` where `abs_off = |eh_rsp_save_offset()| +
+16`, rounded up to 16-byte alignment. This pins rsp to a known-safe
+16-byte-aligned slot strictly below all three save slots regardless
+of where body regalloc left it, so the call's ret-push can never
+land on a save slot.
 
 **Workaround already landed.** `drop_elem` now throws
 `wasm_interpreter_exception("elem segment index out of range")`
 instead of asserting (commit `7565fa1`), so a corrupted ctx doesn't
 auto-silence the bug in release builds — but this still reports a
 memory trap outcome.
+
+### jit2 dest-jmpbuf clobbered under deep `try_table` (9677)
+
+**Status:** open — 1 reproducer remaining after commit `371db25`.
+
+**Reproducer.** `mismatch_9677_seed1776497367.wasm` (939 B).
+interpreter/jit/jit_llvm report `interp_trap (unreachable)` cleanly;
+jit2 now SEGVs inside `__longjmp` at `jmp *%rdx` with demangled PC
+pointing into random memory. Previously (before 371db25) the same
+module surfaced as `memory_trap` via the same rsi-corruption path
+fixed there — but 8e74d64's signal-handler PC classification masked
+it as `interp_trap`. With the root cause removed, the residual bug is
+exposed.
+
+**Symptom.** `signal_throw(wasm_interpreter_exception{"unreachable"})`
+does `longjmp(*trap_jmp_ptr, -1)` where `trap_jmp_ptr` points to
+`dest` in `invoke_with_signal_handler`'s frame. At the point of the
+longjmp, memory at `dest`'s address no longer contains the mangled
+register snapshot that `setjmp` wrote — it contains heap-pointer
+data (looks like vector or `jit_eh_frame` contents). `__longjmp`
+demangles PC from the corrupted slot and jumps to garbage.
+
+**Hypothesis.** `stack_allocator` only allocates a separate native
+stack when `min_size > 4MB`. For small functions it returns
+`top() == nullptr`, and the JIT runs on the same native stack as
+`invoke_with_signal_handler`. The JIT's local body (via spill slots,
+catch_data reservations, etc.) pushes rsp past `dest`, and a write
+through the corrupted rsp overwrites the jmp_buf contents.
+
+**Fix sketch.** Either (a) always allocate a separate alt_stack so
+the JIT can never touch the native stack frames that hold
+invoke_with_signal_handler's dest, or (b) change
+invoke_with_signal_handler to allocate `dest` in a TLS-backed heap
+slot rather than on the stack, so JIT stack usage cannot reach it.
+(a) is simpler but regresses startup cost for hot-path small
+functions; (b) is intrusive but structurally sound.
 
 ### interpreter=ok vs all-JITs trap (`unreachable`)
 
