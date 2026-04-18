@@ -162,10 +162,14 @@ set(SIMD_TESTS
     i16x8_relaxed_q15mulr_s i32x4_relaxed_trunc i8x16_relaxed_swizzle
     relaxed_dot_product relaxed_laneselect relaxed_madd_nmadd relaxed_min_max
 )
-# SIMD tests — use pre-generated _tests.cpp but generate .wasm files from testsuite
+# SIMD tests — regenerate both .wasm and _tests.cpp from the testsuite .wast.
+# Previously the _tests.cpp was checked-in-only; a submodule bump produced
+# .wasm files whose bytes no longer matched the stale .cpp assertions,
+# manifesting as ~784 bogus failures. Treat SIMD the same as normal spec
+# tests so the generated sources stay in lockstep with the submodule.
 foreach(testcase ${SIMD_TESTS})
    list(APPEND SPEC_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/spec/${testcase}_tests.cpp)
-   # Generate .wasm files via wast2json — check testsuite root and proposals/relaxed-simd/
+   # Locate .wast — testsuite root or proposals/relaxed-simd/
    set(_simd_wast "")
    set(_simd_extra_flags "")
    if(EXISTS ${WASM_TESTSUITE_DIR}/${testcase}.wast)
@@ -175,14 +179,20 @@ foreach(testcase ${SIMD_TESTS})
       set(_simd_extra_flags --enable-relaxed-simd)
    endif()
    if(_simd_wast)
-      add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
-         COMMAND ${WAST2JSON} ${WAST2JSON_FEATURES} --no-check ${_simd_extra_flags} ${_simd_wast} -o ${testcase}.json
-         COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker
+      # wast2json produces .json + side-effect .wasm files in wasms/.
+      # Helper tolerates wabt feature-unsupport by emitting an empty .json.
+      add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/spec/${testcase}.json
+         COMMAND ${SPEC_TEST_HELPER} wast2json ${WAST2JSON} ${WAST2JSON_FEATURES} ${_simd_extra_flags} --no-check ${_simd_wast} ${CMAKE_CURRENT_BINARY_DIR}/spec/${testcase}.json
          WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/wasms
-         DEPENDS ${_simd_wast}
+         DEPENDS ${_simd_wast} ${SPEC_TEST_HELPER}
          COMMENT "Generating SIMD wasms: ${testcase}"
       )
-      list(APPEND SIMD_WASM_MARKERS ${CMAKE_BINARY_DIR}/wasms/${testcase}.wasm_marker)
+      # Regenerate _tests.cpp from .json. Empty json → leave checked-in cpp.
+      add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/spec/${testcase}_tests.cpp
+         COMMAND ${SPEC_TEST_HELPER} gen_tests $<TARGET_FILE:spec_test_generator> ${CMAKE_CURRENT_BINARY_DIR}/spec/${testcase}.json ${CMAKE_BINARY_DIR}/wasms ${CMAKE_CURRENT_SOURCE_DIR}/spec/${testcase}_tests.cpp
+         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/spec/${testcase}.json spec_test_generator ${SPEC_TEST_HELPER}
+      )
+      list(APPEND SIMD_WASM_MARKERS ${CMAKE_CURRENT_BINARY_DIR}/spec/${testcase}.json)
    endif()
 endforeach()
 

@@ -23,10 +23,17 @@ case "$cmd" in
       out_json="${@: -1}"   # last arg is output path
       # Drop the last arg from the wast2json argv:
       argv=("${@:1:$#-1}")
-      if "$wast2json_bin" "${argv[@]}" -o "$out_json" 2>/dev/null; then
+      # wast2json emits .wasm side-effect files in the same directory as its
+      # -o argument. Tests read .wasm from ${CMAKE_BINARY_DIR}/wasms/, which
+      # cmake sets as our CWD — so emit with a bare basename (→ files land in
+      # CWD) and then move just the .json to its final location.
+      json_name=$(basename "$out_json")
+      if "$wast2json_bin" "${argv[@]}" -o "$json_name" 2>/dev/null; then
+         [ "$(pwd)/$json_name" != "$out_json" ] && mv "$json_name" "$out_json"
          exit 0
       else
          echo "wast2json failed for $out_json — keeping checked-in tests cpp" 1>&2
+         rm -f "$json_name"
          : > "$out_json"
          exit 0
       fi

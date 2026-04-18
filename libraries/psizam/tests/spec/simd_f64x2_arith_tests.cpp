@@ -13,8 +13,6 @@
 
 using namespace psizam;
 using namespace psizam::detail;
-using namespace psizam;
-using namespace psizam::detail;
 extern wasm_allocator wa;
 
 BACKEND_TEST_CASE( "Testing wasm <simd_f64x2_arith_0_wasm>", "[simd_f64x2_arith_0_wasm_tests]" ) {

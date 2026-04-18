@@ -4,28 +4,53 @@
 
 | Platform | Failures | Total | Pass Rate |
 |----------|----------|-------|-----------|
-| macOS aarch64 | 104 | 13,258 | 99.2% |
-| Linux x86_64 | 124 | 13,186 | 99.1% |
+| macOS aarch64 | 117 | 17,713 | 99.3% |
+| Linux x86_64 | (stale — re-measure after submodule bump) | | |
 
-The difference is entirely jit2 backend bugs (x86_64 vs aarch64 codegen).
+The spec testsuite submodule was bumped to `51279a9` and the SIMD block now
+auto-regenerates like the other spec tests (see
+`tests/spec_test_helpers.sh` + `tests/CMakeLists.txt`). That exposed a wider
+set of tests: the previously-documented "multi-module" and "global_0"
+failures no longer reproduce (the newer testsuite wraps those cases in
+`assert_unlinkable` / `register`, which the generator now skips cleanly).
+The categories below describe what remains.
 
-### Multi-module (96–98 failures, all platforms)
+### Reftype parser gap — 60 failures (15 tests × 4 backends)
 
-These tests require multi-module linking support which is not yet implemented.
-Each test is counted across all 3 backends (interpreter, jit, jit2).
+Tests use `table` declarations with non-funcref/externref reftypes (the
+full typed-reference proposal). The parser rejects with
+`"table must have type funcref or externref"`.
 
-- **table_copy_1..18** (54): Import functions from a host module
-- **table_init_1..6** (18): Import functions from a host module
-- **elem_18..21** (12): Element segment indices from missing linked modules
-- **elem_59, elem_60** (6): Import shared table from "module1"
-- **elem_68** (3): Imports funcref table from "module4"
-- **data_25, data_26** (6): Data segment out of range (depends on linked module memory)
+- **elem_47..54** (8), **elem_57..62** (6), **br_table_0** (1)
 
-### global_0 (3 failures, all backends, all platforms)
+Fixing requires extending `parser.hpp` to parse the remaining reftype
+encodings and teaching validation + the backends to handle them. Not
+yet prioritized.
 
-Imports `spectest.global_i32` and `spectest.global_i64` which should be 666,
-but the test harness uses `standalone_function_t` so imported globals default
-to 0. Also uses `externref` globals which crash the jit backend.
+### Memory section limit — 36 failures (9 tests × 4 backends)
+
+Tests that declare multiple memories (or otherwise exceed the
+engine-configured section-count budget). The parser throws
+`"number of section elements exceeded limit"`.
+
+- **memory_6..10** (5), **memory_25, memory_29** (2),
+  **memory_grow_0, memory_grow_2** (2)
+
+Multi-memory is a post-1.0 proposal. Either lift the per-section
+element cap or opt the multi-memory tests out until the proposal is
+implemented.
+
+### spectest harness imports — 16 failures (4 tests × 4 backends)
+
+Testsuite modules that import `spectest.print_i32` / `spectest.print`
+from the spec harness. The `standalone_function_t` host class used by
+the spec test harness doesn't map them, so the backends throw
+`"no mapping for imported function print_i32"`.
+
+- **binary-leb128_10..12** (3), **token_11** (1)
+
+Add `print`, `print_i32`, `print_i64`, `print_f32`, `print_f64`
+as no-op host functions in the spec test harness to clear these.
 
 ### ~~Stale test code~~ — fixed in tree
 
@@ -615,26 +640,22 @@ version shipped under `external/Catch2/`) has known fixture-cleanup
 ordering issues; the crash reproduces independent of the JIT code
 path. Upgrading Catch2 is the likely fix.
 
-### ~150 spec_test "wasm file not found" failures
+### ~~~150 spec_test "wasm file not found" failures~~ — fixed
 
-**Status:** needs wabt upgrade.
+**Status:** fixed by `tests/spec_test_helpers.sh` (the wast2json step
+now emits the `.json` under CWD with a bare basename, then moves it
+to its final location). Commit `47eee1c` had silently regressed this
+by switching to an absolute `-o <path>` — wast2json emits its `.wasm`
+side-effects next to the `-o` argument, so the `.wasm` files had been
+landing in `build/Debug/libraries/psizam/tests/spec/` instead of the
+`build/Debug/wasms/` directory the tests read from. With the helper
+fixed, the ~150 "file not found" runtime failures disappear.
 
-Local `wast2json` doesn't recognize `--enable-custom-page-sizes` or
-`--enable-wide-arithmetic`, so those .wast files fail to generate
-their .wasm outputs. The build now tolerates this (commit `47eee1c`)
-instead of cascading through the whole spec-test build, but the
-downstream test cases reference `.wasm` filenames that were never
-produced, hence the "file not found" runtime failures. Install a
-newer `wabt` (>= the one supporting those features) to clear these.
+### ~~~150 spec_test multi-module import failures~~ — no longer reproduces
 
-### ~150 spec_test multi-module import failures
-
-**Status:** open — requires multi-module linking support.
-
-`table_copy_*`, `table_init_*`, `elem_18..21`, `elem_59`, `elem_60`,
-`elem_68`, `data_25`, `data_26`: all fail at runtime with
-`"wasm file not found"` / `"cannot execute function, function not
-found"` / `"function index out of range"` because these tests import
-functions or shared tables/memories from a second module that
-psiserve's harness doesn't set up. Multi-module linking is
-Layer-4-ish work per `plans/master-plan.md`.
+**Status:** closed — the newer spec testsuite (`51279a9`) wraps the
+old multi-module cases in `assert_unlinkable` / `register`, which
+the generator cleanly skips (no standalone-harness invocation). If
+multi-module linking is implemented later, the tests will need to
+be regenerated against a testsuite that exercises the feature
+directly.

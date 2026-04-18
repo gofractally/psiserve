@@ -1593,7 +1593,9 @@ int main(int argc, char** argv) {
          for (const auto& o : i->second.get<picojson::array>()) {
             picojson::object obj = o.get<picojson::object>();
             const string t = obj["type"].to_str();
-            if (t == "module" || t == "assert_invalid" || (t == "assert_malformed" && obj["module_type"].to_str() == "binary") || t == "assert_unlinkable") {
+            if (t == "module"
+                || ((t == "assert_invalid" || t == "assert_malformed") && obj["module_type"].to_str() == "binary")
+                || t == "assert_unlinkable") {
                test_suite_name = obj["filename"].to_str();
                test_mappings[test_suite_name] = {};
             }
