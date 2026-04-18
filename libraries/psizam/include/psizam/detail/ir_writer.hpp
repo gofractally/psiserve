@@ -960,24 +960,31 @@ namespace psizam::detail {
                      if (total > _func->vstack_top) total = _func->vstack_top;
                      uint32_t base_depth = _func->vstack_top - total;
                      if (target_entry.is_function) {
-                        // Function body target: emit multi_return_store
-                        uint32_t off = 0;
+                        // Function body target: emit multi_return_store.
+                        // Emit in REVERSE order so aarch64 / x86_64-stack LIFO
+                        // v128 pops from the native stack match byte_offs[].
                         uint32_t first_src = ir_vreg_none;
                         uint32_t byte_offs[16] = {};
+                        uint32_t src_vregs[16] = {};
                         compute_multi_return_offsets(target_entry.result_types, n, byte_offs);
-                        for (uint32_t i = 0; i < n; ++i) {
-                           uint8_t rti = target_entry.result_types[i];
-                           uint32_t src = _func->vstack[base_depth + off];
-                           if (i == 0) first_src = src;
+                        {
+                           uint32_t off = 0;
+                           for (uint32_t i = 0; i < n; ++i) {
+                              src_vregs[i] = _func->vstack[base_depth + off];
+                              off += slots_for_type(target_entry.result_types[i]);
+                           }
+                        }
+                        first_src = src_vregs[0];
+                        for (uint32_t i = n; i > 0; --i) {
+                           uint8_t rti = target_entry.result_types[i - 1];
                            ir_inst store{};
                            store.opcode = ir_op::multi_return_store;
                            store.type = rti;
                            store.flags = IR_SIDE_EFFECT;
                            store.dest = ir_vreg_none;
-                           store.ri.src1 = src;
-                           store.ri.imm = static_cast<int32_t>(byte_offs[i]);
+                           store.ri.src1 = src_vregs[i - 1];
+                           store.ri.imm = static_cast<int32_t>(byte_offs[i - 1]);
                            _func->emit(store);
-                           off += slots_for_type(rti);
                         }
                         // Also mov first value to merge_vregs[0] for jit_llvm scalar return
                         if (first_src != ir_vreg_none && target_entry.merge_vregs[0] != ir_vreg_none &&
@@ -1084,24 +1091,31 @@ namespace psizam::detail {
                      if (total > _func->vstack_top) total = _func->vstack_top;
                      uint32_t base_depth = _func->vstack_top - total;
                      if (target_entry.is_function) {
-                        // Function body target: emit multi_return_store
-                        uint32_t off = 0;
+                        // Function body target: emit multi_return_store.
+                        // Emit in REVERSE order so aarch64 / x86_64-stack LIFO
+                        // v128 pops from the native stack match byte_offs[].
                         uint32_t first_src = ir_vreg_none;
                         uint32_t byte_offs[16] = {};
+                        uint32_t src_vregs[16] = {};
                         compute_multi_return_offsets(target_entry.result_types, n, byte_offs);
-                        for (uint32_t i = 0; i < n; ++i) {
-                           uint8_t rti = target_entry.result_types[i];
-                           uint32_t src = _func->vstack[base_depth + off];
-                           if (i == 0) first_src = src;
+                        {
+                           uint32_t off = 0;
+                           for (uint32_t i = 0; i < n; ++i) {
+                              src_vregs[i] = _func->vstack[base_depth + off];
+                              off += slots_for_type(target_entry.result_types[i]);
+                           }
+                        }
+                        first_src = src_vregs[0];
+                        for (uint32_t i = n; i > 0; --i) {
+                           uint8_t rti = target_entry.result_types[i - 1];
                            ir_inst store{};
                            store.opcode = ir_op::multi_return_store;
                            store.type = rti;
                            store.flags = IR_SIDE_EFFECT;
                            store.dest = ir_vreg_none;
-                           store.ri.src1 = src;
-                           store.ri.imm = static_cast<int32_t>(byte_offs[i]);
+                           store.ri.src1 = src_vregs[i - 1];
+                           store.ri.imm = static_cast<int32_t>(byte_offs[i - 1]);
                            _func->emit(store);
-                           off += slots_for_type(rti);
                         }
                         // Also mov first value to merge_vregs[0] for jit_llvm scalar return
                         if (first_src != ir_vreg_none && target_entry.merge_vregs[0] != ir_vreg_none &&
@@ -1208,24 +1222,31 @@ namespace psizam::detail {
                      if (func->vstack_top >= total) {
                         uint32_t base_depth = func->vstack_top - total;
                         if (target_entry.is_function) {
-                           // Function body target: emit multi_return_store
-                           uint32_t off = 0;
+                           // Function body target: emit multi_return_store.
+                           // Emit in REVERSE order so aarch64 / x86_64-stack LIFO
+                           // v128 pops from the native stack match byte_offs[].
                            uint32_t first_src = ir_vreg_none;
                            uint32_t byte_offs[16] = {};
+                           uint32_t src_vregs[16] = {};
                            ir_writer_impl::compute_multi_return_offsets(target_entry.result_types, n, byte_offs);
-                           for (uint32_t i = 0; i < n; ++i) {
-                              uint8_t rti = target_entry.result_types[i];
-                              uint32_t src = func->vstack[base_depth + off];
-                              if (i == 0) first_src = src;
+                           {
+                              uint32_t off = 0;
+                              for (uint32_t i = 0; i < n; ++i) {
+                                 src_vregs[i] = func->vstack[base_depth + off];
+                                 off += ir_writer_impl::slots_for_type(target_entry.result_types[i]);
+                              }
+                           }
+                           first_src = src_vregs[0];
+                           for (uint32_t i = n; i > 0; --i) {
+                              uint8_t rti = target_entry.result_types[i - 1];
                               ir_inst store{};
                               store.opcode = ir_op::multi_return_store;
                               store.type = rti;
                               store.flags = IR_SIDE_EFFECT;
                               store.dest = ir_vreg_none;
-                              store.ri.src1 = src;
-                              store.ri.imm = static_cast<int32_t>(byte_offs[i]);
+                              store.ri.src1 = src_vregs[i - 1];
+                              store.ri.imm = static_cast<int32_t>(byte_offs[i - 1]);
                               func->emit(store);
-                              off += ir_writer_impl::slots_for_type(rti);
                            }
                            // Also mov first value to merge_vregs[0] for jit_llvm scalar return
                            if (first_src != ir_vreg_none &&
