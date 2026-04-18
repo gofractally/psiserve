@@ -1336,14 +1336,17 @@ namespace psizam::detail {
          emit_pop(rdi);
          // eax = matched catch index
 
-         // Switch on catch index
+         // Switch on catch index — compare for each non-last clause,
+         // then JMP to last handler (default). JE targets are patched below.
          std::vector<void*> catch_labels(catch_count, nullptr);
-         for (uint32_t i = 0; i < catch_count; ++i) {
-            if (i < catch_count - 1) {
-               emit_cmp(static_cast<int32_t>(i), eax);
-               catch_labels[i] = emit_branchcc32(JE);
-            }
-            // Last clause: fall through
+         for (uint32_t i = 0; i < catch_count - 1; ++i) {
+            emit_cmp(static_cast<int32_t>(i), eax);
+            catch_labels[i] = emit_branchcc32(JE);
+         }
+         void* jmp_default = nullptr;
+         if (catch_count > 1) {
+            emit_bytes(0xe9);
+            jmp_default = emit_branch_target32();
          }
 
          // Emit each catch handler's dispatch code
@@ -1351,6 +1354,17 @@ namespace psizam::detail {
          for (uint32_t i = 0; i < catch_count; ++i) {
             if (catch_labels[i]) {
                fix_branch(catch_labels[i], code);
+            }
+            if (i == catch_count - 1 && jmp_default) {
+               fix_branch(jmp_default, code);
+            }
+
+            // Pop intervening try_table EH frames between this catch handler
+            // and the branch target. try_match_exception already popped the
+            // matching try_table's frame; these are OUTER try_tables crossed
+            // by the catch clause's branch.
+            for (uint32_t li = 0; li < clauses[i].eh_leave_count; ++li) {
+               emit_eh_leave();
             }
 
             // Adjust stack to target operand depth (8 bytes per operand on x86_64)

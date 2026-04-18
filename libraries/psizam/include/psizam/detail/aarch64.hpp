@@ -1556,22 +1556,23 @@ namespace psizam::detail {
          emit_call_c_function(&__psizam_eh_get_match);
          // W0 = matched catch index
 
-         // Switch on catch index — compare and branch to each handler
+         // Switch on catch index — compare and branch to each handler,
+         // then unconditional branch to last handler (default case).
          std::vector<void*> clause_branches(catch_count);
-         std::vector<void*> catch_labels(catch_count);
+         std::vector<void*> catch_labels(catch_count, nullptr);
 
-         for (uint32_t i = 0; i < catch_count; ++i) {
-            if (i < catch_count - 1) {
-               // CMP W0, #i
-               emit32(0x7100001F | (i << 10) | (X0 << 5)); // CMP W0, #i
-               // B.EQ .catch_i
-               catch_labels[i] = code;
-               emit32(0x54000000 | COND_EQ); // B.EQ +0 (patched below)
-               emit32(0xD503201F); // NOP sentinel for long-form conversion
-            } else {
-               // Last clause: fall through (guaranteed to match)
-               catch_labels[i] = nullptr; // no branch needed
-            }
+         for (uint32_t i = 0; i < catch_count - 1; ++i) {
+            // CMP W0, #i
+            emit32(0x7100001F | (i << 10) | (X0 << 5)); // CMP W0, #i
+            // B.EQ .catch_i
+            catch_labels[i] = code;
+            emit32(0x54000000 | COND_EQ); // B.EQ +0 (patched below)
+            emit32(0xD503201F); // NOP sentinel for long-form conversion
+         }
+         void* jmp_default = nullptr;
+         if (catch_count > 1) {
+            jmp_default = code;
+            emit32(0x14000000); // B +0 (patched to last handler)
          }
 
          // Emit each catch handler's dispatch code
@@ -1579,6 +1580,17 @@ namespace psizam::detail {
             // Patch the B.EQ to point here
             if (catch_labels[i]) {
                fix_branch(catch_labels[i], code);
+            }
+            if (i == catch_count - 1 && jmp_default) {
+               fix_branch(jmp_default, code);
+            }
+
+            // Pop intervening try_table EH frames between this catch handler
+            // and the branch target. try_match_exception already popped the
+            // matching try_table's frame; these are OUTER try_tables crossed
+            // by the catch clause's branch.
+            for (uint32_t li = 0; li < clauses[i].eh_leave_count; ++li) {
+               emit_eh_leave();
             }
 
             // Adjust stack to target operand depth
