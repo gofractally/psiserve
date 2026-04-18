@@ -30,8 +30,9 @@ fn main() {
     let mut generated = 0u32;
     let mut failed = 0u32;
 
-    // Pre-allocate seed buffer
-    let mut seed_buf = vec![0u8; 4096];
+    // Pre-allocate seed buffer. Size is chosen so wasm-smith rarely runs out
+    // of entropy before reaching max_instructions on complex modules.
+    let mut seed_buf = vec![0u8; 16384];
 
     for _ in 0..count {
         rng.fill_bytes(&mut seed_buf);
@@ -41,7 +42,7 @@ fn main() {
             // Resource limits
             max_memories: 1,
             max_tables: 2,
-            max_instructions: 1000,
+            max_instructions: 2500,
             max_memory32_bytes: 655360,
             // Disable proposals not fully supported by all backends
             gc_enabled: false,
