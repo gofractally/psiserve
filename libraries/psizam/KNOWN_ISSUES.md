@@ -63,6 +63,7 @@ All pass on interpreter and jit. jit2 is experimental.
 **aarch64 only:**
 - ~~**rem codegen clobber**: i32/i64 rem_u/rem_s hardcoded W2/X2 as scratch for UDIV/SDIV quotient, clobbering live vregs~~ — fixed: use X16 (intra-procedure-call scratch) instead
 - ~~**IR corruption in dead code**: emit_br/emit_br_if/emit_try_table returned branch index 0 in unreachable code, corrupting IR instruction 0~~ — fixed: return UINT32_MAX instead
+- ~~**C-style host function int/float args swapped** (jit + jit2)~~ — fixed: host-call arg-repack copy loop indexed the WASM operand stack as `(num_params - 1 - i) * 16`, producing a forward-ordered buffer (args[0] = first WASM param). The trampoline installed for native JIT is `fast_trampoline_rev_impl` (reads args[0] = last WASM param — matches x86_64's zero-copy stack layout). Mismatch only visible for heterogeneously-typed params: `apply(i32, f64, i32)` via a C-style host import got its int and float slots crossed. Fixed by flipping the src offset to `i * 16` in both `aarch64.hpp::emit_legacy_host_call_body` and `jit_codegen_a64.hpp`'s equivalent — same instruction count, simpler offset math. x86_64 was unaffected (zero-copy stack layout is naturally reverse-ordered). jit_llvm was fixed separately in commit `604bcb5` by picking the forward trampoline per-backend.
 
 ### aarch64 notes
 

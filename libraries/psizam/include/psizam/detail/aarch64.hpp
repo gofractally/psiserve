@@ -4789,8 +4789,11 @@ namespace psizam::detail {
          // Save X19/X20
          emit32(0xA9BF53F3); // STP X19, X20, [SP, #-16]!
 
-         // Repack WASM stack args (16-byte stride, reverse order) into
-         // contiguous 8-byte stride buffer in forward order.
+         // Repack WASM stack args (16-byte stride) into contiguous 8-byte
+         // stride buffer in reverse order (args[0] = last WASM param) to
+         // match fast_trampoline_rev_impl. Operand stack is already reverse-
+         // ordered (last-pushed = last-param at SP+extra_on_stack+0), so a
+         // forward-indexed copy walks both arrays in lockstep.
          uint32_t buf_size = num_params > 0 ? ((num_params * 8 + 15) / 16) * 16 : 0;
          if (buf_size > 0) {
             emit32(0xD1000000 | ((buf_size & 0xFFF) << 10) | (SP << 5) | SP);
@@ -4799,8 +4802,7 @@ namespace psizam::detail {
          emit32(0x910003E1); // MOV X1, SP (buffer pointer)
          uint32_t extra_on_stack = buf_size + 32;
          for (uint32_t i = 0; i < num_params; ++i) {
-            // Read param_i from reverse position on stack
-            uint32_t src_offset = extra_on_stack + (num_params - 1 - i) * 16;
+            uint32_t src_offset = extra_on_stack + i * 16;
             uint32_t dst_offset = i * 8;
             emit_ldr_uimm64(X8, SP, src_offset);
             emit_str_uimm64(X8, X1, dst_offset);
