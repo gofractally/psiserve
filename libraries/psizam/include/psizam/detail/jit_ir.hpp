@@ -309,6 +309,53 @@ namespace psizam::detail {
       }
    }
 
+   // Returns true if a v128_op's codegen emits a BLR/CALL to a softfloat helper
+   // (the aarch64 and x86_64 backends both route float SIMD through softfloat).
+   // Regalloc uses this to mark the op as a call point so caller-saved registers
+   // holding live scalar vregs get spilled across the helper call.
+   inline bool simd_sub_calls_helper(simd_sub sub) {
+      switch (sub) {
+      // f32x4 / f64x2 comparisons
+      case simd_sub::f32x4_eq: case simd_sub::f32x4_ne:
+      case simd_sub::f32x4_lt: case simd_sub::f32x4_gt:
+      case simd_sub::f32x4_le: case simd_sub::f32x4_ge:
+      case simd_sub::f64x2_eq: case simd_sub::f64x2_ne:
+      case simd_sub::f64x2_lt: case simd_sub::f64x2_gt:
+      case simd_sub::f64x2_le: case simd_sub::f64x2_ge:
+      // f32x4 arithmetic
+      case simd_sub::f32x4_ceil: case simd_sub::f32x4_floor:
+      case simd_sub::f32x4_trunc: case simd_sub::f32x4_nearest:
+      case simd_sub::f32x4_abs: case simd_sub::f32x4_neg: case simd_sub::f32x4_sqrt:
+      case simd_sub::f32x4_add: case simd_sub::f32x4_sub:
+      case simd_sub::f32x4_mul: case simd_sub::f32x4_div:
+      case simd_sub::f32x4_min: case simd_sub::f32x4_max:
+      case simd_sub::f32x4_pmin: case simd_sub::f32x4_pmax:
+      // f64x2 arithmetic
+      case simd_sub::f64x2_ceil: case simd_sub::f64x2_floor:
+      case simd_sub::f64x2_trunc: case simd_sub::f64x2_nearest:
+      case simd_sub::f64x2_abs: case simd_sub::f64x2_neg: case simd_sub::f64x2_sqrt:
+      case simd_sub::f64x2_add: case simd_sub::f64x2_sub:
+      case simd_sub::f64x2_mul: case simd_sub::f64x2_div:
+      case simd_sub::f64x2_min: case simd_sub::f64x2_max:
+      case simd_sub::f64x2_pmin: case simd_sub::f64x2_pmax:
+      // Float/int SIMD conversions
+      case simd_sub::i32x4_trunc_sat_f32x4_s: case simd_sub::i32x4_trunc_sat_f32x4_u:
+      case simd_sub::f32x4_convert_i32x4_s:   case simd_sub::f32x4_convert_i32x4_u:
+      case simd_sub::i32x4_trunc_sat_f64x2_s_zero:
+      case simd_sub::i32x4_trunc_sat_f64x2_u_zero:
+      case simd_sub::f64x2_convert_low_i32x4_s: case simd_sub::f64x2_convert_low_i32x4_u:
+      case simd_sub::f32x4_demote_f64x2_zero:   case simd_sub::f64x2_promote_low_f32x4:
+      // Relaxed SIMD
+      case simd_sub::f32x4_relaxed_madd: case simd_sub::f32x4_relaxed_nmadd:
+      case simd_sub::f64x2_relaxed_madd: case simd_sub::f64x2_relaxed_nmadd:
+      case simd_sub::i16x8_relaxed_dot_i8x16_i7x16_s:
+      case simd_sub::i32x4_relaxed_dot_i8x16_i7x16_add_s:
+         return true;
+      default:
+         return false;
+      }
+   }
+
    // Returns true if a v128_op produces a scalar (i32/i64) result rather than v128.
    // For these ops, the result vreg is stored in simd.addr.
    inline bool simd_produces_scalar(simd_sub sub) {

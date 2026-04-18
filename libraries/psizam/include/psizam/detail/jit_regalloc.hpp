@@ -442,6 +442,8 @@ namespace psizam::detail {
                 op == ir_op::f64_convert_s_i64 || op == ir_op::f64_convert_u_i64 ||
                 op == ir_op::f32_demote_f64 || op == ir_op::f64_promote_f32 ||
 #endif
+                (op == ir_op::v128_op &&
+                 simd_sub_calls_helper(static_cast<simd_sub>(func.insts[i].dest))) ||
                 false) {
                call_bmp[i / 64] |= uint64_t(1) << (i % 64);
                has_calls = true;
