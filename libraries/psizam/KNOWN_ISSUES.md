@@ -72,12 +72,20 @@ with softfloat. These failures only appear on ARM64, not on x86_64.
 
 ## Open design issues
 
-### jit2 regalloc ↔ EH interaction bug
+### ~~jit2 regalloc ↔ EH interaction bug~~ — fixed
 
-**Status:** worked around in `libraries/psizam/include/psizam/detail/ir_writer.hpp`
-by skipping regalloc for any function with `eh_data_count > 0` (commit `28229a0`).
-The workaround is correctness-preserving but costs performance for any function
-using `try_table` — those functions fall back to stack-mode codegen.
+**Status:** fixed via force-spill (commits `b88c3af` + `6e909ec`). Any vreg
+in a function containing `ir_op::eh_setjmp` is marked
+`ir_live_interval::crosses_setjmp = 1` and force-spilled to memory (no
+phys_reg, no phys_xmm, spill_slot assigned). At catch entry (reached via
+longjmp), every use reloads from its spill slot — which is in the function's
+stack frame and survives longjmp unchanged. The old "skip regalloc for EH
+functions" workaround is removed. Regalloc-mode codegen still runs
+(so fusion, multi-value dispatch, etc. stay correct) — only the data-flow
+goes through memory.
+
+The original analysis below is kept for historical context and as a pointer
+for improving the fix (e.g. narrower criteria for less spilling).
 
 **Reproducer.** Differential fuzzer seed 263 module 174 (5184 bytes). Minimal
 repro:
@@ -178,10 +186,17 @@ with a repro via `psizam-fuzz-diff 200 263` and verify the fix keeps
 `[eh]` compliance tests green and the fuzzer clean through seeds 42, 263,
 and a few others.
 
-### jit2 stack-mode fusion: missing `if_`/`br_if` fixup push for fused comparisons
+### ~~jit2 stack-mode fusion: missing `if_`/`br_if` fixup push~~ — no longer surfaces
 
-**Status:** not fixed — reverted; the fix exposes a deeper memory-corruption
-bug in jit2 (below).
+**Status:** not an active issue. The stack-mode fusion bug is real (stack
+mode doesn't implement the IR_FUSE_NEXT fast path) but EH-using functions
+now go through the regalloc path (with force-spilled vregs), which DOES
+implement fusion correctly. Non-EH functions already went through regalloc.
+So no fuzz modules currently hit the stack-mode-with-fusion code path.
+
+If stack-mode ever gets re-enabled for EH functions (or for any other reason),
+apply the one-line `emit_fused_branch` check in the stack-mode `i32_eqz` /
+`i64_eqz` / relop handlers.
 
 **Reproducer.**
 
@@ -269,3 +284,32 @@ suggesting an `.eh_frame` or LSDA mismatch for the stub helper.
 **Note:** applies only on stack-mode codegen (active for EH-using
 functions under the current workaround). Regalloc-mode is not tested for
 this pattern but may or may not be affected.
+
+### jit2 ctx-object vector state corruption (deeply nested try_table)
+
+**Status:** open — ~3 crashes per 15K fuzzed modules.
+
+**Reproducers:** fuzz modules `crash_887_seed31337.wasm` (5048 B),
+`crash_601_seed9000.wasm` (3201 B), `crash_1517_seed5678.wasm` (1859 B).
+All interpreter / jit / jit_llvm report `interp_trap (unreachable)`; jit2
+crashes with SIGSEGV or SIGABRT.
+
+**Symptom.** Crash inside `jit_execution_context::jit_eh_leave()` at
+`_jit_eh_catches.resize(frame.first_catch_idx)`, where
+`_jit_eh_stack.size()` is a huge garbage number and the vector's
+internal pointers point at unmapped memory. The ctx object's heap memory
+has been overwritten between valid operation and this crash point.
+
+All failing modules share a pattern: heavy nesting of `try_table` /
+`throw` / `catch` (20–50+ nested levels), plus either `memory.size` on a
+zero-page memory, deep `call_indirect` chains, or multi-value block
+results. The offending write hasn't been located yet.
+
+**Ruled out:** not a regalloc assignment issue (force-spilling every vreg
+in EH functions doesn't help); not a multi-value return buffer overflow
+(modules use 0 or ≤ 5 returns); not native-stack overflow
+(`stack_allocator` with guard pages doesn't trigger).
+
+**Investigation hint:** the ctx's `_jit_eh_stack` field is at offset ~624
+from the ctx base. Set a hardware watchpoint on `(char*)ctx + 624` early
+in execution and re-run to catch the write at its source.
