@@ -3786,17 +3786,23 @@ namespace psizam::detail {
                auto& di = _func_insts[def];
                if (di.opcode == ir_op::const_i32 || di.opcode == ir_op::const_i64) {
                   int32_t imm = static_cast<int32_t>(di.imm64);
-                  if (pr_s1 >= 0) {
-                     if (is32) this->emit_cmp(imm, phys_to_reg32(pr_s1));
-                     else      this->emit_cmp(imm, phys_to_reg64(pr_s1));
-                  } else {
-                     load_vreg_rax(inst.rr.src1);
-                     if (is32) this->emit_cmp(imm, eax);
-                     else      this->emit_cmp(imm, rax);
+                  // CMP r64, imm32 sign-extends imm32 to 64 bits. If the
+                  // narrowed value doesn't round-trip, the immediate form
+                  // would compare against the wrong value — fall back to
+                  // the register path.
+                  if (is32 || static_cast<int64_t>(imm) == di.imm64) {
+                     if (pr_s1 >= 0) {
+                        if (is32) this->emit_cmp(imm, phys_to_reg32(pr_s1));
+                        else      this->emit_cmp(imm, phys_to_reg64(pr_s1));
+                     } else {
+                        load_vreg_rax(inst.rr.src1);
+                        if (is32) this->emit_cmp(imm, eax);
+                        else      this->emit_cmp(imm, rax);
+                     }
+                     if (_func_use_count && _func_use_count[inst.rr.src2] == 1)
+                        di.flags |= IR_DEAD;
+                     used_imm = true;
                   }
-                  if (_func_use_count && _func_use_count[inst.rr.src2] == 1)
-                     di.flags |= IR_DEAD;
-                  used_imm = true;
                }
             }
             if (!used_imm) {

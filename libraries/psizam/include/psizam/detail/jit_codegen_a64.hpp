@@ -3572,15 +3572,22 @@ namespace psizam::detail {
          if (is_add || is_sub) {
             int64_t cval;
             if (try_get_const(inst.rr.src2, cval)) {
-               uint32_t uval = static_cast<uint32_t>(cval & (is32 ? 0xFFFFFFFF : cval));
+               // ADD/SUB #imm is a 12-bit unsigned form. 32-bit: only low 32
+               // bits participate; 64-bit: the full value must actually fit.
+               // The previous `cval & (is32 ? 0xFFFFFFFF : cval)` self-ANDed in
+               // the 64-bit case, then narrowed to uint32_t — silently turning
+               // e.g. 2^32 into #0.
+               uint64_t uval = is32 ? (static_cast<uint64_t>(cval) & 0xFFFFFFFFu)
+                                    : static_cast<uint64_t>(cval);
                if (uval <= 4095) {
+                  uint32_t imm = static_cast<uint32_t>(uval);
                   load_vreg_x0(inst.rr.src1);
                   if (is_add) {
-                     if (is32) emit32(0x11000000 | (uval << 10) | (X0 << 5) | X0);
-                     else      emit32(0x91000000 | (uval << 10) | (X0 << 5) | X0);
+                     if (is32) emit32(0x11000000 | (imm << 10) | (X0 << 5) | X0);
+                     else      emit32(0x91000000 | (imm << 10) | (X0 << 5) | X0);
                   } else {
-                     if (is32) emit32(0x51000000 | (uval << 10) | (X0 << 5) | X0);
-                     else      emit32(0xD1000000 | (uval << 10) | (X0 << 5) | X0);
+                     if (is32) emit32(0x51000000 | (imm << 10) | (X0 << 5) | X0);
+                     else      emit32(0xD1000000 | (imm << 10) | (X0 << 5) | X0);
                   }
                   kill_const_if_single_use(inst.rr.src2);
                   store_x0_vreg(inst.dest);
@@ -3811,14 +3818,20 @@ namespace psizam::detail {
       }
 
       void emit_cmp(ir_function& func, const ir_inst& inst, uint32_t idx, uint32_t cond, bool is32) {
-         // Try const-immediate
+         // Try const-immediate. CMP #imm is a 12-bit unsigned form, so the
+         // constant must actually fit in [0, 4095] in the full compare width.
+         // 32-bit form: only the low 32 bits participate. 64-bit form: the
+         // full 64-bit value must be small — narrowing cval to uint32_t first
+         // would silently drop the high bits of e.g. -2^32, emitting CMP Xn, #0.
          int64_t cval;
          if (try_get_const(inst.rr.src2, cval)) {
-            uint32_t uval = static_cast<uint32_t>(is32 ? (cval & 0xFFFFFFFF) : cval);
+            uint64_t uval = is32 ? (static_cast<uint64_t>(cval) & 0xFFFFFFFFu)
+                                 : static_cast<uint64_t>(cval);
             if (uval <= 4095) {
+               uint32_t imm = static_cast<uint32_t>(uval);
                load_vreg_x0(inst.rr.src1);
-               if (is32) emit_cmp_imm32(X0, uval);
-               else      emit_cmp_imm64(X0, uval);
+               if (is32) emit_cmp_imm32(X0, imm);
+               else      emit_cmp_imm64(X0, imm);
                kill_const_if_single_use(inst.rr.src2);
                if ((inst.flags & IR_FUSE_NEXT) && emit_fused_branch(func, idx, cond)) return;
                emit_cset(X0, cond);
