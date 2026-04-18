@@ -243,10 +243,15 @@ the module's `func_type` table has been overwritten. Suspected root cause
 is in the jit2 EH unwind path corrupting adjacent memory; not yet
 diagnosed.
 
-### jit2 float-to-int trap surfaces as SIGSEGV in libgcc unwinder
+### ~~jit2 float-to-int trap surfaces as SIGSEGV in libgcc unwinder~~ — fixed
 
-**Status:** not fixed — diagnosed but requires coordinated fix with the
-jit2 `.eh_frame` registration.
+**Status:** fixed (commit `d30d84f`). Replaced the throw-based trapping
+path (`longjmp_on_exception([&]() { _psizam_f*_trunc_i*(f); })`) with
+inline NaN/overflow checks using `signal_throw`, which longjmps directly
+to `trap_jmp_ptr` without walking JIT frames. Fuzz runs across 5 seeds ×
+3K modules show the `interp=interp_trap jit2=memory_trap` class went
+from 15 → 0. The original (unfixed) description is kept below for
+context in case a related unwinder issue resurfaces.
 
 **Reproducer.** Fuzz seed 31337 module 74/656/1692 — any WASM module that
 calls `i32.trunc_f32_u` / `i32.trunc_f64_s` / `i64.trunc_f32_u` with a
