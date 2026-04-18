@@ -23,6 +23,48 @@ case "$cmd" in
       out_json="${@: -1}"   # last arg is output path
       # Drop the last arg from the wast2json argv:
       argv=("${@:1:$#-1}")
+      # Preprocess the .wast (last arg of argv) to strip constructs newer
+      # wabt can't parse: `(module definition ...)` forms and any assert_*
+      # block containing `0x1_0000_0000` (post-Memory64 oversize-validation
+      # tests). These strip cleanly from memory.wast without affecting the
+      # rest of the module sequence.
+      wast_path="${argv[${#argv[@]}-1]}"
+      tmp_wast=$(mktemp -t wast_filtered.XXXXXX).wast
+      trap 'rm -f "$tmp_wast"' EXIT
+      awk '
+      BEGIN { buf = ""; depth = 0; in_block = 0 }
+      function flush() {
+        if (buf != "") {
+          if (buf ~ /0x1_0000_0000[^_0-9]/ || buf ~ /module[ \t]+definition/) {
+            # drop
+          } else {
+            printf "%s", buf
+          }
+          buf = ""
+        }
+      }
+      {
+        line = $0 "\n"
+        scratch = line
+        n_open = gsub(/\(/, "(", scratch)
+        scratch = line
+        n_close = gsub(/\)/, ")", scratch)
+        if (in_block) {
+          buf = buf line
+          depth += n_open - n_close
+          if (depth <= 0) { flush(); in_block = 0; depth = 0 }
+        } else {
+          if (n_open > n_close) {
+            in_block = 1; buf = line; depth = n_open - n_close
+          } else {
+            buf = line; flush()
+          }
+        }
+      }
+      END { flush() }
+      ' "$wast_path" > "$tmp_wast"
+      # Substitute the filtered wast into argv:
+      argv[${#argv[@]}-1]="$tmp_wast"
       # wast2json emits .wasm side-effect files in the same directory as its
       # -o argument. Tests read .wasm from ${CMAKE_BINARY_DIR}/wasms/, which
       # cmake sets as our CWD — so emit with a bare basename (→ files land in

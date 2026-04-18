@@ -318,7 +318,8 @@ BACKEND_TEST_CASE( "Testing wasm <select_6_wasm>", "[select_6_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <select_7_wasm>", "[select_7_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "select.7.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <select_8_wasm>", "[select_8_wasm_tests]" ) {

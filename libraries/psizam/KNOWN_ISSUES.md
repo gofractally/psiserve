@@ -4,7 +4,7 @@
 
 | Platform | Failures | Total | Pass Rate |
 |----------|----------|-------|-----------|
-| macOS aarch64 | 97 | 17,713 | 99.5% |
+| macOS aarch64 | 65 | 17,709 | 99.6% |
 | Linux x86_64 | (stale — re-measure after submodule bump) | | |
 
 The spec testsuite submodule was bumped to `51279a9` and the SIMD block now
@@ -27,25 +27,13 @@ Fixing requires extending `parser.hpp` to parse the remaining reftype
 encodings and teaching validation + the backends to handle them. Not
 yet prioritized.
 
-### Memory section limit — 32 failures (8 tests × 4 backends)
+### Memory section limit — 4 failures (1 test × 4 backends)
 
-Tests that declare multiple memories or large memory definitions. The
-parser's per-section element cap was bumped from hardcoded `1` to a
-configurable default of `16` (`max_memory_section_elements` in
-`options.hpp`; accessor in `parser.hpp`). That cleared `memory_grow_0`.
-What remains:
-
-- **memory_6..10** (5): stale `.wasm` files in `build/Debug/wasms/`
-  from before a test regen — the checked-in `memory_tests.cpp`
-  expects a `memsize` export those `.wasm` files don't have. Needs a
-  full `wast2json` regeneration step.
-- **memory_25** (1): fails with `"maximum memory out of range"` —
-  past the parse-limit gate now, blocked on a separate memory-size
-  validation (likely Memory64 proposal).
-- **memory_29** (1): multi-memory test (4 memories with `mem1`/`mem2`
-  exports, `size1`/`size2`/`grow1`/`grow2` funcs); blocked on
-  multi-memory runtime support.
-- **memory_grow_2** (1): same as memory_29 — multi-memory proposal.
+- **memory_grow_2** (1 test): calls `memory.grow` against a module with
+  4 memories; fails at parse with `"memory.grow must end with 0x00"`.
+  Multi-memory's `memory.grow` encoding includes a memidx byte
+  instead of the zero reserved byte; blocked on multi-memory runtime
+  support.
 
 ### ~~spectest harness imports~~ — fixed
 
@@ -54,6 +42,30 @@ What remains:
 `print_f64_f64` as no-op member functions, registered via
 `spectest_rhf::add<&spectest_host_t::print_i32>(...)`. This cleared
 **binary-leb128_10..12** (3) and **token_11** (1) — 16 failures total.
+
+### ~~Memory section limit / stale memory.wast artifacts~~ — fixed
+
+Root cause was two-fold: (1) the parser hardcoded `count <= 1` for the
+memory section (fine for WASM 1.0, but rejected valid 2-memory+
+modules); (2) `memory.wast` in the upstream testsuite uses two
+constructs newer `wabt` versions can't parse — `(module definition ...)`
+and Memory64 oversize literals like `0x1_0000_0000` — so wast2json
+returned an empty `.json` and `.wasm` files went stale. The
+checked-in `memory_tests.cpp` expected a different set of modules than
+the stale `.wasm` files carried. Fix:
+
+- `parser.hpp`: replaced the hardcoded cap with
+  `max_memory_section_elements` (default 16) via the `MAX_ELEMENTS`
+  macro.
+- `tests/spec_test_helpers.sh`: preprocess the `.wast` through awk
+  before invoking wast2json, stripping any `module definition` form
+  and any `assert_*` block containing `0x1_0000_0000`. Balanced-paren
+  tracker handles multi-line blocks.
+
+Cleared **memory_6..10, memory_25, memory_29, memory_grow_0** (8
+tests × 4 backends = 32 failures). Also cleared **select_7_wasm** (4)
+as a side benefit of the helper running fresh on all `.wast`
+regenerations.
 
 ### ~~Stale test code~~ — fixed in tree
 
@@ -618,18 +630,11 @@ resolves the loop-exit condition and hits `unreachable` directly,
 while the others run the counter out. Not a correctness divergence
 per se (all eventually would trap), but the fuzzer flags it.
 
-### select validation: mismatched numeric types
+### ~~select validation: mismatched numeric types~~ — fixed
 
-**Status:** open — `spec/select_tests.cpp:318`
-(select_7_wasm).
-
-The testsuite's `select.7.wasm` has an untyped `select` with an
-`i32` on top of an `f64`. The parser rejects with
-`"incorrect types for select"`; the test expects validation to
-succeed. Need to double-check the current spec: untyped `select`
-probably requires both operands to be the same numeric type, and the
-test expectation is stale. If the parser is too strict on some legal
-combination, fix there instead.
+**Status:** fixed (side effect of the `memory.wast` regen via the new
+helper script). A fresh regen of `select.json` produced correctly-numbered
+`.wasm` files and the checked-in `select_tests.cpp` now matches them.
 
 ### unit_tests heap corruption running full suite
 
