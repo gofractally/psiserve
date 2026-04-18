@@ -3642,8 +3642,8 @@ namespace psizam::detail {
          emit32(0x3100043F); // ADDS WZR, W1, #1
          void* not_minus1 = code;
          emit32(0x54000001); // B.NE not_minus1
-         // CMN W0, W0 -> sets V if W0 == INT_MIN (0x80000000)
-         emit32(0x2B00001F | (X0 << 5) | (X0 << 16));
+         // NEGS WZR, W0 -> SUBS WZR, WZR, W0 -> sets V iff W0 == INT_MIN.
+         emit32(0x6B0003FF | (X0 << 16));
          emit_branch_to_handler(COND_VS, fpe_handler);
          fix_branch(not_minus1, code);
          // SDIV W0, W0, W1
@@ -3680,8 +3680,8 @@ namespace psizam::detail {
          emit32(0xB100043F);
          void* not_minus1 = code;
          emit32(0x54000001); // B.NE
-         // ADDS XZR, X0, X0 -> sets V if X0 == INT64_MIN
-         emit32(0xAB00001F | (X0 << 5) | (X0 << 16));
+         // NEGS XZR, X0 -> SUBS XZR, XZR, X0 -> sets V iff X0 == INT64_MIN.
+         emit32(0xEB0003FF | (X0 << 16));
          emit_branch_to_handler(COND_VS, fpe_handler);
          fix_branch(not_minus1, code);
          // SDIV X0, X0, X1
