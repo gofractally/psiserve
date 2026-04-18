@@ -887,6 +887,10 @@ namespace psizam::detail {
                   v.high = this->_multi_return[1].i64;
                   return {v128_const_t{v}};
                }
+               case funcref:
+               case externref:
+               case exnref:
+                  return {i32_const_t{val.i32}};
                default: assert(!"Unexpected multi-value return type");
             }
          }
@@ -896,6 +900,10 @@ namespace psizam::detail {
             case f32: return {f32_const_t{result.scalar.f32}};
             case f64: return {f64_const_t{result.scalar.f64}};
             case v128: return {v128_const_t{result.vector}};
+            case funcref:
+            case externref:
+            case exnref:
+               return {i32_const_t{result.scalar.i32}};
             default: assert(!"Unexpected function return type");
          }
          __builtin_unreachable();
@@ -1386,6 +1394,10 @@ namespace psizam::detail {
             case types::f32: return f32_const_t{ _globals[index].value.f32 };
             case types::f64: return f64_const_t{ _globals[index].value.f64 };
             case types::v128: return v128_const_t{ _globals[index].value.v128 };
+            case types::funcref:
+            case types::externref:
+            case types::exnref:
+               return i32_const_t{ _globals[index].value.i32 };
             default: PSIZAM_THROW(wasm_interpreter_exception, "invalid global type");
          }
       }
@@ -1395,7 +1407,11 @@ namespace psizam::detail {
          auto& gl = _mod->globals[index];
          PSIZAM_ASSERT(gl.type.mutability, wasm_interpreter_exception, "global is not mutable");
          visit(overloaded{ [&](const i32_const_t& i) {
-                                  PSIZAM_ASSERT(gl.type.content_type == types::i32, wasm_interpreter_exception,
+                                  PSIZAM_ASSERT(gl.type.content_type == types::i32 ||
+                                                gl.type.content_type == types::funcref ||
+                                                gl.type.content_type == types::externref ||
+                                                gl.type.content_type == types::exnref,
+                                                wasm_interpreter_exception,
                                                 "expected i32 global type");
                                   _globals[index].value.i32 = i.data.ui;
                                },
@@ -1644,6 +1660,11 @@ namespace psizam::detail {
                   case types::f32: push_operand(f32_const_t{ (uint32_t)0 }); break;
                   case types::f64: push_operand(f64_const_t{ (uint64_t)0 }); break;
                   case types::v128: push_operand(v128_const_t{ v128_t{} }); break;
+                  case types::funcref:
+                  case types::externref:
+                  case types::exnref:
+                     push_operand(i32_const_t{ static_cast<uint32_t>(UINT32_MAX) });
+                     break;
                   default: PSIZAM_THROW(wasm_interpreter_exception, "invalid function param type");
                }
          }
