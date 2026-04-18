@@ -8,6 +8,8 @@
 #include <psio/from_json/map.hpp>
 #include <psio/get_type_name.hpp>
 #include <psio/json/any.hpp>
+#include <psio/structural.hpp>
+#include <psio/wit_resource.hpp>
 #include <psio/to_json.hpp>
 #include <psio/to_json/map.hpp>
 #include <ranges>
@@ -153,36 +155,14 @@ namespace psio
          return *box;
       }
 
-      struct Schema
-      {
-         std::map<std::string, AnyType> types;
-         //
-         const AnyType* get(const std::string& name) const;
-         void           insert(std::string name, AnyType type);
-      };
-      PSIO_REFLECT(Schema, types)
-
-      void to_json(const Schema& schema, auto& stream)
-      {
-         to_json(schema.types, stream);
-      }
-
-      void from_json(Schema& schema, auto& stream)
-      {
-         from_json(schema.types, stream);
-      }
-
-      inline auto& clio_unwrap_packable(Schema& schema)
-      {
-         return schema.types;
-      }
-
-      inline const auto& clio_unwrap_packable(const Schema& schema)
-      {
-         return schema.types;
-      }
-
+      // Forward-declarations. `Schema`, `Member`, and `Func` are fully
+      // defined after `AnyType` (which they reference), together with the
+      // Phase B envelope types (Package, Interface, World, Use).
+      // `Resource` is a variant alternative of AnyType but holds
+      // `vector<Func>`, which is likewise forward-declared.
+      struct Schema;
       struct Member;
+      struct Func;
 
       void to_json_members(const std::vector<Member>&, auto& stream);
       void from_json_members(const std::vector<Member>&, auto& stream);
@@ -235,6 +215,18 @@ namespace psio
       {
          from_json_members(type.members, stream);
       }
+
+      // WIT resource: opaque handle type with reflected methods. Data
+      // members on resource classes are intentionally not carried —
+      // resources don't cross the boundary by value. `name` lets the IR
+      // stand alone without needing the outer map key.
+      struct Resource
+      {
+         std::string            name;
+         std::vector<Func>      methods;
+         std::vector<Attribute> attributes;
+      };
+      PSIO_REFLECT(Resource, name, methods, attributes)
 
       struct Array
       {
@@ -421,6 +413,7 @@ namespace psio
          AnyType(Tuple type);
          AnyType(FracPack type);
          AnyType(Custom type);
+         AnyType(Resource type);
          AnyType(Type type);
          AnyType(std::string name);
          AnyType(const char* name);
@@ -435,6 +428,7 @@ namespace psio
                       Float,
                       FracPack,
                       Custom,
+                      Resource,
                       Type>
                                 value;
          mutable const AnyType* resolved = nullptr;
@@ -475,6 +469,101 @@ namespace psio
       };
       PSIO_REFLECT(Member, name, type, attributes)
 
+      // ── Structural envelope (Phase B, L3) ────────────────────────────
+      //
+      // Schema grows from a bare `types` map into a WIT-shaped envelope:
+      // a package header, interfaces grouping types + functions, worlds
+      // composing interfaces, and cross-package `use` declarations. This
+      // mirrors `wit_world` in `wit_types.hpp` so a parsed `.wit` file
+      // and a reflected C++ world produce the same IR.
+      //
+      // Wire format: each envelope type is a normal extensible struct
+      // (u16 fixed_size header + trailing variable data), so future
+      // field additions ride the standard trailing-extension path.
+
+      struct Package
+      {
+         std::string            name;
+         std::string            version;
+         std::vector<Attribute> attributes;
+      };
+      PSIO_REFLECT(Package, name, version, attributes)
+
+      struct UseItem
+      {
+         std::string                name;
+         std::optional<std::string> alias;
+      };
+      PSIO_REFLECT(UseItem, name, alias)
+
+      struct Use
+      {
+         std::string          package;
+         std::string          interface_name;
+         std::string          version;
+         std::vector<UseItem> items;
+      };
+      PSIO_REFLECT(Use, package, interface_name, version, items)
+
+      struct UseRef
+      {
+         std::string package;
+         std::string interface_name;
+      };
+      PSIO_REFLECT(UseRef, package, interface_name)
+
+      struct Func
+      {
+         std::string            name;
+         std::vector<Member>    params;
+         std::optional<AnyType> result;
+         std::vector<Attribute> attributes;
+      };
+      PSIO_REFLECT(Func, name, params, result, attributes)
+
+      struct Interface
+      {
+         std::string              name;
+         std::vector<std::string> type_names;
+         std::vector<Func>        funcs;
+         std::vector<Attribute>   attributes;
+      };
+      PSIO_REFLECT(Interface, name, type_names, funcs, attributes)
+
+      struct World
+      {
+         std::string              name;
+         std::vector<UseRef>      imports;
+         std::vector<std::string> exports;
+         std::vector<Attribute>   attributes;
+      };
+      PSIO_REFLECT(World, name, imports, exports, attributes)
+
+      struct Schema
+      {
+         Package                        package;
+         std::vector<Interface>         interfaces;
+         std::vector<World>             worlds;
+         std::vector<Use>               uses;
+         std::map<std::string, AnyType> types;
+
+         const AnyType* get(const std::string& name) const;
+         void           insert(std::string name, AnyType type);
+      };
+      PSIO_REFLECT(Schema, package, interfaces, worlds, uses, types)
+
+      // JSON stays as the bare `types` map — keeps the cross-language
+      // vectors.json format stable through Phase B. Envelope JSON is a
+      // Phase C concern when emit_wit / from_wit_text land.
+      void to_json(const Schema& schema, auto& stream)
+      {
+         to_json(schema.types, stream);
+      }
+      void from_json(Schema& schema, auto& stream)
+      {
+         from_json(schema.types, stream);
+      }
+
       inline AnyType::AnyType() {}
       inline AnyType::AnyType(Int type) : value(std::move(type)) {}
       inline AnyType::AnyType(Float type) : value(std::move(type)) {}
@@ -487,6 +576,7 @@ namespace psio
       inline AnyType::AnyType(Tuple type) : value(std::move(type)) {}
       inline AnyType::AnyType(FracPack type) : value(std::move(type)) {}
       inline AnyType::AnyType(Custom type) : value(std::move(type)) {}
+      inline AnyType::AnyType(Resource type) : value(std::move(type)) {}
       inline AnyType::AnyType(Type type) : value(std::move(type)) {}
       inline AnyType::AnyType(std::string name) : value(Type{std::move(name)}) {}
       inline AnyType::AnyType(const char* name) : value(Type{std::move(name)}) {}
@@ -1949,6 +2039,17 @@ namespace psio
                                 Array{.type = insert<std::remove_cv_t<std::remove_extent_t<T>>>(),
                                       .len  = std::extent_v<T>});
                }
+               else if constexpr (is_wit_resource_v<T>)
+               {
+                  // WIT resource: reflected methods become `Func`s; data
+                  // members are dropped (resources are opaque across the
+                  // WASM boundary, per wit_resource.hpp's contract).
+                  Resource res;
+                  res.name       = std::string{reflect<T>::name};
+                  res.methods    = insert_resource_methods<T>();
+                  res.attributes = attrs_from_tuple(type_attrs_of<T>());
+                  schema.insert(name, std::move(res));
+               }
                else if constexpr (reflect<T>::is_struct)
                {
                   auto members = psio::apply_member_templates(
@@ -2003,6 +2104,41 @@ namespace psio
             }
             return Type{std::move(name)};
          }
+         // Walk the compile-time world registry populated by
+         // PSIO_WORLD / PSIO_INTERFACE / PSIO_USE / PSIO_PACKAGE,
+         // turning it into the runtime `Schema` envelope: package
+         // header, uses (imports), interfaces (exports), and all types
+         // referenced by exported interfaces.
+         //
+         // Function pointers declared in PSIO_INTERFACE are not yet
+         // threaded into `Interface::funcs`; that requires param/result
+         // name metadata which lands with step 5 / phase C.
+         template <typename WorldTag>
+         SchemaBuilder& insert_world() &
+         {
+            using info             = ::psio::detail::world_info<WorldTag>;
+            schema.package.name    = info::package::name.c_str();
+            schema.package.version = info::package::version.c_str();
+
+            World world;
+            world.name = std::string{info::name};
+            insert_world_imports<typename info::imports>(
+                world,
+                std::make_index_sequence<std::tuple_size_v<typename info::imports>>{});
+            insert_world_exports<typename info::exports>(
+                world,
+                std::make_index_sequence<std::tuple_size_v<typename info::exports>>{});
+            schema.worlds.push_back(std::move(world));
+            return *this;
+         }
+
+         template <typename WorldTag>
+         SchemaBuilder&& insert_world() &&
+         {
+            insert_world<WorldTag>();
+            return std::move(*this);
+         }
+
          Schema build(std::span<AnyType* const> ext = {}) &&
          {
             optimize(ext);
@@ -2013,6 +2149,149 @@ namespace psio
          void optimize(std::span<AnyType* const> ext = {});
 
         private:
+         template <typename ImportsTuple, std::size_t... I>
+         void insert_world_imports(World& world, std::index_sequence<I...>)
+         {
+            (add_world_import<std::tuple_element_t<I, ImportsTuple>>(world), ...);
+         }
+
+         template <typename UseTag>
+         void add_world_import(World& world)
+         {
+            using u = ::psio::detail::use_info<UseTag>;
+            Use use;
+            use.package        = std::string{u::package};
+            use.interface_name = std::string{u::interface_name};
+            use.version        = std::string{u::version};
+            schema.uses.push_back(std::move(use));
+
+            UseRef ref;
+            ref.package        = std::string{u::package};
+            ref.interface_name = std::string{u::interface_name};
+            world.imports.push_back(std::move(ref));
+         }
+
+         template <typename ExportsTuple, std::size_t... I>
+         void insert_world_exports(World& world, std::index_sequence<I...>)
+         {
+            (add_world_export<std::tuple_element_t<I, ExportsTuple>>(world), ...);
+         }
+
+         template <typename IfaceTag>
+         void add_world_export(World& world)
+         {
+            using info = ::psio::detail::interface_info<IfaceTag>;
+            Interface iface;
+            iface.name = std::string{info::name};
+            add_interface_types<typename info::types>(
+                iface,
+                std::make_index_sequence<std::tuple_size_v<typename info::types>>{});
+            add_interface_funcs<info>(
+                iface,
+                std::make_index_sequence<std::tuple_size_v<decltype(info::funcs)>>{});
+            schema.interfaces.push_back(std::move(iface));
+            world.exports.push_back(std::string{info::name});
+         }
+
+         template <typename Info, std::size_t... I>
+         void add_interface_funcs(Interface& iface, std::index_sequence<I...>)
+         {
+            (add_interface_func<Info, I>(iface), ...);
+         }
+
+         template <typename Info, std::size_t I>
+         void add_interface_func(Interface& iface)
+         {
+            constexpr auto     ptr       = std::get<I>(Info::funcs);
+            std::string_view   qualified = Info::func_names[I];
+            // Strip any `ns::ns::name` prefix — WIT names are bare.
+            auto colons = qualified.rfind("::");
+            std::string short_name =
+                std::string(colons == std::string_view::npos
+                                ? qualified
+                                : qualified.substr(colons + 2));
+            iface.funcs.push_back(make_func_from_ptr(std::move(short_name), ptr));
+         }
+
+         template <typename R, typename... Args>
+         Func make_func_from_ptr(std::string name, R (*)(Args...))
+         {
+            Func func;
+            func.name = std::move(name);
+            // Parameter names aren't reflected from free functions;
+            // synthesize `arg0`, `arg1`, … so the WIT output is
+            // syntactically valid.
+            std::size_t idx = 0;
+            (..., func.params.push_back(
+                     Member{.name = "arg" + std::to_string(idx++),
+                            .type = this->insert<Args>()}));
+            if constexpr (!std::is_void_v<R>)
+               func.result = this->insert<R>();
+            return func;
+         }
+
+         template <typename TypesTuple, std::size_t... I>
+         void add_interface_types(Interface& iface, std::index_sequence<I...>)
+         {
+            (add_interface_type<std::tuple_element_t<I, TypesTuple>>(iface), ...);
+         }
+
+         template <typename T>
+         void add_interface_type(Interface& iface)
+         {
+            std::string name{reflect<T>::name};
+            this->insert<T>(name);
+            iface.type_names.push_back(std::move(name));
+         }
+
+         // Walk reflect<T>::member_functions, producing one Func per
+         // method. Each initializer_list entry in member_function_names
+         // begins with the method name, followed by parameter names.
+         template <typename T>
+         std::vector<Func> insert_resource_methods()
+         {
+            using R = reflect<T>;
+            std::vector<Func> methods;
+            std::size_t       method_i = 0;
+            apply_member_templates(
+                (typename R::member_functions*)nullptr,
+                [&]<auto... M>()
+                {
+                   auto process = [&]<auto Ptr>()
+                   {
+                      using MType = MemberPtrType<decltype(Ptr)>;
+                      auto& names = R::member_function_names[method_i++];
+                      auto  it    = names.begin();
+                      Func  func;
+                      func.name = *it++;
+                      add_resource_method_params<typename MType::ArgTypes>(
+                          func, it, names.end());
+                      if constexpr (!std::is_void_v<typename MType::ReturnType>)
+                      {
+                         func.result = this->insert<
+                             std::remove_cvref_t<typename MType::ReturnType>>();
+                      }
+                      methods.push_back(std::move(func));
+                   };
+                   (process.template operator()<M>(), ...);
+                });
+            return methods;
+         }
+
+         template <typename ArgList, typename It>
+         void add_resource_method_params(Func& func, It& it, It end)
+         {
+            forEachType(ArgList{},
+                        [&](auto* p)
+                        {
+                           using A = std::remove_cvref_t<std::remove_pointer_t<decltype(p)>>;
+                           Member m;
+                           m.name = (it != end) ? *it++ : "";
+                           m.type = this->insert<A>();
+                           func.params.push_back(std::move(m));
+                        });
+         }
+
          bool                               expandNested_ = false;
          Schema                             schema;
          std::map<const void*, std::size_t> ids;

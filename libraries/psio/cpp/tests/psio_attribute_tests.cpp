@@ -372,3 +372,105 @@ TEST_CASE("schema fracpack: Variant attributes survive round-trip",
    REQUIRE(since);
    REQUIRE(since->value == "0.3.0");
 }
+
+// ── Phase B envelope: Package / Interface / World / Use round-trip ────────
+//
+// These envelope fields are populated manually here (the PSIO_PACKAGE /
+// PSIO_INTERFACE / PSIO_WORLD macros land in Phase B step 2+). The test
+// proves only that the new wire format carries the envelope intact.
+
+TEST_CASE("schema envelope: Package round-trip", "[psio][schema][envelope][fracpack]")
+{
+   namespace S = psio::schema_types;
+   S::Schema schema;
+   schema.package  = S::Package{"psibase", "0.3.0", {}};
+   schema.package.attributes.push_back({"since", std::string{"0.1.0"}});
+
+   auto bytes = psio::to_frac(schema);
+   auto rt    = psio::from_frac<S::Schema>(bytes);
+
+   REQUIRE(rt.package.name == "psibase");
+   REQUIRE(rt.package.version == "0.3.0");
+   REQUIRE(rt.package.attributes.size() == 1);
+   REQUIRE(rt.package.attributes[0].name == "since");
+   REQUIRE(rt.package.attributes[0].value == "0.1.0");
+}
+
+TEST_CASE("schema envelope: Interface + Func round-trip",
+          "[psio][schema][envelope][fracpack]")
+{
+   namespace S = psio::schema_types;
+   S::Schema schema;
+   S::Interface iface;
+   iface.name       = "kernel";
+   iface.type_names = {"Block", "Transaction"};
+   S::Func submit;
+   submit.name = "submit_tx";
+   submit.params.push_back(S::Member{"tx", S::Type{"Transaction"}, {}});
+   submit.result = S::AnyType{S::Type{"Block"}};
+   iface.funcs.push_back(std::move(submit));
+   schema.interfaces.push_back(std::move(iface));
+
+   auto bytes = psio::to_frac(schema);
+   auto rt    = psio::from_frac<S::Schema>(bytes);
+
+   REQUIRE(rt.interfaces.size() == 1);
+   REQUIRE(rt.interfaces[0].name == "kernel");
+   REQUIRE(rt.interfaces[0].type_names == std::vector<std::string>{"Block", "Transaction"});
+   REQUIRE(rt.interfaces[0].funcs.size() == 1);
+   REQUIRE(rt.interfaces[0].funcs[0].name == "submit_tx");
+   REQUIRE(rt.interfaces[0].funcs[0].params.size() == 1);
+   REQUIRE(rt.interfaces[0].funcs[0].params[0].name == "tx");
+   REQUIRE(rt.interfaces[0].funcs[0].result.has_value());
+}
+
+TEST_CASE("schema envelope: World + Use round-trip",
+          "[psio][schema][envelope][fracpack]")
+{
+   namespace S = psio::schema_types;
+   S::Schema schema;
+   schema.uses.push_back(S::Use{
+       "wasi", "io/streams", "0.2.0",
+       {S::UseItem{"input_stream", std::nullopt},
+        S::UseItem{"output_stream", std::string{"ostream"}}}});
+   S::World w;
+   w.name    = "node";
+   w.imports = {S::UseRef{"wasi", "io/streams"}};
+   w.exports = {"kernel"};
+   schema.worlds.push_back(std::move(w));
+
+   auto bytes = psio::to_frac(schema);
+   auto rt    = psio::from_frac<S::Schema>(bytes);
+
+   REQUIRE(rt.uses.size() == 1);
+   REQUIRE(rt.uses[0].package == "wasi");
+   REQUIRE(rt.uses[0].interface_name == "io/streams");
+   REQUIRE(rt.uses[0].items.size() == 2);
+   REQUIRE(rt.uses[0].items[0].name == "input_stream");
+   REQUIRE_FALSE(rt.uses[0].items[0].alias.has_value());
+   REQUIRE(rt.uses[0].items[1].alias == "ostream");
+
+   REQUIRE(rt.worlds.size() == 1);
+   REQUIRE(rt.worlds[0].name == "node");
+   REQUIRE(rt.worlds[0].imports.size() == 1);
+   REQUIRE(rt.worlds[0].imports[0].package == "wasi");
+   REQUIRE(rt.worlds[0].exports == std::vector<std::string>{"kernel"});
+}
+
+TEST_CASE("schema envelope: empty envelope still round-trips types",
+          "[psio][schema][envelope][fracpack]")
+{
+   namespace S = psio::schema_types;
+   S::SchemaBuilder b;
+   b.insert<attr_test::Container>("container");
+   auto schema = std::move(b).build();
+
+   auto bytes = psio::to_frac(schema);
+   auto rt    = psio::from_frac<S::Schema>(bytes);
+
+   REQUIRE(rt.package.name.empty());
+   REQUIRE(rt.interfaces.empty());
+   REQUIRE(rt.worlds.empty());
+   REQUIRE(rt.uses.empty());
+   REQUIRE(rt.get("container") != nullptr);
+}

@@ -3,6 +3,7 @@ add_library(psio
    src/fpconv.c
    src/from_json.cpp
    src/chrono.cpp
+   src/emit_wit.cpp
    src/schema.cpp
 )
 target_include_directories(psio PUBLIC include)

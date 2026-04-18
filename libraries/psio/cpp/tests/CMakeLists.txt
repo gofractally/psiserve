@@ -12,6 +12,7 @@ add_executable(psio_tests
    wit_resource_tests.cpp
    wit_attribute_tests.cpp
    psio_attribute_tests.cpp
+   psio_structural_tests.cpp
    fracpack_validate_tests.cpp
 )
 

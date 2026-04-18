@@ -729,6 +729,20 @@ namespace psio::schema_types
       {
          assert(!"type aliases should be resolved before pushing them onto the stack");
       }
+      void add_impl(CompiledSchema* schema,
+                    const AnyType*  type,
+                    const Resource&,
+                    std::vector<const AnyType*>&,
+                    std::vector<const AnyType*>&)
+      {
+         // Resources are opaque handles — canonical ABI wire is a u32.
+         // Methods are IR metadata for emit_wit (Phase C), not pack targets.
+         if (auto* ctype = dfs_terminal(schema, type, CompiledType::scalar))
+         {
+            ctype->is_variable_size = false;
+            ctype->fixed_size       = 4;
+         }
+      }
 
    }  // namespace
 
@@ -1494,6 +1508,15 @@ namespace psio::schema_types
       {
          visitTypes(f, *type.type);
       }
+      void visitTypes(auto&& f, AnyType&, Resource& type)
+      {
+         for (auto& method : type.methods)
+         {
+            visitTypes(f, method.params);
+            if (method.result)
+               visitTypes(f, *method.result);
+         }
+      }
       void visitTypes(auto&&, AnyType&, Int&) {}
       void visitTypes(auto&&, AnyType&, Float&) {}
       void visitTypes(auto&& f, AnyType& type, Type& t)
@@ -1605,8 +1628,14 @@ namespace psio::schema_types
             visitTypes(renamer.addRef(), type);
          }
       }
-      // Build the new schema
+      // Build the new schema. Preserve envelope fields (package, interfaces,
+      // worlds, uses) populated by insert_world; only the types map is
+      // rewritten via the renamer.
       Schema result;
+      result.package    = std::move(schema.package);
+      result.interfaces = std::move(schema.interfaces);
+      result.worlds     = std::move(schema.worlds);
+      result.uses       = std::move(schema.uses);
       for (AnyType* type : ext)
       {
          renamer.rename(*type);
