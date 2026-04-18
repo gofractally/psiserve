@@ -336,15 +336,54 @@ jit1 was unaffected — it preserves ctx in callee-saved `r12` across the
 setjmp/longjmp and doesn't touch the stack slot at all. jit_llvm uses
 LLVM's own invoke/landingpad mechanism and is also unaffected.
 
-### jit1 native: return_call is not tail-call-optimized (open)
+### ~~jit1 native: return_call is not tail-call-optimized~~ — narrow TCO landed (commit `648c23f`)
 
-**Status:** open — by-design gap, not yet implemented.
+**Status:** fixed for the common case — native stack overflow on deep
+`return_call`/`return_call_indirect` chains is resolved. Narrow TCO
+guards: internal callee only, callee signature matches current function's,
+empty param list, `!_stack_limit_is_bytes`. In that case both x86_64 and
+aarch64 now tear down the caller frame and B/jmp directly to the callee.
+Non-matching cases still fall back to emit_call + emit_return, which is
+equivalent to the previous behavior.
 
-**Reproducer.** `mismatch_179193_seed777777.wasm` (4231 B). interpreter/jit2/jit_llvm run OK; jit1 traps with `interp_trap`.
+Parser now emits `emit_eh_leaves_for_branch` BEFORE the tail-call
+codegen so the caller's try_table scopes are popped before the callee
+runs.
 
-**Root cause.** `emit_tail_call` in both `x86_64.hpp` (line 571) and `aarch64.hpp` (line 776) forward to `emit_call` — a comment ("Tail calls: desugar to call + return in JIT1 (no frame reuse optimization)") confirms this is deliberate. A deeply nested `return_call` chain (as fuzzer commonly produces) then stack-overflows where the interpreter's true TCO (`execution_context::tail_call`) reuses the frame. The signal handler maps the native stack overflow to `interp_trap`, so it looks like a trap divergence rather than an OOM.
+**Residual divergence on `mismatch_179193_seed777777.wasm`.** Stack
+overflow is gone but a separate semantic divergence remains — jit1
+reports `wasm_exception (uncaught throw)` where interpreter/jit2/jit_llvm
+all run OK. See the new "jit1 EH: uncaught-throw divergence after tail
+call" item below.
 
-**Fix sketch.** Proper TCO requires tearing down the current activation frame (restore FP, adjust SP to caller-expected state, move args into the callee's expected positions) then `B` (jump) instead of `BL` (call) to the target. Multi-value and host/import callee paths need special handling. Non-trivial — multi-hundred-line change across the prologue/epilogue and call codegen.
+**Fix sketch (for broader TCO coverage).** Lifting the narrow guards
+requires copying callee args into the caller-frame positions before the
+teardown (non-empty param list), and moving-arg conventions for
+differing signatures. Multi-hundred-line change; not yet prioritized.
+
+### jit1 EH: uncaught-throw divergence after tail call (open)
+
+**Status:** open — exposed by commit `648c23f` (narrow TCO landed).
+Previously masked by the stack overflow that happened first.
+
+**Reproducer.** `mismatch_179193_seed777777.wasm`. `--file` run prints
+`jit what: wasm_exception (uncaught throw)` while interpreter, jit2 and
+jit_llvm all succeed. The module densely mixes `try_table` + `throw` +
+`return_call` / `return_call_indirect`.
+
+**Suspected cause.** jit1's EH frame bookkeeping across the tail-call
+boundary. The parser now pops try_table scopes before `emit_tail_call`,
+but jit1's signal-based catch dispatch may still see stale
+`jit_eh_catches` state, or the callee's `throw` walks past the popped
+handler into the caller-that-no-longer-exists. Needs a minimized WAT
+repro and a trace of `jit_eh_enter`/`jit_eh_leave`/`jit_eh_throw` calls.
+
+**Fix sketch.** Confirm the ordering of `jit_eh_leave` vs. the actual
+JIT frame teardown on x86_64 and aarch64. If the catch handler list
+carries an index that refers to the caller's (now-torn-down) frame,
+pop the handlers *at frame teardown time* rather than at parse-emit
+time. Alternatively force non-TCO fallback when the caller is still
+inside any `eh_enter` scope at the return_call instruction.
 
 ### jit_llvm: opaque `unreachable` trap on deeply-nested fuzzer modules (open)
 
