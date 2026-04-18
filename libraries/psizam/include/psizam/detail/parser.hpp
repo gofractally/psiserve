@@ -1269,6 +1269,17 @@ namespace psizam::detail {
                           wasm_parse_exception, "code after function end");
          };
 
+         // Side-channel: propagate the real result types of a block/loop/if/
+         // try_table/function return into the code writer. The writer may need
+         // these to allocate merge vregs and stack slots correctly for v128
+         // (2 vstack slots) vs scalar (1 slot) multi-value results. Only
+         // present on writers that define set_pending_result_types.
+         auto set_pending_result_types = [&](const uint8_t* data, uint32_t count) {
+            if constexpr (requires { code_writer.set_pending_result_types(data, count); }) {
+               code_writer.set_pending_result_types(data, count);
+            }
+         };
+
          while (code.offset() < bounds) {
             PSIZAM_ASSERT(pc_stack.size() <= get_max_nested_structures(_options), wasm_parse_exception,
                           "nested structures validation failure");
@@ -1293,6 +1304,8 @@ namespace psizam::detail {
                   // Pop EH frames for any try_table scopes crossed by this return
                   emit_eh_leaves_for_branch(label);
                   auto [depth_change,rt,rc] = compute_depth_change(label);
+                  if (ft.return_count > 1)
+                     set_pending_result_types(ft.return_types.data(), static_cast<uint32_t>(ft.return_types.size()));
                   auto branch = code_writer.emit_return(depth_change, rt, rc);
                   handle_branch_target(label, branch);
                   op_stack.start_unreachable();
@@ -1340,6 +1353,8 @@ namespace psizam::detail {
                   uint32_t param_count = static_cast<uint32_t>(bp.size());
                   elem.block_params = std::move(bp);
                   pc_stack.push_back(std::move(elem));
+                  if (br.size() > 1)
+                     set_pending_result_types(br.data(), static_cast<uint32_t>(br.size()));
                   code_writer.emit_block(single_type, static_cast<uint32_t>(br.size()), param_count);
                   op_stack.push_scope();
                   // Push params back inside the block scope
@@ -1378,6 +1393,8 @@ namespace psizam::detail {
                   for (int i = static_cast<int>(bp.size()) - 1; i >= 0; --i)
                      op_stack.pop(bp[i]);
 
+                  if (br.size() > 1)
+                     set_pending_result_types(br.data(), static_cast<uint32_t>(br.size()));
                   auto pos = code_writer.emit_loop(single_type, static_cast<uint32_t>(br.size()), static_cast<uint32_t>(bp.size()));
                   pc_element_t elem{};
                   elem.operand_depth = op_stack.depth();
@@ -1423,6 +1440,8 @@ namespace psizam::detail {
                      single_type = ft.return_count ? ft.return_type : types::pseudo;
                   }
 
+                  if (br.size() > 1)
+                     set_pending_result_types(br.data(), static_cast<uint32_t>(br.size()));
                   auto branch = code_writer.emit_if(single_type, static_cast<uint32_t>(br.size()), static_cast<uint32_t>(bp.size()));
                   op_stack.pop(types::i32);  // condition
 
@@ -1501,6 +1520,8 @@ namespace psizam::detail {
                   if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
                   elem.block_params = std::move(bp);
                   pc_stack.push_back(std::move(elem));
+                  if (br.size() > 1)
+                     set_pending_result_types(br.data(), static_cast<uint32_t>(br.size()));
                   code_writer.emit_try(single_type, static_cast<uint32_t>(br.size()));
                   op_stack.push_scope();
                   for (auto p : pc_stack.back().block_params)
@@ -1816,6 +1837,8 @@ namespace psizam::detail {
                      }
                   }
 
+                  if (br.size() > 1)
+                     set_pending_result_types(br.data(), static_cast<uint32_t>(br.size()));
                   auto clause_pcs = code_writer.emit_try_table(single_type, static_cast<uint32_t>(br.size()), clauses, static_cast<uint32_t>(bp.size()));
 
                   // Register catch clause PCs for branch target relocation
