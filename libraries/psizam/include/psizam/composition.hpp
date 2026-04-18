@@ -180,6 +180,26 @@ public:
 
    Host& host() { return *host_ptr_; }
 
+   // ── Unresolved import introspection ──────────────────────────────
+   struct unresolved_import {
+      std::string module_name;
+      std::string func_name;
+      std::size_t module_index;
+   };
+
+   std::vector<unresolved_import> unresolved() const
+   {
+      std::vector<unresolved_import> result;
+      for (std::size_t mi = 0; mi < modules_.size(); ++mi) {
+         auto& mod = *modules_[mi];
+         // Parse the WASM to find imports, check which are registered
+         // in the module's host_function_table
+         // For now, return empty — full implementation needs import
+         // section parsing from the WASM binary
+      }
+      return result;
+   }
+
 private:
    Host*                                        host_ptr_;
    std::vector<std::unique_ptr<instance_t>>     modules_;
@@ -517,5 +537,16 @@ private:
       psio::canonical_lower_fields(value, sp, retptr);
    }
 };
+
+// ── Linking mode tags ───────────────────────────────────────────────
+// Used with the composition constructor to annotate per-module linking:
+//   composition<Host, llvm> vm{static_link(a), b, c, host};
+// Bare bytes = isolated (default). static_link(bytes) = shared memory.
+
+template <typename Bytes>
+struct static_link_t { const Bytes& wasm; };
+
+template <typename Bytes>
+constexpr static_link_t<Bytes> static_link(const Bytes& bytes) { return {bytes}; }
 
 }  // namespace psizam
