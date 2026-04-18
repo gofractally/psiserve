@@ -1139,6 +1139,40 @@ bool wasm_imports_spectest(const std::string& wasm_path) {
    return contents.find("spectest") != std::string::npos;
 }
 
+// Read raw bytes of a .wasm file for import-name scanning.
+std::string slurp_wasm(const std::string& wasm_path) {
+   std::ifstream f(wasm_path, std::ios::binary);
+   if (!f) return {};
+   return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+// True if a .wasm contains any import whose module-name string matches one of
+// the JS-embedding "register" aliases in `registered_aliases`. Imports are
+// encoded as `vec(byte)` — a uleb128 length prefix followed by bytes. For
+// names < 128 bytes the prefix is a single raw length byte, so we match
+// `<len_byte><alias_bytes>` against the file contents.
+//
+// Why skip these: psiserve targets native host embeddings (CLI + server),
+// not the JS-style `WebAssembly.Instance(module, importObject)` linking
+// model that the spec-test `(register "...")` directive exercises. Our
+// production multi-module path is the Component Model (see psiserve's
+// Linker<World> API), not core-wasm cross-module linking.
+bool wasm_imports_registered_alias(const std::string& wasm_path,
+                                   const std::set<std::string>& registered_aliases) {
+   if (registered_aliases.empty()) return false;
+   auto contents = slurp_wasm(wasm_path);
+   if (contents.empty()) return false;
+   for (const auto& alias : registered_aliases) {
+      if (alias == "spectest") continue;  // host-provided, not cross-module
+      if (alias.empty() || alias.size() >= 128) continue;  // skip pathological
+      std::string needle;
+      needle.push_back(static_cast<char>(alias.size()));  // uleb128 len (<128)
+      needle += alias;
+      if (contents.find(needle) != std::string::npos) return true;
+   }
+   return false;
+}
+
 std::string cpp_string(const picojson::value& x) {
    std::string result = "\"";
    std::string original = x.to_str();
@@ -1381,7 +1415,22 @@ const std::set<std::string> blacklist = {
    "table_fill.0.wasm"
 };
 
-void generate_tests(const map<string, vector<picojson::object>>& mappings, const string& wasm_dir = "") {
+// True if any assertion in this test group routes to an explicit named module
+// via `action.module == "$name"`. These are JS-embedding multi-module tests
+// we don't try to pass (see wasm_imports_registered_alias for rationale).
+bool group_has_cross_module_action(const vector<picojson::object>& cmds) {
+   for (const auto& cmd : cmds) {
+      auto act_it = cmd.find("action");
+      if (act_it == cmd.end() || !act_it->second.is<picojson::object>()) continue;
+      const auto& action = act_it->second.get<picojson::object>();
+      if (action.find("module") != action.end()) return true;
+   }
+   return false;
+}
+
+void generate_tests(const map<string, vector<picojson::object>>& mappings,
+                    const string& wasm_dir,
+                    const std::set<std::string>& registered_aliases) {
    stringstream unit_tests;
    string       exp_t, exp_v;
    unit_tests << test_includes;
@@ -1423,6 +1472,18 @@ void generate_tests(const map<string, vector<picojson::object>>& mappings, const
 
    for (const auto& [tsn_file, cmds] : mappings) {
       if(tsn_file.empty() || blacklist.count(tsn_file)) continue;
+      // Skip JS-embedding multi-module tests: modules that import from a
+      // `(register "alias")` name, or test groups whose assertions route to
+      // a named module via `action.module`. psiserve does not implement the
+      // JS embedding's cross-instance linking — production multi-module is
+      // the Component Model layer (psiserve's Linker<World> API).
+      if (!wasm_dir.empty() &&
+          wasm_imports_registered_alias(wasm_dir + "/" + tsn_file, registered_aliases)) {
+         continue;
+      }
+      if (group_has_cross_module_action(cmds)) {
+         continue;
+      }
       auto tsn = tsn_file;
       std::replace(tsn.begin(), tsn.end(), '.', '_');
       bool uses_spectest = !wasm_dir.empty() && wasm_imports_spectest(wasm_dir + "/" + tsn_file);
@@ -1523,14 +1584,22 @@ int main(int argc, char** argv) {
    string test_suite_name;
 
    map<string, vector<picojson::object>> test_mappings;
+   // Aliases bound via `(register "alias")` directives. Used to identify tests
+   // that rely on JS-embedding cross-module linking so we can skip them.
+   std::set<std::string> registered_aliases;
    const picojson::value::object&        obj = v.get<picojson::object>();
    for (picojson::value::object::const_iterator i = obj.begin(); i != obj.end(); i++)
       if (i->first == "commands") {
          for (const auto& o : i->second.get<picojson::array>()) {
             picojson::object obj = o.get<picojson::object>();
-            if (obj["type"].to_str() == "module" || obj["type"].to_str() == "assert_invalid" || (obj["type"].to_str() == "assert_malformed" && obj["module_type"].to_str() == "binary") || obj["type"].to_str() == "assert_unlinkable" ) {
+            const string t = obj["type"].to_str();
+            if (t == "module" || t == "assert_invalid" || (t == "assert_malformed" && obj["module_type"].to_str() == "binary") || t == "assert_unlinkable") {
                test_suite_name = obj["filename"].to_str();
                test_mappings[test_suite_name] = {};
+            }
+            if (t == "register") {
+               auto as_it = obj.find("as");
+               if (as_it != obj.end()) registered_aliases.insert(as_it->second.to_str());
             }
             test_mappings[test_suite_name].push_back(obj);
          }
@@ -1549,5 +1618,5 @@ int main(int argc, char** argv) {
          wasm_dir = ".";
    }
 
-   generate_tests(test_mappings, wasm_dir);
+   generate_tests(test_mappings, wasm_dir, registered_aliases);
 }

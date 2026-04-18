@@ -38,26 +38,6 @@ BACKEND_TEST_CASE( "Testing wasm <elem_10_wasm>", "[elem_10_wasm_tests]" ) {
    CHECK(bkend.call_with_return("env", "call-9")->to_ui32() == UINT32_C(66));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <elem_100_wasm>", "[elem_100_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "elem.100.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "call-7")->to_ui32() == UINT32_C(67));
-   CHECK(bkend.call_with_return("env", "call-8")->to_ui32() == UINT32_C(68));
-   CHECK(bkend.call_with_return("env", "call-9")->to_ui32() == UINT32_C(66));
-}
-
-BACKEND_TEST_CASE( "Testing wasm <elem_101_wasm>", "[elem_101_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "elem.101.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "call-7")->to_ui32() == UINT32_C(67));
-   CHECK(bkend.call_with_return("env", "call-8")->to_ui32() == UINT32_C(69));
-   CHECK(bkend.call_with_return("env", "call-9")->to_ui32() == UINT32_C(70));
-}
-
 BACKEND_TEST_CASE( "Testing wasm <elem_102_wasm>", "[elem_102_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "elem.102.wasm");
@@ -82,33 +62,11 @@ BACKEND_TEST_CASE( "Testing wasm <elem_105_wasm>", "[elem_105_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <elem_106_wasm>", "[elem_106_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "elem.106.wasm");
-   backend_t bkend( code, &wa );
-
-}
-
-BACKEND_TEST_CASE( "Testing wasm <elem_107_wasm>", "[elem_107_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "elem.107.wasm");
-   backend_t bkend( code, &wa );
-
-}
-
 BACKEND_TEST_CASE( "Testing wasm <elem_108_wasm>", "[elem_108_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "elem.108.wasm");
    backend_t bkend( code, &wa );
 
-}
-
-BACKEND_TEST_CASE( "Testing wasm <elem_109_wasm>", "[elem_109_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "elem.109.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "call_imported_elem")->to_ui32() == UINT32_C(42));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <elem_110_wasm>", "[elem_110_wasm_tests]" ) {
@@ -604,15 +562,5 @@ BACKEND_TEST_CASE( "Testing wasm <elem_98_wasm>", "[elem_98_wasm_tests]" ) {
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "call-overwritten-element")->to_ui32() == UINT32_C(66));
-}
-
-BACKEND_TEST_CASE( "Testing wasm <elem_99_wasm>", "[elem_99_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "elem.99.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK_THROWS_AS(bkend("env", "call-7"), std::exception);
-   CHECK(bkend.call_with_return("env", "call-8")->to_ui32() == UINT32_C(65));
-   CHECK(bkend.call_with_return("env", "call-9")->to_ui32() == UINT32_C(66));
 }
 

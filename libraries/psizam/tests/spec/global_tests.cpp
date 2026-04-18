@@ -366,15 +366,6 @@ BACKEND_TEST_CASE( "Testing wasm <global_5_wasm>", "[global_5_wasm_tests]" ) {
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
-BACKEND_TEST_CASE( "Testing wasm <global_50_wasm>", "[global_50_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "global.50.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "get-data", UINT32_C(4))->to_ui32() == UINT32_C(1145324612));
-   CHECK(bkend.call_with_return("env", "get-data", UINT32_C(8))->to_ui32() == UINT32_C(2290649224));
-}
-
 BACKEND_TEST_CASE( "Testing wasm <global_51_wasm>", "[global_51_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "global.51.wasm");

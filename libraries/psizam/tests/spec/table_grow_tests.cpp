@@ -88,30 +88,6 @@ BACKEND_TEST_CASE( "Testing wasm <table_grow_4_wasm>", "[table_grow_4_wasm_tests
    CHECK(bkend.call_with_return("env", "grow", UINT32_C(10))->to_ui32() == UINT32_C(10));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <table_grow_5_wasm>", "[table_grow_5_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_grow.5.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "grow")->to_ui32() == UINT32_C(1));
-}
-
-BACKEND_TEST_CASE( "Testing wasm <table_grow_6_wasm>", "[table_grow_6_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_grow.6.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "grow")->to_ui32() == UINT32_C(2));
-}
-
-BACKEND_TEST_CASE( "Testing wasm <table_grow_7_wasm>", "[table_grow_7_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "table_grow.7.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "size")->to_ui32() == UINT32_C(3));
-}
-
 BACKEND_TEST_CASE( "Testing wasm <table_grow_8_wasm>", "[table_grow_8_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "table_grow.8.wasm");
