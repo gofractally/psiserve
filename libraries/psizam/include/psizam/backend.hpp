@@ -266,7 +266,16 @@ namespace psizam {
                entries[idx].func_name   = key.second;
                entries[idx].signature   = mappings.host_functions[idx];
                auto fwd = mappings.fast_fwd[idx];
+               auto rev = mappings.fast_rev[idx];
                entries[idx].raw_func_ptr = (idx < mappings.raw_ptrs.size()) ? mappings.raw_ptrs[idx] : nullptr;
+               // fast_rev is the JIT-callable trampoline (reverse-order args).
+               // For non-fast-eligible host functions, fast_rev now holds a
+               // slow_trampoline_rev<F,...> instance that goes through the full
+               // type_converter pipeline — see host_function.hpp. Either way,
+               // the JIT path needs a non-null function pointer here.
+               if (rev) {
+                  entries[idx].rev_trampoline = reinterpret_cast<host_trampoline_t>(rev);
+               }
                if (fwd) {
                   entries[idx].trampoline = reinterpret_cast<host_trampoline_t>(fwd);
                } else {

@@ -27,14 +27,14 @@ Imports `spectest.global_i32` and `spectest.global_i64` which should be 666,
 but the test harness uses `standalone_function_t` so imported globals default
 to 0. Also uses `externref` globals which crash the jit backend.
 
-### Stale test code (9 failures, all backends)
+### ~~Stale test code~~ — fixed in tree
 
-Pre-generated `_tests.cpp` files reference `.wasm` numbers that no longer
-exist in the current tail-call proposal `.wast`:
-
-- `return_call.13.wasm`, `return_call_indirect.28.wasm`, `return_call_indirect.29.wasm`
-
-Fix: regenerate from current `.wast` with `wast2json --enable-tail-call`.
+The previously-listed `return_call.13`, `return_call_indirect.28`, `.29`
+test failures no longer reproduce. The checked-in
+`return_call_tests.cpp` / `return_call_indirect_tests.cpp` reference
+`.wasm` indices that match the current `wast2json` output (1..12 and
+12..27 respectively); regenerating with `spec_test_generator` produces
+byte-identical output. ctest `-R return_call` passes 112/112.
 
 ### jit2 backend bugs (x86_64: 17, aarch64: 5)
 
@@ -50,7 +50,7 @@ All pass on interpreter and jit. jit2 is experimental.
 **x86_64 only:**
 - ~~**table.grow** (7): Returns 0 instead of -1 for invalid operations~~ — fixed: regalloc path for `ir_op::table_grow` now calls `__psizam_table_grow` and stores rax to dest vreg (was falling through to stack-mode codegen whose `push rax` was invisible to the regalloc consumer)
 - ~~**table.size** (1): Always returns 0~~ — fixed: same root cause as `table.grow`; regalloc path now stores the helper's return value to the dest vreg
-- **host function results** (1): Memory out-of-bounds on reference-typed returns
+- ~~**host function results** (1): Memory out-of-bounds on reference-typed returns~~ — fixed: jit's `_trampoline_ptrs[i]` was nullptr for non-fast-eligible host functions (those with pointer/reference params or returns), so the JIT-emitted direct call jumped to address 0 → SIGSEGV → `memory_trap`. Added `slow_trampoline_rev<F, ...>` (a per-host-function template instance, callable as a function pointer) and wire `mappings.fast_rev[i]` into `entry.rev_trampoline` so the JIT path always has a non-null trampoline. Used `decltype(auto)` in the slow path to preserve the reference category of the host function's return — `auto` strips it, which then routes a `T&` return through the integer branch of `as_result` and returns the byte VALUE instead of the pointer offset.
 - ~~**simd_const_385, simd_const_387** (2): Segfault in SIMD code~~ — fixed: jit2 regalloc `ir_op::arg` needs v128 type to push 16 bytes for v128 params (ir_writer.hpp set `arg.type = ft.param_types[i]`)
 - ~~**conversions_0, traps_2** (2): Segfault~~ — fixed upstream
 - ~~**Host function / call depth / reentry** (5): Various segfaults~~ — fixed upstream
@@ -334,3 +334,33 @@ rsp the helper calls can reach, so they survive the throw path intact.
 jit1 was unaffected — it preserves ctx in callee-saved `r12` across the
 setjmp/longjmp and doesn't touch the stack slot at all. jit_llvm uses
 LLVM's own invoke/landingpad mechanism and is also unaffected.
+
+### jit2 non-deterministic timeout (counter+try_table loop)
+
+**Status:** open — ~1 mismatch per 10K fuzzed modules; not consistently
+reproducible (run-to-run hangs vs traps depending on stack contents).
+
+**Reproducer.** `mismatch_1041_seed1776492727.wasm` (2555 B). All
+non-jit2 backends trap with `interp_trap (unreachable)` instantly. jit2
+hangs forever about 4 of every 5 runs; the remaining run traps
+correctly. The wasm pattern is the standard "global counter + body that
+decrements" with the body containing `try_table` constructs (also
+common in fuzzer output to bound recursion).
+
+**What was investigated:** the bug is NOT the eh_setjmp saved-rsp
+corruption (that's fixed in commit `5c8d694`). It also isn't reproducible
+with a minimal 2-level nested try_table inside a counter loop — the
+original module has many nested try_tables with explicit catch_tag
+handlers and `br_if` jumping out to the loop, which is what likely
+exercises the buggy path. Likely the same family as the documented
+"stack-mode fusion: missing if_/br_if fixup push" bug, but the path
+through regalloc-mode codegen with all-spilled vregs hasn't been
+narrowed down.
+
+**Investigation hint:** the function loops on a global counter that
+should reach 0 after ~100 iterations, then `unreachable`. jit2's
+infinite loop suggests either the global decrement is wrong, the
+condition is evaluated wrong, or the `br_if` direction is reversed in
+the JIT. Trace `global.get`/`global.set` and `i32.eqz`/`br_if` codegen
+in regalloc-mode for functions with `eh_data_count > 0` and large
+operand stacks.
