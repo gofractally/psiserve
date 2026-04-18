@@ -772,12 +772,81 @@ namespace psizam::detail {
          emit_check_call_depth_end();
       }
 
-      // Tail calls: desugar to call + return in JIT1 aarch64 (no frame reuse)
+      // Tail calls: narrow TCO when callee is an internal function with a
+      // signature identical to the current function's and no params. Falls back
+      // to call+return for all other cases (imports, mismatched sigs, any
+      // params, stack-bytes-limit mode). Frame-reuse for the narrow case means
+      // deep return_call chains no longer blow the native stack.
       void emit_tail_call(const func_type& ft, uint32_t funcnum) {
-         emit_call(ft, funcnum);
+         uint32_t imported_count = _mod.get_imported_functions_size();
+         bool is_import = funcnum < imported_count;
+         bool same_sig = _ft
+             && ft.param_types == _ft->param_types
+             && ft.return_types == _ft->return_types;
+         bool tco_ok = !is_import
+             && same_sig
+             && ft.param_types.empty()
+             && !_stack_limit_is_bytes;
+         if (!tco_ok) {
+            emit_call(ft, funcnum);
+            return;
+         }
+         invalidate_recent_ops();
+         // Restore caller's frame — matches emit_epilogue's teardown.
+         // MOV SP, X29
+         emit32(0x910003BF);
+         // LDP X29, X30, [SP], #16
+         emit32(0xA8C17BFD);
+         // B callee (patched via register_call). Callee runs its own prologue
+         // on the restored stack so deep chains don't grow the native stack.
+         void* branch = code;
+         emit32(0x14000000);
+         register_call(branch, funcnum);
       }
       void emit_tail_call_indirect(const func_type& ft, uint32_t functypeidx, uint32_t table_idx = 0) {
-         emit_call_indirect(ft, functypeidx, table_idx);
+         bool same_sig = _ft
+             && ft.param_types == _ft->param_types
+             && ft.return_types == _ft->return_types;
+         bool tco_ok = same_sig
+             && ft.param_types.empty()
+             && !_stack_limit_is_bytes
+             && table_idx == 0;
+         if (!tco_ok) {
+            emit_call_indirect(ft, functypeidx, table_idx);
+            return;
+         }
+         invalidate_recent_ops();
+         // Pop element index into X0.
+         emit_pop_x(X0);
+         // Bounds check.
+         if (_mod.indirect_table(0)) {
+            emit_add_signed_imm(X8, X20, wasm_allocator::table0_size_offset());
+            emit32(0xB9400108); // LDR W8, [X8]
+            emit32(0x6B08001F); // CMP W0, W8
+         } else {
+            std::uint32_t table_size = _mod.tables[0].limits.initial;
+            emit_cmp_imm32(X0, table_size);
+         }
+         emit_branch_to_handler(COND_HS, call_indirect_handler);
+         // entry = table_base + index * 16
+         emit32(0xD37CEC00); // LSL X0, X0, #4
+         if (_mod.indirect_table(0)) {
+            emit_ldr_signed_offset(X8, X20, wasm_allocator::table_offset());
+            emit32(0x8B000100 | (X0 << 16) | (X8 << 5) | X0);
+         } else {
+            emit_add_signed_imm(X8, X20, wasm_allocator::table_offset());
+            emit32(0x8B000100 | (X0 << 16) | (X8 << 5) | X0);
+         }
+         // Type check against functypeidx.
+         emit32(0xB9400008 | (X0 << 5)); // LDR W8, [X0]
+         emit_cmp_imm32(X8, functypeidx);
+         emit_branch_to_handler(COND_NE, type_error_handler);
+         // Load function pointer into X8.
+         emit32(0xF9400408 | (X0 << 5)); // LDR X8, [X0, #8]
+         // Restore caller's frame, then branch without link.
+         emit32(0x910003BF); // MOV SP, X29
+         emit32(0xA8C17BFD); // LDP X29, X30, [SP], #16
+         emit32(0xD61F0100); // BR X8
       }
 
       // ===================================================================

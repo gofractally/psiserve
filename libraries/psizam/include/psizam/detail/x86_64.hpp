@@ -567,12 +567,77 @@ namespace psizam::detail {
          emit_check_call_depth_end();
       }
 
-      // Tail calls: desugar to call + return in JIT1 (no frame reuse optimization)
+      // Tail calls: narrow TCO when callee is an internal function with a
+      // signature identical to the current function's and no params. Falls back
+      // to call+return for all other cases (imports, mismatched sigs, any
+      // params, stack-bytes-limit mode). Frame-reuse for the narrow case means
+      // deep return_call chains no longer blow the native stack.
       void emit_tail_call(const func_type& ft, uint32_t funcnum) {
-         emit_call(ft, funcnum);
+         uint32_t imported_count = _mod.get_imported_functions_size();
+         bool is_import = funcnum < imported_count;
+         bool same_sig = _ft
+             && ft.param_types == _ft->param_types
+             && ft.return_types == _ft->return_types;
+         bool tco_ok = !is_import
+             && same_sig
+             && ft.param_types.empty()
+             && !_stack_limit_is_bytes;
+         if (!tco_ok) {
+            emit_call(ft, funcnum);
+            return;
+         }
+         // Restore caller's frame — matches emit_epilogue's teardown.
+         emit_mov(rbp, rsp);
+         emit_pop(rbp);
+         // jmp callee (patched via register_call). Callee runs its own
+         // prologue on the restored stack so deep chains don't grow the
+         // native stack.
+         emit_bytes(0xe9);
+         void* branch = emit_branch_target32();
+         register_call(branch, funcnum);
       }
       void emit_tail_call_indirect(const func_type& ft, uint32_t functypeidx, uint32_t table_idx = 0) {
-         emit_call_indirect(ft, functypeidx, table_idx);
+         bool same_sig = _ft
+             && ft.param_types == _ft->param_types
+             && ft.return_types == _ft->return_types;
+         bool tco_ok = same_sig
+             && ft.param_types.empty()
+             && !_stack_limit_is_bytes
+             && table_idx == 0;
+         if (!tco_ok) {
+            emit_call_indirect(ft, functypeidx, table_idx);
+            return;
+         }
+         COUNT_INSTR();
+         auto icount = variable_size_instr(30, 60);
+         // Pop index into rax.
+         emit_pop(rax);
+         // Bounds check.
+         if (_mod.indirect_table(0)) {
+            emit_mov(*(rsi + wasm_allocator::table0_size_offset()), ecx);
+            emit_cmp(ecx, eax);
+         } else {
+            std::uint32_t table_size = _mod.tables[0].limits.initial;
+            emit_cmp(table_size, eax);
+         }
+         fix_branch(emit_branchcc32(JAE), call_indirect_handler);
+         emit(SHL_imm8, imm8{4}, rax);
+         if (_mod.indirect_table(0)) {
+            emit_mov(*(rsi + wasm_allocator::table_offset()), rcx);
+            emit_add(rcx, rax);
+         } else {
+            emit(LEA, *(rax + rsi + wasm_allocator::table_offset()), rax);
+         }
+         // Type check against functypeidx.
+         emit_cmp(functypeidx, *dword_ptr(rax));
+         fix_branch(emit_branchcc32(JNE), type_error_handler);
+         // Load function pointer into rax.
+         emit_mov(*(rax + 8), rax);
+         // Restore caller's frame, then JMP to rax (no-link branch).
+         emit_mov(rbp, rsp);
+         emit_pop(rbp);
+         // jmp rax  →  FF /4  with ModR/M = 0xE0
+         emit_bytes(0xFF, 0xE0);
       }
 
       void emit_drop(uint8_t type) {
