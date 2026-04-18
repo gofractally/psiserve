@@ -347,3 +347,18 @@ target_include_directories(mem64_debug PUBLIC
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_SOURCE_DIR}/../include
 )
+
+# Composition benchmark
+add_executable(bench_composition bench_composition.cpp)
+target_link_libraries(bench_composition psizam psizam-exec)
+target_include_directories(bench_composition PRIVATE
+   ${CMAKE_SOURCE_DIR}/libraries/psizam/examples/composition)
+target_compile_definitions(bench_composition PRIVATE
+   COMPOSITION_WASM_DIR="${CMAKE_BINARY_DIR}/libraries/psizam/examples/composition")
+if(TARGET psizam-llvm)
+   target_link_libraries(bench_composition psizam-llvm)
+   target_compile_definitions(bench_composition PRIVATE PSIZAM_ENABLE_LLVM_BACKEND)
+endif()
+if(TARGET psizam-llvm-jit)
+   target_link_libraries(bench_composition psizam-llvm-jit)
+endif()
