@@ -338,6 +338,16 @@ namespace psizam {
             uint32_t num_imports = mod->get_imported_functions_size();
             _direct_ptrs.resize(num_imports, nullptr);
             _trampoline_ptrs.resize(num_imports, nullptr);
+            // Stub trampoline for imports that couldn't be resolved. When the
+            // JIT emits a direct host call, it doesn't null-check the pointer,
+            // so an unresolved import would segfault (observed as memory_trap
+            // in differential fuzz). Route it through a stub that matches the
+            // interp/jit_llvm behavior of throwing wasm_link_exception.
+            static constexpr auto unresolved_trampoline =
+               +[](void*, native_value*, char*) -> native_value {
+                  PSIZAM_ASSERT(false, wasm_link_exception, "unresolved imported function");
+                  return native_value{uint64_t{0}};
+               };
             for (uint32_t i = 0; i < num_imports; i++) {
                uint32_t mapped = mod->import_functions[i];
                if (mapped < _host_table.size()) {
@@ -346,6 +356,8 @@ namespace psizam {
                   // Prefer reverse-order trampoline for JIT (zero-copy stack pass).
                   // Fall back to forward-order trampoline for functions with custom type converters.
                   _trampoline_ptrs[i] = entry.rev_trampoline ? entry.rev_trampoline : entry.trampoline;
+               } else {
+                  _trampoline_ptrs[i] = unresolved_trampoline;
                }
             }
             ctx->_host_direct_ptrs = _direct_ptrs.data();
