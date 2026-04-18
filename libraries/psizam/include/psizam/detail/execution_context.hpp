@@ -357,7 +357,14 @@ namespace psizam::detail {
 
       void drop_elem(uint32_t x) {
          auto& mod = resolve_module();
-         assert(x < mod.elements.size());
+         // Runtime bounds check: the interpreter validates the segment index
+         // at parse time, but JIT'd code can reach here with stale data when
+         // imports fail to resolve and _dropped_elems is never sized up
+         // during reset(). Trapping here (rather than asserting) keeps jit2's
+         // outcome consistent with the interpreter, which traps on unreachable
+         // further downstream on such malformed modules.
+         if (x >= _dropped_elems.size() || x >= mod.elements.size())
+            signal_throw<wasm_interpreter_exception>("elem segment index out of range");
          _dropped_elems[x] = true;
       }
 
