@@ -1198,6 +1198,29 @@ namespace psizam::detail {
                   PSIZAM_ASSERT(pc_stack.back().expected_result == types::pseudo,
                                 wasm_parse_exception, "type mismatch: if without else cannot have a return value");
                }
+               // An if with parameters but no explicit else needs an identity
+               // pass-through for the false branch (params → results).  Emit a
+               // synthetic else_ here so the IR writer's emit_else handles the
+               // then-branch mov-to-merge, allocates a separate else basic block
+               // for jit_llvm, and registers the new else_ inst as the fix_branch
+               // relocation target.  Without this, the false-path's identity movs
+               // would land in the merge block and run on both paths.
+               if (!pc_stack.back().block_params.empty()) {
+                  auto& old_index = pc_stack.back();
+                  auto& relocations = std::get<std::vector<branch_t>>(old_index.relocations);
+                  if (!old_index.expected_results.empty()) {
+                     for (int i = static_cast<int>(old_index.expected_results.size()) - 1; i >= 0; --i)
+                        op_stack.pop(old_index.expected_results[i]);
+                  } else {
+                     op_stack.pop(old_index.expected_result);
+                  }
+                  op_stack.pop_scope();
+                  op_stack.push_scope();
+                  for (auto p : old_index.block_params)
+                     op_stack.push(p);
+                  relocations[0] = code_writer.emit_else(relocations[0]);
+                  old_index.is_if = false;
+               }
             }
             // For try_table blocks, emit eh_leave before the end label
             // so the EH frame is popped on normal exit (before catch branches resolve)
