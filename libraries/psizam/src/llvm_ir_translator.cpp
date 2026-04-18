@@ -1291,21 +1291,25 @@ namespace psizam::detail {
                         : block_exits[target];
                   };
 
-                  // Scan subsequent instructions for [mov*, br] groups.
-                  // Each case can have zero or more mov instructions before the br.
+                  // Scan subsequent instructions for per-case prologue groups
+                  // terminated by a br.  A case prologue may contain mov ops
+                  // (for block merge_vregs) and/or multi_return_store ops
+                  // (for function-exit multi-value returns), in the order
+                  // emitted by ir_writer::br_table_parser::emit_case.
                   struct bt_case {
                      uint32_t br_target;
                      uint32_t eh_count; // high 16 bits of each br's dest field
-                     std::vector<std::pair<uint32_t, uint32_t>> movs; // dest, src pairs
+                     std::vector<uint32_t> prologue; // inst indices to replay
                   };
                   std::vector<bt_case> cases;
                   uint32_t scan = ip + 1;
                   while (scan < func.inst_count && cases.size() <= bt_size) {
                      bt_case c{};
-                     // Collect movs before br
-                     while (scan < func.inst_count && func.insts[scan].opcode == ir_op::mov) {
-                        auto& mi = func.insts[scan];
-                        c.movs.push_back({mi.dest, mi.rr.src1});
+                     // Collect prologue ops (mov / multi_return_store) before br
+                     while (scan < func.inst_count &&
+                            (func.insts[scan].opcode == ir_op::mov ||
+                             func.insts[scan].opcode == ir_op::multi_return_store)) {
+                        c.prologue.push_back(scan);
                         scan++;
                      }
                      // Expect a br
@@ -1329,14 +1333,50 @@ namespace psizam::detail {
                      // Last case is the default
                      auto& default_case = cases.back();
 
-                     // Create per-case blocks if any case has movs OR crosses
-                     // try_table scopes (needs eh_leave calls before the jump).
+                     // Create per-case blocks if any case has prologue ops OR
+                     // crosses try_table scopes (needs eh_leave calls).
                      bool need_case_blocks = false;
                      for (auto& c : cases) {
-                        if (!c.movs.empty() || c.eh_count > 0) { need_case_blocks = true; break; }
+                        if (!c.prologue.empty() || c.eh_count > 0) { need_case_blocks = true; break; }
                      }
 
                      if (need_case_blocks) {
+                        // Emit a prologue op (mov or multi_return_store) in
+                        // the current insert point, mirroring the main-loop
+                        // handlers for these opcodes.
+                        auto emit_prologue_op = [&](uint32_t inst_idx) {
+                           auto& pi = func.insts[inst_idx];
+                           if (pi.opcode == ir_op::mov) {
+                              if (pi.rr.src1 < v128_slots.size() && v128_slots[pi.rr.src1]) {
+                                 auto* val = load_v128(static_cast<uint16_t>(pi.rr.src1), v128_ty);
+                                 store_v128(static_cast<uint16_t>(pi.dest), val);
+                              } else {
+                                 llvm::Value* val = load_vreg(pi.rr.src1);
+                                 if (val) store_vreg(pi.dest, val);
+                              }
+                           } else { // multi_return_store
+                              auto* val = load_vreg(pi.ri.src1);
+                              if (!val) return;
+                              auto* t = val->getType();
+                              llvm::Value* val_i64 = val;
+                              if (t == f32_ty) {
+                                 val_i64 = builder.CreateZExt(builder.CreateBitCast(val, i32_ty), i64_ty);
+                              } else if (t == f64_ty) {
+                                 val_i64 = builder.CreateBitCast(val, i64_ty);
+                              } else if (t == i32_ty) {
+                                 val_i64 = builder.CreateZExt(val, i64_ty);
+                              } else if (t != i64_ty) {
+                                 val_i64 = llvm::ConstantInt::get(i64_ty, 0);
+                              }
+                              int32_t offset = 24 + pi.ri.imm;
+                              auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
+                                 builder.getInt32(offset));
+                              auto* typed_ptr = builder.CreateBitCast(ptr,
+                                 llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                              builder.CreateStore(val_i64, typed_ptr);
+                           }
+                        };
+
                         // Create a case block for each entry (including default)
                         auto* default_case_bb = llvm::BasicBlock::Create(*ctx, "bt_default", fn);
                         auto* sw = builder.CreateSwitch(bt_index, default_case_bb,
@@ -1352,10 +1392,9 @@ namespace psizam::detail {
                               sw->addCase(builder.getInt32(c), case_bb);
                            }
                            builder.SetInsertPoint(case_bb);
-                           // Emit movs for this case
-                           for (auto& [dest, src] : cases[c].movs) {
-                              llvm::Value* val = load_vreg(src);
-                              if (val) store_vreg(dest, val);
+                           // Emit prologue ops (movs / multi_return_stores) for this case
+                           for (uint32_t pidx : cases[c].prologue) {
+                              emit_prologue_op(pidx);
                            }
                            // Pop try_table catch frames this branch crosses
                            for (uint32_t i = 0; i < cases[c].eh_count; ++i) {
