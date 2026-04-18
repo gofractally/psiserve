@@ -2021,7 +2021,7 @@ namespace psizam::detail {
                   elem.expected_result = single_type;
                   elem.label_result = single_type;
                   elem.is_if = false;
-                  elem.is_try_table = true;
+                  elem.is_try_table = (num_catches > 0);
                   elem.relocations = std::vector<branch_t>{};
                   if (!br.empty()) { elem.expected_results = br; elem.label_results = br; }
                   elem.block_params = bp;

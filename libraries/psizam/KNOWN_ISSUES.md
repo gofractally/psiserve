@@ -418,29 +418,26 @@ requires copying callee args into the caller-frame positions before the
 teardown (non-empty param list), and moving-arg conventions for
 differing signatures. Multi-hundred-line change; not yet prioritized.
 
-### jit1 EH: uncaught-throw divergence after tail call (open)
+### ~~jit1 EH: uncaught-throw divergence after tail call~~ — fixed
 
-**Status:** open — exposed by commit `648c23f` (narrow TCO landed).
-Previously masked by the stack overflow that happened first.
+**Status:** fixed. Root cause was NOT in the tail-call path itself.
 
-**Reproducer.** `mismatch_179193_seed777777.wasm`. `--file` run prints
-`jit what: wasm_exception (uncaught throw)` while interpreter, jit2 and
-jit_llvm all succeed. The module densely mixes `try_table` + `throw` +
-`return_call` / `return_call_indirect`.
+**Root cause.** `x86_64.hpp::emit_try_table` and
+`aarch64.hpp::emit_try_table` returned early for 0-catch try_tables
+(`if (catch_count == 0) return {}`) — skipping `__psizam_eh_enter`.
+But the parser still marked the block as `is_try_table = true`, so
+its `end` instruction emitted `emit_eh_leave` → `__psizam_eh_leave`.
+This popped the WRONG frame (the enclosing try_table's frame) from
+`jit_eh_stack`, leaving the EH stack empty when `throw` fired.
 
-**Suspected cause.** jit1's EH frame bookkeeping across the tail-call
-boundary. The parser now pops try_table scopes before `emit_tail_call`,
-but jit1's signal-based catch dispatch may still see stale
-`jit_eh_catches` state, or the callee's `throw` walks past the popped
-handler into the caller-that-no-longer-exists. Needs a minimized WAT
-repro and a trace of `jit_eh_enter`/`jit_eh_leave`/`jit_eh_throw` calls.
+In `mismatch_179193_seed777777.wasm`, func 0 has
+`try_table @3 (6 catches) { ... try_table @5 (0 catches) { } end; throw 0 }`.
+The empty @5's `end` popped @3's frame, so `throw 0` found no handler.
 
-**Fix sketch.** Confirm the ordering of `jit_eh_leave` vs. the actual
-JIT frame teardown on x86_64 and aarch64. If the catch handler list
-carries an index that refers to the caller's (now-torn-down) frame,
-pop the handlers *at frame teardown time* rather than at parse-emit
-time. Alternatively force non-TCO fallback when the caller is still
-inside any `eh_enter` scope at the return_call instruction.
+**Fix.** Parser now sets `is_try_table = (num_catches > 0)`. A 0-catch
+try_table is semantically a block (can never catch anything), so it
+doesn't need an EH frame. This keeps `end` from emitting `eh_leave`
+and keeps `count_eh_leaves_for_branch` from counting it.
 
 ### ~~jit_llvm: SIMD-chain divergence surfaces as `unreachable` trap~~ — fixed (commit `ef8c4e8`)
 
