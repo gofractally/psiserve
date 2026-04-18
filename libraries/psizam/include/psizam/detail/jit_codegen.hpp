@@ -731,19 +731,35 @@ namespace psizam::detail {
          // ── Multi-value return store ──
          case ir_op::multi_return_store: {
             // Store value to ctx->_multi_return[offset]
-            // inst.ri.src1 = value vreg on stack, inst.ri.imm = byte offset
-            this->emit_pop_raw(rax);
+            // inst.ri.src1 = value vreg on stack, inst.ri.imm = byte offset.
+            // v128 values occupy two native-stack slots (low on top, high below),
+            // matching const_v128's push order.
             int32_t offset = multi_return_offset + inst.ri.imm;
-            this->emit_mov(rax, *(rdi + offset));
+            if (inst.type == types::v128) {
+               this->emit_pop_raw(rax); // low
+               this->emit_mov(rax, *(rdi + offset));
+               this->emit_pop_raw(rax); // high
+               this->emit_mov(rax, *(rdi + offset + 8));
+            } else {
+               this->emit_pop_raw(rax);
+               this->emit_mov(rax, *(rdi + offset));
+            }
             break;
          }
 
          // ── Multi-value call return load ──
          case ir_op::multi_return_load: {
-            // Load value from ctx->_multi_return[offset] after a multi-value call
+            // Load value from ctx->_multi_return[offset] after a multi-value call.
             int32_t offset = multi_return_offset + inst.ri.imm;
-            this->emit_mov(*(rdi + offset), rax);
-            this->emit_push_raw(rax);
+            if (inst.type == types::v128) {
+               this->emit_mov(*(rdi + offset + 8), rax); // high
+               this->emit_push_raw(rax);
+               this->emit_mov(*(rdi + offset), rax);     // low on top
+               this->emit_push_raw(rax);
+            } else {
+               this->emit_mov(*(rdi + offset), rax);
+               this->emit_push_raw(rax);
+            }
             break;
          }
 

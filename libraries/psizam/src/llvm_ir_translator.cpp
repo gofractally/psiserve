@@ -3249,6 +3249,27 @@ namespace psizam::detail {
 
                // ──── Multi-value return store ────
                case ir_op::multi_return_store: {
+                  int32_t offset = 24 + inst.ri.imm; // multi_return_offset = 24
+                  if (inst.type == types::v128) {
+                     // Load v128 from separate slot, split into low/high i64s,
+                     // store packed: low at offset, high at offset+8.
+                     auto* vec = load_v128(static_cast<uint16_t>(inst.ri.src1),
+                                           v128_ty);
+                     if (!vec) break;
+                     auto* lo = builder.CreateExtractElement(vec, builder.getInt32(0));
+                     auto* hi = builder.CreateExtractElement(vec, builder.getInt32(1));
+                     auto* lo_ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
+                        builder.getInt32(offset));
+                     auto* hi_ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
+                        builder.getInt32(offset + 8));
+                     auto* lo_typed = builder.CreateBitCast(lo_ptr,
+                        llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                     auto* hi_typed = builder.CreateBitCast(hi_ptr,
+                        llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                     builder.CreateStore(lo, lo_typed);
+                     builder.CreateStore(hi, hi_typed);
+                     break;
+                  }
                   // In unreachable code the source vreg may not have been
                   // allocated; skip the store in that case (the op won't
                   // actually execute at runtime).
@@ -3267,10 +3288,9 @@ namespace psizam::detail {
                   } else if (t == i32_ty) {
                      val_i64 = builder.CreateZExt(val, i64_ty);
                   } else if (t != i64_ty) {
-                     // Unknown type (e.g. v128) — best-effort zero
+                     // Unknown type — best-effort zero
                      val_i64 = llvm::ConstantInt::get(i64_ty, 0);
                   }
-                  int32_t offset = 24 + inst.ri.imm; // multi_return_offset = 24
                   auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
                      builder.getInt32(offset));
                   auto* typed_ptr = builder.CreateBitCast(ptr,
@@ -3282,6 +3302,25 @@ namespace psizam::detail {
                // ──── Multi-value call return load ────
                case ir_op::multi_return_load: {
                   int32_t offset = 24 + inst.ri.imm; // multi_return_offset = 24
+                  if (inst.type == types::v128) {
+                     // Load packed low/high i64s from offset and offset+8, combine
+                     // into v128 vector, store to v128 slot.
+                     auto* lo_ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
+                        builder.getInt32(offset));
+                     auto* hi_ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
+                        builder.getInt32(offset + 8));
+                     auto* lo_typed = builder.CreateBitCast(lo_ptr,
+                        llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                     auto* hi_typed = builder.CreateBitCast(hi_ptr,
+                        llvm::PointerType::getUnqual(builder.getInt64Ty()));
+                     auto* lo = builder.CreateLoad(builder.getInt64Ty(), lo_typed);
+                     auto* hi = builder.CreateLoad(builder.getInt64Ty(), hi_typed);
+                     llvm::Value* vec = llvm::UndefValue::get(v128_ty);
+                     vec = builder.CreateInsertElement(vec, lo, builder.getInt32(0));
+                     vec = builder.CreateInsertElement(vec, hi, builder.getInt32(1));
+                     store_v128(static_cast<uint16_t>(inst.dest), vec);
+                     break;
+                  }
                   auto* ptr = builder.CreateGEP(builder.getInt8Ty(), ctx_ptr,
                      builder.getInt32(offset));
                   auto* typed_ptr = builder.CreateBitCast(ptr,

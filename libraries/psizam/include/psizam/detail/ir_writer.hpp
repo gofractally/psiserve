@@ -377,8 +377,9 @@ namespace psizam::detail {
          // Allocate merge vregs so br-to-function-body can pass return values
          if (ft.return_count > 1) {
             for (uint32_t i = 0; i < ft.return_count && i < 16; ++i) {
-               entry.merge_vregs[i] = _func->alloc_vreg(types::i64);
-               entry.result_types[i] = types::i64;
+               uint8_t rti = (i < ft.return_types.size()) ? static_cast<uint8_t>(ft.return_types[i]) : types::i64;
+               entry.merge_vregs[i] = _func->alloc_vreg(rti);
+               entry.result_types[i] = rti;
             }
             entry.merge_vreg = entry.merge_vregs[0];
          } else if (entry.result_type != types::pseudo) {
@@ -464,6 +465,8 @@ namespace psizam::detail {
                   // so regalloc sees the stores (epilogue can't reference vregs safely)
                   if (!_unreachable && _func->vstack_depth() > entry.stack_depth) {
                      uint32_t first_src = ir_vreg_none;
+                     uint32_t byte_offs[16] = {};
+                     compute_multi_return_offsets(entry.result_types, entry.result_count, byte_offs);
                      for (uint32_t i = entry.result_count; i > 0; --i) {
                         uint8_t rt = entry.result_types[i - 1];
                         if (rt == types::v128) _func->vpop();  // ghost slot
@@ -475,7 +478,7 @@ namespace psizam::detail {
                         store.flags = IR_SIDE_EFFECT;
                         store.dest = ir_vreg_none;
                         store.ri.src1 = src;
-                        store.ri.imm = static_cast<int32_t>((i - 1) * 8);
+                        store.ri.imm = static_cast<int32_t>(byte_offs[i - 1]);
                         _func->emit(store);
                      }
                      // Also mov the first return value to merge_vregs[0] so the
@@ -589,6 +592,8 @@ namespace psizam::detail {
                _pending_result_types_count = 0;
                for (uint32_t i = 0; i < result_count && i < 16; ++i)
                   rt_buf[i] = (pt && i < pc) ? pt[i] : types::i64;
+               uint32_t byte_offs[16] = {};
+               compute_multi_return_offsets(rt_buf, result_count, byte_offs);
                uint32_t first_src = ir_vreg_none;
                for (uint32_t i = result_count; i > 0; --i) {
                   uint8_t rti = rt_buf[i - 1];
@@ -601,7 +606,7 @@ namespace psizam::detail {
                   store.flags = IR_SIDE_EFFECT;
                   store.dest = ir_vreg_none;
                   store.ri.src1 = src;
-                  store.ri.imm = static_cast<int32_t>((i - 1) * 8); // offset in _multi_return
+                  store.ri.imm = static_cast<int32_t>(byte_offs[i - 1]);
                   _func->emit(store);
                }
                // Also mov first value to the function's merge_vregs[0] so jit_llvm's
@@ -665,6 +670,24 @@ namespace psizam::detail {
       // Number of vstack slots for a given value type (v128 = 2, others = 1).
       static uint32_t slots_for_type(uint8_t t) {
          return (t == types::v128) ? 2u : 1u;
+      }
+
+      // Byte size occupied in ctx->_multi_return[] for a given result type.
+      // v128 packs as 16 bytes (low then high), others as one 8-byte slot.
+      static uint32_t multi_return_bytes_for_type(uint8_t t) {
+         return (t == types::v128) ? 16u : 8u;
+      }
+
+      // Fill byte_offs[0..count-1] with the byte offset of each result in
+      // ctx->_multi_return[], respecting v128 = 16 bytes, scalars = 8 bytes.
+      static void compute_multi_return_offsets(const uint8_t* result_types,
+                                               uint32_t count,
+                                               uint32_t* byte_offs) {
+         uint32_t accum = 0;
+         for (uint32_t i = 0; i < count; ++i) {
+            byte_offs[i] = accum;
+            accum += multi_return_bytes_for_type(result_types[i]);
+         }
       }
 
       void emit_block(uint8_t result_type = types::pseudo, uint32_t result_count = 0, uint32_t param_count = 0) {
@@ -940,6 +963,8 @@ namespace psizam::detail {
                         // Function body target: emit multi_return_store
                         uint32_t off = 0;
                         uint32_t first_src = ir_vreg_none;
+                        uint32_t byte_offs[16] = {};
+                        compute_multi_return_offsets(target_entry.result_types, n, byte_offs);
                         for (uint32_t i = 0; i < n; ++i) {
                            uint8_t rti = target_entry.result_types[i];
                            uint32_t src = _func->vstack[base_depth + off];
@@ -950,7 +975,7 @@ namespace psizam::detail {
                            store.flags = IR_SIDE_EFFECT;
                            store.dest = ir_vreg_none;
                            store.ri.src1 = src;
-                           store.ri.imm = static_cast<int32_t>(i * 8);
+                           store.ri.imm = static_cast<int32_t>(byte_offs[i]);
                            _func->emit(store);
                            off += slots_for_type(rti);
                         }
@@ -1062,6 +1087,8 @@ namespace psizam::detail {
                         // Function body target: emit multi_return_store
                         uint32_t off = 0;
                         uint32_t first_src = ir_vreg_none;
+                        uint32_t byte_offs[16] = {};
+                        compute_multi_return_offsets(target_entry.result_types, n, byte_offs);
                         for (uint32_t i = 0; i < n; ++i) {
                            uint8_t rti = target_entry.result_types[i];
                            uint32_t src = _func->vstack[base_depth + off];
@@ -1072,7 +1099,7 @@ namespace psizam::detail {
                            store.flags = IR_SIDE_EFFECT;
                            store.dest = ir_vreg_none;
                            store.ri.src1 = src;
-                           store.ri.imm = static_cast<int32_t>(i * 8);
+                           store.ri.imm = static_cast<int32_t>(byte_offs[i]);
                            _func->emit(store);
                            off += slots_for_type(rti);
                         }
@@ -1184,6 +1211,8 @@ namespace psizam::detail {
                            // Function body target: emit multi_return_store
                            uint32_t off = 0;
                            uint32_t first_src = ir_vreg_none;
+                           uint32_t byte_offs[16] = {};
+                           ir_writer_impl::compute_multi_return_offsets(target_entry.result_types, n, byte_offs);
                            for (uint32_t i = 0; i < n; ++i) {
                               uint8_t rti = target_entry.result_types[i];
                               uint32_t src = func->vstack[base_depth + off];
@@ -1194,7 +1223,7 @@ namespace psizam::detail {
                               store.flags = IR_SIDE_EFFECT;
                               store.dest = ir_vreg_none;
                               store.ri.src1 = src;
-                              store.ri.imm = static_cast<int32_t>(i * 8);
+                              store.ri.imm = static_cast<int32_t>(byte_offs[i]);
                               func->emit(store);
                               off += ir_writer_impl::slots_for_type(rti);
                            }
@@ -1323,6 +1352,8 @@ namespace psizam::detail {
                   // The call instruction's dest vreg holds the return value in RAX which
                   // for multi-value is unused (callee stores everything to _multi_return).
                   // Load all N return values from _multi_return buffer.
+                  uint32_t byte_offs[16] = {};
+                  compute_multi_return_offsets(ft.return_types.data(), ft.return_count, byte_offs);
                   for (uint32_t i = 0; i < ft.return_count; ++i) {
                      uint32_t load_dest = _func->alloc_vreg(ft.return_types[i]);
                      ir_inst load{};
@@ -1331,7 +1362,7 @@ namespace psizam::detail {
                      load.flags = IR_SIDE_EFFECT;
                      load.dest = load_dest;
                      load.ri.src1 = ir_vreg_none;
-                     load.ri.imm = static_cast<int32_t>(i * 8);
+                     load.ri.imm = static_cast<int32_t>(byte_offs[i]);
                      _func->emit(load);
                      _func->vpush(load_dest);
                      // v128 occupies 2 vstack slots (real + ghost) for consumer ops.
@@ -1495,6 +1526,8 @@ namespace psizam::detail {
                _func->emit(inst);
                if (ft.return_count > 1) {
                   // Multi-value: load all N values from _multi_return buffer
+                  uint32_t byte_offs[16] = {};
+                  compute_multi_return_offsets(ft.return_types.data(), ft.return_count, byte_offs);
                   for (uint32_t i = 0; i < ft.return_count; ++i) {
                      uint32_t load_dest = _func->alloc_vreg(ft.return_types[i]);
                      ir_inst load{};
@@ -1503,7 +1536,7 @@ namespace psizam::detail {
                      load.flags = IR_SIDE_EFFECT;
                      load.dest = load_dest;
                      load.ri.src1 = ir_vreg_none;
-                     load.ri.imm = static_cast<int32_t>(i * 8);
+                     load.ri.imm = static_cast<int32_t>(byte_offs[i]);
                      _func->emit(load);
                      _func->vpush(load_dest);
                      // v128 occupies 2 vstack slots (real + ghost) for consumer ops.

@@ -708,6 +708,12 @@ namespace psizam::detail {
                case i64: return {i64_const_t{val.i64}};
                case f32: return {f32_const_t{val.f32}};
                case f64: return {f64_const_t{val.f64}};
+               case v128: {
+                  v128_t v;
+                  v.low  = this->_multi_return[0].i64;
+                  v.high = this->_multi_return[1].i64;
+                  return {v128_const_t{v}};
+               }
                default: assert(!"Unexpected multi-value return type");
             }
          }
@@ -857,6 +863,12 @@ namespace psizam::detail {
                case i64: return {i64_const_t{val.i64}};
                case f32: return {f32_const_t{val.f32}};
                case f64: return {f64_const_t{val.f64}};
+               case v128: {
+                  v128_t v;
+                  v.low  = this->_multi_return[0].i64;
+                  v.high = this->_multi_return[1].i64;
+                  return {v128_const_t{v}};
+               }
                default: assert(!"Unexpected multi-value return type");
             }
          }

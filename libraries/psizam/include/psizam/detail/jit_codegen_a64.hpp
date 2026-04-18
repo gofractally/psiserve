@@ -1825,18 +1825,37 @@ namespace psizam::detail {
 
          // ── Multi-value return store ──
          case ir_op::multi_return_store: {
-            load_vreg_x0(inst.ri.src1);
             int32_t offset = multi_return_offset + inst.ri.imm;
-            // STR X0, [X19, #offset]
-            emit_str_offset(X0, X19, offset);
+            if (inst.type == types::v128) {
+               // v128 on native stack occupies 32 bytes: low at SP+0, high at SP+16.
+               // Store to _multi_return as packed 16 bytes: low at offset, high at offset+8.
+               emit_ldr_offset(X0, SP, 0);
+               emit_str_offset(X0, X19, offset);
+               emit_ldr_offset(X0, SP, 16);
+               emit_str_offset(X0, X19, offset + 8);
+               emit_add_imm(SP, SP, 32);
+            } else {
+               load_vreg_x0(inst.ri.src1);
+               emit_str_offset(X0, X19, offset);
+            }
             break;
          }
 
          // ── Multi-value call return load ──
          case ir_op::multi_return_load: {
             int32_t offset = multi_return_offset + inst.ri.imm;
-            emit_ldr_offset(X0, X19, offset);
-            store_x0_vreg(inst.dest);
+            if (inst.type == types::v128) {
+               // Reserve 32 bytes (native v128 layout) and populate low/high halves
+               // from the packed 16-byte _multi_return slot.
+               emit_sub_imm(SP, SP, 32);
+               emit_ldr_offset(X0, X19, offset);
+               emit_str_offset(X0, SP, 0);
+               emit_ldr_offset(X0, X19, offset + 8);
+               emit_str_offset(X0, SP, 16);
+            } else {
+               emit_ldr_offset(X0, X19, offset);
+               store_x0_vreg(inst.dest);
+            }
             break;
          }
 

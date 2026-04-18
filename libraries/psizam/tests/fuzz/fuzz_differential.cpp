@@ -357,10 +357,17 @@ static bool compare_returns(const char* source, const char* b1_name, const run_r
          // In NaN-tolerant mode, both being NaN is acceptable
          if (nan_tolerant && is_nan_value(a) && is_nan_value(b))
             continue;
-         fprintf(stderr, "RETURN VALUE MISMATCH [%s] export#%zu: %s=%s:0x%llx %s=%s:0x%llx\n",
-                 source, i,
-                 b1_name, type_name(a.type), (unsigned long long)a.bits,
-                 b2_name, type_name(b.type), (unsigned long long)b.bits);
+         if (a.type == types::v128 || b.type == types::v128) {
+            fprintf(stderr, "RETURN VALUE MISMATCH [%s] export#%zu: %s=%s:0x%016llx%016llx %s=%s:0x%016llx%016llx\n",
+                    source, i,
+                    b1_name, type_name(a.type), (unsigned long long)a.bits_hi, (unsigned long long)a.bits,
+                    b2_name, type_name(b.type), (unsigned long long)b.bits_hi, (unsigned long long)b.bits);
+         } else {
+            fprintf(stderr, "RETURN VALUE MISMATCH [%s] export#%zu: %s=%s:0x%llx %s=%s:0x%llx\n",
+                    source, i,
+                    b1_name, type_name(a.type), (unsigned long long)a.bits,
+                    b2_name, type_name(b.type), (unsigned long long)b.bits);
+         }
          return false;
       }
    }

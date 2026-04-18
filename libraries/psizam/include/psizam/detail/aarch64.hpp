@@ -407,15 +407,39 @@ namespace psizam::detail {
             }
          }
          if (ft.return_types.size() > 1) {
-            // Multi-value return: copy N values from operand stack to ctx->_multi_return
-            for (uint32_t i = 0; i < ft.return_types.size(); i++) {
-               uint32_t stack_slot = ft.return_types.size() - 1 - i;
-               uint32_t sp_offset = stack_slot * 16;  // 16-byte aligned slots
-               uint32_t mr_offset = multi_return_offset + i * 8;
-               // LDR X0, [SP, #sp_offset]
-               emit32(0xF94003E0 | ((sp_offset / 8) << 10));
-               // STR X0, [X19, #mr_offset]
-               emit32(0xF9000260 | ((mr_offset / 8) << 10));
+            // Multi-value return: copy N values from operand stack to ctx->_multi_return.
+            // Each operand stack slot is 16 bytes; v128 uses two slots (low at lower addr).
+            // _multi_return layout is packed: scalar=8 bytes, v128=16 bytes (low then high).
+            uint32_t sp_size_for[16] = {};
+            uint32_t mr_off_for[16] = {};
+            uint32_t mr_accum = 0;
+            for (size_t i = 0; i < ft.return_types.size(); i++) {
+               mr_off_for[i] = mr_accum;
+               mr_accum += (ft.return_types[i] == types::v128) ? 16u : 8u;
+               sp_size_for[i] = (ft.return_types[i] == types::v128) ? 32u : 16u;
+            }
+            // SP top-down: last return at SP+0. Compute SP offsets by accumulating
+            // from the top (last return = offset 0).
+            uint32_t sp_off_for[16] = {};
+            uint32_t sp_accum = 0;
+            for (int i = (int)ft.return_types.size() - 1; i >= 0; i--) {
+               sp_off_for[i] = sp_accum;
+               sp_accum += sp_size_for[i];
+            }
+            for (size_t i = 0; i < ft.return_types.size(); i++) {
+               uint32_t sp_off = sp_off_for[i];
+               uint32_t mr_off = multi_return_offset + mr_off_for[i];
+               if (ft.return_types[i] == types::v128) {
+                  // v128 on stack: low at sp_off, high at sp_off+16.
+                  // Pack into _multi_return as low@mr_off, high@mr_off+8.
+                  emit32(0xF94003E0 | ((sp_off / 8) << 10));          // LDR X0, [SP, #sp_off]
+                  emit32(0xF9000260 | ((mr_off / 8) << 10));          // STR X0, [X19, #mr_off]
+                  emit32(0xF94003E0 | (((sp_off + 16) / 8) << 10));   // LDR X0, [SP, #sp_off+16]
+                  emit32(0xF9000260 | (((mr_off + 8) / 8) << 10));    // STR X0, [X19, #mr_off+8]
+               } else {
+                  emit32(0xF94003E0 | ((sp_off / 8) << 10));          // LDR X0, [SP, #sp_off]
+                  emit32(0xF9000260 | ((mr_off / 8) << 10));          // STR X0, [X19, #mr_off]
+               }
             }
          } else if(ft.return_count != 0) {
             if(ft.return_type == types::v128) {
@@ -5027,12 +5051,23 @@ namespace psizam::detail {
             if(total_size != 0) {
                emit_add_imm_sp(total_size);
             }
-            // Push return values: result[0] first (deepest), result[N-1] last (top)
+            // Push return values: result[0] first (deepest), result[N-1] last (top).
+            // _multi_return layout: packed; scalar=8, v128=16 (low@off, high@off+8).
+            uint32_t mr_accum = 0;
             for (uint32_t i = 0; i < ft.return_types.size(); i++) {
-               uint32_t mr_offset = multi_return_offset + i * 8;
-               // LDR X0, [X19, #mr_offset]
-               emit32(0xF9400260 | ((mr_offset / 8) << 10));
-               emit_push_x(X0);
+               uint32_t mr_off = multi_return_offset + mr_accum;
+               if (ft.return_types[i] == types::v128) {
+                  // Push high first (deeper), then low (on top) — matches push order
+                  emit32(0xF9400260 | (((mr_off + 8) / 8) << 10)); // LDR X0, [X19, #mr_off+8]
+                  emit_push_x(X0); // high (deeper)
+                  emit32(0xF9400260 | ((mr_off / 8) << 10));       // LDR X0, [X19, #mr_off]
+                  emit_push_x(X0); // low (on top)
+                  mr_accum += 16;
+               } else {
+                  emit32(0xF9400260 | ((mr_off / 8) << 10));       // LDR X0, [X19, #mr_off]
+                  emit_push_x(X0);
+                  mr_accum += 8;
+               }
             }
             return;
          }
