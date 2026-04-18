@@ -146,6 +146,19 @@ int main() {
       std::cout << "\n";
    }
 
+   // JIT1
+   {
+      auto r = run_bench<psizam::jit>("jit1", provider, consumer, ITERS);
+      std::cout << "Backend: " << r.backend_name << "\n";
+      std::cout << std::string(40, '-') << "\n";
+      print_row("scalar i32 (bridge)", r.scalar_i32_cps);
+      print_row("scalar i64 (bridge)", r.scalar_i64_cps);
+      print_row("string 12B (bridge)", r.string_short_cps);
+      print_row("string 200B (bridge)", r.string_long_cps);
+      print_row("scalar i32 (direct)", r.direct_scalar_cps);
+      std::cout << "\n";
+   }
+
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
    {
       auto r = run_bench<psizam::jit_llvm>("jit_llvm", provider, consumer, ITERS);

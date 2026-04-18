@@ -430,6 +430,41 @@ namespace psizam {
          }
          _host_table.resolve(*mod);
          ctx->set_host_table(&_host_table);
+
+         // Build trampoline arrays for JIT backends (same as construct())
+         if constexpr (requires { ctx->_host_direct_ptrs; }) {
+            uint32_t num_imports = mod->get_imported_functions_size();
+            _direct_ptrs.resize(num_imports, nullptr);
+            _trampoline_ptrs.resize(num_imports, nullptr);
+            static constexpr auto unresolved_trampoline =
+               +[](void*, native_value*, char*) -> native_value {
+                  PSIZAM_ASSERT(false, wasm_link_exception, "unresolved imported function");
+                  return native_value{uint64_t{0}};
+               };
+            constexpr bool want_rev = requires { Impl::reverse_host_args; } && Impl::reverse_host_args;
+            for (uint32_t i = 0; i < num_imports; i++) {
+               uint32_t mapped = mod->import_functions[i];
+               if (mapped < _host_table.size()) {
+                  auto& entry = _host_table.get_entry(mapped);
+                  _direct_ptrs[i] = entry.raw_func_ptr;
+                  if constexpr (want_rev) {
+                     _trampoline_ptrs[i] = entry.rev_trampoline ? entry.rev_trampoline : entry.trampoline;
+                  } else {
+                     _trampoline_ptrs[i] = entry.trampoline ? entry.trampoline : entry.rev_trampoline;
+                  }
+                  // If no fast trampoline but slow_dispatch exists, leave
+                  // null — JIT falls back to call_host_function which
+                  // routes through _host_table.call() → slow_dispatch.
+                  if (!_trampoline_ptrs[i] && !entry.slow_dispatch)
+                     _trampoline_ptrs[i] = unresolved_trampoline;
+               } else {
+                  _trampoline_ptrs[i] = unresolved_trampoline;
+               }
+            }
+            ctx->_host_direct_ptrs = _direct_ptrs.data();
+            ctx->_host_trampoline_ptrs = _trampoline_ptrs.data();
+         }
+
          if (ctx.owns) {
             ctx->initialize_globals();
             if constexpr (!std::is_same_v<Impl, null_backend>) {

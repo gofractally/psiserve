@@ -72,15 +72,22 @@ static std::vector<std::uint8_t> read_wasm(const char* path)
 //      with args in reverse stack order vs the forward order slow_dispatch expects.
 //   2. The 16-arg canonical calling convention hits type_check_args which
 //      asserts arg count == WASM param count.
-// Interpreter and jit_llvm work correctly. JIT1/JIT2 are excluded until the
-// composition system adds proper trampoline support for those backends.
+// All backends should now work — the host_function_table constructor
+// in backend.hpp builds trampoline arrays for JIT1/JIT2.
+// jit2 is x86_64-only.
 
-#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND) && defined(__x86_64__)
   #define COMP_TEST_CASE(name, tags) \
-    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit_llvm)
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit2, psizam::jit_llvm)
+#elif defined(PSIZAM_ENABLE_LLVM_BACKEND)
+  #define COMP_TEST_CASE(name, tags) \
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit_llvm)
+#elif defined(__x86_64__)
+  #define COMP_TEST_CASE(name, tags) \
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit, psizam::jit2)
 #else
   #define COMP_TEST_CASE(name, tags) \
-    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter)
+    TEMPLATE_TEST_CASE(name, tags, psizam::interpreter, psizam::jit)
 #endif
 
 // ── Helper: set up a wired composition ──────────────────────────────────────
