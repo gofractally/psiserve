@@ -318,6 +318,29 @@ target_compile_definitions(component_tests PUBLIC
 )
 catch_discover_tests(component_tests)
 
+# ── Composition tests ────────────────────────────────────────────────────────
+
+add_executable(composition_tests main.cpp
+   composition_tests.cpp
+)
+target_link_libraries(composition_tests psizam psizam-exec Catch2::Catch2)
+if(PSIZAM_ENABLE_LLVM)
+   target_link_libraries(composition_tests psizam-llvm)
+endif()
+target_include_directories(composition_tests PUBLIC
+   ${CMAKE_CURRENT_SOURCE_DIR}
+   ${CMAKE_CURRENT_SOURCE_DIR}/../include
+   ${CMAKE_CURRENT_SOURCE_DIR}/../examples/composition
+)
+target_compile_definitions(composition_tests PUBLIC
+   CATCH_CONFIG_NO_POSIX_SIGNALS
+   COMPOSITION_WASM_DIR="${CMAKE_BINARY_DIR}/libraries/psizam/examples/composition"
+)
+if(TARGET composition_provider_guest AND TARGET composition_consumer_guest)
+   add_dependencies(composition_tests composition_provider_guest composition_consumer_guest)
+endif()
+catch_discover_tests(composition_tests)
+
 add_executable(mem64_debug compliance/mem64_debug.cpp)
 target_link_libraries(mem64_debug psizam psizam-exec)
 target_include_directories(mem64_debug PUBLIC
