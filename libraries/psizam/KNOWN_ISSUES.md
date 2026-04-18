@@ -385,13 +385,71 @@ pop the handlers *at frame teardown time* rather than at parse-emit
 time. Alternatively force non-TCO fallback when the caller is still
 inside any `eh_enter` scope at the return_call instruction.
 
-### jit_llvm: opaque `unreachable` trap on deeply-nested fuzzer modules (open)
+### ~~jit_llvm: SIMD-chain divergence surfaces as `unreachable` trap~~ — fixed (commit `ef8c4e8`)
 
-**Status:** open — root cause not narrowed.
+**Status:** fixed. Root cause was jit_llvm's `hw_deterministic` path
+for `f32x4.demote_f64x2_zero` / `f64x2.promote_low_f32x4`, which used
+LLVM's native `CreateFPTrunc` / `CreateFPExt` instead of the softfloat
+helper. Hardware `fptrunc` on NaN produces canonical quiet NaN
+(`0x7fc00000`) while softfloat preserves the NaN payload — that
+mismatch cascaded through the module's control flow until the runaway
+counter hit 0 on `unreachable`. The scalar `f32_demote_f64` /
+`f64_promote_f32` already routed through softfloat in any non-`fast`
+mode; the SIMD variants now do the same (and skip the follow-on
+`maybe_canon` which would overwrite the softfloat-provided payload).
 
-**Reproducer.** `mismatch_365607_seed31415926.wasm` (3264 B). interpreter/jit/jit2 run OK; jit_llvm raises `interp_trap (unreachable)`. Minimization via `wasm-reduce` is blocked because binaryen's `wasm-opt` can't round-trip the fuzzer-generated module (validator rejects an `f32`/`i32` type mismatch in an xor inside a block, which psizam's parser accepts). Module uses `try_table`+tail-call+EH+v128 densely; likely a translation/lowering bug in `llvm_ir_translator.cpp` that only triggers on a specific opcode-sequence/type combination.
+Reproducer `mismatch_365607_seed31415926.wasm` now runs ok on both
+backends; all 4572 SIMD spec tests still pass.
 
-**Fix sketch.** Hand-minimize (binaryen tooling doesn't work). Alternatively, add a trap-site log to `llvm_ir_translator` that dumps the WASM PC when emitting the unreachable IR, to pinpoint the buggy path.
+**Reproducer.** `mismatch_365607_seed31415926.wasm` (3264 B, 1190-line
+WAT via `wasm2wat --enable-all`). interpreter/jit/jit2/wasm3 run OK;
+jit_llvm raises `interp_trap (unreachable)`.
+
+**Narrowed location.** Diagnostic (temporary `ip` encoding in
+`__psizam_trap`'s `trap_code` for `ir_op::unreachable`, reverted) shows
+the firing site is `ip=4` in func 2 — the very first `unreachable`
+under `(global.get 5; i32.eqz; if unreachable end)` at the top of
+the function. That unreachable only fires when global 5 (the runaway
+counter, initial 100) hits 0. Counter decrements only on every
+recursive entry into func 2 via `return_call 2`, which is itself
+guarded by `if (i64x2.bitmask != 0)` on a v128 produced by this
+chain (func 2, right after the decrement):
+
+```
+i64.const 2123283510833915851
+f64.convert_i64_s                 ; f64 stays on stack underneath
+v128.const i32x4 0x839cbe5d 0x6c5be233 0x938d73bd 0x7f2ee05e
+i32x4.trunc_sat_f32x4_s
+i16x8.abs
+f64x2.neg
+f32x4.demote_f64x2_zero
+i8x16.neg
+f32x4.floor
+f64x2.convert_low_i32x4_s
+i64x2.bitmask                     ; → i32 feeding `if`
+```
+
+So interp's chain must produce `bitmask == 0` (→ fall past the
+recursive tail call and return normally), while jit_llvm's produces
+a non-zero result (→ enter the recursive tail call, decrement the
+counter on each re-entry, and eventually trap when it hits 0). The
+outcome `unreachable` is downstream — the real bug is in one of the
+SIMD ops above.
+
+**Likely suspects.** `i32x4.trunc_sat_f32x4_s` on a v128 whose f32
+lanes are the raw bytes of the v128.const (likely NaN / out-of-range
+for i32), and `f64x2.neg` / `f32x4.demote_f64x2_zero` /
+`f64x2.convert_low_i32x4_s` on softfloat. LLVM's native codegen for
+these intrinsics may use hardware semantics even under softfloat mode;
+interp runs everything through the softfloat helpers.
+
+**Fix sketch.** Build three micro-modules that each run the chain up
+to one specific op and return the v128 via an exported global, and
+diff interp vs. jit_llvm to find the first divergent op. Then inspect
+`llvm_ir_translator.cpp`'s emission for that op. Don't start with
+wasm-reduce — binaryen's `wasm-opt` can't round-trip the module
+(validator rejects an `f32`/`i32` type mismatch in an xor inside a
+block that psizam's parser accepts).
 
 ### ~~jit2 + jit_llvm: uncaught-exception trap classified as memory_trap~~ — fixed
 
