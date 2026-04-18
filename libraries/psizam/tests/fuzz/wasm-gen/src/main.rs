@@ -48,7 +48,7 @@ fn main() {
             relaxed_simd_enabled: false,
             custom_page_sizes_enabled: false,
             exceptions_enabled: true,
-            reference_types_enabled: false,  // JIT assert on ref-typed globals
+            reference_types_enabled: true,
             memory64_enabled: false,         // limited JIT support
             threads_enabled: false,          // shared memory not supported in fuzzer
             // Enabled — we want to surface bugs in these, not hide them
