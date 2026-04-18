@@ -4536,9 +4536,18 @@ namespace psizam::detail {
                      store_v128(inst.simd.v_dest, builder.CreateBitCast(r, v128_ty)); break;
                   }
                   case simd_sub::f32x4_demote_f64x2_zero: {
+                     // NaN-payload-sensitive: route through the softfloat helper
+                     // in any non-`fast` mode so results match the interpreter
+                     // bit-for-bit. Hardware fptrunc canonicalizes NaN payloads
+                     // to 0x7fc00000, which diverges from softfloat's f64_to_f32.
+                     // When the softfloat helper is used, skip maybe_canon_v4xf32
+                     // — the helper already produces the WASM-spec NaN payload
+                     // and canonicalization would overwrite it (matches scalar
+                     // f32_demote_f64 handling above).
                      auto* a = load_v128(inst.simd.v_src1, v2xf64_ty);
                      llvm::Value* r;
-                     if (opts.fp == fp_mode::softfloat) {
+                     bool used_sf = (opts.fp != fp_mode::fast);
+                     if (used_sf) {
                         r = llvm::ConstantVector::getSplat(llvm::ElementCount::getFixed(4),
                               llvm::ConstantFP::get(f32_ty, 0.0));
                         for (int j = 0; j < 2; ++j) {
@@ -4552,12 +4561,15 @@ namespace psizam::detail {
                         auto* zero2 = llvm::Constant::getNullValue(llvm::FixedVectorType::get(f32_ty, 2));
                         r = builder.CreateShuffleVector(narrow2, zero2, llvm::ArrayRef<int>{0,1,2,3});
                      }
-                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v4xf32(builder, r), v128_ty)); break;
+                     llvm::Value* final_r = used_sf ? r : maybe_canon_v4xf32(builder, r);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(final_r, v128_ty)); break;
                   }
                   case simd_sub::f64x2_promote_low_f32x4: {
+                     // NaN-payload-sensitive: same reasoning as f32x4_demote_f64x2_zero.
                      auto* a = load_v128(inst.simd.v_src1, v4xf32_ty);
                      llvm::Value* r;
-                     if (opts.fp == fp_mode::softfloat) {
+                     bool used_sf = (opts.fp != fp_mode::fast);
+                     if (used_sf) {
                         r = llvm::UndefValue::get(v2xf64_ty);
                         for (int j = 0; j < 2; ++j) {
                            auto* idx = builder.getInt32(j);
@@ -4569,7 +4581,8 @@ namespace psizam::detail {
                         auto* low2 = builder.CreateShuffleVector(a, a, llvm::ArrayRef<int>{0,1});
                         r = builder.CreateFPExt(low2, v2xf64_ty);
                      }
-                     store_v128(inst.simd.v_dest, builder.CreateBitCast(maybe_canon_v2xf64(builder, r), v128_ty)); break;
+                     llvm::Value* final_r = used_sf ? r : maybe_canon_v2xf64(builder, r);
+                     store_v128(inst.simd.v_dest, builder.CreateBitCast(final_r, v128_ty)); break;
                   }
 
                   // ── Relaxed SIMD ──
