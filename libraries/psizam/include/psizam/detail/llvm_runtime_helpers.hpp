@@ -85,6 +85,14 @@ extern "C" {
    // See libraries/psizam/docs/gas-metering-design.md.
    void __psizam_gas_charge(void* ctx, int64_t cost);
 
+   // Slow-path handler for the Phase 3 inline-decrement JIT path. The
+   // JIT emits `sub imm, counter(ctx) ; jns done ; call here` so the
+   // decrement happens inline; when the counter crosses zero this
+   // helper reads the (already-decremented) counter, invokes the
+   // context's gas_handler, or throws wasm_gas_exhausted_exception if
+   // the handler is null. It does NOT decrement the counter itself.
+   void __psizam_gas_exhausted_check(void* ctx);
+
    // Trap — throws a WASM trap exception. Does not return.
    [[noreturn]] void __psizam_trap(void* ctx, uint32_t trap_code);
    // trap codes: 0=unreachable, 1=div_by_zero, 2=int_overflow,

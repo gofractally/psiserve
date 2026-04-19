@@ -534,25 +534,65 @@ namespace psizam::detail {
 
       // ──────── Function prologue/epilogue ────────
 
-      // Gas_charge prologue with fast-path skip (see x86_64.hpp for the
-      // detailed rationale). When _gas_strategy == off the call is
-      // skipped by a branch-predicted `je`; ~2 cycles vs a full host-
-      // call roundtrip.
+      // Phase 3 gas_charge: three-way emission (see x86_64.hpp for the
+      // detailed rationale). When strategy is off or atomicity is on
+      // we either skip entirely or fall back to the host helper; the
+      // common case (strategy on, _gas_atomic false) executes an
+      // inline `subq $cost, counter(%rdi); jns done` and only calls
+      // into __psizam_gas_exhausted_check on the slow path.
       void emit_gas_charge(int64_t cost) {
-         const uint32_t strategy_off = static_cast<uint32_t>(
-            jit_execution_context<false>::gas_strategy_offset());
-         this->emit_bytes(0x80, 0xBF);           // cmpb $0, disp32(%rdi)
+         using ctx_t = jit_execution_context<false>;
+         const uint32_t strategy_off = static_cast<uint32_t>(ctx_t::gas_strategy_offset());
+         const uint32_t atomic_off   = static_cast<uint32_t>(ctx_t::gas_atomic_offset());
+         const uint32_t counter_off  = static_cast<uint32_t>(ctx_t::gas_counter_offset());
+
+         // cmpb $0, strategy_off(%rdi)
+         this->emit_bytes(0x80, 0xBF);
          this->emit_operand32(strategy_off);
-         this->emit_bytes(0x00);                 // imm8 = 0
-         this->emit_bytes(0x74, 21);             // je skip (over 21 bytes)
-         this->emit_bytes(0x57);                 // pushq %rdi
-         this->emit_bytes(0x56);                 // pushq %rsi
-         this->emit_bytes(0xbe);                 // mov $cost, %esi
+         this->emit_bytes(0x00);
+         auto* je_done_imm = reinterpret_cast<uint8_t*>(this->code) + 1;
+         this->emit_bytes(0x74, 0x00);
+
+         // cmpb $0, atomic_off(%rdi)
+         this->emit_bytes(0x80, 0xBF);
+         this->emit_operand32(atomic_off);
+         this->emit_bytes(0x00);
+         auto* jne_helper_imm = reinterpret_cast<uint8_t*>(this->code) + 1;
+         this->emit_bytes(0x75, 0x00);
+
+         // Inline non-atomic: subq $cost, counter_off(%rdi); jns done
+         this->emit_bytes(0x48, 0x83, 0xAF);
+         this->emit_operand32(counter_off);
+         this->emit_bytes(static_cast<uint8_t>(cost & 0xFF));
+         auto* jns_done_imm = reinterpret_cast<uint8_t*>(this->code) + 1;
+         this->emit_bytes(0x79, 0x00);
+         // Slow: call __psizam_gas_exhausted_check(ctx)
+         this->emit_bytes(0x57);
+         this->emit_bytes(0x56);
+         this->emit_mov(&__psizam_gas_exhausted_check, rax);
+         this->emit(CALL, rax);
+         this->emit_bytes(0x5e);
+         this->emit_bytes(0x5f);
+         auto* jmp_done_imm = reinterpret_cast<uint8_t*>(this->code) + 1;
+         this->emit_bytes(0xeb, 0x00);
+
+         // helper_path: atomic via host helper
+         auto* helper_path_target = reinterpret_cast<uint8_t*>(this->code);
+         this->emit_bytes(0x57);
+         this->emit_bytes(0x56);
+         this->emit_bytes(0xbe);
          this->emit_operand32(static_cast<uint32_t>(cost));
          this->emit_mov(&__psizam_gas_charge, rax);
          this->emit(CALL, rax);
-         this->emit_bytes(0x5e);                 // popq %rsi
-         this->emit_bytes(0x5f);                 // popq %rdi
+         this->emit_bytes(0x5e);
+         this->emit_bytes(0x5f);
+
+         // done:
+         auto* done_target = reinterpret_cast<uint8_t*>(this->code);
+         *je_done_imm    = static_cast<uint8_t>(done_target        - (je_done_imm + 1));
+         *jne_helper_imm = static_cast<uint8_t>(helper_path_target - (jne_helper_imm + 1));
+         *jns_done_imm   = static_cast<uint8_t>(done_target        - (jns_done_imm + 1));
+         *jmp_done_imm   = static_cast<uint8_t>(done_target        - (jmp_done_imm + 1));
       }
 
       void emit_function_prologue(ir_function& func) {

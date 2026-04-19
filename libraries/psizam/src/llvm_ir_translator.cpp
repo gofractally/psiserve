@@ -8,6 +8,7 @@
 //           locals/globals, calls, select.
 
 #include <psizam/detail/llvm_ir_translator.hpp>
+#include <psizam/detail/execution_context.hpp>
 #include <psizam/exceptions.hpp>
 
 #include <llvm/IR/IRBuilder.h>
@@ -162,6 +163,7 @@ namespace psizam::detail {
       llvm::Function* rt_trap           = nullptr;
       llvm::Function* rt_call_depth_dec = nullptr;
       llvm::Function* rt_gas_charge = nullptr;
+      llvm::Function* rt_gas_exhausted_check = nullptr;
       llvm::Function* rt_call_depth_inc = nullptr;
       llvm::Function* rt_get_memory     = nullptr;
 
@@ -337,6 +339,12 @@ namespace psizam::detail {
          // when the context's strategy is off.
          rt_gas_charge = decl("__psizam_gas_charge",
             llvm::FunctionType::get(void_ty, {ptr_ty, i64_ty}, false));
+
+         // void __psizam_gas_exhausted_check(void* ctx) — Phase 3 slow
+         // path for the inline-decrement version. Called after the JIT
+         // has already decremented the counter into negative territory.
+         rt_gas_exhausted_check = decl("__psizam_gas_exhausted_check",
+            llvm::FunctionType::get(void_ty, {ptr_ty}, false));
 
          // void* __psizam_get_memory(void* ctx) — returns current linear memory base
          rt_get_memory = decl("__psizam_get_memory",
@@ -729,31 +737,65 @@ namespace psizam::detail {
          llvm::Value* mem_arg = &*arg_it++;
          mem_arg->setName("mem");
 
-         // Gas metering (Phase 2a): fast-path skip when _gas_strategy ==
-         // off. Emit:
-         //   %strategy = load i8, ptr (ctx + strategy_off)
-         //   %on = icmp ne i8 %strategy, 0
-         //   br i1 %on, label %gas_call, label %gas_skip
-         // gas_call: call __psizam_gas_charge(ctx, 1); br %gas_skip
-         // gas_skip:
+         // Gas metering (Phase 3): three-way branch at function entry.
+         //   if (strategy == off) goto done;
+         //   if (atomic)          goto helper_call;
+         //   counter -= cost;
+         //   if (counter < 0)     __psizam_gas_exhausted_check(ctx);
+         //   goto done;
+         // helper_call:
+         //   __psizam_gas_charge(ctx, cost);   // handles atomic + trap
+         // done:
          {
             const std::size_t strategy_off =
                detail::jit_execution_context<false>::gas_strategy_offset();
-            auto* strategy_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr,
-                                                            strategy_off,
-                                                            "strategy_ptr");
-            auto* strategy_val = builder.CreateLoad(i8_ty, strategy_gep,
-                                                    "strategy");
-            auto* is_on = builder.CreateICmpNE(strategy_val,
-               llvm::ConstantInt::get(i8_ty, 0), "gas_on");
-            auto* gas_call_bb = llvm::BasicBlock::Create(*ctx, "gas_call", fn);
-            auto* gas_skip_bb = llvm::BasicBlock::Create(*ctx, "gas_skip", fn);
-            builder.CreateCondBr(is_on, gas_call_bb, gas_skip_bb);
-            builder.SetInsertPoint(gas_call_bb);
+            const std::size_t atomic_off =
+               detail::jit_execution_context<false>::gas_atomic_offset();
+            const std::size_t counter_off =
+               detail::jit_execution_context<false>::gas_counter_offset();
+
+            auto* strategy_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr, strategy_off, "strategy_ptr");
+            auto* strategy_val = builder.CreateLoad(i8_ty, strategy_gep, "strategy");
+            auto* gas_on = builder.CreateICmpNE(strategy_val, llvm::ConstantInt::get(i8_ty, 0), "gas_on");
+
+            auto* gas_on_bb      = llvm::BasicBlock::Create(*ctx, "gas_on",      fn);
+            auto* gas_fast_bb    = llvm::BasicBlock::Create(*ctx, "gas_fast",    fn);
+            auto* gas_trap_bb    = llvm::BasicBlock::Create(*ctx, "gas_trap",    fn);
+            auto* gas_helper_bb  = llvm::BasicBlock::Create(*ctx, "gas_helper",  fn);
+            auto* gas_done_bb    = llvm::BasicBlock::Create(*ctx, "gas_done",    fn);
+
+            builder.CreateCondBr(gas_on, gas_on_bb, gas_done_bb);
+
+            // gas_on: check atomic
+            builder.SetInsertPoint(gas_on_bb);
+            auto* atomic_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr, atomic_off, "atomic_ptr");
+            auto* atomic_val = builder.CreateLoad(i8_ty, atomic_gep, "gas_atomic");
+            auto* is_atomic = builder.CreateICmpNE(atomic_val, llvm::ConstantInt::get(i8_ty, 0), "is_atomic");
+            builder.CreateCondBr(is_atomic, gas_helper_bb, gas_fast_bb);
+
+            // gas_fast: non-atomic inline decrement
+            builder.SetInsertPoint(gas_fast_bb);
+            auto* counter_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr, counter_off, "counter_ptr");
+            auto* cur = builder.CreateLoad(i64_ty, counter_gep, "cur");
+            auto* next = builder.CreateSub(cur,
+               llvm::ConstantInt::get(i64_ty, 1, /*signed*/true), "next");
+            builder.CreateStore(next, counter_gep);
+            auto* negative = builder.CreateICmpSLT(next,
+               llvm::ConstantInt::get(i64_ty, 0), "gas_negative");
+            builder.CreateCondBr(negative, gas_trap_bb, gas_done_bb);
+
+            // gas_trap: slow path
+            builder.SetInsertPoint(gas_trap_bb);
+            builder.CreateCall(rt_gas_exhausted_check, {ctx_ptr});
+            builder.CreateBr(gas_done_bb);
+
+            // gas_helper: atomic path via host helper
+            builder.SetInsertPoint(gas_helper_bb);
             builder.CreateCall(rt_gas_charge,
                {ctx_ptr, llvm::ConstantInt::get(i64_ty, 1, /*signed*/true)});
-            builder.CreateBr(gas_skip_bb);
-            builder.SetInsertPoint(gas_skip_bb);
+            builder.CreateBr(gas_done_bb);
+
+            builder.SetInsertPoint(gas_done_bb);
          }
 
          // Store mem_ptr in an alloca so memory_grow can update it and LLVM's

@@ -232,13 +232,29 @@ namespace psizam::detail {
       // Refill convenience used by yield / timeout-check handlers.
       inline void restock_gas(int64_t n) { _gas_counter.store(n, std::memory_order_relaxed); }
 
+      // Runtime-switchable atomicity for the gas counter. False (default)
+      // = non-atomic decrement (single-fiber / deterministic / DoS-limit
+      // cases; ~1 ns per check on JIT). True = atomic fetch_sub, required
+      // only when another thread may store(-1) to trigger an external
+      // interrupt. JITs read this flag per prologue; setting it at
+      // instance creation is sufficient.
+      inline bool gas_atomic() const { return _gas_atomic; }
+      inline void set_gas_atomic(bool a) { _gas_atomic = a; }
+
       // Runtime check invoked at interpreter function-call boundaries.
       // Hot path: inlined, one relaxed fetch_sub + branch. Off path
       // (strategy == off) returns immediately; the branch predictor
       // pins it so the extra compare is effectively free.
       inline void gas_charge(int64_t cost) {
          if (_gas_strategy == gas_insertion_strategy::off) return;
-         int64_t prev = _gas_counter.fetch_sub(cost, std::memory_order_relaxed);
+         int64_t prev;
+         if (_gas_atomic) {
+            prev = _gas_counter.fetch_sub(cost, std::memory_order_relaxed);
+         } else {
+            int64_t cur = _gas_counter.load(std::memory_order_relaxed);
+            prev = cur;
+            _gas_counter.store(cur - cost, std::memory_order_relaxed);
+         }
          if (prev - cost < 0) [[unlikely]] {
             if (_gas_handler) _gas_handler(this);
             else PSIZAM_THROW(wasm_gas_exhausted_exception, "gas exhausted");
@@ -521,6 +537,7 @@ namespace psizam::detail {
          ctx->_gas_handler  = _gas_handler;
          ctx->_gas_slice    = _gas_slice;
          ctx->_gas_strategy = _gas_strategy;
+         ctx->_gas_atomic   = _gas_atomic;
          // Set call depth limit via derived accessor
          ctx->set_max_call_depth(derived().get_remaining_call_depth());
          return ctx;
@@ -569,12 +586,14 @@ namespace psizam::detail {
       std::vector<bool>               _dropped_data;
       fp_mode                         _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
       // Gas metering — defaults to strategy::off (no instrumentation),
-      // unlimited budget, null handler. Enable by calling
-      // set_gas_strategy(...) with a non-off strategy.
+      // unlimited budget, null handler, non-atomic. Enable by calling
+      // set_gas_strategy(...) with a non-off strategy. Toggle atomicity
+      // via set_gas_atomic(true) when cross-thread interrupts are needed.
       std::atomic<int64_t>            _gas_counter{gas_budget_unlimited};
       gas_handler_t                   _gas_handler = nullptr;
       int64_t                         _gas_slice   = gas_slice_default;
       gas_insertion_strategy          _gas_strategy = gas_insertion_strategy::off;
+      bool                            _gas_atomic   = false;
    };
 
    struct jit_visitor { template<typename T> jit_visitor(T&&) {} };
@@ -633,14 +652,13 @@ namespace psizam::detail {
          this->_remaining_call_depth = max_call_depth;
       }
 
-      // Byte offset of _gas_strategy within this derived class. JIT
-      // codegen embeds this as an immediate in a `cmpb $0, off(ctx); je`
-      // fast-path that skips the gas_charge host call entirely when
-      // strategy == off. Not constexpr (offsetof on non-standard-layout
-      // types isn't), but called once per compile.
-      static std::size_t gas_strategy_offset() {
-         return offsetof(jit_execution_context, _gas_strategy);
-      }
+      // Byte offsets of gas fields within this derived class. JIT
+      // codegen embeds these as immediates to reach the fields from
+      // the ctx pointer register. Not constexpr (offsetof on non-
+      // standard-layout types isn't), but called once per compile.
+      static std::size_t gas_strategy_offset() { return offsetof(jit_execution_context, _gas_strategy); }
+      static std::size_t gas_atomic_offset()   { return offsetof(jit_execution_context, _gas_atomic); }
+      static std::size_t gas_counter_offset()  { return offsetof(jit_execution_context, _gas_counter); }
 
       std::uint32_t get_remaining_call_depth() const { return this->_remaining_call_depth; }
 

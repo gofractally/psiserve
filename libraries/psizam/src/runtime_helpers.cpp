@@ -194,4 +194,13 @@ void __psizam_gas_charge(void* ctx, int64_t cost) {
    as_ctx(ctx).gas_charge(cost);
 }
 
+void __psizam_gas_exhausted_check(void* ctx) {
+   auto& c = as_ctx(ctx);
+   // JIT already did the inline decrement; we just check and dispatch.
+   if (c.gas_counter().load(std::memory_order_relaxed) >= 0) return;
+   auto h = c.gas_handler();
+   if (h) h(&c);
+   else escape_or_throw<wasm_gas_exhausted_exception>("gas exhausted");
+}
+
 } // extern "C"

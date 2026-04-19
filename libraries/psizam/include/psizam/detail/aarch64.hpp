@@ -4859,41 +4859,89 @@ namespace psizam::detail {
          emit32(0xA8C153F3);
       }
 
-      // Gas_charge prologue with fast-path skip. Loads the _gas_strategy
-      // byte, compares to 0, skips the host-call sequence entirely when
-      // metering is disabled.
+      // Phase 3 gas_charge: three-way emission (see x86_64.hpp for rationale).
       //
-      //   LDRB W9, [X19, #strategy_off]    ; load strategy byte
-      //   CBZ  W9, skip                    ; skip when == 0
-      //   MOV  X0, X19
-      //   MOV  X1, #cost
-      //   STP  X19, X20, [SP, #-16]!
-      //   BL   __psizam_gas_charge
-      //   LDP  X19, X20, [SP], #16
-      //   skip:
+      //   LDRB  W9, [X19, #strategy_off]   ; strategy byte
+      //   CBZ   W9, done                   ; strategy == off → skip
+      //   LDRB  W9, [X19, #atomic_off]     ; atomic flag
+      //   CBNZ  W9, helper_path            ; atomic → go through helper
+      //   ── inline non-atomic fast path ──
+      //   LDR   X9, [X19, #counter_off]
+      //   SUBS  X9, X9, #cost
+      //   STR   X9, [X19, #counter_off]
+      //   B.PL  done                       ; if result >= 0, skip trap
+      //   call  __psizam_gas_exhausted_check(ctx=X0)
+      //   B     done
+      //   helper_path:
+      //   call  __psizam_gas_charge(ctx=X0, cost=X1)
+      //   done:
       void emit_gas_charge(int64_t cost) {
-         const uint32_t strategy_off = static_cast<uint32_t>(
-            jit_execution_context<false>::gas_strategy_offset());
-         // LDRB W9, [X19, #strategy_off] — imm12 unsigned, scaled by 1
+         using ctx_t = jit_execution_context<false>;
+         const uint32_t strategy_off = static_cast<uint32_t>(ctx_t::gas_strategy_offset());
+         const uint32_t atomic_off   = static_cast<uint32_t>(ctx_t::gas_atomic_offset());
+         const uint32_t counter_off  = static_cast<uint32_t>(ctx_t::gas_counter_offset());
+
+         // LDRB W9, [X19, #strategy_off]
          emit32(0x39400269u | ((strategy_off & 0xFFF) << 10));
-         // CBZ W9, +<skip_bytes>/4
-         // Skip distance = all instructions after this CBZ up to 'skip:'.
-         // emit_call_c_function expands to ~14 insn (stack-align + mov_imm64 +
-         // BLR + restore). We bound it with a 32-bit branch if needed.
-         // Simplest: patch after emission.
-         auto* cbz_pos = reinterpret_cast<uint8_t*>(code);
-         emit32(0x34000009u); // CBZ W9, 0 (patched below)
-         // ── full call sequence ──
-         emit32(0xAA1303E0);                    // MOV X0, X19
+         auto* cbz_done_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x34000009u); // CBZ W9, 0 (patched)
+
+         // LDRB W9, [X19, #atomic_off]
+         emit32(0x39400269u | ((atomic_off & 0xFFF) << 10));
+         auto* cbnz_helper_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x35000009u); // CBNZ W9, 0 (patched)
+
+         // LDR X9, [X19, #counter_off]  (unsigned 12-bit imm, scaled by 8)
+         PSIZAM_ASSERT((counter_off & 7) == 0 && (counter_off / 8) < 4096,
+                        wasm_interpreter_exception, "counter offset outside LDR range");
+         emit32(0xF9400269u | (((counter_off / 8) & 0xFFF) << 10));
+         // SUBS X9, X9, #cost  (imm12 unsigned; shift=0)
+         emit32(0xF1000129u | ((static_cast<uint32_t>(cost) & 0xFFF) << 10));
+         // STR X9, [X19, #counter_off]
+         emit32(0xF9000269u | (((counter_off / 8) & 0xFFF) << 10));
+         // B.PL done  (positive or zero → skip trap). B.cond imm19 signed.
+         auto* bpl_done_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x54000005u); // B.PL 0 (cond=0b0101, rel19=0; patched)
+         // Slow path: call __psizam_gas_exhausted_check(ctx)
+         emit32(0xAA1303E0);  // MOV X0, X19
+         emit_save_context();
+         emit_call_c_function(&__psizam_gas_exhausted_check);
+         emit_restore_context();
+         // B done (uncond). B imm26 signed, in 4-byte units.
+         auto* b_done_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x14000000u); // B 0 (patched)
+
+         // helper_path:
+         auto* helper_path_target = reinterpret_cast<uint8_t*>(code);
+         emit32(0xAA1303E0);  // MOV X0, X19
          emit_mov_imm64(X1, cost);
          emit_save_context();
          emit_call_c_function(&__psizam_gas_charge);
          emit_restore_context();
-         // Patch CBZ offset: (skip_target - cbz_pos) / 4
-         auto* skip_target = reinterpret_cast<uint8_t*>(code);
-         int32_t delta = static_cast<int32_t>(skip_target - cbz_pos) / 4;
-         uint32_t cbz_insn = 0x34000009u | ((delta & 0x7FFFF) << 5);
-         std::memcpy(cbz_pos, &cbz_insn, 4);
+
+         // done:
+         auto* done_target = reinterpret_cast<uint8_t*>(code);
+
+         // Patch
+         auto patch_cbz_cbnz = [](uint8_t* pos, ptrdiff_t insn_delta, uint32_t base) {
+            uint32_t insn = base | ((insn_delta & 0x7FFFF) << 5);
+            std::memcpy(pos, &insn, 4);
+         };
+         auto patch_bcond = [](uint8_t* pos, ptrdiff_t insn_delta, uint32_t base) {
+            uint32_t insn = base | ((insn_delta & 0x7FFFF) << 5);
+            std::memcpy(pos, &insn, 4);
+         };
+         auto patch_b = [](uint8_t* pos, ptrdiff_t insn_delta) {
+            uint32_t insn = 0x14000000u | (insn_delta & 0x03FFFFFF);
+            std::memcpy(pos, &insn, 4);
+         };
+         patch_cbz_cbnz(cbz_done_pos,
+            (done_target - cbz_done_pos) / 4, 0x34000009u);           // CBZ W9
+         patch_cbz_cbnz(cbnz_helper_pos,
+            (helper_path_target - cbnz_helper_pos) / 4, 0x35000009u); // CBNZ W9
+         patch_bcond(bpl_done_pos,
+            (done_target - bpl_done_pos) / 4, 0x54000005u);           // B.PL
+         patch_b(b_done_pos, (done_target - b_done_pos) / 4);         // B
       }
 
       template<typename F>
