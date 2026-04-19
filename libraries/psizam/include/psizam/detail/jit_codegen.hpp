@@ -2842,17 +2842,27 @@ namespace psizam::detail {
 
          // Multi-value return store (register mode)
          case ir_op::multi_return_store: {
-            load_vreg_rax(inst.ri.src1);
             int32_t offset = multi_return_offset + inst.ri.imm;
-            this->emit_mov(rax, *(rdi + offset));
+            if (inst.type == types::v128) {
+               load_v128_to_xmm(inst.ri.src1, xmm0);
+               this->emit_vmovdqu(xmm0, *(rdi + offset));
+            } else {
+               load_vreg_rax(inst.ri.src1);
+               this->emit_mov(rax, *(rdi + offset));
+            }
             return true;
          }
 
          // Multi-value call return load (register mode)
          case ir_op::multi_return_load: {
             int32_t offset = multi_return_offset + inst.ri.imm;
-            this->emit_mov(*(rdi + offset), rax);
-            store_rax_vreg(inst.dest);
+            if (inst.type == types::v128) {
+               this->emit_vmovdqu(*(rdi + offset), xmm0);
+               store_xmm_to_v128(xmm0, inst.dest);
+            } else {
+               this->emit_mov(*(rdi + offset), rax);
+               store_rax_vreg(inst.dest);
+            }
             return true;
          }
 

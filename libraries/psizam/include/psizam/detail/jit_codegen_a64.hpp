@@ -133,10 +133,17 @@ namespace psizam::detail {
          _block_addrs = scratch.alloc<void*>(func.block_count);
          _block_fixups = scratch.alloc<block_fixup*>(func.block_count);
          _num_blocks = func.block_count;
+         _block_v128_sp = scratch.alloc<uint32_t>(func.block_count);
+         _block_v128_result = scratch.alloc<uint32_t>(func.block_count);
+         _block_has_start = scratch.alloc<uint8_t>(func.block_count);
          for (uint32_t i = 0; i < func.block_count; ++i) {
             _block_addrs[i] = nullptr;
             _block_fixups[i] = nullptr;
+            _block_v128_sp[i] = 0;
+            _block_v128_result[i] = 0;
+            _block_has_start[i] = 0;
          }
+         _v128_sp_bytes = 0;
 
          // Build vreg → physical register mapping
          _vreg_map = nullptr;
@@ -1165,6 +1172,15 @@ namespace psizam::detail {
          return branch;
       }
 
+      void emit_v128_br_adjust(uint32_t target_block) {
+         if (target_block < _num_blocks && _block_has_start[target_block]) {
+            uint32_t target_depth = _block_v128_sp[target_block];
+            if (_v128_sp_bytes > target_depth) {
+               emit_add_imm(SP, SP, _v128_sp_bytes - target_depth);
+            }
+         }
+      }
+
       void emit_branch_to_block(ir_function& func, uint32_t block_idx) {
          if (block_idx >= _num_blocks) return;
          bool is_loop = func.blocks && (func.blocks[block_idx].is_loop || func.blocks[block_idx].branch_to_entry);
@@ -1198,10 +1214,14 @@ namespace psizam::detail {
       // If fixup stack
       static constexpr uint32_t MAX_IF_DEPTH = 256;
       void* _if_fixups[MAX_IF_DEPTH];
+      uint32_t _if_v128_sp[MAX_IF_DEPTH];
       uint32_t _if_fixup_top = 0;
 
       void push_if_fixup(void* branch) {
-         if (_if_fixup_top < MAX_IF_DEPTH) _if_fixups[_if_fixup_top++] = branch;
+         if (_if_fixup_top < MAX_IF_DEPTH) {
+            _if_v128_sp[_if_fixup_top] = _v128_sp_bytes;
+            _if_fixups[_if_fixup_top++] = branch;
+         }
       }
       void pop_if_fixup_to(void* target) {
          if (_if_fixup_top > 0) {
@@ -1222,7 +1242,9 @@ namespace psizam::detail {
          if (next.opcode == ir_op::br_if) {
             uint32_t eh_count = next.dest >> 16;
             if (eh_count > 0) {
-               // Can't fuse: need eh_leave on taken path
+               return false;
+            }
+            if (next.br.target < _num_blocks && _block_has_start[next.br.target] && _v128_sp_bytes > _block_v128_sp[next.br.target]) {
                return false;
             }
             emit_cond_branch_to_block(func, next.br.target, cc);
@@ -1281,6 +1303,7 @@ namespace psizam::detail {
       void emit_v128_pop(uint32_t vd = 0) {
          emit_v128_load_tos(vd);
          emit_add_imm(SP, SP, 32);
+         _v128_sp_bytes -= 32;
       }
 
       // Push v128 to stack (32 bytes)
@@ -1289,6 +1312,7 @@ namespace psizam::detail {
          emit32(0x4E183C00 | (vs << 5) | X1);    // UMOV X1, Vs.D[1]
          emit_push(X1);  // high first (deeper)
          emit_push(X0);  // low on top
+         _v128_sp_bytes += 32;
       }
 
       // ──────── SIMD helper patterns ────────
@@ -1349,6 +1373,7 @@ namespace psizam::detail {
          emit32(0xD63F0100);  // BLR X8
          // Pop arg2 (32 bytes)
          emit_add_imm(SP, SP, 32);
+         _v128_sp_bytes -= 32;
          // Store result to NOS (now TOS)
          emit_str_offset(X0, SP, 0);
          emit_str_offset(X1, SP, 16);
@@ -1368,6 +1393,7 @@ namespace psizam::detail {
          emit32(0xD63F0100);  // BLR X8
          // Pop arg2 + arg3 (64 bytes)
          emit_add_imm(SP, SP, 64);
+         _v128_sp_bytes -= 64;
          // Store result to arg1 slot (now TOS)
          emit_str_offset(X0, SP, 0);
          emit_str_offset(X1, SP, 16);
@@ -1501,7 +1527,9 @@ namespace psizam::detail {
 
       void emit_ir_inst_reg(ir_function& func, const ir_inst& inst, uint32_t idx) {
          if (inst.flags & IR_DEAD) return;
-
+#ifdef PSIZAM_V128_DEBUG
+         uint32_t _v128_pre = _v128_sp_bytes;
+#endif
          switch (inst.opcode) {
          case ir_op::nop:
          case ir_op::block:
@@ -1509,7 +1537,8 @@ namespace psizam::detail {
             break;
          case ir_op::drop:
             if (inst.type == types::v128) {
-               emit_add_imm(SP, SP, 32);  // pop v128 (32 bytes)
+               emit_add_imm(SP, SP, 32);
+               _v128_sp_bytes -= 32;
             }
             break;
 
@@ -1527,10 +1556,26 @@ namespace psizam::detail {
 
          case ir_op::block_start:
             mark_block_start(inst.dest);
+            if (inst.dest < _num_blocks) {
+               _block_v128_sp[inst.dest] = _v128_sp_bytes;
+               _block_v128_result[inst.dest] = inst.rr.src1;
+               _block_has_start[inst.dest] = 1;
+            }
             break;
-         case ir_op::block_end:
+         case ir_op::block_end: {
+            uint32_t v128_result_bytes = inst.rr.src1;
+            if (inst.dest < _num_blocks) {
+               _block_v128_result[inst.dest] = v128_result_bytes;
+               if (_block_has_start[inst.dest]) {
+                  uint32_t target = _block_v128_sp[inst.dest] + v128_result_bytes;
+                  if (_v128_sp_bytes > target)
+                     emit_add_imm(SP, SP, _v128_sp_bytes - target);
+                  _v128_sp_bytes = target;
+               }
+            }
             mark_block_end(func, inst.dest, inst.flags & 1);
             break;
+         }
 
          // ── Constants ──
          case ir_op::const_i32: {
@@ -1572,6 +1617,7 @@ namespace psizam::detail {
             emit_push(X0);  // high first (deeper)
             emit_mov_imm64(X0, low);
             emit_push(X0);  // low on top
+            _v128_sp_bytes += 32;
             break;
          }
 
@@ -1708,8 +1754,8 @@ namespace psizam::detail {
                emit_str_offset(X0, SP, 32);   // overwrite val1_low
                emit_str_offset(X1, SP, 48);   // overwrite val1_high
                fix_branch(skip, code);
-               // Drop val2 (32 bytes), val1 remains at TOS
                emit_add_imm(SP, SP, 32);
+               _v128_sp_bytes -= 32;
             } else {
                load_vreg_x0(inst.sel.cond);
                load_vreg_to(X1, inst.sel.val1);
@@ -1793,13 +1839,15 @@ namespace psizam::detail {
                _block_fixups[target_block] = fixup;
             }
             pop_if_fixup_to(code);
+            if (_if_fixup_top < MAX_IF_DEPTH)
+               _v128_sp_bytes = _if_v128_sp[_if_fixup_top];
             break;
          }
          case ir_op::br: {
             uint32_t eh_count = inst.dest >> 16;
             auto emit_eh_leaves = [&]() {
                for (uint32_t i = 0; i < eh_count; ++i) {
-                  emit_mov_reg(X0, X19); // ctx — reload before each call (BLR clobbers X0)
+                  emit_mov_reg(X0, X19);
                   emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_leave));
                }
             };
@@ -1808,21 +1856,23 @@ namespace psizam::detail {
                if (is_default) {
                   emit_pop(X0); // discard index
                   emit_eh_leaves();
+                  emit_v128_br_adjust(inst.br.target);
                   emit_branch_to_block(func, inst.br.target);
                   _in_br_table = false;
                } else {
-                  // CMP W [SP], #case — use X17 for index since emit_cmp_imm32 clobbers X16
                   emit_ldr_offset(X17, SP, 0);
                   emit_cmp_imm32(X17, _br_table_case);
                   void* skip = emit_cond_branch_placeholder(COND_NE);
                   emit_pop(X0); // pop index
                   emit_eh_leaves();
+                  emit_v128_br_adjust(inst.br.target);
                   emit_branch_to_block(func, inst.br.target);
                   fix_branch(skip, code);
                   _br_table_case++;
                }
             } else {
                emit_eh_leaves();
+               emit_v128_br_adjust(inst.br.target);
                emit_branch_to_block(func, inst.br.target);
             }
             break;
@@ -1831,14 +1881,17 @@ namespace psizam::detail {
             uint32_t eh_count = inst.dest >> 16;
             load_vreg_x0(inst.br.src1);
             emit_cmp_imm32(X0, 0);
-            if (eh_count > 0) {
-               // Must use complex path to emit eh_leave on taken path only:
-               // if condition is false, skip over eh_leave + branch
+            uint32_t v128_delta = 0;
+            if (inst.br.target < _num_blocks && _block_has_start[inst.br.target] && _v128_sp_bytes > _block_v128_sp[inst.br.target])
+               v128_delta = _v128_sp_bytes - _block_v128_sp[inst.br.target];
+            if (eh_count > 0 || v128_delta > 0) {
                void* skip = emit_cond_branch_placeholder(COND_EQ);
                for (uint32_t i = 0; i < eh_count; ++i) {
-                  emit_mov_reg(X0, X19); // ctx — reload before each call (BLR clobbers X0)
+                  emit_mov_reg(X0, X19);
                   emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_leave));
                }
+               if (v128_delta > 0)
+                  emit_add_imm(SP, SP, v128_delta);
                emit_branch_to_block(func, inst.br.target);
                fix_branch(skip, code);
             } else {
@@ -1862,13 +1915,12 @@ namespace psizam::detail {
          case ir_op::multi_return_store: {
             int32_t offset = multi_return_offset + inst.ri.imm;
             if (inst.type == types::v128) {
-               // v128 on native stack occupies 32 bytes: low at SP+0, high at SP+16.
-               // Store to _multi_return as packed 16 bytes: low at offset, high at offset+8.
                emit_ldr_offset(X0, SP, 0);
                emit_str_offset(X0, X19, offset);
                emit_ldr_offset(X0, SP, 16);
                emit_str_offset(X0, X19, offset + 8);
                emit_add_imm(SP, SP, 32);
+               _v128_sp_bytes -= 32;
             } else {
                load_vreg_x0(inst.ri.src1);
                emit_str_offset(X0, X19, offset);
@@ -1880,9 +1932,8 @@ namespace psizam::detail {
          case ir_op::multi_return_load: {
             int32_t offset = multi_return_offset + inst.ri.imm;
             if (inst.type == types::v128) {
-               // Reserve 32 bytes (native v128 layout) and populate low/high halves
-               // from the packed 16-byte _multi_return slot.
                emit_sub_imm(SP, SP, 32);
+               _v128_sp_bytes += 32;
                emit_ldr_offset(X0, X19, offset);
                emit_str_offset(X0, SP, 0);
                emit_ldr_offset(X0, X19, offset + 8);
@@ -1932,9 +1983,13 @@ namespace psizam::detail {
             register_call(branch, funcnum);
             // Pop params
             uint32_t arg_bytes = 0;
-            for (uint32_t p = 0; p < ft.param_types.size(); ++p)
-               arg_bytes += (ft.param_types[p] == types::v128) ? 32 : 16;
+            uint32_t v128_arg_bytes = 0;
+            for (uint32_t p = 0; p < ft.param_types.size(); ++p) {
+               if (ft.param_types[p] == types::v128) { arg_bytes += 32; v128_arg_bytes += 32; }
+               else arg_bytes += 16;
+            }
             if (arg_bytes > 0) emit_add_imm(SP, SP, arg_bytes);
+            _v128_sp_bytes -= v128_arg_bytes;
             emit_call_depth_inc();
             if (ft.return_count > 1) {
                // Multi-value: separate multi_return_load instructions handle the loads
@@ -1942,6 +1997,7 @@ namespace psizam::detail {
                if (ft.return_type == types::v128) {
                   emit_push(X1);
                   emit_push(X0);
+                  _v128_sp_bytes += 32;
                } else if (inst.dest != ir_vreg_none) {
                   store_x0_vreg(inst.dest);
                }
@@ -2017,10 +2073,14 @@ namespace psizam::detail {
                emit32(0xD63F0100); // BLR X8
             }
             // Pop params
-            uint32_t arg_bytes = 0;
-            for (uint32_t p = 0; p < ft.param_types.size(); ++p)
-               arg_bytes += (ft.param_types[p] == types::v128) ? 32 : 16;
-            if (arg_bytes > 0) emit_add_imm(SP, SP, arg_bytes);
+            uint32_t ci_arg_bytes = 0;
+            uint32_t ci_v128_arg_bytes = 0;
+            for (uint32_t p = 0; p < ft.param_types.size(); ++p) {
+               if (ft.param_types[p] == types::v128) { ci_arg_bytes += 32; ci_v128_arg_bytes += 32; }
+               else ci_arg_bytes += 16;
+            }
+            if (ci_arg_bytes > 0) emit_add_imm(SP, SP, ci_arg_bytes);
+            _v128_sp_bytes -= ci_v128_arg_bytes;
             emit_call_depth_inc();
             if (ft.return_count > 1) {
                // Multi-value: separate multi_return_load instructions handle the loads
@@ -2028,6 +2088,7 @@ namespace psizam::detail {
                if (ft.return_type == types::v128) {
                   emit_push(X1);
                   emit_push(X0);
+                  _v128_sp_bytes += 32;
                } else if (inst.dest != ir_vreg_none) {
                   store_x0_vreg(inst.dest);
                }
@@ -2129,6 +2190,7 @@ namespace psizam::detail {
                emit_ldr_offset(X1, FP, offset + high_stride);  // high qword
                emit_push(X1);  // high first (deeper)
                emit_push(X0);  // low on top
+               _v128_sp_bytes += 32;
             } else {
                int8_t pr = get_phys(inst.dest);
                uint32_t rd = (pr >= 0) ? phys_to_reg(pr) : X0;
@@ -2144,7 +2206,8 @@ namespace psizam::detail {
                int32_t high_stride = is_param ? 16 : 8;
                emit_ldr_offset(X0, SP, 0);    // low qword (TOS)
                emit_ldr_offset(X1, SP, 16);   // high qword (TOS + 16)
-               emit_add_imm(SP, SP, 32);      // pop v128 (32 bytes)
+               emit_add_imm(SP, SP, 32);
+               _v128_sp_bytes -= 32;
                emit_str_offset(X0, FP, offset);                // store low
                emit_str_offset(X1, FP, offset + high_stride);  // store high
             } else {
@@ -2181,6 +2244,7 @@ namespace psizam::detail {
                emit_ldr_offset(X1, X16, 8);   // high qword
                emit_push(X1);  // high first (deeper)
                emit_push(X0);  // low on top
+               _v128_sp_bytes += 32;
             } else {
                emit_global_load(inst.local.index, X0, inst.type);
                store_x0_vreg(inst.dest);
@@ -2191,7 +2255,8 @@ namespace psizam::detail {
             if (inst.type == types::v128) {
                emit_ldr_offset(X0, SP, 0);    // low qword (TOS)
                emit_ldr_offset(X1, SP, 16);   // high qword
-               emit_add_imm(SP, SP, 32);      // pop v128
+               emit_add_imm(SP, SP, 32);
+               _v128_sp_bytes -= 32;
                auto offset = _mod.get_global_offset(inst.local.index);
                emit_ldr_offset(X16, X20, wasm_allocator::globals_end() - 8);
                emit_add_signed_imm(X16, X16, static_cast<int32_t>(offset));
@@ -2911,6 +2976,18 @@ namespace psizam::detail {
          default:
             break;
          }
+#ifdef PSIZAM_V128_DEBUG
+         if (inst.opcode == ir_op::br || inst.opcode == ir_op::br_if)
+            fprintf(stderr, "  [%u] op=%d dest=%d target=%u type=%d v128_sp: %u -> %u\n", idx, (int)inst.opcode,
+                    inst.dest, inst.br.target, inst.type, _v128_pre, _v128_sp_bytes);
+         else if (inst.opcode == ir_op::multi_return_store || inst.opcode == ir_op::multi_return_load)
+            fprintf(stderr, "  [%u] op=%d src=%u imm=%d type=%d v128_sp: %u -> %u\n", idx, (int)inst.opcode,
+                    inst.ri.src1, inst.ri.imm, inst.type, _v128_pre, _v128_sp_bytes);
+         else
+            fprintf(stderr, "  [%u] op=%d sub=%d type=%d v128_sp: %u -> %u\n", idx, (int)inst.opcode,
+                    (inst.opcode == ir_op::v128_op) ? (int)static_cast<simd_sub>(inst.dest) : inst.dest,
+                    inst.type, _v128_pre, _v128_sp_bytes);
+#endif
       }
 
       void emit_simd_op(const ir_inst& inst) {
@@ -4560,6 +4637,10 @@ namespace psizam::detail {
       bool _use_regalloc = false;
       uint32_t _callee_saved_used = 0;
       uint32_t _callee_saved_count = 0;
+      uint32_t _v128_sp_bytes = 0;
+      uint32_t* _block_v128_sp = nullptr;
+      uint32_t* _block_v128_result = nullptr;
+      uint8_t*  _block_has_start = nullptr;
       uint32_t* _func_def_inst = nullptr;
       uint16_t* _func_use_count = nullptr;
       ir_inst*  _func_insts = nullptr;

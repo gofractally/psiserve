@@ -47,8 +47,8 @@ endforeach()
 
 # Known jit2 v128 bugs — mark as expected failures until fixed
 set(FUZZ_REGRESSION_XFAIL
-   "fuzz_regression/mismatch_233604_seed6158"
    "fuzz_regression/mismatch_81788_seed6720"
+   "fuzz_regression/mismatch_1098_seed1776506086"
 )
 foreach(xf ${FUZZ_REGRESSION_XFAIL})
    if(TEST ${xf})

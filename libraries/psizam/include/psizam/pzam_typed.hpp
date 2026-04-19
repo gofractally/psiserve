@@ -356,8 +356,10 @@ namespace psizam {
             }
          }
 
-         // Initialize execution context
-         _ctx = detail::jit_execution_context<>(_mod, 8192);
+         // Initialize execution context (placement-new: jit_execution_context
+         // is non-assignable due to std::atomic member)
+         _ctx.~jit_execution_context();
+         new (&_ctx) detail::jit_execution_context<>(_mod, 8192);
          _ctx.set_wasm_allocator(&_wa);
          _ctx.set_host_table(&_table);
          _ctx.reset();
