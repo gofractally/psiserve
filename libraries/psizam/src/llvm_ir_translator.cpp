@@ -2212,6 +2212,7 @@ namespace psizam::detail {
                         break;
                   }
                   auto* store_inst = builder.CreateStore(val, ptr);
+                  store_inst->setVolatile(true);
                   break;
                }
 

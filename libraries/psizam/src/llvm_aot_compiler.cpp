@@ -13,26 +13,20 @@
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/TargetSelect.h>
 
-// Explicit target initialization (avoid linking all targets).
-// Guarded by PSIZAM_LLVM_TARGET_* defines for single-target builds.
+// Explicit target initialization — always declare both targets.
+// Both psizam-llvm-x86 and psizam-llvm-arm link this file with different
+// PSIZAM_LLVM_TARGET_* defines, but the linker merges the duplicate
+// llvm_aot_compile() symbol (ODR). Unconditionally declaring both avoids
+// the init function being absent in whichever copy the linker picks.
 extern "C" {
-#if !defined(PSIZAM_LLVM_TARGET_X86) && !defined(PSIZAM_LLVM_TARGET_AARCH64)
-   // Default: both targets
-   #define PSIZAM_LLVM_TARGET_X86
-   #define PSIZAM_LLVM_TARGET_AARCH64
-#endif
-#ifdef PSIZAM_LLVM_TARGET_X86
    void LLVMInitializeX86TargetInfo();
    void LLVMInitializeX86Target();
    void LLVMInitializeX86TargetMC();
    void LLVMInitializeX86AsmPrinter();
-#endif
-#ifdef PSIZAM_LLVM_TARGET_AARCH64
    void LLVMInitializeAArch64TargetInfo();
    void LLVMInitializeAArch64Target();
    void LLVMInitializeAArch64TargetMC();
    void LLVMInitializeAArch64AsmPrinter();
-#endif
 }
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
@@ -47,22 +41,16 @@ extern "C" {
 
 namespace psizam::detail {
 
-   // Initialize X86 and AArch64 targets for cross-compilation.
-   // Only these two are linked, so we can't use InitializeAllTargets().
    static bool ensure_llvm_targets() {
       static bool done = [] {
-#ifdef PSIZAM_LLVM_TARGET_X86
          LLVMInitializeX86TargetInfo();
          LLVMInitializeX86Target();
          LLVMInitializeX86TargetMC();
          LLVMInitializeX86AsmPrinter();
-#endif
-#ifdef PSIZAM_LLVM_TARGET_AARCH64
          LLVMInitializeAArch64TargetInfo();
          LLVMInitializeAArch64Target();
          LLVMInitializeAArch64TargetMC();
          LLVMInitializeAArch64AsmPrinter();
-#endif
          return true;
       }();
       return done;
@@ -162,19 +150,21 @@ namespace psizam::detail {
             case 257: return reloc_type::abs64;                     // R_AARCH64_ABS64
             case 282: return reloc_type::aarch64_call26;            // R_AARCH64_JUMP26
             case 283: return reloc_type::aarch64_call26;            // R_AARCH64_CALL26
-            case 263:                                                // R_AARCH64_MOVW_UABS_G0
-            case 264: return reloc_type::aarch64_movw_uabs_g0_nc;  // R_AARCH64_MOVW_UABS_G0_NC
-            case 265:                                                // R_AARCH64_MOVW_UABS_G1
-            case 266: return reloc_type::aarch64_movw_uabs_g1_nc;  // R_AARCH64_MOVW_UABS_G1_NC
-            case 267:                                                // R_AARCH64_MOVW_UABS_G2
-            case 268: return reloc_type::aarch64_movw_uabs_g2_nc;  // R_AARCH64_MOVW_UABS_G2_NC
-            case 269: return reloc_type::aarch64_movw_uabs_g3;     // R_AARCH64_MOVW_UABS_G3
-            case 260: return reloc_type::aarch64_adr_prel_pg_hi21; // R_AARCH64_ADR_PREL_PG_HI21
-            case 261: return reloc_type::aarch64_adr_prel_pg_hi21; // R_AARCH64_ADR_PREL_PG_HI21_NC
-            case 275: return reloc_type::aarch64_add_abs_lo12_nc;  // R_AARCH64_ADD_ABS_LO12_NC
-            case 278: return reloc_type::aarch64_ldst8_abs_lo12_nc;  // R_AARCH64_LDST8_ABS_LO12_NC
-            case 284: return reloc_type::aarch64_ldst32_abs_lo12_nc; // R_AARCH64_LDST32_ABS_LO12_NC
-            case 286: return reloc_type::aarch64_ldst64_abs_lo12_nc; // R_AARCH64_LDST64_ABS_LO12_NC
+            case 263:                                                 // R_AARCH64_MOVW_UABS_G0     (0x107)
+            case 264: return reloc_type::aarch64_movw_uabs_g0_nc;  // R_AARCH64_MOVW_UABS_G0_NC  (0x108)
+            case 265:                                                 // R_AARCH64_MOVW_UABS_G1     (0x109)
+            case 266: return reloc_type::aarch64_movw_uabs_g1_nc;  // R_AARCH64_MOVW_UABS_G1_NC  (0x10a)
+            case 267:                                                 // R_AARCH64_MOVW_UABS_G2     (0x10b)
+            case 268: return reloc_type::aarch64_movw_uabs_g2_nc;  // R_AARCH64_MOVW_UABS_G2_NC  (0x10c)
+            case 269: return reloc_type::aarch64_movw_uabs_g3;     // R_AARCH64_MOVW_UABS_G3     (0x10d)
+            case 275:                                                 // R_AARCH64_ADR_PREL_PG_HI21 (0x113)
+            case 276: return reloc_type::aarch64_adr_prel_pg_hi21; // R_AARCH64_ADR_PREL_PG_HI21_NC (0x114)
+            case 277: return reloc_type::aarch64_add_abs_lo12_nc;  // R_AARCH64_ADD_ABS_LO12_NC  (0x115)
+            case 278: return reloc_type::aarch64_ldst8_abs_lo12_nc;   // R_AARCH64_LDST8_ABS_LO12_NC  (0x116)
+            case 284: return reloc_type::aarch64_ldst16_abs_lo12_nc;  // R_AARCH64_LDST16_ABS_LO12_NC (0x11c)
+            case 285: return reloc_type::aarch64_ldst32_abs_lo12_nc;  // R_AARCH64_LDST32_ABS_LO12_NC (0x11d)
+            case 286: return reloc_type::aarch64_ldst64_abs_lo12_nc;  // R_AARCH64_LDST64_ABS_LO12_NC (0x11e)
+            case 299: return reloc_type::aarch64_ldst128_abs_lo12_nc; // R_AARCH64_LDST128_ABS_LO12_NC (0x12b)
             default:
                std::cerr << "Fatal: Unsupported aarch64 ELF relocation type: " << elf_type << "\n";
                std::abort();
@@ -183,8 +173,8 @@ namespace psizam::detail {
    }
 
    llvm_aot_result llvm_aot_compile(
-         std::unique_ptr<llvm::Module> llvm_mod,
          std::unique_ptr<llvm::LLVMContext> llvm_ctx,
+         std::unique_ptr<llvm::Module> llvm_mod,
          const module& mod,
          const std::string& target_triple) {
 
@@ -204,12 +194,17 @@ namespace psizam::detail {
          return llvm_aot_result{.error = "LLVM target lookup failed: " + error};
       }
 
-      // Create target machine with large code model for absolute addressing
       llvm::TargetOptions opts;
       auto rm = llvm::Reloc::Static;
-      // Use large code model so all external references use abs64 on x86_64
-      // or MOVZ+MOVK sequences on aarch64 (Small would use ADRP which is harder to relocate)
-      auto cm = llvm::CodeModel::Large;
+      // aarch64: Small code model uses ADRP+ADD (8 bytes per reference, ±4GB
+      // range) — our relocation system already handles adr_prel_pg_hi21 and
+      // add_abs_lo12_nc.  Large uses MOVZ+MOVK×3 (16 bytes, any address) but
+      // doubles code size for reference-heavy modules like clang.wasm.
+      // x86_64: Large uses movabs (10 bytes) for abs64 relocations.  Small
+      // would use RIP-relative call/lea (5-7 bytes, ±2GB) which is fine for
+      // in-process execution but requires the code blob and runtime helpers
+      // to be allocated within 2GB — safe in practice but keep Large for now.
+      auto cm = is_x86_64 ? llvm::CodeModel::Large : llvm::CodeModel::Small;
       // x86-64-v2 includes SSE4.1/4.2 — avoids libc calls for ceil/floor/etc.
       std::string cpu = is_x86_64 ? "x86-64-v2" : "";
       // On aarch64, reserve x18 — macOS uses it as a platform register.
@@ -474,6 +469,9 @@ namespace psizam::detail {
                   auto addr_or_err = sym.getAddress();
                   if (addr_or_err) {
                      result.function_offsets[code_idx].first = static_cast<uint32_t>(*addr_or_err);
+                     auto size_or_err = llvm::object::ELFSymbolRef(sym).getSize();
+                     if (size_or_err)
+                        result.function_offsets[code_idx].second = static_cast<uint32_t>(size_or_err);
                   }
                }
             }
@@ -485,6 +483,9 @@ namespace psizam::detail {
                   auto addr_or_err = sym.getAddress();
                   if (addr_or_err) {
                      result.body_offsets[code_idx].first = static_cast<uint32_t>(*addr_or_err);
+                     auto size_or_err = llvm::object::ELFSymbolRef(sym).getSize();
+                     if (size_or_err)
+                        result.body_offsets[code_idx].second = static_cast<uint32_t>(size_or_err);
                   }
                }
             }

@@ -32,9 +32,12 @@ namespace psizam::detail {
 
    /// Compile an LLVM module to a relocatable code blob.
    /// target_triple: e.g., "x86_64-unknown-linux-gnu" or "aarch64-unknown-linux-gnu"
+   /// Parameter order: ctx before mod so that on any error-return path the
+   /// Module destructor runs first (reverse-declaration order), which is
+   /// required because Module references its Context.
    llvm_aot_result llvm_aot_compile(
-         std::unique_ptr<llvm::Module> llvm_mod,
          std::unique_ptr<llvm::LLVMContext> llvm_ctx,
+         std::unique_ptr<llvm::Module> llvm_mod,
          const module& mod,
          const std::string& target_triple);
 

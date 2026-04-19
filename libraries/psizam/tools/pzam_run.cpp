@@ -256,6 +256,39 @@ int pzam_run_main(int argc, char** argv) {
 
    symbol_table[static_cast<uint32_t>(reloc_symbol::code_blob_self)] = exec_code;
 
+#if defined(__aarch64__)
+   // Diagnose ADRP range overflows: Small code model ADRP has ±4GB range.
+   // If runtime symbols are >4GB from the code blob, the page delta overflows
+   // and the ADRP computes a garbage address.
+   {
+      uint64_t code_base = reinterpret_cast<uint64_t>(exec_code);
+      uint32_t adrp_total = 0, adrp_overflow = 0;
+      for (auto& r : relocs) {
+         if (r.type == reloc_type::aarch64_adr_prel_pg_hi21) {
+            adrp_total++;
+            void* addr = symbol_table[static_cast<uint32_t>(r.symbol)];
+            uint64_t target = reinterpret_cast<uint64_t>(addr) + r.addend;
+            uint64_t patch_site = code_base + r.code_offset;
+            int64_t page_delta = static_cast<int64_t>((target & ~0xFFFULL) -
+                                 (patch_site & ~0xFFFULL));
+            int64_t pages = page_delta >> 12;
+            if (pages < -(1LL << 20) || pages >= (1LL << 20)) {
+               if (adrp_overflow < 5) {
+                  std::cerr << "[pzam-run] ADRP OVERFLOW: reloc at code+" << std::hex
+                            << r.code_offset << " sym=" << std::dec << static_cast<uint32_t>(r.symbol)
+                            << " target=0x" << std::hex << target
+                            << " site=0x" << patch_site
+                            << " delta=" << std::dec << (page_delta >> 12) << " pages\n";
+               }
+               adrp_overflow++;
+            }
+         }
+      }
+      std::cerr << "[pzam-run] ADRP stats: " << adrp_total << " total, "
+                << adrp_overflow << " overflows (±4GB range)\n";
+   }
+#endif
+
    apply_relocations(static_cast<char*>(exec_code), relocs.data(),
                      static_cast<uint32_t>(relocs.size()), symbol_table);
 
@@ -273,10 +306,6 @@ int pzam_run_main(int argc, char** argv) {
                  static_cast<pzam_opt_tier>(cs->opt_tier) == pzam_opt_tier::jit2;
    if (is_jit) {
       mod.allocator._code_base = static_cast<char*>(exec_code);
-      // _code_size feeds growable_allocator::get_code_span(), which the
-      // signal handler reads to decide whether a fault is JIT code (→ wasm
-      // trap) or a corrupted PC (→ "control-flow corruption"). Without this,
-      // any SIGSEGV inside pzam-run's JIT code looks unrecognized.
       mod.allocator._code_size = total_code_size;
       for (size_t j = 0; j < cs->functions.size(); j++) {
          mod.code[j].jit_code_offset = cs->functions[j].code_offset;
@@ -284,6 +313,11 @@ int pzam_run_main(int argc, char** argv) {
          mod.code[j].stack_size = cs->functions[j].stack_size;
       }
    } else {
+      // LLVM tier: _code_base must stay null (it's the LLVM dispatch flag in
+      // execution_context), but the signal handler needs the code range via
+      // get_code_span() to classify faults as WASM traps vs corruption.
+      mod.allocator._exec_code_base = static_cast<char*>(exec_code);
+      mod.allocator._exec_code_size = total_code_size;
       auto code_base_addr = reinterpret_cast<uintptr_t>(exec_code);
       for (size_t j = 0; j < cs->functions.size(); j++) {
          mod.code[j].jit_code_offset = code_base_addr + cs->functions[j].code_offset;
@@ -348,6 +382,66 @@ int pzam_run_main(int argc, char** argv) {
       }
       jit_func_ranges = func_ranges.data();
       jit_func_range_count = static_cast<uint32_t>(func_ranges.size());
+
+      // Build sorted offset→index table for crash lookup (handles zero-size funcs)
+      std::vector<std::pair<uint32_t, uint32_t>> sorted_offsets(func_ranges.size());
+      for (size_t j = 0; j < func_ranges.size(); j++)
+         sorted_offsets[j] = {func_ranges[j].offset, func_ranges[j].func_index};
+      std::sort(sorted_offsets.begin(), sorted_offsets.end());
+      std::cerr << "[pzam-run] func_ranges: " << func_ranges.size() << " entries"
+                << " code_size=" << cs->code_blob.size() << "\n";
+      // Verify function-to-code mapping by checking param count in native code
+      // On aarch64 LLVM body: x0=ctx, x1=mem, w2..w(2+N-1) = N wasm params
+      // After prologue, the body moves w2/w3/w4/... to callee-saved regs
+      // Count MOV Wd,Wn instructions in first 20 instructions to infer param count
+      uint32_t num_imp = mod.get_imported_functions_size();
+      auto count_native_params = [&](uint32_t code_idx) -> int {
+         uint32_t off = cs->functions[code_idx].code_offset;
+         if (off + 80 > cs->code_blob.size()) return -1;
+         const uint32_t* insns = reinterpret_cast<const uint32_t*>(
+            cs->code_blob.data() + off);
+         int max_src_reg = -1;
+         for (int i = 0; i < 20; i++) {
+            uint32_t insn = insns[i];
+            // MOV Wd, Wn is ORR Wd, WZR, Wn: 0x2A0003E0 | (Rm<<16) | Rd
+            if ((insn & 0xFFE0FFE0) == 0x2A0003E0) {
+               int rm = (insn >> 16) & 0x1F;
+               if (rm >= 2 && rm <= 7) {
+                  if (rm > max_src_reg) max_src_reg = rm;
+               }
+            }
+         }
+         return max_src_reg >= 2 ? (max_src_reg - 1) : 0;
+      };
+
+      // Check for BL (call26) range overflow
+      {
+         uint64_t code_base = reinterpret_cast<uint64_t>(exec_code);
+         uint32_t call26_total = 0, call26_overflow = 0;
+         for (auto& r : relocs) {
+            if (r.type == reloc_type::aarch64_call26) {
+               call26_total++;
+               void* addr = symbol_table[static_cast<uint32_t>(r.symbol)];
+               int64_t target = static_cast<int64_t>(reinterpret_cast<uint64_t>(addr)) + r.addend;
+               int64_t pc = static_cast<int64_t>(code_base + r.code_offset);
+               int64_t offset = target - pc;
+               // BL range: ±128MB (26 bits * 4 = ±2^27)
+               if (offset < -(1LL << 27) || offset >= (1LL << 27)) {
+                  if (call26_overflow < 5) {
+                     std::cerr << "[pzam-run] BL OVERFLOW: reloc at code+0x" << std::hex
+                               << r.code_offset << " sym=" << std::dec << static_cast<uint32_t>(r.symbol)
+                               << " target=0x" << std::hex << (uint64_t)addr
+                               << " pc=0x" << (code_base + r.code_offset)
+                               << " delta=" << std::dec << offset
+                               << " (" << (offset / (1024*1024)) << " MB)\n";
+                  }
+                  call26_overflow++;
+               }
+            }
+         }
+         std::cerr << "[pzam-run] BL stats: " << call26_total << " total, "
+                   << call26_overflow << " overflows (±128MB range)\n";
+      }
    }
 #endif
 
@@ -386,8 +480,21 @@ int pzam_run_main(int argc, char** argv) {
       }
    }
 
+   std::cerr << "[pzam-run] is_llvm=" << (mod.allocator._code_base == nullptr)
+             << " mem_pages=" << ctx.current_linear_memory() << "\n";
+
    // Find and run _start
    uint32_t start_idx = mod.get_exported_function("_start");
+   {
+      uint32_t num_imp = mod.get_imported_functions_size();
+      uint32_t code_idx = start_idx - num_imp;
+      std::cerr << "[pzam-run] _start: wasm_idx=" << start_idx << " code_idx=" << code_idx
+                << " jit_code_offset=0x" << std::hex << mod.code[code_idx].jit_code_offset
+                << " size=" << std::dec << mod.code[code_idx].jit_code_size
+                << " mem_base=" << std::hex << (uintptr_t)ctx.linear_memory()
+                << " mem_pages=" << std::dec << ctx.current_linear_memory()
+                << " is_llvm=" << (mod.allocator._code_base == nullptr) << "\n";
+   }
 
    try {
       if (mod.start != std::numeric_limits<uint32_t>::max()) {

@@ -133,9 +133,12 @@ namespace psizam::detail {
       aarch64_movw_uabs_g3 = 6,    // MOVK bits 48-63
       aarch64_adr_prel_pg_hi21 = 7,// ADRP page-relative (bits 5-23, 29-30)
       aarch64_add_abs_lo12_nc = 8, // ADD immediate low 12 bits (bits 10-21)
-      aarch64_ldst8_abs_lo12_nc = 9,  // LDR/STR 8-bit low 12 (bits 10-21, no scale)
+      aarch64_ldst8_abs_lo12_nc = 9,   // LDR/STR 8-bit low 12 (bits 10-21, no scale)
       aarch64_ldst32_abs_lo12_nc = 10, // LDR/STR 32-bit low 12 (bits 10-21, scale 4)
       aarch64_ldst64_abs_lo12_nc = 11, // LDR/STR 64-bit low 12 (bits 10-21, scale 8)
+      // Added for Small code model support:
+      aarch64_ldst16_abs_lo12_nc = 12, // LDR/STR 16-bit low 12 (bits 10-21, scale 2)
+      aarch64_ldst128_abs_lo12_nc = 13,// LDR/STR 128-bit low 12 (bits 10-21, scale 16)
    };
 
    /// A single relocation entry: records where an absolute address was embedded.
@@ -215,8 +218,10 @@ namespace psizam::detail {
             }
             case reloc_type::aarch64_add_abs_lo12_nc:
             case reloc_type::aarch64_ldst8_abs_lo12_nc:
+            case reloc_type::aarch64_ldst16_abs_lo12_nc:
             case reloc_type::aarch64_ldst32_abs_lo12_nc:
-            case reloc_type::aarch64_ldst64_abs_lo12_nc: {
+            case reloc_type::aarch64_ldst64_abs_lo12_nc:
+            case reloc_type::aarch64_ldst128_abs_lo12_nc: {
                uint32_t insn;
                std::memcpy(&insn, site, 4);
                insn &= ~(0xFFFu << 10);  // clear imm12 (bits 10-21)
@@ -297,7 +302,6 @@ namespace psizam::detail {
 
             case reloc_type::aarch64_add_abs_lo12_nc:
             case reloc_type::aarch64_ldst8_abs_lo12_nc: {
-               // ADD/LDR8: low 12 bits of (S+A), in bits 10-21
                uint64_t resolved = target + r.addend;
                uint32_t imm12 = static_cast<uint32_t>(resolved) & 0xFFFu;
                uint32_t insn;
@@ -307,8 +311,17 @@ namespace psizam::detail {
                break;
             }
 
+            case reloc_type::aarch64_ldst16_abs_lo12_nc: {
+               uint64_t resolved = target + r.addend;
+               uint32_t imm12 = (static_cast<uint32_t>(resolved) & 0xFFFu) >> 1;
+               uint32_t insn;
+               std::memcpy(&insn, patch_site, 4);
+               insn = (insn & ~(0xFFFu << 10)) | (imm12 << 10);
+               std::memcpy(patch_site, &insn, 4);
+               break;
+            }
+
             case reloc_type::aarch64_ldst32_abs_lo12_nc: {
-               // LDR/STR 32-bit: low 12 bits of (S+A) >> 2, in bits 10-21
                uint64_t resolved = target + r.addend;
                uint32_t imm12 = (static_cast<uint32_t>(resolved) & 0xFFFu) >> 2;
                uint32_t insn;
@@ -319,9 +332,18 @@ namespace psizam::detail {
             }
 
             case reloc_type::aarch64_ldst64_abs_lo12_nc: {
-               // LDR/STR 64-bit: low 12 bits of (S+A) >> 3, in bits 10-21
                uint64_t resolved = target + r.addend;
                uint32_t imm12 = (static_cast<uint32_t>(resolved) & 0xFFFu) >> 3;
+               uint32_t insn;
+               std::memcpy(&insn, patch_site, 4);
+               insn = (insn & ~(0xFFFu << 10)) | (imm12 << 10);
+               std::memcpy(patch_site, &insn, 4);
+               break;
+            }
+
+            case reloc_type::aarch64_ldst128_abs_lo12_nc: {
+               uint64_t resolved = target + r.addend;
+               uint32_t imm12 = (static_cast<uint32_t>(resolved) & 0xFFFu) >> 4;
                uint32_t insn;
                std::memcpy(&insn, patch_site, 4);
                insn = (insn & ~(0xFFFu << 10)) | (imm12 << 10);

@@ -57,7 +57,7 @@ set_property(CACHE LLVM_WASI_LTO PROPERTY STRINGS OFF Thin Full)
 # free lists + page reclaim keep the working set much tighter. OFF means
 # keep wasi-libc's bundled malloc.
 option(LLVM_WASI_USE_MIMALLOC "Link mimalloc ahead of wasi-libc's malloc in clang.wasm / wasm-ld.wasm" ON)
-set(MIMALLOC_VERSION "2.2.1" CACHE STRING "mimalloc version when LLVM_WASI_USE_MIMALLOC=ON")
+set(MIMALLOC_VERSION "2.1.7" CACHE STRING "mimalloc version when LLVM_WASI_USE_MIMALLOC=ON")
 set(MIMALLOC_URL
     "https://github.com/microsoft/mimalloc/archive/refs/tags/v${MIMALLOC_VERSION}.tar.gz"
     CACHE STRING "URL to mimalloc source tarball")
@@ -172,6 +172,7 @@ set(_LLVM_WASI_ARGS
    -DLLVM_ENABLE_PIC=OFF
    -DLLVM_ENABLE_PEDANTIC=OFF
    -DLLVM_ENABLE_WARNINGS=OFF
+   -DLLVM_CCACHE_BUILD=ON
 )
 if(NOT LLVM_WASI_LTO STREQUAL "OFF")
    list(APPEND _LLVM_WASI_ARGS -DLLVM_ENABLE_LTO=${LLVM_WASI_LTO})
@@ -308,7 +309,10 @@ if(LLVM_WASI_BUILD_CLANG)
    set(_MIMALLOC_LIB_DIR "")
    if(LLVM_WASI_USE_MIMALLOC)
       set(_MIMALLOC_PREFIX "${CMAKE_BINARY_DIR}/mimalloc-install")
-      set(_MIMALLOC_LIB_DIR "${_MIMALLOC_PREFIX}/lib")
+      # mimalloc installs to lib/mimalloc-<major>.<minor>/libmimalloc.a, not
+      # lib/libmimalloc.a. Use the versioned subdir so -lmimalloc resolves.
+      string(REGEX MATCH "^[0-9]+\\.[0-9]+" _MI_MAJOR_MINOR "${MIMALLOC_VERSION}")
+      set(_MIMALLOC_LIB_DIR "${_MIMALLOC_PREFIX}/lib/mimalloc-${_MI_MAJOR_MINOR}")
       # ExternalProject_Add handles download + extract + cross-configure +
       # build + install in one go. No configure-time populate required.
       ExternalProject_Add(mimalloc-wasi
@@ -327,6 +331,17 @@ if(LLVM_WASI_BUILD_CLANG)
             -DMI_BUILD_TESTS=OFF
             -DMI_BUILD_OBJECT=OFF
             -DMI_USE_CXX=OFF
+            # MI_OVERRIDE=ON compiles alloc-override.c, which defines strong
+            # malloc/free/calloc/realloc/aligned_alloc/posix_memalign. Without
+            # it the archive only exports mi_* symbols, the LLVM link never
+            # references them, and wasi-libc's dlmalloc silently wins. ON is
+            # the right flag for replacement, but as of mimalloc 2.1.7 the
+            # resulting binary traps at startup on wasm32-wasip1 — the
+            # __attribute__((constructor)) in init.c calls atexit + getenv
+            # and hits a null-deref at 0xffffffff before main() runs. Leaving
+            # OFF for now so clang.wasm starts; LTO alone already keeps the
+            # peak under the 4 GB wasm32 ceiling for C hello worlds. Revisit
+            # if C++ <string> compile becomes the forcing function.
             -DMI_OVERRIDE=OFF
             -DMI_LIBC_MUSL=ON
             -DMI_OPT_ARCH=OFF
@@ -438,6 +453,7 @@ if(LLVM_WASI_BUILD_CLANG)
       -DLLVM_ENABLE_PIC=OFF
       -DLLVM_ENABLE_PEDANTIC=OFF
       -DLLVM_ENABLE_WARNINGS=OFF
+      -DLLVM_CCACHE_BUILD=ON
    )
    if(NOT LLVM_WASI_LTO STREQUAL "OFF")
       list(APPEND _CLANG_WASI_ARGS -DLLVM_ENABLE_LTO=${LLVM_WASI_LTO})

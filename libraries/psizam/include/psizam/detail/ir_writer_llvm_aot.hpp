@@ -134,7 +134,7 @@ namespace psizam::detail {
 
          // Build translate options (shared, read-only)
          llvm_translate_options topts;
-         topts.opt_level        = 2;
+         topts.opt_level        = _compile_result->opt_level;
          topts.fp               = _compile_result->softfloat ? fp_mode::softfloat
                                                              : fp_mode::hw_deterministic;
          topts.per_function     = true;
@@ -187,7 +187,7 @@ namespace psizam::detail {
 
                   auto llvm_mod = translator.take_module();
                   auto llvm_ctx = translator.take_context();
-                  auto result = llvm_aot_compile(std::move(llvm_mod), std::move(llvm_ctx),
+                  auto result = llvm_aot_compile(std::move(llvm_ctx), std::move(llvm_mod),
                                                   get_ir_module(), target_triple);
 
                   if (!result.error.empty()) {
@@ -326,7 +326,7 @@ namespace psizam::detail {
 
          // Create per-function LLVM translator + module
          llvm_translate_options topts;
-         topts.opt_level        = 2;
+         topts.opt_level        = _compile_result->opt_level;
          topts.fp               = _compile_result->softfloat ? fp_mode::softfloat
                                                              : fp_mode::hw_deterministic;
          topts.per_function     = true;
@@ -339,7 +339,7 @@ namespace psizam::detail {
 
             auto llvm_mod = translator.take_module();
             auto llvm_ctx = translator.take_context();
-            auto func_result = llvm_aot_compile(std::move(llvm_mod), std::move(llvm_ctx),
+            auto func_result = llvm_aot_compile(std::move(llvm_ctx), std::move(llvm_mod),
                                                  get_ir_module(), _compile_result->target_triple);
 
             if (!func_result.error.empty()) {

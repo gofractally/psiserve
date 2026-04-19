@@ -326,12 +326,15 @@ namespace psizam {
                        static_cast<pzam_opt_tier>(cs->opt_tier) == pzam_opt_tier::jit2;
          if (is_jit) {
             _mod.allocator._code_base = static_cast<char*>(_exec_code);
+            _mod.allocator._code_size = total_code_size;
             for (size_t j = 0; j < cs->functions.size(); j++) {
                _mod.code[j].jit_code_offset = cs->functions[j].code_offset;
                _mod.code[j].jit_code_size   = cs->functions[j].code_size;
                _mod.code[j].stack_size       = cs->functions[j].stack_size;
             }
          } else {
+            _mod.allocator._exec_code_base = static_cast<char*>(_exec_code);
+            _mod.allocator._exec_code_size = total_code_size;
             auto code_base_addr = reinterpret_cast<uintptr_t>(_exec_code);
             for (size_t j = 0; j < cs->functions.size(); j++) {
                _mod.code[j].jit_code_offset = code_base_addr + cs->functions[j].code_offset;

@@ -63,7 +63,7 @@ if(TARGET psizam-llvm)
 endif()
 
 add_executable(pzam-run pzam_run.cpp)
-target_compile_definitions(pzam-run PRIVATE PZAM_STANDALONE_RUN)
+target_compile_definitions(pzam-run PRIVATE PZAM_STANDALONE_RUN PSIZAM_JIT_SIGNAL_DIAGNOSTICS)
 target_link_libraries(pzam-run psizam psizam-exec)
 if(TARGET psizam-llvm-jit)
    target_link_libraries(pzam-run psizam-llvm-jit)

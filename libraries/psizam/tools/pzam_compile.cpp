@@ -28,7 +28,7 @@ using namespace psizam;
 using namespace psizam::detail;
 
 static void usage(const char* prog) {
-   std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [--softfloat] [--backtrace] [-o output.pzam] input.wasm\n";
+   std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [--opt-level=0|1|2] [--softfloat] [--backtrace] [-o output.pzam] input.wasm\n";
 }
 
 static std::vector<char> write_pzam(
@@ -111,7 +111,8 @@ static bool compile_wasm(
       const std::string& output_file,
       bool use_softfloat = false,
       bool use_backtrace = false,
-      const std::string& target_triple = {}) {
+      const std::string& target_triple = {},
+      int opt_level = 2) {
 
    module mod;
    mod.allocator.use_default_memory();
@@ -120,6 +121,7 @@ static bool compile_wasm(
    compile_result.target_triple = target_triple;
    compile_result.softfloat = use_softfloat;
    compile_result.backtrace = use_backtrace;
+   compile_result.opt_level = opt_level;
    null_debug_info debug;
 
    using parser_t = binary_parser<IrWriter, default_options, null_debug_info>;
@@ -170,6 +172,7 @@ int pzam_compile_main(int argc, char** argv) {
    std::string input_file;
    bool use_softfloat = false;
    bool use_backtrace = false;
+   int opt_level = 2;
 
    for (int i = 1; i < argc; i++) {
       std::string arg = argv[i];
@@ -177,6 +180,8 @@ int pzam_compile_main(int argc, char** argv) {
          target_str = arg.substr(9);
       } else if (arg.starts_with("--backend=")) {
          backend_str = arg.substr(10);
+      } else if (arg.starts_with("--opt-level=")) {
+         opt_level = std::stoi(arg.substr(12));
       } else if (arg == "--softfloat") {
          use_softfloat = true;
       } else if (arg == "--backtrace") {
@@ -240,7 +245,7 @@ int pzam_compile_main(int argc, char** argv) {
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       ok = compile_wasm<ir_writer_llvm_aot>(wasm_bytes, target_arch, output_file,
                                              use_softfloat, use_backtrace,
-                                             target_triple);
+                                             target_triple, opt_level);
 #else
       std::cerr << "Error: LLVM backend not available (build with -DPSIZAM_ENABLE_LLVM=ON)\n";
       return 1;

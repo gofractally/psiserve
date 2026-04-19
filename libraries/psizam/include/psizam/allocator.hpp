@@ -499,7 +499,11 @@ namespace psizam {
 
       const void* get_code_start() const { return _code_base; }
 
-      detail::span<std::byte> get_code_span() const {return {(std::byte*)_code_base, _code_size};}
+      detail::span<std::byte> get_code_span() const {
+         if (_code_base) return {(std::byte*)_code_base, _code_size};
+         if (_exec_code_base) return {(std::byte*)_exec_code_base, _exec_code_size};
+         return {};
+      }
       /// Returns the actual code size before page alignment padding.
       size_t get_actual_code_size() const { return _actual_code_size; }
 
@@ -661,6 +665,8 @@ namespace psizam {
       char*    _code_base             = nullptr;
       size_t   _code_size             = 0;
       size_t   _actual_code_size     = 0;
+      char*    _exec_code_base        = nullptr;
+      size_t   _exec_code_size        = 0;
       bool     _is_jit                = false;
       void*    _eh_frame_data         = nullptr;
    };

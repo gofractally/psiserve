@@ -45,6 +45,7 @@ namespace psizam::detail {
       std::string                  error;               // non-empty on failure (e.g. LLVM AOT)
       bool                         softfloat = false;   // use softfloat wrappers (runtime option)
       bool                         backtrace = false;   // enable async backtrace frame tracking
+      int                          opt_level = 2;       // LLVM optimization level (0-3)
    };
 
 #if !defined(__wasi__)
