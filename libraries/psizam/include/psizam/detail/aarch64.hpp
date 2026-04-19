@@ -330,7 +330,7 @@ namespace psizam::detail {
       // Prologue / Epilogue
       // ===================================================================
 
-      static constexpr std::size_t max_prologue_size = 160;  // includes 3-instruction stack limit check + gas_charge host call
+      static constexpr std::size_t max_prologue_size = 192;  // includes 3-instruction stack limit check + gas_charge host call (Phase 4: always-wide MOVZ/MOVK chain)
       static constexpr std::size_t max_epilogue_size = 80;  // includes 3-instruction stack limit restore + debug check
 
       void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& locals, uint32_t funcnum) {
@@ -357,9 +357,13 @@ namespace psizam::detail {
          emit32(0x910003FD);
 
          emit_check_stack_limit();
-         // Gas metering (Phase 2b): per-function cost = body byte size.
-         // See x86_64.hpp for rationale.
-         emit_gas_charge(static_cast<int64_t>(_mod.code[funcnum].wasm_body_bytes));
+         // Gas metering (Phase 4): per-function cost = body size in bytes +
+         // prepay_extra (heavy-op weights for opcodes outside any loop,
+         // accumulated by the parser and patched in at end-of-function).
+         // Loops still charge 1-per-iteration plus their own heavy-op
+         // extras, patched at end-of-loop.
+         _prologue_gas_imm_ptr =
+            emit_gas_charge(static_cast<int64_t>(_mod.code[funcnum].wasm_body_bytes));
 
          // Zero-initialize locals
          uint64_t count = 0;
@@ -532,8 +536,10 @@ namespace psizam::detail {
          invalidate_recent_ops();
          void* label = code;
          // Loop-header gas metering: back-edges land before the gas
-         // check so every iteration pays gas.
-         emit_gas_charge(1);
+         // check so every iteration pays gas. Placeholder cost of 1;
+         // parser patches via patch_gas_imm_add_extra to
+         // 1 + sum(heavy_op_extras inside this loop) when END is reached.
+         _last_loop_gas_imm_ptr = emit_gas_charge(1);
          return label;
       }
 
@@ -4289,6 +4295,42 @@ namespace psizam::detail {
          std::memcpy(slots, instrs, 12);
       }
 
+      // Parse-time handle accessors. Each call to emit_gas_charge updates
+      // the last-loop handle (and emit_prologue updates the prologue
+      // handle); callers retrieve them immediately (after emit_prologue
+      // for the function prepay, after emit_loop for the per-iteration
+      // charge).
+      void* prologue_gas_handle() const  { return _prologue_gas_imm_ptr; }
+      void* last_loop_gas_handle() const { return _last_loop_gas_imm_ptr; }
+
+      // Add heavy-opcode extras onto a previously-emitted gas-charge
+      // MOVZ/MOVK chain. Additive so the parser only needs to know the
+      // sum of extras it accumulated for this scope — the base cost
+      // (body bytes for the prologue, 1 for a loop) is already baked
+      // into the four 16-bit immediate fields.
+      //
+      // The chain lives at imm_ptr as 4 consecutive 32-bit instructions:
+      //   MOVZ X10, #c0, LSL #0  | MOVK X10, #c1, LSL #16
+      //   MOVK X10, #c2, LSL #32 | MOVK X10, #c3, LSL #48
+      // with the imm16 field occupying bits [20:5] of each.
+      void patch_gas_imm_add_extra(void* imm_ptr, int64_t extra) {
+         if (!imm_ptr || extra == 0) return;
+         uint8_t* p = reinterpret_cast<uint8_t*>(imm_ptr);
+         uint32_t insns[4];
+         std::memcpy(insns, p, 16);
+         uint64_t cur = 0;
+         for (int i = 0; i < 4; ++i) {
+            uint64_t chunk = (insns[i] >> 5) & 0xFFFFu;
+            cur |= (chunk << (i * 16));
+         }
+         uint64_t v = cur + static_cast<uint64_t>(extra);
+         for (int i = 0; i < 4; ++i) {
+            uint32_t chunk = static_cast<uint32_t>((v >> (i * 16)) & 0xFFFFu);
+            insns[i] = (insns[i] & ~(0xFFFFu << 5)) | (chunk << 5);
+         }
+         std::memcpy(p, insns, 16);
+      }
+
     private:
 
       // ===================================================================
@@ -4880,7 +4922,7 @@ namespace psizam::detail {
          emit32(0xA8C153F3);
       }
 
-      // Phase 3 gas_charge: three-way emission (see x86_64.hpp for rationale).
+      // Phase 4 gas_charge: three-way emission (see x86_64.hpp for rationale).
       //
       //   LDRB  W9, [X19, #strategy_off]   ; strategy byte
       //   CBZ   W9, done                   ; strategy == off → skip
@@ -4888,7 +4930,11 @@ namespace psizam::detail {
       //   CBNZ  W9, helper_path            ; atomic → go through helper
       //   ── inline non-atomic fast path ──
       //   LDR   X9, [X19, #counter_off]
-      //   SUBS  X9, X9, #cost
+      //   MOVZ  X10, #chunk0              ; always 4 insns so offsets are
+      //   MOVK  X10, #chunk1, LSL #16     ; fixed for post-hoc patching of
+      //   MOVK  X10, #chunk2, LSL #32     ; per-scope heavy-op extras.
+      //   MOVK  X10, #chunk3, LSL #48
+      //   SUBS  X9, X9, X10
       //   STR   X9, [X19, #counter_off]
       //   B.PL  done                       ; if result >= 0, skip trap
       //   call  __psizam_gas_exhausted_check(ctx=X0)
@@ -4896,7 +4942,10 @@ namespace psizam::detail {
       //   helper_path:
       //   call  __psizam_gas_charge(ctx=X0, cost=X1)
       //   done:
-      void emit_gas_charge(int64_t cost) {
+      //
+      // Returns a pointer to the first MOVZ (X10) instruction so the parser
+      // can later widen the imm via patch_gas_imm_add_extra.
+      void* emit_gas_charge(int64_t cost) {
          using ctx_t = jit_execution_context<false>;
          const uint32_t strategy_off = static_cast<uint32_t>(ctx_t::gas_strategy_offset());
          const uint32_t atomic_off   = static_cast<uint32_t>(ctx_t::gas_atomic_offset());
@@ -4916,15 +4965,28 @@ namespace psizam::detail {
          PSIZAM_ASSERT((counter_off & 7) == 0 && (counter_off / 8) < 4096,
                         wasm_interpreter_exception, "counter offset outside LDR range");
          emit32(0xF9400269u | (((counter_off / 8) & 0xFFF) << 10));
-         // Decrement: SUBS X9, X9, #imm12 when it fits; else materialize
-         // the cost in X10 first (MOVZ/MOVK chain) and SUBS reg-reg.
-         if (cost >= 0 && cost <= 4095) {
-            emit32(0xF1000129u | ((static_cast<uint32_t>(cost) & 0xFFF) << 10));
-         } else {
-            emit_mov_imm64(X10, cost);
-            // SUBS X9, X9, X10 — 0xEB0A0129 (sf=1, op=SUBS, shift=0, Rm=X10, imm6=0, Rn=X9, Rd=X9)
-            emit32(0xEB0A0129u);
-         }
+         // Always emit the full 4-insn MOVZ/MOVK chain into X10 followed by
+         // SUBS X9, X9, X10. Fixed size means the parser can locate each
+         // chunk's imm16 field at a known byte offset and additively widen
+         // the 64-bit cost with heavy-op extras after the fact.
+         uint8_t* gas_imm_ptr = reinterpret_cast<uint8_t*>(code);
+         const uint64_t ucost = static_cast<uint64_t>(cost);
+         const uint16_t chunks[4] = {
+            static_cast<uint16_t>(ucost),
+            static_cast<uint16_t>(ucost >> 16),
+            static_cast<uint16_t>(ucost >> 32),
+            static_cast<uint16_t>(ucost >> 48)
+         };
+         // MOVZ X10, #chunk0, LSL #0
+         emit32(0xD2800000u | (static_cast<uint32_t>(chunks[0]) << 5) | X10);
+         // MOVK X10, #chunk1, LSL #16
+         emit32(0xF2A00000u | (static_cast<uint32_t>(chunks[1]) << 5) | X10);
+         // MOVK X10, #chunk2, LSL #32
+         emit32(0xF2C00000u | (static_cast<uint32_t>(chunks[2]) << 5) | X10);
+         // MOVK X10, #chunk3, LSL #48
+         emit32(0xF2E00000u | (static_cast<uint32_t>(chunks[3]) << 5) | X10);
+         // SUBS X9, X9, X10 — sf=1, op=SUBS, shift=0, Rm=X10, imm6=0, Rn=X9, Rd=X9
+         emit32(0xEB0A0129u);
          // STR X9, [X19, #counter_off]
          emit32(0xF9000269u | (((counter_off / 8) & 0xFFF) << 10));
          // B.PL done  (positive or zero → skip trap). B.cond imm19 signed.
@@ -4970,6 +5032,7 @@ namespace psizam::detail {
          patch_bcond(bpl_done_pos,
             (done_target - bpl_done_pos) / 4, 0x54000005u);           // B.PL
          patch_b(b_done_pos, (done_target - b_done_pos) / 4);         // B
+         return gas_imm_ptr;
       }
 
       template<typename F>
@@ -5784,6 +5847,13 @@ namespace psizam::detail {
       void* stack_overflow_handler = nullptr;
       void* memory_handler = nullptr;
       uint64_t _local_count = 0;
+
+      // Gas-metering patch handles (Phase 4 heavy-op accumulator). Each
+      // points at the first MOVZ of the MOVZ+3×MOVK chain inside the
+      // corresponding emit_gas_charge sequence. Parser widens via
+      // patch_gas_imm_add_extra once per-scope heavy-op extras are known.
+      void* _prologue_gas_imm_ptr  = nullptr;
+      void* _last_loop_gas_imm_ptr = nullptr;
 
       // Result types stashed by the parser before a multi-value branch so
       // emit_multipop_multivalue can size v128 slots correctly (v128 = 2
