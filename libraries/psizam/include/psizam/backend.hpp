@@ -378,8 +378,12 @@ namespace psizam {
                   auto& entry = _host_table.get_entry(mapped);
                   _direct_ptrs[i] = entry.raw_func_ptr;
                   if constexpr (want_rev) {
+                     PSIZAM_ASSERT(entry.rev_trampoline || !entry.trampoline,
+                        wasm_link_exception, "rev trampoline missing — would silently use fwd trampoline with wrong arg order");
                      _trampoline_ptrs[i] = entry.rev_trampoline ? entry.rev_trampoline : entry.trampoline;
                   } else {
+                     PSIZAM_ASSERT(entry.trampoline || !entry.rev_trampoline,
+                        wasm_link_exception, "fwd trampoline missing for host function — would silently use wrong arg order");
                      _trampoline_ptrs[i] = entry.trampoline ? entry.trampoline : entry.rev_trampoline;
                   }
                } else {
@@ -448,8 +452,12 @@ namespace psizam {
                   auto& entry = _host_table.get_entry(mapped);
                   _direct_ptrs[i] = entry.raw_func_ptr;
                   if constexpr (want_rev) {
+                     PSIZAM_ASSERT(entry.rev_trampoline || !entry.trampoline,
+                        wasm_link_exception, "rev trampoline missing — would silently use fwd trampoline with wrong arg order");
                      _trampoline_ptrs[i] = entry.rev_trampoline ? entry.rev_trampoline : entry.trampoline;
                   } else {
+                     PSIZAM_ASSERT(entry.trampoline || !entry.rev_trampoline,
+                        wasm_link_exception, "fwd trampoline missing for host function — would silently use wrong arg order");
                      _trampoline_ptrs[i] = entry.trampoline ? entry.trampoline : entry.rev_trampoline;
                   }
                   // If no fast trampoline but slow_dispatch exists, leave
