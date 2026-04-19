@@ -163,6 +163,24 @@ namespace psizam::detail {
                   }
                }
             }
+            // Dump the 16 instructions preceding the faulting PC so we can see
+            // how the operand registers were computed. Also dump the full
+            // register file.
+            if (in_code) {
+               fprintf(stderr, "  All regs:\n");
+               for (int i = 0; i < 29; i += 4) {
+                  fprintf(stderr, "    X%-2d=%016llx  X%-2d=%016llx  X%-2d=%016llx  X%-2d=%016llx\n",
+                          i,   ss->__x[i],   i+1, ss->__x[i+1],
+                          i+2, ss->__x[i+2], i+3, ss->__x[i+3]);
+               }
+               fprintf(stderr, "  Preceding instructions (pc-64 .. pc):\n");
+               for (int off = -64; off <= 0; off += 4) {
+                  uint64_t ia = pc_val + off;
+                  uint32_t insn = 0;
+                  memcpy(&insn, (void*)ia, 4);
+                  fprintf(stderr, "    %+4d  0x%08x\n", off, insn);
+               }
+            }
          }
 #endif
 

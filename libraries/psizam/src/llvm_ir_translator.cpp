@@ -5157,6 +5157,30 @@ namespace psizam::detail {
       // Generate entry wrappers for all functions
       _impl->generate_entry_wrappers();
 
+      // DEBUG: dump IR for specific function(s) pre-optimization.
+      // PSIZAM_LLVM_DUMP_FUNC=N,M,... writes wasm_func_N.ll to /tmp
+      // for each requested index. The dump is pre-optimization IR so we
+      // can inspect what the translator produced before any LLVM pass.
+      if (const char* want = std::getenv("PSIZAM_LLVM_DUMP_FUNC")) {
+         std::string s(want);
+         size_t pos = 0;
+         while (pos < s.size()) {
+            size_t comma = s.find(',', pos);
+            if (comma == std::string::npos) comma = s.size();
+            uint32_t idx = static_cast<uint32_t>(std::stoul(s.substr(pos, comma - pos)));
+            pos = comma + 1;
+            if (idx < _impl->wasm_funcs.size() && _impl->wasm_funcs[idx]) {
+               auto* fn = _impl->wasm_funcs[idx];
+               if (!fn->isDeclaration()) {
+                  std::string path = "/tmp/wasm_func_" + std::to_string(idx) + "_pre.ll";
+                  std::error_code ec;
+                  llvm::raw_fd_ostream os(path, ec);
+                  if (!ec) { fn->print(os); fprintf(stderr, "[dump] wrote %s\n", path.c_str()); }
+               }
+            }
+         }
+      }
+
       // Verify the module
       std::string err;
       llvm::raw_string_ostream err_stream(err);
@@ -5228,6 +5252,11 @@ namespace psizam::detail {
          llvm::ModulePassManager mpm;
          llvm::FunctionPassManager fpm;
 
+         // DEBUG: skip Phase 2 passes to bisect the runtime crash.
+         // PSIZAM_LLVM_SKIP_PHASE2=1 keeps Phase 1 (canonicalize) and
+         // Phase 3 (cleanup) but skips Reassociate/GVN/LICM.
+         bool skip_phase2 = std::getenv("PSIZAM_LLVM_SKIP_PHASE2") != nullptr;
+
          // Phase 1: Canonicalize — cheap, huge IR reduction.
          // mem2reg is critical: promotes alloca-per-register to SSA.
          // SROA breaks up the host_args alloca when it can.
@@ -5237,16 +5266,18 @@ namespace psizam::detail {
          fpm.addPass(llvm::InstCombinePass());
          fpm.addPass(llvm::SimplifyCFGPass());
 
-         // Phase 2: Optimize — moderate cost, good speedup.
-         // Reassociate enables better constant folding.
-         // GVN eliminates redundant loads (e.g., repeated ctx pointer loads).
-         // LICM hoists loop-invariant computations (loop pass, needs adaptor).
-         fpm.addPass(llvm::ReassociatePass());
-         fpm.addPass(llvm::GVNPass());
-         {
-            llvm::LoopPassManager lpm;
-            lpm.addPass(llvm::LICMPass(llvm::LICMOptions()));
-            fpm.addPass(llvm::createFunctionToLoopPassAdaptor(std::move(lpm), /*UseMemorySSA=*/true));
+         if (!skip_phase2) {
+            // Phase 2: Optimize — moderate cost, good speedup.
+            // Reassociate enables better constant folding.
+            // GVN eliminates redundant loads (e.g., repeated ctx pointer loads).
+            // LICM hoists loop-invariant computations (loop pass, needs adaptor).
+            fpm.addPass(llvm::ReassociatePass());
+            fpm.addPass(llvm::GVNPass());
+            {
+               llvm::LoopPassManager lpm;
+               lpm.addPass(llvm::LICMPass(llvm::LICMOptions()));
+               fpm.addPass(llvm::createFunctionToLoopPassAdaptor(std::move(lpm), /*UseMemorySSA=*/true));
+            }
          }
 
          // Phase 3: Cleanup — removes dead code exposed by earlier passes.

@@ -70,6 +70,51 @@ psizam error: wasm memory out-of-bounds
 - **Uninitialized read** in generated code (an uninitialized WASM local or
   vreg being used as an address).
 
+## Investigation Log (2026-04-19)
+
+### Narrowed down
+- **Interpreter / JIT backend executes the same WASM correctly** → the bug
+  is in our LLVM AOT translation, not the WASM itself.
+- Crash reproduces with or without same-batch relocation optimization →
+  not a bug in that optimization.
+- Skipping Phase 2 optimization passes (`PSIZAM_LLVM_SKIP_PHASE2=1`:
+  Reassociate / GVN / LICM) does **not** fix the crash → bug is in
+  translation or Phase 1 passes (mem2reg / SROA / InstCombine / SimplifyCFG).
+- Zero-initializing vreg allocas does not fix the crash → not uninitialized
+  vreg reads.
+
+### Crash site (wasm-ld at -j18 batched)
+- Crashes inside `wasm_func_40125` (code_idx 40097, body @ code_offset
+  0x4005eac, size 2176 bytes).
+- Crash is ~1156 bytes into that function body.
+- Called from `wasm_func_40014` (code_idx 39986).
+- Function 40125 is an allocator-like routine (loads from a memory header,
+  masks low 3 bits, navigates free-list pointers at memory offsets
+  0x2864D8 / 0x2864DC / 0x2864C8).
+- The WASM bytecode for this function contains **no byte-load opcodes**,
+  yet the crashing native instruction is `LDRB W9, [X19, W20, UXTW]`.
+  Either LLVM codegen split a wider load into bytes, or the crash is in
+  compiler-generated runtime-helper inlining, or our translation emitted
+  an i8 load where it shouldn't.
+
+### Deterministic-but-layout-sensitive garbage
+- X20 garbage is always ASCII byte data (`"_TER"` = 0x5245545f in batched
+  layout; `"MINA"` = 0x414e494d with same-batch opt disabled). Changing
+  the build subtly changes which garbage gets read, but the fault
+  **always** is an OOB WASM memory load with garbage offset.
+- The garbage looks like text (rodata) read as an i32 → strongly suggests
+  either a wrong load type (i32 read where i8 stored) or a wrong pointer
+  (loading from rodata-adjacent memory instead of a local/vreg alloca).
+
+### Diagnostics added (available in the tree)
+- `signals.hpp`: dumps all 29 GPRs + 16 preceding instructions on JIT fault.
+- `pzam-compile --dump-layout=FILE`: writes `(off, size, kind, code_idx)`
+  rows for every entry wrapper and body in the final merged code blob.
+  Enables `awk` lookup of which function a given PC lands in.
+- `PSIZAM_LLVM_DUMP_FUNC=N,M,...`: dumps pre-optimization IR for specific
+  wasm_func_N to `/tmp/wasm_func_N_pre.ll`.
+- `PSIZAM_LLVM_SKIP_PHASE2=1`: run pipeline with only canonicalize + cleanup.
+
 ## Acceptance Criteria
 - [ ] Root cause identified and documented
 - [ ] Fix applied in `libraries/psizam/src/llvm_ir_translator.cpp` or

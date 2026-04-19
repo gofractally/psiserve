@@ -18,6 +18,7 @@
 #include <psizam/detail/ir_writer_llvm_aot.hpp>
 #endif
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -33,7 +34,7 @@ struct compile_options : default_options {
 };
 
 static void usage(const char* prog) {
-   std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [--opt-level=0|1|2] [--softfloat] [--backtrace] [-jN] [-o output.pzam] input.wasm\n";
+   std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [--opt-level=0|1|2] [--softfloat] [--backtrace] [-jN] [--dump-layout=FILE] [-o output.pzam] input.wasm\n";
 }
 
 static std::vector<char> write_pzam(
@@ -118,7 +119,8 @@ static bool compile_wasm(
       bool use_backtrace = false,
       const std::string& target_triple = {},
       int opt_level = 2,
-      std::uint32_t compile_threads = 0) {
+      std::uint32_t compile_threads = 0,
+      const std::string& dump_layout = {}) {
 
    module mod;
    mod.allocator.use_default_memory();
@@ -165,6 +167,36 @@ static bool compile_wasm(
       return false;
    }
    out.write(pzam_bytes.data(), pzam_bytes.size());
+
+   if (!dump_layout.empty()) {
+      std::ofstream layout(dump_layout);
+      if (!layout.is_open()) {
+         std::cerr << "Warning: cannot open layout dump file: " << dump_layout << "\n";
+      } else {
+         // Sort by offset so "grep + sort" isn't needed for PC lookup
+         struct row { uint32_t idx; uint32_t off; uint32_t sz; int kind; };
+         std::vector<row> rows;
+         rows.reserve(compile_result.function_offsets.size() +
+                      compile_result.body_offsets.size());
+         for (size_t i = 0; i < compile_result.function_offsets.size(); ++i) {
+            auto [off, sz] = compile_result.function_offsets[i];
+            if (sz != 0) rows.push_back({static_cast<uint32_t>(i), off, sz, 0});
+         }
+         for (size_t i = 0; i < compile_result.body_offsets.size(); ++i) {
+            auto [off, sz] = compile_result.body_offsets[i];
+            if (sz != 0) rows.push_back({static_cast<uint32_t>(i), off, sz, 1});
+         }
+         std::sort(rows.begin(), rows.end(), [](const row& a, const row& b) {
+            return a.off < b.off;
+         });
+         layout << "# kind=0 entry, kind=1 body. idx = code_idx (excludes imports)\n";
+         layout << "# off_hex off_dec size kind code_idx\n";
+         for (auto& r : rows) {
+            layout << std::hex << "0x" << r.off << std::dec
+                   << " " << r.off << " " << r.sz << " " << r.kind << " " << r.idx << "\n";
+         }
+      }
+   }
    return true;
 }
 
@@ -184,6 +216,7 @@ int pzam_compile_main(int argc, char** argv) {
    int opt_level = 2;
    std::uint32_t compile_threads = std::thread::hardware_concurrency();
    if (compile_threads == 0) compile_threads = 1;
+   std::string dump_layout;
 
    for (int i = 1; i < argc; i++) {
       std::string arg = argv[i];
@@ -193,6 +226,8 @@ int pzam_compile_main(int argc, char** argv) {
          backend_str = arg.substr(10);
       } else if (arg.starts_with("--opt-level=")) {
          opt_level = std::stoi(arg.substr(12));
+      } else if (arg.starts_with("--dump-layout=")) {
+         dump_layout = arg.substr(14);
       } else if (arg == "-j") {
          if (i + 1 < argc) {
             compile_threads = static_cast<std::uint32_t>(std::stoul(argv[++i]));
@@ -257,17 +292,18 @@ int pzam_compile_main(int argc, char** argv) {
       // jit2 backend ignores compile_threads; pass 0 to keep it serial.
       if (target_arch == pzam_arch::x86_64) {
          ok = compile_wasm<ir_writer_x64>(wasm_bytes, target_arch, output_file,
-                                           false, use_backtrace, {}, 2, 0);
+                                           false, use_backtrace, {}, 2, 0, dump_layout);
       } else {
          ok = compile_wasm<ir_writer_a64>(wasm_bytes, target_arch, output_file,
-                                           false, use_backtrace, {}, 2, 0);
+                                           false, use_backtrace, {}, 2, 0, dump_layout);
       }
    } else if (backend_str == "llvm") {
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       ok = compile_wasm<ir_writer_llvm_aot>(wasm_bytes, target_arch, output_file,
                                              use_softfloat, use_backtrace,
                                              target_triple, opt_level,
-                                             compile_threads);
+                                             compile_threads,
+                                             dump_layout);
 #else
       std::cerr << "Error: LLVM backend not available (build with -DPSIZAM_ENABLE_LLVM=ON)\n";
       return 1;

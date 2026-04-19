@@ -40,7 +40,8 @@ namespace psizam::detail {
    struct pzam_compile_result {
       std::vector<code_relocation> relocs;
       std::vector<uint8_t>         code_blob;          // filled by LLVM AOT path
-      std::vector<std::pair<uint32_t, uint32_t>> function_offsets; // (offset, size) per function
+      std::vector<std::pair<uint32_t, uint32_t>> function_offsets; // entry wrapper (offset, size)
+      std::vector<std::pair<uint32_t, uint32_t>> body_offsets;     // function body (offset, size) — LLVM only
       std::string                  target_triple;       // set by caller for LLVM AOT
       std::string                  error;               // non-empty on failure (e.g. LLVM AOT)
       bool                         softfloat = false;   // use softfloat wrappers (runtime option)

@@ -77,6 +77,7 @@ namespace psizam::detail {
          _compile_result->relocs = std::move(_accumulated_relocs);
          _compile_result->code_blob = std::move(_accumulated_code);
          _compile_result->function_offsets = std::move(_function_offsets);
+         _compile_result->body_offsets = _func_body_offsets;
       }
 
     private:
@@ -352,6 +353,7 @@ namespace psizam::detail {
          _compile_result->relocs = std::move(_accumulated_relocs);
          _compile_result->code_blob = std::move(_accumulated_code);
          _compile_result->function_offsets = std::move(_function_offsets);
+         _compile_result->body_offsets = _func_body_offsets;
       }
 #endif // !__wasi__
 
