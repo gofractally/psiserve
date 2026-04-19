@@ -5,3 +5,4 @@
 add_subdirectory(hello_world)
 add_subdirectory(composition)
 add_subdirectory(runtime)
+add_subdirectory(runtime_resource)
