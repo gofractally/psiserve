@@ -2,6 +2,30 @@
 
 Status: design (2026-04-19). Phase 1 complete. Phase 2a in progress.
 
+## Phase 2a first measurement (interpreter, call-boundary metering)
+
+Simplest possible Phase 2a: `gas_charge(cost)` hook called from the
+interpreter's `call()` dispatch with a placeholder cost of 1. No
+bitcode changes, no CFG walk yet (comes in Phase 2b). Recursive
+call-heavy workload (depth 100, 50K top-level invocations,
+≈5M total gas_charge calls), Linux x86_64:
+
+| Strategy | Debug ns/call | Release ns/call |
+|---|---|---|
+| off | 238 | 24.8 |
+| prepay_max (unlimited budget, atomic fetch_sub) | 239 | 29.6 |
+
+**Release overhead: ~4.8 ns per call, ~19% on this workload.** Debug
+shows 0.3% because interpreter dispatch dominates; Release exposes
+the real cost — `lock xadd` (~15–20 cycles) for the relaxed
+atomic decrement. The atomicity is what enables the cross-thread
+interrupt path; a non-atomic counter would be ~1 ns per call but
+would not safely observe external `store(-1)` writes.
+
+This is the cost *at call granularity*. Phase 2b's WASM-binary
+rewriter will hit function entries and loop headers (not every
+call), so the number on realistic workloads should be much lower.
+
 ## Opt-in at runtime (no compile flag)
 
 Gas metering is always compiled in but inactive by default. The counter

@@ -211,23 +211,39 @@ namespace psizam::detail {
 
       // ── Gas metering (see libraries/psizam/docs/gas-metering-design.md) ──
       //
-      // Storage for the per-instance gas counter and exhaustion handler.
-      // The load-time injection pass (Phase 2+) will emit decrement+check
-      // sequences that decrement this counter; for now the fields are
-      // inert plumbing.
+      // Storage for the per-instance gas counter, exhaustion handler,
+      // and insertion-strategy selector. In Phase 2a the interpreter's
+      // call() checks the strategy and, when != off, does a fetch_sub
+      // + negative-test on the counter. Per-opcode cost is a placeholder
+      // (1 per call) pending CFG-based cost computation in Phase 2b.
       //
-      // Accessors return the atomic by reference so external threads can
-      // issue stores (e.g., `gas_counter().store(-1, relaxed)` for
-      // external interrupt) without going through a non-const method.
+      // gas_counter() returns by reference so external threads can issue
+      // stores directly (e.g. `gas_counter().store(-1, relaxed)` for
+      // external interrupt).
       inline std::atomic<int64_t>&       gas_counter()       { return _gas_counter; }
       inline const std::atomic<int64_t>& gas_counter() const { return _gas_counter; }
       inline gas_handler_t               gas_handler() const { return _gas_handler; }
+      inline gas_insertion_strategy      gas_strategy() const { return _gas_strategy; }
       inline void set_gas_handler(gas_handler_t h) { _gas_handler = h; }
+      inline void set_gas_strategy(gas_insertion_strategy s) { _gas_strategy = s; }
       inline void set_gas_budget(int64_t n) { _gas_counter.store(n, std::memory_order_relaxed); }
       inline void set_gas_slice(int64_t n)  { _gas_slice = n; }
       inline int64_t gas_slice() const { return _gas_slice; }
       // Refill convenience used by yield / timeout-check handlers.
       inline void restock_gas(int64_t n) { _gas_counter.store(n, std::memory_order_relaxed); }
+
+      // Runtime check invoked at interpreter function-call boundaries.
+      // Hot path: inlined, one relaxed fetch_sub + branch. Off path
+      // (strategy == off) returns immediately; the branch predictor
+      // pins it so the extra compare is effectively free.
+      inline void gas_charge(int64_t cost) {
+         if (_gas_strategy == gas_insertion_strategy::off) return;
+         int64_t prev = _gas_counter.fetch_sub(cost, std::memory_order_relaxed);
+         if (prev - cost < 0) [[unlikely]] {
+            if (_gas_handler) _gas_handler(this);
+            else PSIZAM_THROW(wasm_gas_exhausted_exception, "gas exhausted");
+         }
+      }
 
       template<typename Module>
       inline void reset(Module& mod) {
@@ -497,12 +513,14 @@ namespace psizam::detail {
          ctx->_dropped_elems = _dropped_elems;
          ctx->_dropped_data  = _dropped_data;
          // Propagate gas policy to the child fiber. The counter itself is
-         // per-fiber (each fiber gets its own budget); handler + slice
-         // inherit from the parent so yield/timeout policy is consistent.
+         // per-fiber (each fiber gets its own budget); handler + slice +
+         // strategy inherit from the parent so yield/timeout policy is
+         // consistent.
          ctx->_gas_counter.store(_gas_counter.load(std::memory_order_relaxed),
                                  std::memory_order_relaxed);
-         ctx->_gas_handler = _gas_handler;
-         ctx->_gas_slice   = _gas_slice;
+         ctx->_gas_handler  = _gas_handler;
+         ctx->_gas_slice    = _gas_slice;
+         ctx->_gas_strategy = _gas_strategy;
          // Set call depth limit via derived accessor
          ctx->set_max_call_depth(derived().get_remaining_call_depth());
          return ctx;
@@ -550,13 +568,13 @@ namespace psizam::detail {
       std::vector<bool>               _dropped_elems;
       std::vector<bool>               _dropped_data;
       fp_mode                         _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
-      // Gas metering — defaults to unlimited + no handler (i.e., no trap
-      // can fire until a non-default budget/handler is installed). The
-      // injection pass (Phase 2) is a no-op while the counter stays at
-      // its default, so existing modules see zero behavioral change.
+      // Gas metering — defaults to strategy::off (no instrumentation),
+      // unlimited budget, null handler. Enable by calling
+      // set_gas_strategy(...) with a non-off strategy.
       std::atomic<int64_t>            _gas_counter{gas_budget_unlimited};
       gas_handler_t                   _gas_handler = nullptr;
       int64_t                         _gas_slice   = gas_slice_default;
+      gas_insertion_strategy          _gas_strategy = gas_insertion_strategy::off;
    };
 
    struct jit_visitor { template<typename T> jit_visitor(T&&) {} };
@@ -1222,6 +1240,11 @@ namespace psizam::detail {
       std::uint32_t get_remaining_call_depth() const { return _remaining_call_depth; }
 
       inline void call(uint32_t index) {
+         // Gas metering (Phase 2a): charge a placeholder cost at every
+         // function-call boundary. Real per-function costs (max-path
+         // CFG walk) land in Phase 2b; the fetch_sub + branch overhead
+         // is what Phase 2a's microbench measures.
+         gas_charge(1);
          // TODO validate index is valid
          if (index < _mod->get_imported_functions_size()) {
             const auto& ft = _mod->get_function_type(index);

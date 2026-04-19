@@ -417,6 +417,15 @@ endif()
 add_executable(bench-compare ${BENCH_SOURCES})
 target_link_libraries(bench-compare ${BENCH_LIBS})
 target_compile_definitions(bench-compare PRIVATE ${BENCH_DEFS})
+
+# ##################################################################################################
+# Gas-metering microbench — interpreter-only, no wasi-sdk / third-party
+# runtime dependencies. Measures the per-call gas_charge() overhead on
+# a call-heavy WASM module (strategy::off vs prepay_max with unlimited
+# budget so the trap path is never taken).
+# ##################################################################################################
+add_executable(bench-gas ${CMAKE_CURRENT_SOURCE_DIR}/bench_gas.cpp)
+target_link_libraries(bench-gas psizam-exec)
 # Ensure our fetched wasmtime headers take priority over any system-installed
 # wasmtime (e.g. via Homebrew) that might be on -isystem /opt/homebrew/include.
 if(PSIZAM_ENABLE_BENCH_WASMTIME AND EXISTS "${WASMTIME_DIR}/include")
