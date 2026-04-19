@@ -622,30 +622,19 @@ slot rather than on the stack, so JIT stack usage cannot reach it.
 (a) is simpler but regresses startup cost for hot-path small
 functions; (b) is intrusive but structurally sound.
 
-### interpreter=ok vs all-JITs trap (`unreachable`)
+### ~~interpreter=ok vs all-JITs trap (`unreachable`)~~ — fixed
 
-**Status:** open — 1 reproducer.
+**Status:** fixed — resolved by the 0-catch try_table fix (commit
+`b2ee2f7`). Full 18K-module fuzzer pass on seed 1776497367 shows 0
+mismatches. The divergence was caused by EH stack corruption from
+unmatched `eh_leave` on 0-catch try_tables; the interpreter doesn't
+use `jit_eh_stack` so it was unaffected.
 
-`/tmp/fuzz/mismatch_17201_seed1776497367.wasm` (1096 B): interpreter
-returns `ok`; jit, jit2, and jit_llvm all report
-`interp_trap (unreachable)`. Since the three JITs AGREE and only the
-interpreter disagrees, this is most likely an interpreter bug (or a
-wasm-gen bug producing a module that falls into UB by spec). Not
-critical — matching behaviour across JITs means no
-backend-consistency issue. Worth tracing if someone is already in
-`interpret_visitor` for something else.
+### ~~interp/jit/jit2 timeout vs jit_llvm trap~~ — fixed
 
-### interp/jit/jit2 timeout vs jit_llvm trap
-
-**Status:** open — 2 reproducers.
-
-`/tmp/fuzz/mismatch_18536_seed1776497367.wasm`,
-`/tmp/fuzz/mismatch_2190_seed1776492783.wasm`: interpreter, jit1, and
-jit2 all time out on the fuzz watchdog; jit_llvm reports
-`interp_trap (unreachable)`. jit_llvm's constant folding likely
-resolves the loop-exit condition and hits `unreachable` directly,
-while the others run the counter out. Not a correctness divergence
-per se (all eventually would trap), but the fuzzer flags it.
+**Status:** fixed — resolved by the 0-catch try_table fix (commit
+`b2ee2f7`). Full fuzzer passes on seed 1776497367 (19K modules) and
+seed 1776492783 (3K modules) show 0 mismatches.
 
 ### ~~select validation: mismatched numeric types~~ — fixed
 
