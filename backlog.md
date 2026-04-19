@@ -23,14 +23,17 @@ Last updated: 2026-04-19
 | [0012](.issues/0012-psiserve-wit-host-guest-api.md) | psiserve WIT host/guest DB API | backlog | high | psiserve,psio | — | 0013,0014 |
 | [0013](.issues/0013-psiserve-virtual-db-config.md) | psiserve virtual DB config + permissions | backlog | medium | psiserve | — | — |
 | [0014](.issues/0014-psiserve-snapshot-api.md) | psiserve snapshot API (blockchain) | backlog | medium | psiserve,psitri | — | — |
+| [0015](.issues/0015-psizam-memory-sandboxing-modes.md) | psizam memory sandboxing modes (guarded/checked/unchecked) | ready | high | psizam | agent3 | — |
 
 ## Dependency Graph
 
 ```
 0001 (done) → 0002 (in-progress) → 0012 → 0013
                                           → 0014
+0004 (in-progress) [compute sandboxing]
 0005 (in-progress) → 0010
-0006 (in-progress) → 0007
+0006 (in-progress) → 0015 [memory sandboxing]
+                   → 0007
                    → 0009
 0011 → 0012
 ```
