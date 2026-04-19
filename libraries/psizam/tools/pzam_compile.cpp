@@ -168,6 +168,16 @@ static bool compile_wasm(
    }
    out.write(pzam_bytes.data(), pzam_bytes.size());
 
+   if (const char* dump_code_env = std::getenv("PSIZAM_DUMP_CODE_BLOB")) {
+      std::ofstream code(dump_code_env, std::ios::binary);
+      if (code.is_open()) {
+         code.write(reinterpret_cast<const char*>(compile_result.code_blob.data()),
+                    compile_result.code_blob.size());
+         std::cerr << "[dump-code] wrote " << compile_result.code_blob.size()
+                   << " bytes to " << dump_code_env << "\n";
+      }
+   }
+
    if (!dump_layout.empty()) {
       std::ofstream layout(dump_layout);
       if (!layout.is_open()) {

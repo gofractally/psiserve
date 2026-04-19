@@ -5288,6 +5288,30 @@ namespace psizam::detail {
          mpm.addPass(llvm::createModuleToFunctionPassAdaptor(std::move(fpm)));
          mpm.run(*_impl->llvm_mod, mam);
       }
+
+      // DEBUG: dump IR for specific function(s) post-optimization.
+      // PSIZAM_LLVM_DUMP_FUNC_POST=N,M,... writes wasm_func_N_post.ll
+      // after the pass pipeline runs. Compare with _pre.ll to see what
+      // each optimization transformed.
+      if (const char* want = std::getenv("PSIZAM_LLVM_DUMP_FUNC_POST")) {
+         std::string s(want);
+         size_t pos = 0;
+         while (pos < s.size()) {
+            size_t comma = s.find(',', pos);
+            if (comma == std::string::npos) comma = s.size();
+            uint32_t idx = static_cast<uint32_t>(std::stoul(s.substr(pos, comma - pos)));
+            pos = comma + 1;
+            if (idx < _impl->wasm_funcs.size() && _impl->wasm_funcs[idx]) {
+               auto* fn = _impl->wasm_funcs[idx];
+               if (!fn->isDeclaration()) {
+                  std::string path = "/tmp/wasm_func_" + std::to_string(idx) + "_post.ll";
+                  std::error_code ec;
+                  llvm::raw_fd_ostream os(path, ec);
+                  if (!ec) { fn->print(os); fprintf(stderr, "[dump] wrote %s\n", path.c_str()); }
+               }
+            }
+         }
+      }
    }
 
    llvm::Module* llvm_ir_translator::get_module() const {

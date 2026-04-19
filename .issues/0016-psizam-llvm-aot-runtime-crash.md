@@ -113,7 +113,51 @@ psizam error: wasm memory out-of-bounds
   Enables `awk` lookup of which function a given PC lands in.
 - `PSIZAM_LLVM_DUMP_FUNC=N,M,...`: dumps pre-optimization IR for specific
   wasm_func_N to `/tmp/wasm_func_N_pre.ll`.
+- `PSIZAM_LLVM_DUMP_FUNC_POST=N,M,...`: dumps post-optimization IR.
 - `PSIZAM_LLVM_SKIP_PHASE2=1`: run pipeline with only canonicalize + cleanup.
+- `PSIZAM_DUMP_CODE_BLOB=FILE`: dump raw merged code bytes for external
+  disassembly with `llvm-mc -disassemble -triple=aarch64`.
+
+### Narrowed further (2026-04-19 late)
+Corrected PC→function mapping: the crash is in **wasm_func_40107** (a
+`memcmp`-like function; `code_idx 40079`), NOT `wasm_func_40125` as
+initially thought. The callee's disassembled body:
+```
+mov w22, w4   ; arg 4 (length)
+mov w20, w3   ; arg 3 (2nd pointer) ← the garbage register
+mov w23, w2   ; arg 2 (1st pointer)
+mov x21, x0   ; ctx
+mov x19, x1   ; mem
+...
+ldrb w9, [x19, w20, uxtw]   ; crash: read byte at mem[arg3]
+```
+So the garbage is **the 2nd pointer argument passed by the caller**.
+
+The caller is **wasm_func_40014**. Its call site passes `W23` (loaded
+from WASM memory) as that argument. Tracing through the IR:
+```
+%60 = getelementptr i8, ptr %5, i64 2342500   ; mem[2342500]
+%61 = load volatile i32, ptr %60              ; = local1
+%63 = zext i32 %61 to i64
+%64 = getelementptr i8, ptr %5, i64 %63       ; mem[local1]
+%65 = load volatile i32, ptr %64              ; = local2, passed to memcmp
+```
+The value `mem[mem[2342500]]` is `0x5245545f` at crash time — but
+the **interpreter executes the exact same IR semantic and this value is
+valid enough to not OOB**. So some earlier WASM function wrote
+something to WASM memory that our LLVM path wrote differently.
+
+### Next steps for debugging
+1. Instrument `__psizam_call_host` and WASM-to-WASM call wrappers to
+   log args passed and return values — compare interpreter vs LLVM
+   traces for divergence.
+2. `wasm_func_40014` stores to `mem[2342500]` in `bb2_exit` (value
+   from `wasm_func_40126` or constant `2646500`). Check whether the
+   initial store path matches the interpreter's.
+3. Bisect Phase 1 passes individually (SROA / EarlyCSE / InstCombine
+   / SimplifyCFG). Use a small batch size to avoid OOM.
+4. Use `lldb` on `pzam-run` to break at `wasm_func_40107` entry and
+   inspect the caller's args live.
 
 ## Acceptance Criteria
 - [ ] Root cause identified and documented
