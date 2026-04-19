@@ -85,9 +85,18 @@ struct bridge_program {
    instruction code[MAX_BRIDGE_INSTRUCTIONS];
    uint8_t     len = 0;
    std::string export_name;
+   uint32_t    export_index = std::numeric_limits<uint32_t>::max();
+
+   // Cached cabi_realloc indices (resolved lazily, per-module)
+   uint32_t    provider_realloc_idx = std::numeric_limits<uint32_t>::max();
+   uint32_t    consumer_realloc_idx = std::numeric_limits<uint32_t>::max();
 
    void emit(op o, uint8_t src = 0, uint8_t dst = 0, uint8_t align = 0, uint32_t size = 0) {
       code[len++] = {o, src, dst, align, size};
+   }
+
+   bool has_resolved_index() const {
+      return export_index != std::numeric_limits<uint32_t>::max();
    }
 };
 
@@ -333,10 +342,22 @@ bridge_program compile_bridge(std::string_view export_name) {
 // Threaded-dispatch executor. Uses computed-goto (GCC extension) for
 // zero-overhead opcode dispatch.
 //
+// Helper: call cabi_realloc by cached index (resolve lazily on first call)
+template <typename BackendT>
+inline uint32_t bridge_cabi_realloc(
+   BackendT& be, void* host, uint32_t& cached_idx,
+   uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t size)
+{
+   if (cached_idx == std::numeric_limits<uint32_t>::max())
+      cached_idx = be.resolve_export("cabi_realloc");
+   auto r = be.call_by_index(host, cached_idx, old_ptr, old_size, align, size);
+   return r ? r->to_ui32() : 0u;
+}
+
 // Template parameter BackendKind is needed to resolve module_instance type.
 template <typename Host, typename BackendKind>
 native_value execute_bridge(
-   const bridge_program& prog,
+   bridge_program& prog,  // non-const: caches resolved indices
    module_instance<Host, BackendKind>* consumer,
    module_instance<Host, BackendKind>* provider,
    void* host,
@@ -406,10 +427,9 @@ do_copy_string_arg:
       uint32_t dst_ptr = 0;
       if (src_len > 0) {
          // Allocate in provider's memory
-         auto alloc_ret = provider->be->call_with_return(
-            host, std::string_view{"cabi_realloc"},
-            uint32_t{0}, uint32_t{0}, uint32_t{1}, src_len);
-         dst_ptr = alloc_ret ? alloc_ret->to_ui32() : 0u;
+         dst_ptr = bridge_cabi_realloc(
+            *provider->be, host, prog.provider_realloc_idx,
+            0u, 0u, 1u, src_len);
 
          // Copy bytes from consumer to provider
          char* provider_mem = provider->be->get_context().linear_memory();
@@ -433,10 +453,9 @@ do_copy_list_arg:
       uint32_t byte_len = src_len * elem_size;
       uint32_t dst_ptr = 0;
       if (byte_len > 0) {
-         auto alloc_ret = provider->be->call_with_return(
-            host, std::string_view{"cabi_realloc"},
-            uint32_t{0}, uint32_t{0}, elem_align, byte_len);
-         dst_ptr = alloc_ret ? alloc_ret->to_ui32() : 0u;
+         dst_ptr = bridge_cabi_realloc(
+            *provider->be, host, prog.provider_realloc_idx,
+            0u, 0u, elem_align, byte_len);
 
          char* provider_mem = provider->be->get_context().linear_memory();
          char* cons_mem = consumer->be->get_context().linear_memory();
@@ -455,10 +474,9 @@ do_copy_record_arg:
       // memcpy the canonical layout.
       uint32_t src_ptr = static_cast<uint32_t>(consumer_args[ip->src].i64);
 
-      auto alloc_ret = provider->be->call_with_return(
-         host, std::string_view{"cabi_realloc"},
-         uint32_t{0}, uint32_t{0}, static_cast<uint32_t>(ip->align), ip->size);
-      uint32_t dst_ptr = alloc_ret ? alloc_ret->to_ui32() : 0u;
+      uint32_t dst_ptr = bridge_cabi_realloc(
+         *provider->be, host, prog.provider_realloc_idx,
+         0u, 0u, static_cast<uint32_t>(ip->align), ip->size);
 
       char* provider_mem = provider->be->get_context().linear_memory();
       char* cons_mem = consumer->be->get_context().linear_memory();
@@ -472,26 +490,40 @@ do_set_retptr:
    {
       // Allocate return area in provider's memory.
       // ip->dst = provider arg slot for retptr, ip->size/align = retarea dimensions.
-      auto alloc_ret = provider->be->call_with_return(
-         host, std::string_view{"cabi_realloc"},
-         uint32_t{0}, uint32_t{0}, static_cast<uint32_t>(ip->align), ip->size);
-      provider_retptr = alloc_ret ? alloc_ret->to_ui32() : 0u;
+      provider_retptr = bridge_cabi_realloc(
+         *provider->be, host, prog.provider_realloc_idx,
+         0u, 0u, static_cast<uint32_t>(ip->align), ip->size);
       provider_slots[ip->dst] = static_cast<uint64_t>(provider_retptr);
    }
    NEXT();
 
 do_call_export:
    {
-      auto r = provider->be->call_with_return(
-         host, std::string_view{prog.export_name},
-         provider_slots[0],  provider_slots[1],
-         provider_slots[2],  provider_slots[3],
-         provider_slots[4],  provider_slots[5],
-         provider_slots[6],  provider_slots[7],
-         provider_slots[8],  provider_slots[9],
-         provider_slots[10], provider_slots[11],
-         provider_slots[12], provider_slots[13],
-         provider_slots[14], provider_slots[15]);
+      decltype(provider->be->call_with_return(
+         host, std::string_view{}, uint64_t{})) r;
+      if (prog.has_resolved_index()) {
+         r = provider->be->call_by_index(
+            host, prog.export_index,
+            provider_slots[0],  provider_slots[1],
+            provider_slots[2],  provider_slots[3],
+            provider_slots[4],  provider_slots[5],
+            provider_slots[6],  provider_slots[7],
+            provider_slots[8],  provider_slots[9],
+            provider_slots[10], provider_slots[11],
+            provider_slots[12], provider_slots[13],
+            provider_slots[14], provider_slots[15]);
+      } else {
+         r = provider->be->call_with_return(
+            host, std::string_view{prog.export_name},
+            provider_slots[0],  provider_slots[1],
+            provider_slots[2],  provider_slots[3],
+            provider_slots[4],  provider_slots[5],
+            provider_slots[6],  provider_slots[7],
+            provider_slots[8],  provider_slots[9],
+            provider_slots[10], provider_slots[11],
+            provider_slots[12], provider_slots[13],
+            provider_slots[14], provider_slots[15]);
+      }
       result.i64 = r ? r->to_ui64() : 0;
    }
    NEXT();
@@ -519,10 +551,9 @@ do_return_string:
       // Allocate in consumer's memory for the string data
       uint32_t consumer_str_ptr = 0;
       if (s_len > 0) {
-         auto alloc_ret = consumer->be->call_with_return(
-            host, std::string_view{"cabi_realloc"},
-            uint32_t{0}, uint32_t{0}, uint32_t{1}, s_len);
-         consumer_str_ptr = alloc_ret ? alloc_ret->to_ui32() : 0u;
+         consumer_str_ptr = bridge_cabi_realloc(
+            *consumer->be, host, prog.consumer_realloc_idx,
+            0u, 0u, 1u, s_len);
          // Re-read provider_mem — it could be invalidated by consumer alloc
          // (but they're separate modules with separate memories, so it's fine)
          char* consumer_mem_w = consumer->be->get_context().linear_memory();
@@ -555,11 +586,9 @@ do_return_list:
       uint32_t byte_len = e_len * ip->size;
       uint32_t consumer_e_ptr = 0;
       if (byte_len > 0) {
-         auto alloc_ret = consumer->be->call_with_return(
-            host, std::string_view{"cabi_realloc"},
-            uint32_t{0}, uint32_t{0},
-            static_cast<uint32_t>(ip->align), byte_len);
-         consumer_e_ptr = alloc_ret ? alloc_ret->to_ui32() : 0u;
+         consumer_e_ptr = bridge_cabi_realloc(
+            *consumer->be, host, prog.consumer_realloc_idx,
+            0u, 0u, static_cast<uint32_t>(ip->align), byte_len);
          char* consumer_mem_w = consumer->be->get_context().linear_memory();
          std::memcpy(consumer_mem_w + consumer_e_ptr,
                      provider_mem + e_ptr, byte_len);

@@ -270,7 +270,17 @@ public:
                         const instance_policy& override_policy);
 
    // ── Instance binding (live instance as provider) ────────────────
-   void bind(instance& consumer, instance& provider,
+   // Wire a prepared module's imports to a live instance's exports.
+   // Must be called BEFORE instantiate(). The bridge entries are
+   // registered in the module's host function table; the backend
+   // resolves them at construction time.
+   //
+   // Typed (shared header available):
+   template <typename InterfaceTag>
+   void bind(module_handle& consumer_mod, instance& provider);
+
+   // Dynamic (WIT-driven, no shared header):
+   void bind(module_handle& consumer_mod, instance& provider,
              std::string_view interface_name);
 
    // ── Cache management ────────────────────────────────────────────
@@ -405,6 +415,110 @@ namespace detail_runtime {
          table, std::string_view{iface_info::name},
          std::make_index_sequence<n>{});
    }
+}
+
+// ── bind<InterfaceTag> ───────────────────────────────────────────
+// Creates bridge entries in the consumer module's host function table
+// that route calls to the provider's live instance. Uses the bridge
+// executor for complex types, direct forwarding for scalars.
+
+namespace detail_runtime {
+
+   template <typename FnPtr>
+   struct bind_fn_traits;
+
+   template <typename R, typename... Args>
+   struct bind_fn_traits<R(*)(Args...)> {
+      using ReturnType = R;
+      using ArgTypes   = ::psio::TypeList<std::remove_cvref_t<Args>...>;
+      static constexpr bool all_scalar =
+         detail::is_scalar_wasm_type_v<R> &&
+         (detail::is_scalar_wasm_type_v<std::remove_cvref_t<Args>> && ...);
+   };
+
+   // Bridge entry: forward call from consumer to provider's live backend
+   template <typename FnPtr>
+   void register_bind_entry(
+      host_function_table& table,
+      std::string_view iface_name,
+      std::string_view func_name,
+      void* provider_backend,
+      void* provider_host)
+   {
+      using Traits = bind_fn_traits<FnPtr>;
+
+      host_function_table::entry e;
+      e.module_name = std::string{iface_name};
+      e.func_name   = std::string{func_name};
+      e.signature.params.assign(16, types::i64);
+      e.signature.ret = {types::i64};
+
+      using backend_t = backend<std::nullptr_t, interpreter>;
+      auto* be_ptr = static_cast<backend_t*>(provider_backend);
+      void* host_ptr = provider_host;
+      std::string export_name{func_name};
+
+      // Forward call to provider's live backend.
+      // For all signatures: use the 16-wide flat_val convention
+      // (same as PSIO_MODULE thunks). The provider's export expects
+      // 16 i64 args regardless of the logical param count.
+      e.slow_dispatch = [be_ptr, host_ptr, export_name](
+         void*, native_value* args, char*) -> native_value
+      {
+         auto r = be_ptr->call_with_return(
+            host_ptr, std::string_view{export_name},
+            static_cast<uint64_t>(args[0].i64),
+            static_cast<uint64_t>(args[1].i64),
+            static_cast<uint64_t>(args[2].i64),
+            static_cast<uint64_t>(args[3].i64),
+            static_cast<uint64_t>(args[4].i64),
+            static_cast<uint64_t>(args[5].i64),
+            static_cast<uint64_t>(args[6].i64),
+            static_cast<uint64_t>(args[7].i64),
+            static_cast<uint64_t>(args[8].i64),
+            static_cast<uint64_t>(args[9].i64),
+            static_cast<uint64_t>(args[10].i64),
+            static_cast<uint64_t>(args[11].i64),
+            static_cast<uint64_t>(args[12].i64),
+            static_cast<uint64_t>(args[13].i64),
+            static_cast<uint64_t>(args[14].i64),
+            static_cast<uint64_t>(args[15].i64));
+         native_value rv;
+         rv.i64 = r ? r->to_ui64() : 0;
+         return rv;
+      };
+
+      table.add_entry(std::move(e));
+   }
+
+   template <typename InterfaceTag, std::size_t... Is>
+   void bind_interface_methods(
+      host_function_table& table,
+      void* provider_backend,
+      void* provider_host,
+      std::index_sequence<Is...>)
+   {
+      using info = ::psio::detail::interface_info<InterfaceTag>;
+      using func_types = typename info::func_types;
+
+      (register_bind_entry<std::tuple_element_t<Is, func_types>>(
+         table, info::name, info::func_names[Is],
+         provider_backend, provider_host), ...);
+   }
+}
+
+template <typename InterfaceTag>
+void runtime::bind(module_handle& consumer_mod, instance& provider) {
+   if (!consumer_mod || !provider) return;
+
+   using info = ::psio::detail::interface_info<InterfaceTag>;
+   constexpr auto N = info::func_names.size();
+
+   detail_runtime::bind_interface_methods<InterfaceTag>(
+      consumer_mod.table(),
+      provider.backend_ptr(),
+      provider.host_ptr(),
+      std::make_index_sequence<N>{});
 }
 
 template <typename HostImpl>

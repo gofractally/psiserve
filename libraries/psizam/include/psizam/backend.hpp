@@ -753,6 +753,21 @@ namespace psizam {
          }
       }
 
+      /// Resolve an export name to a function index (do this once at link time).
+      uint32_t resolve_export(const std::string_view& name) {
+         return mod->get_exported_function(name);
+      }
+
+      /// Call an exported function by pre-resolved index (no string lookup).
+      template <typename... Args>
+      inline auto call_by_index(void* host, uint32_t func_index, Args&&... args) {
+         if constexpr (psizam_debug) {
+            return ctx->template execute<tc_t>(host, detail::debug_visitor(*ctx), func_index, std::forward<Args>(args)...);
+         } else {
+            return ctx->template execute<tc_t>(host, detail::interpret_visitor(*ctx), func_index, std::forward<Args>(args)...);
+         }
+      }
+
       template<typename Watchdog, typename F>
       inline void timed_run(Watchdog&& wd, F&& f) {
          //timed_run_has_timed_out -- declared in signal handling code because signal handler needs to inspect it on a SEGV too -- is a thread local

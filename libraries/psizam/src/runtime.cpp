@@ -173,8 +173,8 @@ instance runtime::instantiate(const module_handle& tmpl,
    return instance{std::move(inst)};
 }
 
-void runtime::bind(instance&, instance&, std::string_view) {
-   // TODO: create bridge from consumer's imports to provider's live instance
+void runtime::bind(module_handle&, instance&, std::string_view) {
+   // TODO: dynamic WIT-driven bind (reads WIT from module, generates bridge)
 }
 
 runtime::cache_stats runtime::stats() const {

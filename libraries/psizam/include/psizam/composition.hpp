@@ -328,14 +328,20 @@ private:
       constexpr bool ret_scalar = detail::is_scalar_wasm_type_v<Ret> ||
                                   std::is_void_v<Ret>;
 
+      // Shared state for lazy export index resolution.
+      // Resolved on first call (after instantiation), cached for all subsequent.
+      auto cached_idx = std::make_shared<uint32_t>(std::numeric_limits<uint32_t>::max());
+
       if constexpr (all_args_scalar && ret_scalar) {
-         // FAST PATH: scalar-only — just forward the 16 args to provider
-         e.slow_dispatch = [provider_ptr, fn_name](
+         // FAST PATH: scalar-only — forward args, call by index
+         e.slow_dispatch = [provider_ptr, fn_name, cached_idx](
             void* host_void, native_value* args, char*) -> native_value
          {
-            char* provider_mem = provider_ptr->be->get_context().linear_memory();
-            auto r = provider_ptr->be->call_with_return(
-               host_void, std::string_view{fn_name},
+            if (*cached_idx == std::numeric_limits<uint32_t>::max())
+               *cached_idx = provider_ptr->be->resolve_export(fn_name);
+
+            auto r = provider_ptr->be->call_by_index(
+               host_void, *cached_idx,
                static_cast<uint64_t>(args[0].i64),
                static_cast<uint64_t>(args[1].i64),
                static_cast<uint64_t>(args[2].i64),
@@ -362,9 +368,14 @@ private:
          auto* prog_ptr = new bridge::bridge_program(
             bridge::compile_bridge<FnPtr>(fn_name));
 
+         // Resolve export index lazily on first call
          e.slow_dispatch = [prog_ptr, provider_ptr, consumer_ptr](
             void* host_void, native_value* args, char* consumer_memory) -> native_value
          {
+            if (!prog_ptr->has_resolved_index())
+               prog_ptr->export_index = provider_ptr->be->resolve_export(
+                  prog_ptr->export_name);
+
             return bridge::execute_bridge<Host, BackendKind>(
                *prog_ptr, consumer_ptr, provider_ptr,
                host_void, args, consumer_memory);
