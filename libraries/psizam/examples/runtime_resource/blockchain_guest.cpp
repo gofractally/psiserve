@@ -1,63 +1,58 @@
 // blockchain_guest.cpp — the blockchain process WASM.
 //
-// Imports wasm_runtime, module_store, env from the host.
-// Gets contract WASM bytes from module_store (string return),
-// loads into runtime, instantiates, calls add.
+// Uses name_id for all identifiers. Resolves export indices once
+// at setup, calls by integer index — no string lookup on hot path.
 
 #include "shared.hpp"
 #include <psio/guest_alloc.hpp>
 #include <psizam/module.hpp>
-
-#include <string.h>
 
 PSIO_WIT_SECTION(blockchain)
 PSIO_WIT_SECTION(wasm_runtime)
 PSIO_WIT_SECTION(module_store)
 PSIO_WIT_SECTION(env)
 
-// ── Import thunks (canonical — string args or returns) ─────────────
-PSIO_IMPORT_IMPL(wasm_runtime, load_module, call)
+// ── Import thunks ──────────────────────────────────────────────────
+PSIO_IMPORT_IMPL(wasm_runtime, load_module)
 PSIO_IMPORT_IMPL(module_store, get_module)
 PSIO_IMPORT_IMPL(env, log)
 
 uint32_t wasm_runtime::load_module(std::string_view wasm_bytes)
    PSIO_IMPORT_IMPL_BODY(wasm_runtime, load_module, wasm_bytes)
 
-uint64_t wasm_runtime::call(uint32_t instance_handle,
-                            std::string_view func_name,
-                            uint64_t arg0, uint64_t arg1)
-   PSIO_IMPORT_IMPL_BODY(wasm_runtime, call,
-                         instance_handle, func_name, arg0, arg1)
-
-wit::string module_store::get_module(std::string_view name)
+wit::string module_store::get_module(psio::name_id name)
    PSIO_IMPORT_IMPL_BODY(module_store, get_module, name)
 
 void env::log(std::string_view msg)
    PSIO_IMPORT_IMPL_BODY(env, log, msg)
 
-// wasm_runtime scalar methods use PSIO_IMPORT (natural signature)
+// Scalar imports — natural WASM signature via PSIO_IMPORT
 
 // ── Blockchain implementation ──────────────────────────────────────
 
 struct blockchain_impl
 {
-   uint64_t run_contract(std::string_view contract_name,
+   uint64_t run_contract(psio::name_id contract_name,
                          uint64_t arg0, uint64_t arg1)
    {
       env::log("blockchain: fetching contract bytes");
 
-      // Get contract WASM bytes from module_store (string return!)
+      // Get contract WASM bytes by name (u64, one flat_val — no string)
       auto wasm_bytes = module_store::get_module(contract_name);
 
       env::log("blockchain: loading into runtime");
-      auto mod = wasm_runtime::load_module(
-         std::string_view{wasm_bytes.data(), wasm_bytes.size()});
+      auto mod = wasm_runtime::load_module(wasm_bytes.view());
 
       env::log("blockchain: instantiating");
       auto inst = wasm_runtime::instantiate(mod);
 
-      env::log("blockchain: calling add");
-      auto result = wasm_runtime::call(inst, "add", arg0, arg1);
+      // Resolve "add" to an integer index — ONCE
+      using namespace psio::literals;
+      auto add_idx = wasm_runtime::resolve_export(inst, "add"_n);
+
+      env::log("blockchain: calling by index");
+      // Call by integer index — no string lookup
+      auto result = wasm_runtime::call_by_index(inst, add_idx, arg0, arg1);
 
       wasm_runtime::destroy_instance(inst);
       wasm_runtime::destroy_module(mod);

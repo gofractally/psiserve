@@ -55,8 +55,12 @@ constexpr bool is_scalar_wasm_type_v = [] {
       return true;
    else if constexpr (std::is_integral_v<T>)
       return sizeof(T) <= 8;
+   else if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>)
+      return true;
+   else if constexpr (wasm_type_traits<std::decay_t<T>>::is_wasm_type)
+      return true;
    else
-      return std::is_same_v<T, float> || std::is_same_v<T, double>;
+      return false;
 }();
 
 // Member-pointer decomposition for checking method signatures

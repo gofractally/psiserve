@@ -426,3 +426,20 @@ inline namespace literals
 }
 
 } // namespace psio
+
+// ── wasm_type_traits specialization ────────────────────────────────
+// Makes name_id pass as a single i64 through psizam's host function
+// dispatch. Forward-declares the primary template (defined in
+// psizam/host_function.hpp) so the specialization is visible to any
+// TU that includes name.hpp before host_function.hpp.
+namespace psizam {
+   template<typename T, typename> struct wasm_type_traits;
+
+   template<>
+   struct wasm_type_traits<psio::name_id, void> {
+      static constexpr bool is_wasm_type = true;
+      using wasm_type = uint64_t;
+      static constexpr uint64_t      unwrap(psio::name_id n) { return n.value; }
+      static constexpr psio::name_id wrap(uint64_t v)        { return psio::name_id{v}; }
+   };
+} // namespace psizam
