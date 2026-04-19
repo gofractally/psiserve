@@ -21,6 +21,7 @@ build.ninja
 # IDE / Editor
 .vscode/
 .idea/
+.cache/
 *.swp
 *.swo
 *~
