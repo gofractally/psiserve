@@ -8,20 +8,33 @@ Clone the private tasks repo as a sibling to this repo:
 git clone git@github.com:bytemaster/psiserve-tasks.git ../psiserve-tasks
 ```
 
-Then verify your git identity is set correctly before making any commits:
+Verify your git identity is set correctly before making any commits:
 
 ```bash
 git config --global user.name "Daniel Larimer"
 git config --global user.email "dan@fractally.com"
 ```
 
+Create a `.agent` file at the root of this checkout containing your
+agent name (single line, no quotes, no trailing newline-fuss):
+
+```bash
+echo "agent0" > .agent          # or whatever name you were assigned
+```
+
+`.agent` is gitignored — it's local to this checkout and identifies
+which agent is running here. Every agent reads this file on startup to
+know its name, then looks up its assignment at
+`../psiserve-tasks/.agents/<name>.md`.
+
 ## Your Assignment
 
-1. Find your agent file: `../psiserve-tasks/.agents/<your-agent-name>.md`
-2. Read your current assignment and coordinator notes there
-3. Follow the issue slug to `.issues/<slug>.md` in this repo for full context and acceptance criteria
-4. Update the `## Agent Status` section in your agent file as you complete work
-5. Push your status updates: `git -C ../psiserve-tasks add -A && git -C ../psiserve-tasks commit -m "status update" && git -C ../psiserve-tasks push`
+1. Read `.agent` in this checkout to get your name.
+2. Find your agent file: `../psiserve-tasks/.agents/<name>.md` (where `<name>` is from `.agent`).
+3. Read your current assignment and coordinator notes there.
+4. Follow the issue slug to `.issues/<slug>.md` in this repo for full context and acceptance criteria.
+5. Update the `## Agent Status` section in your agent file as you complete work.
+6. Push your status updates: `git -C ../psiserve-tasks add -A && git -C ../psiserve-tasks commit -m "status update" && git -C ../psiserve-tasks push`
 
 ## Creating New Issues
 

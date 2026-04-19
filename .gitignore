@@ -30,6 +30,9 @@ build.ninja
 # Claude Code
 .claude/scheduled_tasks.lock
 
+# Per-checkout agent identity — see TASKS.md
+.agent
+
 # Certificates / keys
 certs/
 
