@@ -582,28 +582,32 @@ instead of asserting (commit `7565fa1`), so a corrupted ctx doesn't
 auto-silence the bug in release builds — but this still reports a
 memory trap outcome.
 
-### jit2 dest-jmpbuf clobbered under deep `try_table` (9677)
+### ~~jit2 dest-jmpbuf clobbered under deep `try_table` (9677)~~ — fixed
 
-**Status:** open — 1 reproducer remaining after commit `371db25`.
+**Status:** fixed — resolved by the 0-catch try_table fix (commit
+`b2ee2f7`). Full fuzzer pass on seed 1776497367 (10K modules) now
+shows 0 mismatches, 0 crashes. The module's deep `try_table` nesting
+included 0-catch try_tables whose unmatched `eh_leave` corrupted the
+EH stack, which cascaded into jmpbuf corruption. With 0-catch
+try_tables no longer marked as `is_try_table`, the EH stack stays
+consistent and the jmpbuf is never overwritten.
+
+Previous analysis (kept for context):
 
 **Reproducer.** `mismatch_9677_seed1776497367.wasm` (939 B).
 interpreter/jit/jit_llvm report `interp_trap (unreachable)` cleanly;
-jit2 now SEGVs inside `__longjmp` at `jmp *%rdx` with demangled PC
-pointing into random memory. Previously (before 371db25) the same
-module surfaced as `memory_trap` via the same rsi-corruption path
-fixed there — but 8e74d64's signal-handler PC classification masked
-it as `interp_trap`. With the root cause removed, the residual bug is
-exposed.
+jit2 previously SEGVed inside `__longjmp` at `jmp *%rdx` with
+demangled PC pointing into random memory.
 
-**Symptom.** `signal_throw(wasm_interpreter_exception{"unreachable"})`
-does `longjmp(*trap_jmp_ptr, -1)` where `trap_jmp_ptr` points to
+**Symptom was.** `signal_throw(wasm_interpreter_exception{"unreachable"})`
+did `longjmp(*trap_jmp_ptr, -1)` where `trap_jmp_ptr` pointed to
 `dest` in `invoke_with_signal_handler`'s frame. At the point of the
-longjmp, memory at `dest`'s address no longer contains the mangled
-register snapshot that `setjmp` wrote — it contains heap-pointer
+longjmp, memory at `dest`'s address no longer contained the mangled
+register snapshot that `setjmp` wrote — it contained heap-pointer
 data (looks like vector or `jit_eh_frame` contents). `__longjmp`
-demangles PC from the corrupted slot and jumps to garbage.
+demangled PC from the corrupted slot and jumped to garbage.
 
-**Hypothesis.** `stack_allocator` only allocates a separate native
+**Previous hypothesis.** `stack_allocator` only allocates a separate native
 stack when `min_size > 4MB`. For small functions it returns
 `top() == nullptr`, and the JIT runs on the same native stack as
 `invoke_with_signal_handler`. The JIT's local body (via spill slots,
