@@ -783,6 +783,83 @@ namespace psizam::detail {
          }
       }
 
+      // ──────── Gas metering ────────
+
+      // Three-way gas charge emission mirroring aarch64.hpp::emit_gas_charge.
+      // Unlike jit1, no patching is needed — codegen runs after the parser
+      // accumulates heavy-op extras, so the final cost is known at emit time.
+      void emit_gas_charge(int64_t cost) {
+         using ctx_t = jit_execution_context<false>;
+         const uint32_t strategy_off = static_cast<uint32_t>(ctx_t::gas_strategy_offset());
+         const uint32_t atomic_off   = static_cast<uint32_t>(ctx_t::gas_atomic_offset());
+         const uint32_t counter_off  = static_cast<uint32_t>(ctx_t::gas_counter_offset());
+
+         // LDRB W8, [X19, #strategy_off]
+         emit32(0x39400268u | ((strategy_off & 0xFFF) << 10));
+         auto* cbz_done_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x34000008u); // CBZ W8, done (patched)
+
+         // LDRB W8, [X19, #atomic_off]
+         emit32(0x39400268u | ((atomic_off & 0xFFF) << 10));
+         auto* cbnz_helper_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x35000008u); // CBNZ W8, helper_path (patched)
+
+         // Inline non-atomic fast path
+         // LDR X8, [X19, #counter_off]
+         PSIZAM_ASSERT((counter_off & 7) == 0 && (counter_off / 8) < 4096,
+                        wasm_interpreter_exception, "counter offset outside LDR range");
+         emit32(0xF9400268u | (((counter_off / 8) & 0xFFF) << 10));
+         const uint64_t ucost = static_cast<uint64_t>(cost);
+         if (cost > 0 && ucost <= 4095) {
+            // SUBS X8, X8, #imm12
+            emit32(0xF1000108u | (static_cast<uint32_t>(ucost) << 10));
+         } else {
+            emit_mov_imm64(X16, ucost);
+            // SUBS X8, X8, X16
+            emit32(0xEB100108u);
+         }
+         // STR X8, [X19, #counter_off]
+         emit32(0xF9000268u | (((counter_off / 8) & 0xFFF) << 10));
+         // B.PL done (cond=0101)
+         auto* bpl_done_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x54000005u); // patched
+
+         // Slow path: call __psizam_gas_exhausted_check(ctx)
+         emit32(0xAA1303E0u); // MOV X0, X19
+         emit_push(X19); emit_push(X20);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_gas_exhausted_check));
+         emit32(0xD63F0100u); // BLR X8
+         emit_pop(X20); emit_pop(X19);
+         auto* b_done_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x14000000u); // B done (patched)
+
+         // helper_path: atomic via __psizam_gas_charge(ctx, cost)
+         auto* helper_path_target = reinterpret_cast<uint8_t*>(code);
+         emit32(0xAA1303E0u); // MOV X0, X19
+         emit_mov_imm64(X1, static_cast<uint64_t>(cost));
+         emit_push(X19); emit_push(X20);
+         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_gas_charge));
+         emit32(0xD63F0100u); // BLR X8
+         emit_pop(X20); emit_pop(X19);
+
+         // done:
+         auto* done_target = reinterpret_cast<uint8_t*>(code);
+
+         // Patch forward branches
+         auto patch_cb = [](uint8_t* pos, ptrdiff_t delta, uint32_t base) {
+            uint32_t insn = base | ((delta & 0x7FFFF) << 5);
+            std::memcpy(pos, &insn, 4);
+         };
+         patch_cb(cbz_done_pos,    (done_target - cbz_done_pos) / 4,            0x34000008u);
+         patch_cb(cbnz_helper_pos, (helper_path_target - cbnz_helper_pos) / 4,  0x35000008u);
+         patch_cb(bpl_done_pos,    (done_target - bpl_done_pos) / 4,            0x54000005u);
+         {
+            ptrdiff_t delta = (done_target - b_done_pos) / 4;
+            uint32_t insn = 0x14000000u | (delta & 0x03FFFFFFu);
+            std::memcpy(b_done_pos, &insn, 4);
+         }
+      }
+
       // ──────── Function prologue/epilogue ────────
 
       void emit_function_prologue(ir_function& func) {
@@ -790,6 +867,9 @@ namespace psizam::detail {
          emit32(0xA9BF7BFD);
          // MOV X29, SP
          emit32(0x910003FD);
+
+         emit_gas_charge(static_cast<int64_t>(_mod.code[func.func_index].wasm_body_bytes)
+                         + func.prologue_gas_extra);
 
          // Count body local slots, accounting for v128 locals using 2 slots (16 bytes)
          uint32_t body_local_slots = 0;
@@ -1140,10 +1220,10 @@ namespace psizam::detail {
                }
                _block_fixups[block_idx] = nullptr;
             }
-            // TODO: gas metering on jit2 aarch64. This backend never
-            // received a Phase 2a/3 emit_gas_charge hook at function
-            // prologue either — both function-entry and loop-header
-            // metering need to land together on a dedicated pass.
+            if (_cur_func && _cur_func->blocks &&
+                _cur_func->blocks[block_idx].is_loop) {
+               emit_gas_charge(1 + _cur_func->blocks[block_idx].loop_gas_extra);
+            }
          }
       }
 
@@ -1172,11 +1252,19 @@ namespace psizam::detail {
          return branch;
       }
 
-      void emit_v128_br_adjust(uint32_t target_block) {
+      void emit_v128_br_adjust(uint32_t target_block, uint32_t result_v128_bytes = 0) {
          if (target_block < _num_blocks && _block_has_start[target_block]) {
-            uint32_t target_depth = _block_v128_sp[target_block];
+            uint32_t target_depth = _block_v128_sp[target_block] + result_v128_bytes;
             if (_v128_sp_bytes > target_depth) {
-               emit_add_imm(SP, SP, _v128_sp_bytes - target_depth);
+               uint32_t excess = _v128_sp_bytes - target_depth;
+               if (result_v128_bytes > 0) {
+                  // v128 result at TOS must survive; compact the stack
+                  for (uint32_t off = 0; off < result_v128_bytes; off += 16) {
+                     emit_ldr_offset(X0, SP, off);
+                     emit_str_offset(X0, SP, off + excess);
+                  }
+               }
+               emit_add_imm(SP, SP, excess);
             }
          }
       }
@@ -1845,6 +1933,7 @@ namespace psizam::detail {
          }
          case ir_op::br: {
             uint32_t eh_count = inst.dest >> 16;
+            uint32_t br_v128 = (inst.type == types::v128) ? 32 : 0;
             auto emit_eh_leaves = [&]() {
                for (uint32_t i = 0; i < eh_count; ++i) {
                   emit_mov_reg(X0, X19);
@@ -1856,7 +1945,7 @@ namespace psizam::detail {
                if (is_default) {
                   emit_pop(X0); // discard index
                   emit_eh_leaves();
-                  emit_v128_br_adjust(inst.br.target);
+                  emit_v128_br_adjust(inst.br.target, br_v128);
                   emit_branch_to_block(func, inst.br.target);
                   _in_br_table = false;
                } else {
@@ -1865,33 +1954,42 @@ namespace psizam::detail {
                   void* skip = emit_cond_branch_placeholder(COND_NE);
                   emit_pop(X0); // pop index
                   emit_eh_leaves();
-                  emit_v128_br_adjust(inst.br.target);
+                  emit_v128_br_adjust(inst.br.target, br_v128);
                   emit_branch_to_block(func, inst.br.target);
                   fix_branch(skip, code);
                   _br_table_case++;
                }
             } else {
                emit_eh_leaves();
-               emit_v128_br_adjust(inst.br.target);
+               emit_v128_br_adjust(inst.br.target, br_v128);
                emit_branch_to_block(func, inst.br.target);
             }
             break;
          }
          case ir_op::br_if: {
             uint32_t eh_count = inst.dest >> 16;
+            uint32_t br_v128 = (inst.type == types::v128) ? 32 : 0;
             load_vreg_x0(inst.br.src1);
             emit_cmp_imm32(X0, 0);
-            uint32_t v128_delta = 0;
-            if (inst.br.target < _num_blocks && _block_has_start[inst.br.target] && _v128_sp_bytes > _block_v128_sp[inst.br.target])
-               v128_delta = _v128_sp_bytes - _block_v128_sp[inst.br.target];
-            if (eh_count > 0 || v128_delta > 0) {
+            uint32_t target_depth = 0;
+            if (inst.br.target < _num_blocks && _block_has_start[inst.br.target])
+               target_depth = _block_v128_sp[inst.br.target] + br_v128;
+            uint32_t v128_delta = (_v128_sp_bytes > target_depth) ? _v128_sp_bytes - target_depth : 0;
+            if (eh_count > 0 || v128_delta > 0 || (br_v128 > 0 && _v128_sp_bytes > target_depth)) {
                void* skip = emit_cond_branch_placeholder(COND_EQ);
                for (uint32_t i = 0; i < eh_count; ++i) {
                   emit_mov_reg(X0, X19);
                   emit_eh_runtime_call_a64(reinterpret_cast<void*>(&__psizam_eh_leave));
                }
-               if (v128_delta > 0)
+               if (v128_delta > 0) {
+                  if (br_v128 > 0) {
+                     for (uint32_t off = 0; off < br_v128; off += 16) {
+                        emit_ldr_offset(X0, SP, off);
+                        emit_str_offset(X0, SP, off + v128_delta);
+                     }
+                  }
                   emit_add_imm(SP, SP, v128_delta);
+               }
                emit_branch_to_block(func, inst.br.target);
                fix_branch(skip, code);
             } else {
