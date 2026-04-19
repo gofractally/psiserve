@@ -104,6 +104,15 @@ if(WASI_LINK_STUBS AND WASI_LLVM_STUBS_DIR)
    set(CMAKE_EXE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT} -L${WASI_LLVM_STUBS_DIR} -lwasi_llvm_stubs")
 endif()
 
+# Opt-in link against mimalloc ahead of wasi-libc's dlmalloc. mimalloc
+# provides strong malloc/free/realloc/calloc/aligned_alloc/posix_memalign
+# symbols that the linker resolves before walking further right, so as
+# long as -lmimalloc appears before -lc, mimalloc wins every malloc call.
+# wasi-libc's dlmalloc then becomes dead code (DCE'd by wasm-ld).
+if(WASI_LINK_MIMALLOC AND WASI_MIMALLOC_DIR)
+   set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${WASI_MIMALLOC_DIR} -lmimalloc ${CMAKE_EXE_LINKER_FLAGS_INIT}")
+endif()
+
 # ---------- cmake behavior ----------
 
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)

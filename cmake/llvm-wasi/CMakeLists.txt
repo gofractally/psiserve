@@ -41,6 +41,27 @@ option(LLVM_WASI_BUILD_CLANG "Also build clang.wasm + wasm-ld.wasm for the sourc
 # Optional: path to a pre-built host clang-tblgen (skips host build for clang)
 set(CLANG_HOST_TBLGEN "" CACHE FILEPATH "Path to host clang-tblgen binary (optional, skips host build)")
 
+# LTO mode for the WASI cross-build. ThinLTO across LLVM's ~500 .cpp files
+# cuts clang.wasm's static size and working-set materially — the default
+# MinSizeRel build leaves a lot of never-inlined template instantiations
+# and duplicated small functions across .a archives. Options: OFF, Thin,
+# Full. Full is slower to link and (empirically) not much better than Thin
+# for LLVM itself. Set to OFF for fast iteration.
+set(LLVM_WASI_LTO "Thin" CACHE STRING "LTO mode for WASI-targeted LLVM/clang (OFF, Thin, Full)")
+set_property(CACHE LLVM_WASI_LTO PROPERTY STRINGS OFF Thin Full)
+
+# Swap wasi-libc's default dlmalloc for mimalloc on the wasm clang/lld
+# binaries. dlmalloc fragments badly under clang's long-running, mixed-size
+# allocation pattern (AST + IR + analysis passes), which pushes the wasm
+# linear memory past 4 GB on non-trivial C++ compiles. mimalloc's segregated
+# free lists + page reclaim keep the working set much tighter. OFF means
+# keep wasi-libc's bundled malloc.
+option(LLVM_WASI_USE_MIMALLOC "Link mimalloc ahead of wasi-libc's malloc in clang.wasm / wasm-ld.wasm" ON)
+set(MIMALLOC_VERSION "2.2.1" CACHE STRING "mimalloc version when LLVM_WASI_USE_MIMALLOC=ON")
+set(MIMALLOC_URL
+    "https://github.com/microsoft/mimalloc/archive/refs/tags/v${MIMALLOC_VERSION}.tar.gz"
+    CACHE STRING "URL to mimalloc source tarball")
+
 # ---------- download LLVM source ----------
 
 message(STATUS "Downloading LLVM ${LLVM_VERSION} source...")
@@ -152,6 +173,9 @@ set(_LLVM_WASI_ARGS
    -DLLVM_ENABLE_PEDANTIC=OFF
    -DLLVM_ENABLE_WARNINGS=OFF
 )
+if(NOT LLVM_WASI_LTO STREQUAL "OFF")
+   list(APPEND _LLVM_WASI_ARGS -DLLVM_ENABLE_LTO=${LLVM_WASI_LTO})
+endif()
 
 # Determine dependencies
 if(TARGET llvm-host)
@@ -272,6 +296,49 @@ ExternalProject_Add(wasi-llvm-stubs
 # host llvm-tblgen.
 if(LLVM_WASI_BUILD_CLANG)
 
+   # ---------- Optional: mimalloc for wasm32-wasip1 ----------
+   #
+   # clang does a lot of small, mixed-size, long-lived allocations (AST
+   # nodes, IR, pass state). wasi-libc's bundled dlmalloc fragments badly
+   # under that workload — enough that a hello-world with #include <string>
+   # pushes the linear memory past the 4 GB wasm32 ceiling on non-trivial
+   # C++. mimalloc's segregated free lists + page-level reclaim keep the
+   # working set tight. We cross-compile the library once, then the
+   # toolchain file links it ahead of libc.a for clang-wasi and wasm-ld.
+   set(_MIMALLOC_LIB_DIR "")
+   if(LLVM_WASI_USE_MIMALLOC)
+      set(_MIMALLOC_PREFIX "${CMAKE_BINARY_DIR}/mimalloc-install")
+      set(_MIMALLOC_LIB_DIR "${_MIMALLOC_PREFIX}/lib")
+      # ExternalProject_Add handles download + extract + cross-configure +
+      # build + install in one go. No configure-time populate required.
+      ExternalProject_Add(mimalloc-wasi
+         URL          "${MIMALLOC_URL}"
+         PREFIX       "${CMAKE_BINARY_DIR}/mimalloc"
+         BINARY_DIR   "${CMAKE_BINARY_DIR}/mimalloc-build"
+         INSTALL_DIR  "${_MIMALLOC_PREFIX}"
+         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+         CMAKE_ARGS
+            -DCMAKE_TOOLCHAIN_FILE=${WASI_TOOLCHAIN_FILE}
+            -DCMAKE_INSTALL_PREFIX=${_MIMALLOC_PREFIX}
+            -DCMAKE_BUILD_TYPE=Release
+            # WASI: no threads, no TLS, no _Atomic pthread, no siginfo.
+            -DMI_BUILD_SHARED=OFF
+            -DMI_BUILD_STATIC=ON
+            -DMI_BUILD_TESTS=OFF
+            -DMI_BUILD_OBJECT=OFF
+            -DMI_USE_CXX=OFF
+            -DMI_OVERRIDE=OFF
+            -DMI_LIBC_MUSL=ON
+            -DMI_OPT_ARCH=OFF
+            -DMI_NO_THP=ON
+            -DMI_WIN_REDIRECT=OFF
+            # mimalloc wants mmap; wasi-libc supplies it via _WASI_EMULATED_MMAN
+            # (toolchain file already adds -lwasi-emulated-mman).
+            "-DCMAKE_C_FLAGS=-D_WASI_EMULATED_MMAN -DMI_OSX_ZONE=0 -DMI_PADDING=0 -DMI_DEBUG=0"
+      )
+   endif()
+
+
    # clang needs its own tblgen host binary (clang-tblgen).
    if(CLANG_HOST_TBLGEN)
       set(_HOST_CLANG_TBLGEN "${CLANG_HOST_TBLGEN}")
@@ -372,8 +439,19 @@ if(LLVM_WASI_BUILD_CLANG)
       -DLLVM_ENABLE_PEDANTIC=OFF
       -DLLVM_ENABLE_WARNINGS=OFF
    )
+   if(NOT LLVM_WASI_LTO STREQUAL "OFF")
+      list(APPEND _CLANG_WASI_ARGS -DLLVM_ENABLE_LTO=${LLVM_WASI_LTO})
+   endif()
+   if(LLVM_WASI_USE_MIMALLOC)
+      list(APPEND _CLANG_WASI_ARGS
+         -DWASI_LINK_MIMALLOC=ON
+         -DWASI_MIMALLOC_DIR=${_MIMALLOC_LIB_DIR})
+   endif()
 
    set(_CLANG_WASI_DEPS wasi-llvm-stubs)
+   if(LLVM_WASI_USE_MIMALLOC)
+      list(APPEND _CLANG_WASI_DEPS mimalloc-wasi)
+   endif()
    if(TARGET llvm-host)
       list(APPEND _CLANG_WASI_DEPS llvm-host)
    endif()
