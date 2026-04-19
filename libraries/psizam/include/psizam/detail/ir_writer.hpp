@@ -411,6 +411,18 @@ namespace psizam::detail {
             _opt_scratch_alloc.use_default_memory();
 #endif
             _codegen.emplace(_allocator, _mod, _codegen_scratch, _enable_backtrace, _stack_limit_is_bytes);
+            // Apply caller-requested fp_mode BEFORE emitting entry/handlers.
+            // Default in the codegen is fp_mode::softfloat, which bakes raw
+            // (unrelocated) pointers to _psizam_f32_* / _psizam_f64_* helpers
+            // into every FP op — fine for in-process JIT, fatal for AOT where
+            // those addresses are stale at load time. AOT callers (pzam-compile)
+            // pass softfloat=false via pzam_compile_result so we emit native FP
+            // instructions instead.
+            if (_compile_result) {
+               _codegen->set_fp_mode(_compile_result->softfloat
+                                     ? fp_mode::softfloat
+                                     : fp_mode::fast);
+            }
             _codegen->emit_entry_and_error_handlers();
          }
       }
