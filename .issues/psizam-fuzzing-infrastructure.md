@@ -1,5 +1,5 @@
 ---
-id: "0005"
+id: psizam-fuzzing-infrastructure
 title: psizam differential fuzzing infrastructure (libFuzzer)
 status: in-progress
 priority: high
@@ -8,7 +8,7 @@ agent: psiserve-agent3
 branch: main
 created: 2026-04-19
 depends_on: []
-blocks: ["0010"]
+blocks: [psizam-eh-v2-fuzzing]
 ---
 
 ## Description

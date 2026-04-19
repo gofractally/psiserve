@@ -1,5 +1,5 @@
 ---
-id: "0015"
+id: psizam-memory-sandboxing-modes
 title: psizam memory sandboxing modes (guarded / checked / unchecked)
 status: ready
 priority: high
@@ -7,7 +7,7 @@ area: psizam
 agent: psiserve-agent3
 branch: ~
 created: 2026-04-19
-depends_on: ["0006"]
+depends_on: [psizam-jit2-segfault-fixes]
 blocks: []
 ---
 

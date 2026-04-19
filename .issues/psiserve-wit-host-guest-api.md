@@ -1,5 +1,5 @@
 ---
-id: "0012"
+id: psiserve-wit-host-guest-api
 title: psiserve WIT host/guest API for database access
 status: backlog
 priority: high
@@ -7,8 +7,8 @@ area: psiserve, psio
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0002", "0011"]
-blocks: ["0013", "0014"]
+depends_on: [psiserve-psitri-integration, psio-dynamic-schema-validation]
+blocks: [psiserve-virtual-db-config, psiserve-snapshot-api]
 ---
 
 ## Description

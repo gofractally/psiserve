@@ -1,5 +1,5 @@
 ---
-id: "0004"
+id: psizam-gas-metering
 title: psizam gas metering (instruction-count-based, consensus-safe)
 status: in-progress
 priority: high

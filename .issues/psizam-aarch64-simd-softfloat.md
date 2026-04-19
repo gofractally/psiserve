@@ -1,5 +1,5 @@
 ---
-id: "0007"
+id: psizam-aarch64-simd-softfloat
 title: psizam aarch64 JIT SIMD softfloat (consensus divergence fix)
 status: backlog
 priority: high
@@ -7,7 +7,7 @@ area: psizam
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0006"]
+depends_on: [psizam-jit2-segfault-fixes]
 blocks: []
 ---
 

@@ -1,5 +1,5 @@
 ---
-id: "0009"
+id: psizam-externref-globals-crash
 title: psizam externref globals crash in JIT backend (DoS vector)
 status: backlog
 priority: high
@@ -7,7 +7,7 @@ area: psizam
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0006"]
+depends_on: [psizam-jit2-segfault-fixes]
 blocks: []
 ---
 

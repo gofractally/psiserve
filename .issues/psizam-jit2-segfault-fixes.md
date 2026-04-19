@@ -1,5 +1,5 @@
 ---
-id: "0006"
+id: psizam-jit2-segfault-fixes
 title: psizam jit2 segfault and memory-safety fixes
 status: in-progress
 priority: critical
@@ -7,7 +7,7 @@ area: psizam
 agent: psiserve-agent3
 branch: main
 created: 2026-04-19
-depends_on: ["0005"]
+depends_on: [psizam-fuzzing-infrastructure]
 blocks: []
 ---
 

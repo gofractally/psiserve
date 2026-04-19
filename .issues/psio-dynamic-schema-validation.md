@@ -1,5 +1,5 @@
 ---
-id: "0011"
+id: psio-dynamic-schema-validation
 title: psio dynamic binary validation against schema (FracPack + others)
 status: backlog
 priority: medium
@@ -8,7 +8,7 @@ agent: ~
 branch: ~
 created: 2026-04-19
 depends_on: []
-blocks: ["0012"]
+blocks: [psiserve-wit-host-guest-api]
 ---
 
 ## Description

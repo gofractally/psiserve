@@ -1,5 +1,5 @@
 ---
-id: "0016"
+id: psio-wit-resource-drop-specializations
 title: Wire wit_resource_drop specializations for all WIT resources (host + guest)
 status: ready
 priority: high
@@ -8,7 +8,7 @@ agent: ~
 branch: ~
 created: 2026-04-19
 depends_on: []
-blocks: ["0012"]
+blocks: [psiserve-wit-host-guest-api]
 ---
 
 ## Description

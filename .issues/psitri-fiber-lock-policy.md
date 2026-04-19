@@ -1,5 +1,5 @@
 ---
-id: "0001"
+id: psitri-fiber-lock-policy
 title: Pluggable lock policy for fiber-aware consumers
 status: done
 priority: high
@@ -9,7 +9,7 @@ branch: feature/pluggable-lock-policy
 created: 2026-04-19
 closed: 2026-04-19
 depends_on: []
-blocks: ["0002"]
+blocks: [psiserve-psitri-integration]
 ---
 
 ## Description

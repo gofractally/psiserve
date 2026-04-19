@@ -1,5 +1,5 @@
 ---
-id: "0002"
+id: psiserve-psitri-integration
 title: Expose psitri database to wasm instances via psiserve (psi-api)
 status: in-progress
 priority: high
@@ -7,8 +7,8 @@ area: psiserve, psitri
 agent: psiserve-agent2
 branch: main
 created: 2026-04-19
-depends_on: ["0001"]
-blocks: ["0012"]
+depends_on: [psitri-fiber-lock-policy]
+blocks: [psiserve-wit-host-guest-api]
 ---
 
 ## Description

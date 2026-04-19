@@ -1,5 +1,5 @@
 ---
-id: "0014"
+id: psiserve-snapshot-api
 title: psiserve snapshot API for blockchain state
 status: backlog
 priority: medium
@@ -7,7 +7,7 @@ area: psiserve, psitri
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0012"]
+depends_on: [psiserve-wit-host-guest-api]
 blocks: []
 ---
 

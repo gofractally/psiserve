@@ -19,9 +19,19 @@ git config --global user.email "dan@fractally.com"
 
 1. Find your agent file: `../psiserve-tasks/.agents/<your-agent-name>.md`
 2. Read your current assignment and coordinator notes there
-3. Follow the issue ID to `.issues/<id>-*.md` in this repo for full context and acceptance criteria
+3. Follow the issue slug to `.issues/<slug>.md` in this repo for full context and acceptance criteria
 4. Update the `## Agent Status` section in your agent file as you complete work
 5. Push your status updates: `git -C ../psiserve-tasks add -A && git -C ../psiserve-tasks commit -m "status update" && git -C ../psiserve-tasks push`
+
+## Creating New Issues
+
+To avoid conflicts between agents on different machines:
+
+1. **Always `git pull` first** before adding a new issue file
+2. **Use a descriptive slug** for the filename (kebab-case, no numbers)
+3. **Cite issues by relative path** (e.g. `.issues/psio-wit-resource-drop-specializations.md`),
+   not by number — numbers do not exist in this tracker
+4. **Frontmatter** uses slugs for `id`, `depends_on`, and `blocks`
 
 ## Building
 

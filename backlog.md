@@ -2,42 +2,64 @@
 
 Last updated: 2026-04-19
 
+## Issue Conventions
+
+- **No numeric IDs.** Each issue is a markdown file at `.issues/<slug>.md`.
+  Sequential numbers race between agents; slugs do not.
+- **Cite issues by relative path**, not by number. Example: `.issues/psio-wit-resource-drop-specializations.md`.
+- **Before creating a new issue**: `git pull` first, check for a similar
+  existing issue, then add a new file with a descriptive slug.
+- **Dependency fields** in frontmatter (`depends_on`, `blocks`) use slugs
+  matching the filename without `.md`.
+
 ## Status Key
 `done` | `in-progress` | `ready` | `backlog` | `blocked`
 
 ## Issue Index
 
-| ID | Title | Status | Priority | Area | Agent | Blocks |
-|----|-------|--------|----------|------|-------|--------|
-| [0001](.issues/0001-psitri-fiber-lock-policy.md) | psitri fiber lock policy | done | high | psitri | agent2 | 0002 |
-| [0002](.issues/0002-psiserve-psitri-integration.md) | psiserve psitri integration / psi-api | in-progress | high | psiserve,psitri | agent2 | 0012 |
-| [0003](.issues/0003-psizam-llvm-wasi-toolchain.md) | psizam LLVM-WASI toolchain (ThinLTO, mimalloc, web-IDE) | in-progress | medium | psizam | agent-psio | — |
-| [0004](.issues/0004-psizam-gas-metering.md) | psizam gas metering (consensus-safe) | in-progress | high | psizam | agent-psio | — |
-| [0005](.issues/0005-psizam-fuzzing-infrastructure.md) | psizam differential fuzzing (libFuzzer) | in-progress | high | psizam | agent3 | 0010 |
-| [0006](.issues/0006-psizam-jit2-segfault-fixes.md) | psizam jit2 segfault / memory-safety fixes | in-progress | critical | psizam | agent3 | — |
-| [0007](.issues/0007-psizam-aarch64-simd-softfloat.md) | psizam aarch64 SIMD softfloat (consensus divergence) | backlog | high | psizam | — | — |
-| [0008](.issues/0008-psizam-multi-module-linking.md) | psizam multi-module linking | backlog | medium | psizam | — | — |
-| [0009](.issues/0009-psizam-externref-globals-crash.md) | psizam externref globals crash (DoS) | backlog | high | psizam | — | — |
-| [0010](.issues/0010-psizam-eh-v2-fuzzing.md) | psizam EH v2 differential fuzzing | backlog | medium | psizam | — | — |
-| [0011](.issues/0011-psio-dynamic-schema-validation.md) | psio dynamic schema validation (FracPack+) | backlog | medium | psio | — | 0012 |
-| [0012](.issues/0012-psiserve-wit-host-guest-api.md) | psiserve WIT host/guest DB API | backlog | high | psiserve,psio | — | 0013,0014 |
-| [0013](.issues/0013-psiserve-virtual-db-config.md) | psiserve virtual DB config + permissions | backlog | medium | psiserve | — | — |
-| [0014](.issues/0014-psiserve-snapshot-api.md) | psiserve snapshot API (blockchain) | backlog | medium | psiserve,psitri | — | — |
-| [0015](.issues/0015-psizam-memory-sandboxing-modes.md) | psizam memory sandboxing modes (guarded/checked/unchecked) | ready | high | psizam | agent3 | — |
-| [0016](.issues/0016-psio-wit-resource-drop-specializations.md) | Wire wit_resource_drop specializations (host + guest) | ready | high | psio,psiserve,wasi | — | 0012 |
+| Issue | Status | Priority | Area | Agent | Blocks |
+|-------|--------|----------|------|-------|--------|
+| [psitri-fiber-lock-policy](.issues/psitri-fiber-lock-policy.md) | done | high | psitri | agent2 | psiserve-psitri-integration |
+| [psiserve-psitri-integration](.issues/psiserve-psitri-integration.md) | in-progress | high | psiserve,psitri | agent2 | psiserve-wit-host-guest-api |
+| [psizam-llvm-wasi-toolchain](.issues/psizam-llvm-wasi-toolchain.md) | in-progress | medium | psizam | agent-psio | — |
+| [psizam-gas-metering](.issues/psizam-gas-metering.md) | in-progress | high | psizam | agent-psio | — |
+| [psizam-fuzzing-infrastructure](.issues/psizam-fuzzing-infrastructure.md) | in-progress | high | psizam | agent3 | psizam-eh-v2-fuzzing |
+| [psizam-jit2-segfault-fixes](.issues/psizam-jit2-segfault-fixes.md) | in-progress | critical | psizam | agent3 | — |
+| [psizam-aarch64-simd-softfloat](.issues/psizam-aarch64-simd-softfloat.md) | backlog | high | psizam | — | — |
+| [psizam-multi-module-linking](.issues/psizam-multi-module-linking.md) | backlog | medium | psizam | — | — |
+| [psizam-externref-globals-crash](.issues/psizam-externref-globals-crash.md) | backlog | high | psizam | — | — |
+| [psizam-eh-v2-fuzzing](.issues/psizam-eh-v2-fuzzing.md) | backlog | medium | psizam | — | — |
+| [psio-dynamic-schema-validation](.issues/psio-dynamic-schema-validation.md) | backlog | medium | psio | — | psiserve-wit-host-guest-api |
+| [psiserve-wit-host-guest-api](.issues/psiserve-wit-host-guest-api.md) | backlog | high | psiserve,psio | — | psiserve-virtual-db-config, psiserve-snapshot-api |
+| [psiserve-virtual-db-config](.issues/psiserve-virtual-db-config.md) | backlog | medium | psiserve | — | — |
+| [psiserve-snapshot-api](.issues/psiserve-snapshot-api.md) | backlog | medium | psiserve,psitri | — | — |
+| [psizam-memory-sandboxing-modes](.issues/psizam-memory-sandboxing-modes.md) | ready | high | psizam | agent3 | — |
+| [psio-wit-resource-drop-specializations](.issues/psio-wit-resource-drop-specializations.md) | ready | high | psio,psiserve,wasi | — | psiserve-wit-host-guest-api |
 
 ## Dependency Graph
 
 ```
-0001 (done) → 0002 (in-progress) → 0012 → 0013
-                                          → 0014
-0004 (in-progress) [compute sandboxing]
-0005 (in-progress) → 0010
-0006 (in-progress) → 0015 [memory sandboxing]
-                   → 0007
-                   → 0009
-0011 → 0012
-0016 [resource RAII] → 0012
+psitri-fiber-lock-policy (done)
+  └→ psiserve-psitri-integration (in-progress)
+       └→ psiserve-wit-host-guest-api
+            ├→ psiserve-virtual-db-config
+            └→ psiserve-snapshot-api
+
+psizam-gas-metering (in-progress)    [compute sandboxing]
+
+psizam-fuzzing-infrastructure (in-progress)
+  └→ psizam-eh-v2-fuzzing
+
+psizam-jit2-segfault-fixes (in-progress)
+  ├→ psizam-memory-sandboxing-modes [memory sandboxing]
+  ├→ psizam-aarch64-simd-softfloat
+  └→ psizam-externref-globals-crash
+
+psio-dynamic-schema-validation
+  └→ psiserve-wit-host-guest-api
+
+psio-wit-resource-drop-specializations
+  └→ psiserve-wit-host-guest-api
 ```
 
 ## Conflict Map (agents touching overlapping areas)

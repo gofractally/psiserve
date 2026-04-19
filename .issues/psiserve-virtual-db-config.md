@@ -1,5 +1,5 @@
 ---
-id: "0013"
+id: psiserve-virtual-db-config
 title: psiserve virtual database config and permissions
 status: backlog
 priority: medium
@@ -7,7 +7,7 @@ area: psiserve
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0012"]
+depends_on: [psiserve-wit-host-guest-api]
 blocks: []
 ---
 

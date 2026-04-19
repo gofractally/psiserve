@@ -1,5 +1,5 @@
 ---
-id: "0010"
+id: psizam-eh-v2-fuzzing
 title: psizam EH v2 differential fuzzing (try_table/throw/throw_ref)
 status: backlog
 priority: medium
@@ -7,7 +7,7 @@ area: psizam
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0005"]
+depends_on: [psizam-fuzzing-infrastructure]
 blocks: []
 ---
 
