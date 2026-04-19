@@ -2,6 +2,36 @@
 
 Status: design (2026-04-19). Phases 1, 2a, and 2b complete. Phase 3 in progress.
 
+## Design principles
+
+1. **Approximation is cheaper than precision.** `prepay_max` overrun is
+   bounded by one function's cost and fires at most once per trap (on
+   the terminal path, by definition). `per_block` precision overhead is
+   per basic block per iteration, unbounded with execution length. For
+   any real workload the cost of measuring gas precisely exceeds the
+   cost of approximating it. Approximation is not a compromise — it's
+   the correct default.
+
+2. **Compatibility is a runtime flag.** Selecting an insertion strategy
+   is a load-time decision. Users who pick `prepay_max` pay zero for
+   `per_block`'s existence (and vice versa). The strategies coexist
+   without cross-contamination.
+
+3. **Compatibility serves adoption and validation.** We ship
+   `per_block` not because it's technically superior — it isn't — but
+   because it earns two things our own model can't provide on its own:
+   (a) a migration path for Wasmer/Near users (they get bit-compatible
+   charge points, then discover `prepay_max` is faster still), and
+   (b) a differential-testing harness: same module + same budget +
+   matching opcode weights should trap at the same logical point across
+   engines; any divergence is a correctness bug in one side.
+
+4. **Faster than the competition at their own game.** Our `per_block`
+   uses the Phase 3 inline `sub imm, counter; jns` peephole across
+   every backend. Wasmer's middleware and Near's pwasm-utils both use
+   host-call-per-check. We ship the same injection granularity at a
+   fraction of the per-check cost. That's the hook.
+
 ## Phase 2b — per-function cost proxy (implemented)
 
 Instead of the full CFG max-path computation originally planned, Phase 2b
@@ -141,25 +171,30 @@ which handler is installed at instantiation time.
 
 | Strategy | Where checks go | Cost model | Use case |
 |---|---|---|---|
-| `prepay_max` | Function entry + loop header only | Prepay max-over-all-paths at entry; loop body cost at each header | Best JIT perf; fewest checks; overpays when control takes a short path |
-| `per_block` | Every basic-block boundary (after `loop`, `if`, `else`, `br`, `br_if`, `br_table`, `end`, `call`) | Pay exact block cost per block | Exact accounting; matches Wasmer/Near; more checks |
-| `hybrid` | Prepay per function up to a threshold; fall back to per-block for functions above it | Mix | Balance, for workloads with mixed function sizes |
+| `prepay_max` | Function entry + loop header only | Body-size proxy at entry; loop body cost at each header | Default. Fewest checks, approximation is cheap, overrun is bounded |
+| `per_block` | Every basic-block boundary (after `loop`, `if`, `else`, `br`, `br_if`, `br_table`, `end`, `call`) | Pay straight-line block cost per block | Compatibility + differential testing against Wasmer/Near; opt-in |
 | `off` | None | — | Unmetered baseline for perf comparison |
 
-Default: `prepay_max`. All four are testable; the Phase 2 microbench
-informs the final default choice.
+Default: `prepay_max`. `per_block` is opt-in — a caller who doesn't
+select it pays nothing for its existence.
+
+`hybrid` was considered (prepay under a size threshold, per-block
+above) and dropped: the threshold adds a support-surface without
+solving a real user problem. Either you want compat with Wasmer/Near
+(pick `per_block`) or you don't (pick `prepay_max`). A mode that
+silently switches between them is a debugging nightmare nobody asked
+for.
 
 ### prepay_max cost calculation
 
-- **Per-function cost**: max over all control-flow paths through the
-  function, summing the weight of each basic block on the path. Loop
-  bodies are excluded from this sum (they're paid per iteration at
-  the loop header).
-- **Per-loop cost**: weight of one iteration of the loop body.
-
-CFG max-path is a standard topological walk: for each merge point
-take `max` of incoming path costs. `if/else` and `br_table` contribute
-`max(arm_costs...)`, not the sum.
+- **Per-function cost**: WASM body byte count (`wasm_body_bytes`)
+  snapshotted by the parser — a proxy for opcode count at ~2-3 bytes
+  per opcode. Charged once at function entry. See Phase 2b above for
+  the rationale for preferring the proxy over a full CFG max-path
+  walk.
+- **Per-loop cost**: 1 per back-edge iteration. Heavy opcodes
+  (`i64.div_*`, `call_indirect`, `memory.grow`, bulk memory) charge
+  additional dynamic costs inside their handlers (see Cost table).
 
 ### per_block cost calculation
 
@@ -271,7 +306,7 @@ condition).
 
 ## Implementation plan
 
-### Phase 1 — foundation (plumbing only, no behavior change)
+### Phase 1 — foundation (complete)
 
 - `gas_handler_t` typedef in `psizam/gas.hpp`
 - `wasm_gas_exhausted_exception` in `exceptions.hpp`
@@ -281,25 +316,56 @@ condition).
 - `gas_cost_table` compile-time constant
 - Build + full test suite passes with zero behavioral change
 
-### Phase 2 — WASM injection + host helper
+### Phase 2a — call-boundary metering on all backends (complete)
 
-- Load-time CFG analysis + injection pass (one strategy at a time)
-- `$gas_check` internal host helper resolved by the module loader
-- `instance_policy` struct threaded through Options with gas fields
-- Correctness tests via `BACKEND_TEST_CASE` (runs on every backend)
-- **Microbench harness: measure overhead vs. `off` baseline on every
-  backend.** This is an acceptance criterion — we lock in the default
-  insertion strategy based on this measurement.
+Per-backend charge hook at every function entry. Placeholder cost of
+1. All five backends (interpreter, jit1 x86_64 + aarch64, jit2,
+jit_llvm) route through the same atomic-relaxed counter.
 
-### Phase 3+ — per-backend peepholes (pure perf work)
+### Phase 2b — per-function cost proxy (complete)
 
-- Phase 3: interpreter (bitcode_writer peephole)
-- Phase 4: jit1 x86_64 + aarch64
-- Phase 5: jit2 IR
-- Phase 6: jit_llvm
+Function entry charges `wasm_body_bytes` (parser snapshot). Loop
+back-edges still charge 1 per iteration. Cross-backend determinism
+test asserts all five backends trap at identical counter values.
 
-Each phase is independent, additive, and tested via the same
-`BACKEND_TEST_CASE` suite from Phase 2.
+### Phase 3 — inline peephole across all backends (in progress)
+
+- Interpreter: bitcode_writer peephole → synthetic `gas_check(imm)` op
+- jit1 x86_64 + aarch64: inline `sub imm, counter; jns done` in
+  prologue and loop back-edge emission (imm8 fast path, imm32/reg-reg
+  fallback for larger costs)
+- jit2 IR: single `gas_check` IR node, codegen emits the inline form
+- jit_llvm: confirm LLVM inlines naturally, else custom-lower
+
+### Phase 4 — heavy-opcode dynamic charges
+
+Dynamic charges inside opcode handlers for opcodes whose weight
+varies by 10× or more from the flat baseline: `i64.div_*`/`rem_*`,
+`f*.div`, `call_indirect`, `memory.grow`, `table.grow`,
+`memory.copy`/`fill`, `table.copy`/`init`. No new injection points.
+Fires under every insertion strategy.
+
+### Phase 5 — handler variants
+
+`yield` (fiber), `timeout` (wall-clock), `external_interrupt`
+(cross-thread `store(-1)`). Each is a ~dozen lines on top of the
+existing handler dispatch, tested per-backend.
+
+### Phase 6 — `per_block` strategy (compatibility + validation)
+
+Load-time injection at every basic-block boundary, matching
+Wasmer/Near pwasm-utils granularity. Uses the Phase 3 inline
+peephole, so per-check cost is ~3 cycles vs. their host-call. Opt-in
+via `insertion_strategy::per_block`.
+
+### Phase 7 — differential test harness
+
+Shared-module/shared-budget trap-point agreement between our
+`per_block` mode and a reference runner (Wasmer middleware, Near
+pwasm-utils). Any divergence is a correctness bug somewhere.
+
+Phases are additive and each is tested via `BACKEND_TEST_CASE` suites
+on every backend.
 
 ## Testing
 
@@ -312,4 +378,7 @@ Each phase is independent, additive, and tested via the same
   point across all backends (interp/jit1/jit2/jit_llvm)
 - `gas_prepay_max` — verify function overpays when taking a shorter
   path; verify total matches max path when taking the longest path
+- `gas_per_block_compat` — same module + matching opcode weights
+  trap at the same logical point under our `per_block` and under a
+  reference runner (Wasmer middleware, Near pwasm-utils)
 - Microbench — `off` vs each strategy, per backend
