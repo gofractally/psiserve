@@ -275,8 +275,10 @@ int setrlimit(int resource, const struct rlimit_stub* rlim) {
 // ── mmap (heap-backed) ────────────────────────────────────────────────────
 //
 // WASI has no virtual memory. We implement mmap by allocating from the WASM
-// linear memory heap via malloc. This lets LLVM's memory-mapped I/O paths
-// work transparently within the 32-bit WASM address space.
+// linear memory heap via malloc. For writable file-backed MAP_SHARED mappings
+// we flush contents back to the file on munmap; lld uses FileOutputBuffer's
+// mmap path to write the output .wasm, and without writeback the file stays
+// as a zero-filled truncated block on disk.
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -290,32 +292,61 @@ int setrlimit(int resource, const struct rlimit_stub* rlim) {
 #ifndef MAP_ANON
 #define MAP_ANON MAP_ANONYMOUS
 #endif
+#ifndef MAP_SHARED
+#define MAP_SHARED 0x01
+#endif
+#ifndef PROT_WRITE
+#define PROT_WRITE 0x2
+#endif
+
+// A small header precedes every mmap allocation; munmap uses it to find the
+// fd+offset and write back if the mapping was shared+writable+file-backed.
+// Aligned to 16 so the returned pointer stays aligned.
+struct _mmap_hdr {
+   int           fd;
+   int           flags;
+   int           prot;
+   int           _pad;
+   long long     offset;
+   unsigned long length;
+   unsigned long _pad2;
+};
 
 void* mmap(void* addr, unsigned long length, int prot, int flags, int fd, long long offset) {
-   (void)addr; (void)prot;
+   (void)addr;
 
-   void* ptr = malloc(length);
-   if (!ptr) {
+   const unsigned long hdr_size = sizeof(struct _mmap_hdr);
+   char* raw = (char*)malloc(hdr_size + length);
+   if (!raw) {
       errno = ENOMEM;
       return MAP_FAILED;
    }
 
+   struct _mmap_hdr* h = (struct _mmap_hdr*)raw;
+   h->fd     = fd;
+   h->flags  = flags;
+   h->prot   = prot;
+   h->offset = offset;
+   h->length = length;
+
+   void* ptr = raw + hdr_size;
+
    if (fd >= 0 && !(flags & (MAP_ANONYMOUS | MAP_ANON))) {
-      // File-backed mapping: read file contents into the buffer
+      // File-backed mapping: read file contents into the buffer.
       memset(ptr, 0, length);
       long long saved = lseek(fd, 0, SEEK_CUR);
       if (saved >= 0)
          lseek(fd, offset, SEEK_SET);
       unsigned long total = 0;
       while (total < length) {
-         int n = read(fd, (char*)ptr + total, length - total);
+         long n = read(fd, (char*)ptr + total, length - total);
          if (n <= 0) break;
          total += n;
       }
       if (saved >= 0)
          lseek(fd, saved, SEEK_SET);
    } else {
-      // Anonymous mapping: zero-fill
+      // Anonymous mapping: zero-fill.
       memset(ptr, 0, length);
    }
 
@@ -324,7 +355,61 @@ void* mmap(void* addr, unsigned long length, int prot, int flags, int fd, long l
 
 int munmap(void* addr, unsigned long length) {
    (void)length;
-   free(addr);
+   if (!addr) return 0;
+
+   const unsigned long hdr_size = sizeof(struct _mmap_hdr);
+   struct _mmap_hdr* h = (struct _mmap_hdr*)((char*)addr - hdr_size);
+
+   // Writeback: MAP_SHARED + PROT_WRITE + file-backed = flush to disk so lld's
+   // output actually lands in the file instead of being discarded with the
+   // buffer. Ignore errors — munmap has no way to surface them.
+   if (h->fd >= 0
+       && (h->flags & MAP_SHARED)
+       && (h->prot & PROT_WRITE)
+       && !(h->flags & (MAP_ANONYMOUS | MAP_ANON))) {
+      long long saved = lseek(h->fd, 0, SEEK_CUR);
+      if (saved >= 0)
+         lseek(h->fd, h->offset, SEEK_SET);
+      unsigned long total = 0;
+      while (total < h->length) {
+         long n = write(h->fd, (char*)addr + total, h->length - total);
+         if (n <= 0) break;
+         total += n;
+      }
+      if (saved >= 0)
+         lseek(h->fd, saved, SEEK_SET);
+   }
+
+   free(h);
+   return 0;
+}
+
+int msync(void* addr, unsigned long length, int flags) {
+   (void)flags;
+   if (!addr) return 0;
+
+   const unsigned long hdr_size = sizeof(struct _mmap_hdr);
+   struct _mmap_hdr* h = (struct _mmap_hdr*)((char*)addr - hdr_size);
+
+   if (h->fd < 0
+       || !(h->flags & MAP_SHARED)
+       || !(h->prot & PROT_WRITE)
+       || (h->flags & (MAP_ANONYMOUS | MAP_ANON))) {
+      return 0;
+   }
+
+   long long saved = lseek(h->fd, 0, SEEK_CUR);
+   if (saved >= 0)
+      lseek(h->fd, h->offset, SEEK_SET);
+   unsigned long total = 0;
+   unsigned long bytes = length < h->length ? length : h->length;
+   while (total < bytes) {
+      long n = write(h->fd, (char*)addr + total, bytes - total);
+      if (n <= 0) break;
+      total += n;
+   }
+   if (saved >= 0)
+      lseek(h->fd, saved, SEEK_SET);
    return 0;
 }
 
@@ -358,5 +443,16 @@ int uname(void* buf) {
    (void)buf;
    errno = ENOSYS;
    return -1;
+}
+
+// ── C++ ABI (thread_local) ────────────────────────────────────────────────
+// lld uses thread_local variables with non-trivial destructors; libc++abi
+// needs __cxa_thread_atexit to register them. WASI is single-threaded and
+// the wasi variant of libc++abi omits it. No threads means destructors can
+// never be invoked anyway, so a no-op stub is sufficient.
+
+int __cxa_thread_atexit(void (*func)(void*), void* arg, void* dso_handle) {
+   (void)func; (void)arg; (void)dso_handle;
+   return 0;
 }
 

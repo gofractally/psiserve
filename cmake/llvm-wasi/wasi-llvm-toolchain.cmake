@@ -84,6 +84,11 @@ set(_COMMON_FLAGS "${_COMMON_FLAGS} -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMA
 set(_COMMON_FLAGS "${_COMMON_FLAGS} -fno-exceptions")
 # LLVM needs to think it's on Unix for Support library OS-specific code paths
 set(_COMMON_FLAGS "${_COMMON_FLAGS} -DLLVM_ON_UNIX=1")
+# Clang 22's CLANG_ABI macro (clang/Support/Compiler.h) has a wasm branch that
+# tests `__WASM__` but clang only predefines `__wasm__` — so none of the
+# branches match and CLANG_ABI stays undefined, failing tblgen-generated
+# Attrs.inc. We're building everything statically, so force the static branch.
+set(_COMMON_FLAGS "${_COMMON_FLAGS} -DCLANG_BUILD_STATIC")
 # WASM is little-endian; LLVM's bit.h needs BYTE_ORDER to avoid #include <machine/endian.h>
 set(_COMMON_FLAGS "${_COMMON_FLAGS} -DBYTE_ORDER=1234 -DLITTLE_ENDIAN=1234 -DBIG_ENDIAN=4321")
 
@@ -91,6 +96,13 @@ set(CMAKE_C_FLAGS_INIT "${_COMMON_FLAGS}")
 set(CMAKE_CXX_FLAGS_INIT "${_COMMON_FLAGS} -isystem ${_CXX_INCLUDE} -stdlib=libc++")
 
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${_CXX_LIB} -L${_RT_LIB} -lc++ -lc++abi -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-process-clocks")
+
+# Opt-in link against libwasi_llvm_stubs.a (POSIX stubs for LLVM symbols that
+# wasi-libc doesn't provide: sigaction, getrlimit, getpwuid_r, ...). Used by
+# the clang-wasi ExternalProject; not needed for llvm-wasi (archives only).
+if(WASI_LINK_STUBS AND WASI_LLVM_STUBS_DIR)
+   set(CMAKE_EXE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT} -L${WASI_LLVM_STUBS_DIR} -lwasi_llvm_stubs")
+endif()
 
 # ---------- cmake behavior ----------
 
