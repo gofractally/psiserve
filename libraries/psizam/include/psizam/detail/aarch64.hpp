@@ -513,7 +513,11 @@ namespace psizam::detail {
 
       void* emit_loop(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {
          invalidate_recent_ops();
-         return code;
+         void* label = code;
+         // Loop-header gas metering: back-edges land before the gas
+         // check so every iteration pays gas.
+         emit_gas_charge(1);
+         return label;
       }
 
       void* emit_if(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {

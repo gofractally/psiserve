@@ -419,7 +419,15 @@ namespace psizam::detail {
          return emit_br(depth_change, rt, UINT32_MAX, result_count);
       }
       void emit_block(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {}
-      void* emit_loop(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) { set_branch_target(); return code; }
+      void* emit_loop(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {
+         set_branch_target();
+         void* label = code;
+         // Loop-header gas metering: every iteration (including the first)
+         // passes through the loop label before executing the body, so
+         // emitting gas_charge here correctly accounts for iteration count.
+         emit_gas_charge(1);
+         return label;
+      }
       void* emit_if(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {
          if (auto cond = try_pop_recent_op<condition_op>()) {
             COUNT_INSTR_NO_FLAGS();

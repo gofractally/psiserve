@@ -4091,6 +4091,12 @@ namespace psizam::detail {
                }
                _block_fixups[block_idx] = nullptr;
             }
+            // Loop-header gas metering: branches back to the label land
+            // ahead of this gas_charge, so each iteration pays gas.
+            if (_cur_func && _cur_func->blocks &&
+                _cur_func->blocks[block_idx].is_loop) {
+               emit_gas_charge(1);
+            }
          }
       }
 

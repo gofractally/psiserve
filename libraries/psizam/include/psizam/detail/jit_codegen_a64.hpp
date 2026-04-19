@@ -1111,6 +1111,10 @@ namespace psizam::detail {
                }
                _block_fixups[block_idx] = nullptr;
             }
+            // TODO: gas metering on jit2 aarch64. This backend never
+            // received a Phase 2a/3 emit_gas_charge hook at function
+            // prologue either — both function-entry and loop-header
+            // metering need to land together on a dedicated pass.
          }
       }
 
