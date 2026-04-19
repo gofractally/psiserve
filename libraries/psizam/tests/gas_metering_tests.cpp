@@ -82,6 +82,65 @@ BACKEND_TEST_CASE("gas: user handler invoked on exhaustion (yield-style)", "[gas
    CHECK(yield_count > 0);
 }
 
+// Helper for the determinism test: instantiate a backend, set a fixed
+// budget, call `call(depth)`, and return the counter value observed
+// after the trap (by using a handler that snapshots the counter and
+// restocks). Every backend with the same budget + same call should
+// see the same final gas_counter value.
+template <typename Impl>
+int64_t gas_count_to_trap(psizam::wasm_code& code, int64_t budget,
+                          uint32_t depth) {
+   using rhf_t     = psizam::registered_host_functions<psizam::standalone_function_t>;
+   using backend_t = psizam::backend<rhf_t, Impl>;
+   psizam::wasm_allocator local_wa;
+   backend_t bkend(code, &local_wa);
+   rhf_t::resolve(bkend.get_module());
+
+   using ctx_t = typename Impl::context;
+   static thread_local int64_t seen_counter = 0;
+   seen_counter = 0;
+   bkend.get_context().set_gas_strategy(psizam::gas_insertion_strategy::prepay_max);
+   bkend.get_context().set_gas_handler(+[](void* ctx) {
+      auto* c = static_cast<ctx_t*>(ctx);
+      if (seen_counter == 0) {
+         seen_counter = c->gas_counter().load(std::memory_order_relaxed);
+      }
+      c->restock_gas(psizam::gas_budget_unlimited);
+   });
+   bkend.get_context().set_gas_budget(budget);
+   (void)bkend.call("env", "call", depth);
+   return seen_counter;
+}
+
+TEST_CASE("gas: cross-backend determinism", "[gas][determinism]") {
+   psizam::registered_host_functions<psizam::standalone_function_t>
+      ::add<&gas_host_call>("env", "host.call");
+   psizam::wasm_code code(implementation_limits_wasm,
+                          implementation_limits_wasm + implementation_limits_wasm_len);
+
+   // Budget small enough to exhaust mid-recursion but large enough
+   // to fire the handler at a well-defined point.
+   constexpr int64_t budget = 5;
+   constexpr uint32_t depth = 50;
+
+   int64_t interp = gas_count_to_trap<psizam::interpreter>(code, budget, depth);
+   INFO("interpreter trapped with counter=" << interp);
+   REQUIRE(interp < 0);
+#if defined(__x86_64__) || defined(__aarch64__)
+   int64_t j1 = gas_count_to_trap<psizam::jit>(code, budget, depth);
+   int64_t j2 = gas_count_to_trap<psizam::jit2>(code, budget, depth);
+   INFO("jit trapped with counter=" << j1);
+   INFO("jit2 trapped with counter=" << j2);
+   CHECK(j1 == interp);
+   CHECK(j2 == interp);
+#endif
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+   int64_t jl = gas_count_to_trap<psizam::jit_llvm>(code, budget, depth);
+   INFO("jit_llvm trapped with counter=" << jl);
+   CHECK(jl == interp);
+#endif
+}
+
 BACKEND_TEST_CASE("gas: external interrupt via atomic store(-1)", "[gas][interrupt]") {
    using rhf_t     = psizam::registered_host_functions<psizam::standalone_function_t>;
    using backend_t = psizam::backend<rhf_t, TestType>;
