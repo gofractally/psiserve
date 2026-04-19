@@ -1,23 +1,30 @@
 ---
-id: psiserve-content-addressable-store
-title: Content-addressable store (CAS) with file-level dedup on chunked-file-storage
+id: psiserve-pfs
+title: PFS — Planetary File System (local IPFS-compatible CAS with file-level dedup)
 status: ready
 priority: high
 area: psiserve, psio, psitri
-agent: ~
+agent: agent0
 branch: ~
 created: 2026-04-19
 depends_on: [psitri-chunked-file-storage]
-blocks: [psiserve-user-filesystem, ipfs-http-api]
+blocks: [psiserve-user-filesystem]
 ---
+
+## Name
+
+**PFS** = IPFS minus the "I" (Interplanetary). Same content model,
+same CIDs, same HTTP API surface — but local-only, no libp2p / bitswap /
+network participation. The three-letter name captures the scope
+exactly: planetary, not interplanetary.
 
 ## Motivation
 
-The content-addressable store is the layer that makes files identifiable
-by a content hash (CID) and enables **file-level dedup**: two different
-users who upload the same bytes end up sharing one underlying copy via
-CID collision, while each sees the file independently in their own
-filesystem namespace above.
+PFS is the layer that makes files identifiable by a content hash (CID)
+and enables **file-level dedup**: two different users who upload the
+same bytes end up sharing one underlying copy via CID collision, while
+each sees the file independently in their own filesystem namespace
+above.
 
 File-level dedup is the right granularity for real workloads (duplicate
 docs, shared Docker images, photo re-uploads, snapshot replicas) without
@@ -153,7 +160,6 @@ our endpoints.
 ## Notes
 
 - Sits directly on `psitri-chunked-file-storage` for block storage.
-- Blocks `psiserve-user-filesystem` (multi-tenant paths/quotas/permissions)
-  and `ipfs-http-api` if we later pull the API into its own issue.
+- Blocks `psiserve-user-filesystem` (multi-tenant paths/quotas/permissions).
 - Refcount semantics are independent of SAL's storage refcount — this is
   the application-visible, consensus-deterministic, snapshotable counter.

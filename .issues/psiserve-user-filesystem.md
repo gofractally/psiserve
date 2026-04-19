@@ -7,13 +7,13 @@ area: psiserve, psio, psitri
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: [psiserve-content-addressable-store]
+depends_on: [psiserve-pfs]
 blocks: []
 ---
 
 ## Motivation
 
-Layer a human-facing filesystem on top of the content-addressable store.
+Layer a human-facing filesystem on top of PFS (the content-addressable store).
 Each tenant (user, account, organization) gets their own private namespace
 with paths, directories, permissions, and a storage quota. From the
 tenant's point of view, files are named and owned; the fact that two
@@ -21,7 +21,7 @@ tenants storing identical bytes end up pointing at one underlying CID is
 invisible — each tenant "thinks they have the whole file."
 
 This is where file-level dedup actually happens in practice: the
-filesystem layer creates and destroys references to CAS CIDs; the CAS
+filesystem layer creates and destroys references to PFS CIDs; PFS
 manages the refcount and underlying storage.
 
 ## Design
@@ -168,8 +168,8 @@ POST /api/v0/files/rm
 
 ## Notes
 
-- Sits on top of `psiserve-content-addressable-store`.
-- Completely independent sharding dimension from CAS (filesystem sharded
-  by tenant, CAS sharded by CID) — they compose cleanly.
+- Sits on top of `psiserve-pfs`.
+- Completely independent sharding dimension from PFS (filesystem sharded
+  by tenant, PFS sharded by CID) — they compose cleanly.
 - Quota accounting is at the application layer, separate from psitri's
   internal allocator accounting.

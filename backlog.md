@@ -35,8 +35,8 @@ Last updated: 2026-04-19
 | [psiserve-snapshot-api](.issues/psiserve-snapshot-api.md) | backlog | medium | psiserve,psitri | — | — |
 | [psizam-memory-sandboxing-modes](.issues/psizam-memory-sandboxing-modes.md) | ready | high | psizam | agent3 | — |
 | [psio-wit-resource-drop-specializations](.issues/psio-wit-resource-drop-specializations.md) | ready | high | psio,psiserve,wasi | — | psiserve-wit-host-guest-api |
-| [psitri-chunked-file-storage](.issues/psitri-chunked-file-storage.md) | ready | high | psitri | — | psiserve-content-addressable-store |
-| [psiserve-content-addressable-store](.issues/psiserve-content-addressable-store.md) | ready | high | psiserve,psio,psitri | — | psiserve-user-filesystem |
+| [psitri-chunked-file-storage](.issues/psitri-chunked-file-storage.md) | ready | high | psitri | — | psiserve-pfs |
+| [psiserve-pfs](.issues/psiserve-pfs.md) | ready | high | psiserve,psio,psitri | agent0 | psiserve-user-filesystem |
 | [psiserve-user-filesystem](.issues/psiserve-user-filesystem.md) | backlog | medium | psiserve,psio,psitri | — | — |
 
 ## Dependency Graph
@@ -65,7 +65,7 @@ psio-wit-resource-drop-specializations
   └→ psiserve-wit-host-guest-api
 
 psitri-chunked-file-storage
-  └→ psiserve-content-addressable-store
+  └→ psiserve-pfs
        └→ psiserve-user-filesystem
 ```
 

@@ -8,7 +8,7 @@ agent: ~
 branch: ~
 created: 2026-04-19
 depends_on: []
-blocks: [ipfs-filesystem-api]
+blocks: [psiserve-pfs]
 ---
 
 ## Motivation
