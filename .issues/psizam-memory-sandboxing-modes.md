@@ -4,7 +4,7 @@ title: psizam memory sandboxing modes (guarded / checked / unchecked)
 status: ready
 priority: high
 area: psizam
-agent: psiserve-agent3
+agent: agent-arm
 branch: ~
 created: 2026-04-19
 depends_on: [psizam-jit2-segfault-fixes]

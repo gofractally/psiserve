@@ -23,8 +23,8 @@ Last updated: 2026-04-19
 | [psiserve-psitri-integration](.issues/psiserve-psitri-integration.md) | in-progress | high | psiserve,psitri | agent2 | psiserve-wit-host-guest-api |
 | [psizam-llvm-wasi-toolchain](.issues/psizam-llvm-wasi-toolchain.md) | in-progress | medium | psizam | agent-psio | — |
 | [psizam-gas-metering](.issues/psizam-gas-metering.md) | in-progress | high | psizam | agent-psio | — |
-| [psizam-fuzzing-infrastructure](.issues/psizam-fuzzing-infrastructure.md) | in-progress | high | psizam | agent3 | psizam-eh-v2-fuzzing |
-| [psizam-jit2-segfault-fixes](.issues/psizam-jit2-segfault-fixes.md) | in-progress | critical | psizam | agent3 | — |
+| [psizam-fuzzing-infrastructure](.issues/psizam-fuzzing-infrastructure.md) | in-progress | high | psizam | agent-arm | psizam-eh-v2-fuzzing |
+| [psizam-jit2-segfault-fixes](.issues/psizam-jit2-segfault-fixes.md) | in-progress | critical | psizam | agent-arm | — |
 | [psizam-aarch64-simd-softfloat](.issues/psizam-aarch64-simd-softfloat.md) | backlog | high | psizam | — | — |
 | [psizam-multi-module-linking](.issues/psizam-multi-module-linking.md) | backlog | medium | psizam | — | — |
 | [psizam-externref-globals-crash](.issues/psizam-externref-globals-crash.md) | backlog | high | psizam | — | — |
@@ -33,7 +33,7 @@ Last updated: 2026-04-19
 | [psiserve-wit-host-guest-api](.issues/psiserve-wit-host-guest-api.md) | backlog | high | psiserve,psio | — | psiserve-virtual-db-config, psiserve-snapshot-api |
 | [psiserve-virtual-db-config](.issues/psiserve-virtual-db-config.md) | backlog | medium | psiserve | — | — |
 | [psiserve-snapshot-api](.issues/psiserve-snapshot-api.md) | backlog | medium | psiserve,psitri | — | — |
-| [psizam-memory-sandboxing-modes](.issues/psizam-memory-sandboxing-modes.md) | ready | high | psizam | agent3 | — |
+| [psizam-memory-sandboxing-modes](.issues/psizam-memory-sandboxing-modes.md) | ready | high | psizam | agent-arm | — |
 | [psio-wit-resource-drop-specializations](.issues/psio-wit-resource-drop-specializations.md) | ready | high | psio,psiserve,wasi | — | psiserve-wit-host-guest-api |
 | [psitri-chunked-file-storage](.issues/psitri-chunked-file-storage.md) | ready | high | psitri | — | psiserve-pfs |
 | [psiserve-pfs](.issues/psiserve-pfs.md) | ready | high | psiserve,psio,psitri | agent0 | psiserve-user-filesystem |
@@ -72,4 +72,4 @@ psitri-chunked-file-storage
 ## Conflict Map (agents touching overlapping areas)
 - agent2 + agent-psio both touch `libraries/psizam/` — coordinate before merging
 - agent2 touches `external/psitri` (submodule) — must push psitri before parent merge
-- agent3 touches `libraries/psizam/tests/` — agent2 also modifies spec tests — merge order matters
+- agent-arm touches `libraries/psizam/tests/` — agent2 also modifies spec tests — merge order matters
