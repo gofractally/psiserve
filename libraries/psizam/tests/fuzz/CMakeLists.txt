@@ -45,16 +45,6 @@ foreach(wasm_file ${FUZZ_REGRESSION_WASM})
       TIMEOUT 30)
 endforeach()
 
-# Known jit2 v128 bugs — mark as expected failures until fixed
-set(FUZZ_REGRESSION_XFAIL
-   "fuzz_regression/mismatch_81788_seed6720"
-   "fuzz_regression/mismatch_1098_seed1776506086"
-)
-foreach(xf ${FUZZ_REGRESSION_XFAIL})
-   if(TEST ${xf})
-      set_tests_properties(${xf} PROPERTIES WILL_FAIL TRUE)
-   endif()
-endforeach()
 
 # ── libFuzzer driver (optional) ──────────────────────────────────────────────
 # Coverage-guided differential fuzzer using libFuzzer.

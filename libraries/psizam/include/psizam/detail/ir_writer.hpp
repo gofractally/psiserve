@@ -796,7 +796,9 @@ namespace psizam::detail {
             _pending_result_types_count = 0;
          }
          _func->ctrl_push(entry);
-         _func->start_block(entry.block_idx, compute_v128_result_bytes(entry));
+         if (!_unreachable) {
+            _func->start_block(entry.block_idx, compute_v128_result_bytes(entry));
+         }
          return entry.block_idx;
       }
 
