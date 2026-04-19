@@ -80,6 +80,27 @@ Chunks within a file are addressable as `(filepath, chunk_index)`. This
 enables HTTP Range requests and resumable downloads without needing a
 content-addressed per-chunk namespace.
 
+### Transparent compression via the compactor
+Compression is piggybacked on work the compactor already does — writes
+stay fast, compression is background work, reads pay near-zero extra cost.
+
+- **Write path**: uncompressed. New 4MB blocks land in SAL raw.
+- **Compactor**: when it repacks a block (liveness/age-driven), it also
+  runs zstd/lz4 on the payload. If the ratio is poor (> ~95% of raw), it
+  stores raw; otherwise it stores the compressed bytes and flips a
+  compression flag in the block header.
+- **Read path**: a SAL → WASM linear-memory copy is already mandatory.
+  Swapping `memcpy` for `zstd_decompress` is a few-ns-per-byte step-up
+  on a path that's already feeding a disk or network consumer. Net
+  latency effectively unchanged.
+- **Natural tiering**: hot blocks don't get compacted (MFU cache
+  protects them), so hot data stays uncompressed. Cold data compresses
+  on its next compaction pass. No explicit policy required.
+
+CIDs and IPFS compatibility are unaffected — chunks are always
+uncompressed before they cross the API boundary. Compression is purely a
+disk-space / IO-bandwidth optimization below the chunk layer.
+
 ## Key Layout (within a shard)
 
 ```
@@ -106,11 +127,17 @@ refcount (the owning file).
 - [ ] GC on file deletion frees all owned 4MB blocks immediately
 - [ ] Byte-range reads translate to (chunk_index_start, chunk_index_end)
       and read only those chunks
+- [ ] Compactor compresses (zstd or lz4) during repack when ratio is
+      favorable; flag in block header marks compressed vs raw
+- [ ] Read path decompresses into the destination memory on cache miss;
+      benchmarks confirm end-to-end latency is unchanged vs uncompressed
+      for both hot (cached decompressed) and cold (miss + decompress) cases
 
 ## Open Design Questions
 
 - **4MB block header format**: how many bytes for slot liveness + chunk
-  offsets + size. Target: ≤64 bytes so a 4MB block is ~99.998% payload.
+  offsets + size + compression flag. Target: ≤64 bytes so a 4MB block is
+  ~99.998% payload.
 - **Partial-final-chunk handling**: last chunk of a file is usually <256KB.
   Inline the remainder in the file_node, or waste the slot?
 - **SAL fragmentation with 4MB allocations**: check whether SAL can movably
@@ -119,6 +146,11 @@ refcount (the owning file).
 - **Shard rebalancing**: if filename hash is poorly distributed for a
   specific workload, one shard gets hot. Can we rehash without downtime?
   Likely "no, accept uniform hash assumption" for v1.
+- **Compactor compression policy**: which algo (zstd-1 vs lz4), ratio
+  floor threshold, age cutoff, and whether MFU cache stores compressed
+  pages (one-time decompress on miss) or decompressed pages (decompress
+  on every fetch). Start simple: zstd-1, skip if ratio > 0.95, decompressed
+  MFU cache.
 
 ## Notes
 
