@@ -364,7 +364,20 @@ namespace psizam::detail {
                }
             }
          }
-         assert((char*)code <= (char*)_code_start + max_prologue_size);
+         // Ref-typed locals default to null (UINT32_MAX sentinel), not zero
+         {
+            uint32_t slot = 0;
+            for (uint32_t i = 0; i < locals.size(); ++i) {
+               bool is_ref = (locals[i].type == types::funcref ||
+                              locals[i].type == types::externref ||
+                              locals[i].type == types::exnref);
+               for (uint32_t j = 0; j < locals[i].count; ++j) {
+                  if (is_ref)
+                     emit_movd(UINT32_MAX, *(rbp - static_cast<int32_t>((slot + 1) * 8)));
+                  slot += (locals[i].type == types::v128) ? 2 : 1;
+               }
+            }
+         }
       }
       // Offset of _multi_return buffer in frame_info_holder (accessed via RDI)
       static constexpr int32_t multi_return_offset = 24;

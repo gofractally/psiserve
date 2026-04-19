@@ -1,0 +1,5 @@
+# Ignore libFuzzer-generated corpus entries (hash-named files)
+# Only track hand-picked .wasm seed files
+*
+!.gitignore
+!*.wasm

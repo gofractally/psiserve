@@ -1,6 +1,7 @@
 # ── psiserve: WASM TCP application server library ──────────────────────────────
 
 add_library(psiserve
+   src/fiber_lock_policy_check.cpp
    src/host_api.cpp
    src/log.cpp
    src/module_store.cpp
@@ -13,6 +14,7 @@ target_include_directories(psiserve PUBLIC
 
 target_link_libraries(psiserve PUBLIC
    psiber
+   psitri
    psizam
    psizam-exec
    ucc

@@ -390,7 +390,7 @@ namespace psizam::detail {
             entry.merge_vreg = ir_vreg_none;
          }
          _func->ctrl_push(entry);
-         _func->start_block(entry.block_idx);
+         _func->start_block(entry.block_idx, compute_v128_result_bytes(entry));
       }
 
       void emit_epilogue(const func_type& /*ft*/, const std::vector<local_entry>& /*locals*/, uint32_t /*funcnum*/) {
@@ -582,7 +582,7 @@ namespace psizam::detail {
                }
             }
 
-            _func->end_block(entry.block_idx);
+            _func->end_block(entry.block_idx, compute_v128_result_bytes(entry));
             _unreachable = entry.entered_unreachable ? true : false;
          }
          return block_idx;
@@ -690,6 +690,17 @@ namespace psizam::detail {
          return (t == types::v128) ? 16u : 8u;
       }
 
+      static uint32_t compute_v128_result_bytes(const ir_control_entry& entry) {
+         uint32_t bytes = 0;
+         if (entry.result_count > 1) {
+            for (uint32_t i = 0; i < entry.result_count; ++i)
+               if (entry.result_types[i] == types::v128) bytes += 32;
+         } else if (entry.result_type == types::v128) {
+            bytes = 32;
+         }
+         return bytes;
+      }
+
       // Fill byte_offs[0..count-1] with the byte offset of each result in
       // ctx->_multi_return[], respecting v128 = 16 bytes, scalars = 8 bytes.
       static void compute_multi_return_offsets(const uint8_t* result_types,
@@ -784,7 +795,7 @@ namespace psizam::detail {
             _pending_result_types_count = 0;
          }
          _func->ctrl_push(entry);
-         _func->start_block(entry.block_idx);
+         _func->start_block(entry.block_idx, compute_v128_result_bytes(entry));
          return entry.block_idx;
       }
 

@@ -635,6 +635,9 @@ namespace psizam::detail {
             }
          }
 
+         // Ref-typed locals default to null (UINT32_MAX sentinel), not zero
+         emit_ref_local_init(func);
+
          // Save callee-saved registers to the frame (after locals and spill slots)
          if (_use_regalloc) {
             int32_t save_offset = -static_cast<int32_t>((body_local_slots + _num_spill_slots + 1) * 8);
@@ -2839,17 +2842,27 @@ namespace psizam::detail {
 
          // Multi-value return store (register mode)
          case ir_op::multi_return_store: {
-            load_vreg_rax(inst.ri.src1);
             int32_t offset = multi_return_offset + inst.ri.imm;
-            this->emit_mov(rax, *(rdi + offset));
+            if (inst.type == types::v128) {
+               load_v128_to_xmm(inst.ri.src1, xmm0);
+               this->emit_vmovdqu(xmm0, *(rdi + offset));
+            } else {
+               load_vreg_rax(inst.ri.src1);
+               this->emit_mov(rax, *(rdi + offset));
+            }
             return true;
          }
 
          // Multi-value call return load (register mode)
          case ir_op::multi_return_load: {
             int32_t offset = multi_return_offset + inst.ri.imm;
-            this->emit_mov(*(rdi + offset), rax);
-            store_rax_vreg(inst.dest);
+            if (inst.type == types::v128) {
+               this->emit_vmovdqu(*(rdi + offset), xmm0);
+               store_xmm_to_v128(xmm0, inst.dest);
+            } else {
+               this->emit_mov(*(rdi + offset), rax);
+               store_rax_vreg(inst.dest);
+            }
             return true;
          }
 
@@ -4330,6 +4343,21 @@ namespace psizam::detail {
       // Spill slots are after body locals: rbp - (body_locals + slot + 1) * 8
       int32_t get_spill_offset(int16_t slot) const {
          return -static_cast<int32_t>((_body_locals + static_cast<uint32_t>(slot) + 1) * 8);
+      }
+
+      void emit_ref_local_init(ir_function& func) {
+         const auto& locals = _mod.code[func.func_index].locals;
+         uint32_t slot = 0;
+         for (uint32_t g = 0; g < locals.size(); ++g) {
+            bool is_ref = (locals[g].type == types::funcref ||
+                           locals[g].type == types::externref ||
+                           locals[g].type == types::exnref);
+            for (uint32_t j = 0; j < locals[g].count; ++j) {
+               if (is_ref)
+                  this->emit_movd(UINT32_MAX, *(rbp - static_cast<int32_t>((slot + 1) * 8)));
+               slot += (locals[g].type == types::v128) ? 2 : 1;
+            }
+         }
       }
 
       // Get the XMM register assigned to a v128 vreg (-1 if spilled/none)
@@ -6744,6 +6772,7 @@ namespace psizam::detail {
                for (uint32_t i = 0; i < _body_locals; ++i)
                   this->emit_mov(rax, *(rbp - static_cast<int32_t>((i + 1) * 8)));
             }
+            emit_ref_local_init(func);
             // Reset RSP to frame bottom (rbp - total_slots*8)
             uint32_t total_slots = _body_locals + _num_spill_slots + _callee_saved_count;
             this->emit_mov(rbp, rsp);

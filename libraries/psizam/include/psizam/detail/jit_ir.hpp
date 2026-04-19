@@ -600,24 +600,24 @@ namespace psizam::detail {
          return idx;
       }
 
-      void start_block(uint32_t block_idx) {
+      void start_block(uint32_t block_idx, uint32_t v128_result_bytes = 0) {
          ir_inst inst{};
          inst.opcode = ir_op::block_start;
          inst.type = 0;
          inst.flags = IR_NONE;
          inst.dest = block_idx;
-         inst.rr.src1 = ir_vreg_none;
+         inst.rr.src1 = v128_result_bytes;
          inst.rr.src2 = ir_vreg_none;
          emit(inst);
       }
 
-      void end_block(uint32_t block_idx) {
+      void end_block(uint32_t block_idx, uint32_t v128_result_bytes = 0) {
          ir_inst inst{};
          inst.opcode = ir_op::block_end;
          inst.type = 0;
          inst.flags = (block_idx < block_count && blocks[block_idx].is_if) ? 1 : 0;
          inst.dest = block_idx;
-         inst.rr.src1 = ir_vreg_none;
+         inst.rr.src1 = v128_result_bytes;
          inst.rr.src2 = ir_vreg_none;
          emit(inst);
       }
