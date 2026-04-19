@@ -42,11 +42,18 @@ Each file is a single btree entry keyed by its path within its shard:
 ### Logical vs physical chunk size
 - **Logical chunk = 256KB** (IPFS-standard, for HTTP range addressing and
   API compatibility).
-- **Physical allocation unit = 4MB** (one control_block per block, ~16
-  chunks packed together). Amortizes control_block consumption.
+- **Logical block = 4MB** (uncompressed). ~16 chunks packed together.
+  One control_block per logical block.
+- **On-disk size = whatever cacheline count the payload needs.** SAL
+  allocates at cacheline granularity, so a compressed block that packs
+  down to 800KB simply consumes fewer cachelines. No special large-blob
+  path in SAL; compressed and uncompressed blocks are indistinguishable
+  at the allocator layer.
+- Internal fragmentation per block ≤63 bytes (cacheline-padding).
 
-At 16 chunks per 4MB block and 4B control_blocks, addressable capacity is
-16 PB of chunked data — with fine-grained 256KB chunk-level read access.
+At ~16 chunks per 4MB *logical* block and 4B control_blocks, the
+addressable logical capacity ceiling is 16 PB. Actual stored bytes can be
+much smaller with compression.
 
 ### No content-addressed dedup
 Chunks are **not** shared across files. Each 4MB block has exactly one
@@ -135,14 +142,16 @@ refcount (the owning file).
 
 ## Open Design Questions
 
-- **4MB block header format**: how many bytes for slot liveness + chunk
-  offsets + size + compression flag. Target: ≤64 bytes so a 4MB block is
-  ~99.998% payload.
+- **4MB block header format**: slot liveness + chunk offsets + sizes +
+  compression flag + uncompressed-payload-size. Target: one cacheline
+  (64 bytes) so the header is exactly one SAL allocation unit of overhead.
 - **Partial-final-chunk handling**: last chunk of a file is usually <256KB.
   Inline the remainder in the file_node, or waste the slot?
-- **SAL fragmentation with 4MB allocations**: check whether SAL can movably
-  compact 4MB units, or whether they become pinned. If pinned, large-file
-  churn could fragment the heap.
+- **SAL fragmentation with 4MB logical allocations**: SAL works at cacheline
+  granularity, so the on-disk size is whatever the payload needs — no
+  special-sized free lists. Check whether SAL can movably compact
+  cacheline-count allocations in the 4MB-uncompressed range, or whether
+  they become pinned. If pinned, large-file churn could fragment the heap.
 - **Shard rebalancing**: if filename hash is poorly distributed for a
   specific workload, one shard gets hot. Can we rehash without downtime?
   Likely "no, accept uniform hash assumption" for v1.
