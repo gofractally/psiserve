@@ -23,6 +23,8 @@
 //   auto inst = rt.instantiate(tmpl);
 //   inst.as<greeter>().run(5);
 
+#include <psizam/host_function_table.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -160,6 +162,10 @@ public:
 
    std::vector<std::string> wit_sections() const;
 
+   // Internal accessors for template code in this header
+   host_function_table& table();
+   void set_host_ptr(void* p);
+
    module_handle_impl* get() const { return impl_.get(); }
 };
 
@@ -187,8 +193,8 @@ public:
 
    // ── Typed call (shared header available) ────────────────────────
    // Returns a proxy: inst.as<greeter>().concat("a", "b")
-   // template <typename Tag>
-   // auto as();
+   template <typename Tag>
+   auto as();
 
    // ── Dynamic call (WIT-driven, no shared header) ─────────────────
    // native_value call(std::string_view interface_name,
@@ -207,6 +213,10 @@ public:
    // ── Memory ──────────────────────────────────────────────────────
    char*       linear_memory();
    std::size_t memory_size() const;
+
+   // Internal accessors for template code
+   void* backend_ptr();
+   void* host_ptr();
 
    instance_impl* get() const { return impl_.get(); }
 };
@@ -241,8 +251,11 @@ public:
    void register_library(std::string_view name, wasm_bytes wasm);
 
    // ── Host interface registration ─────────────────────────────────
-   // template <typename... Interfaces, typename Host>
-   // void provide(Host& host);
+   // Registers host C++ methods as imports for a prepared module.
+   // Uses PSIO_HOST_MODULE reflection to walk interfaces and register
+   // each method with the module's host function table.
+   template <typename HostImpl>
+   void provide(module_handle& mod, HostImpl& host);
 
    // ── Module preparation ──────────────────────────────────────────
    module_handle prepare(wasm_bytes wasm, const instance_policy& policy);
@@ -271,5 +284,141 @@ public:
    void evict(wasm_bytes wasm);
    void clear_cache();
 };
+
+// ═════════════════════════════════════════════════════════════════════
+// Template implementation (needs full backend + proxy types)
+// ═════════════════════════════════════════════════════════════════════
+
+} // namespace psizam
+
+// Include after the class definitions so the template body can see
+// the proxy/adapter types from hosted.hpp.
+#include <psizam/hosted.hpp>
+
+namespace psizam {
+
+template <typename Tag>
+auto instance::as() {
+   using backend_t = backend<std::nullptr_t, interpreter>;
+   using info      = ::psio::detail::interface_info<Tag>;
+   using adapter   = detail::void_proxy_adapter<backend_t, info>;
+   using proxy_t   = typename info::template proxy<adapter>;
+   return proxy_t{*static_cast<backend_t*>(backend_ptr()), host_ptr()};
+}
+
+// ── provide<HostImpl> ───────────────────────────────────────────────
+// Walks PSIO_HOST_MODULE interfaces and registers each method with the
+// module's host function table. Scalar methods get fast trampolines
+// (natural arg count, direct call). Canonical methods (strings, records,
+// lists) get the 16-wide handler with type-specialized lift/lower.
+
+namespace detail_runtime {
+
+   template <typename IfaceImpl, std::size_t I, typename HostImpl>
+   void register_one_host_method(host_function_table& table,
+                                  std::string_view iface_name)
+   {
+      constexpr auto method_ptr = std::get<I>(IfaceImpl::methods);
+      using MTypes = detail::member_fn_types<
+         std::remove_const_t<decltype(method_ptr)>>;
+      std::string mod_name{iface_name};
+      std::string fn_name{IfaceImpl::names[I]};
+
+      if constexpr (MTypes::all_scalar) {
+         table.template add<method_ptr>(mod_name, fn_name);
+      } else {
+         // Canonical path: 16-wide (i64×16) → i64 with type-specialized
+         // lift/lower compiled at this template instantiation.
+         host_function_table::entry e;
+         e.module_name = mod_name;
+         e.func_name   = fn_name;
+         e.signature.params.assign(16, types::i64);
+         e.signature.ret = {types::i64};
+
+         e.slow_dispatch = [](void* host_void, native_value* args,
+                              char* memory) -> native_value {
+            auto* host = static_cast<HostImpl*>(host_void);
+            using MType      = detail::member_fn_types<
+               std::remove_const_t<decltype(method_ptr)>>;
+            using ReturnType = typename MType::ReturnType;
+
+            ::psio::native_value slots[16];
+            for (int i = 0; i < 16; ++i)
+               slots[i].i64 = args[i].i64;
+
+            const uint8_t* mem = reinterpret_cast<const uint8_t*>(memory);
+            detail::host_lift_policy lift{slots, mem};
+            // Decompose the member pointer to extract arg types.
+            // Use a helper to strip the const from constexpr auto.
+            using MemPtrType = std::remove_const_t<decltype(method_ptr)>;
+            auto fn_args = [&]<typename H, typename R, typename... As>(R (H::*)(As...)) {
+               return detail::lift_canonical_args<method_ptr>(
+                  lift, ::psio::TypeList<std::remove_cvref_t<As>...>{});
+            }(MemPtrType{});
+
+            if constexpr (std::is_void_v<ReturnType>) {
+               std::apply([host](auto&&... a) {
+                  (host->*method_ptr)(std::forward<decltype(a)>(a)...);
+               }, fn_args);
+               return native_value{uint64_t{0}};
+            } else {
+               auto result = std::apply([host](auto&&... a) {
+                  return (host->*method_ptr)(std::forward<decltype(a)>(a)...);
+               }, fn_args);
+               uint64_t rv = 0;
+               if constexpr (std::is_integral_v<ReturnType>)
+                  rv = static_cast<uint64_t>(result);
+               else if constexpr (std::is_floating_point_v<ReturnType>) {
+                  if constexpr (sizeof(ReturnType) == 4) {
+                     union { float f; uint32_t u; } cvt{result};
+                     rv = cvt.u;
+                  } else {
+                     union { double f; uint64_t u; } cvt{result};
+                     rv = cvt.u;
+                  }
+               }
+               return native_value{rv};
+            }
+         };
+
+         table.add_entry(std::move(e));
+      }
+   }
+
+   template <typename IfaceImpl, std::size_t... Is>
+   void register_iface_methods(host_function_table& table,
+                                std::string_view iface_name,
+                                std::index_sequence<Is...>)
+   {
+      using HostImpl = typename IfaceImpl::host;
+      (register_one_host_method<IfaceImpl, Is, HostImpl>(table, iface_name), ...);
+   }
+
+   template <typename IfaceImpl>
+   void register_one_interface(host_function_table& table)
+   {
+      using iface_tag  = typename IfaceImpl::tag;
+      using iface_info = ::psio::detail::interface_info<iface_tag>;
+      constexpr auto n =
+         std::tuple_size_v<std::remove_cvref_t<decltype(IfaceImpl::methods)>>;
+      register_iface_methods<IfaceImpl>(
+         table, std::string_view{iface_info::name},
+         std::make_index_sequence<n>{});
+   }
+}
+
+template <typename HostImpl>
+void runtime::provide(module_handle& mod, HostImpl& host) {
+   if (!mod) return;
+   mod.set_host_ptr(&host);
+
+   if constexpr (requires { typename ::psio::detail::impl_info<HostImpl>::interfaces; })
+   {
+      using interfaces = typename ::psio::detail::impl_info<HostImpl>::interfaces;
+      [&]<typename... IfaceImpls>(std::tuple<IfaceImpls...>*) {
+         (detail_runtime::register_one_interface<IfaceImpls>(mod.table()), ...);
+      }(static_cast<interfaces*>(nullptr));
+   }
+}
 
 } // namespace psizam

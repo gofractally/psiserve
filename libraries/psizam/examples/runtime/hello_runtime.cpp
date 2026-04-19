@@ -1,37 +1,108 @@
-// hello_runtime.cpp — Phase 1: native C++ hello world using the runtime API.
+// hello_runtime.cpp — Phase 2: load WASM and call exports via runtime API.
 //
-// Loads the hello_world guest WASM via the runtime, exercises:
-//   - instance_policy configuration
-//   - gas_state (monotonic consumed + moving deadline)
-//   - module_handle preparation
-//   - instance lifecycle
-//   - typed proxy calls
-//
-// This is a NATIVE example — the runtime loads WASM but the driver
-// is plain C++. Phase 2 will move the driver into WASM (blockchain
-// process launching smart contracts).
+// Loads the hello_world guest WASM, registers host functions,
+// instantiates, and calls exports through typed proxies. Exercises
+// the full runtime lifecycle: prepare → instantiate → call → gas.
 
 #include <psizam/runtime.hpp>
+
+// Interface declarations from the hello_world example
+#include <psio/structural.hpp>
+#include <psio/wit_owned.hpp>
+#include <psio/guest_attrs.hpp>
 
 #include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
-// Read a file into a byte vector
+// ── Shared interface declarations (same as hello_world/shared.hpp) ──
+
+PSIO_PACKAGE(hello, "0.1.0");
+
+struct point {
+   uint32_t x{};
+   uint32_t y{};
+};
+PSIO_REFLECT(point, x, y)
+
+struct env {
+   static void log_u64(uint64_t n);
+   static void log_string(std::string_view msg);
+   static uint32_t sum_points_host(point a, point b);
+};
+
+struct clock_api {
+   static uint64_t now();
+};
+
+struct greeter {
+   static void               run(uint64_t count);
+   static wit::string        concat(std::string_view a, std::string_view b);
+   static uint32_t           add(uint32_t a, uint32_t b, uint32_t c);
+   static uint32_t           sum_point(point p);
+   static point              make_point(uint32_t x, uint32_t y);
+   static point              translate(point p, int32_t dx, int32_t dy);
+   static uint32_t           sum_list(std::vector<uint32_t> xs);
+   static std::optional<uint32_t>
+                             find_first(std::vector<int32_t> xs, int32_t needle);
+   static wit::vector<uint32_t> range(uint32_t n);
+   static wit::vector<point>    make_grid(uint32_t w, uint32_t h);
+};
+
+PSIO_INTERFACE(env,       types(), funcs(func(log_u64, value),
+                                         func(log_string, msg),
+                                         func(sum_points_host, a, b)))
+PSIO_INTERFACE(clock_api, types(), funcs(func(now)))
+PSIO_INTERFACE(greeter,   types(point),
+                          funcs(func(run,         count),
+                                func(concat,      a, b),
+                                func(add,         a, b, c),
+                                func(sum_point,   p),
+                                func(make_point,  x, y),
+                                func(translate,   p, dx, dy),
+                                func(sum_list,    xs),
+                                func(find_first,  xs, needle),
+                                func(range,       n),
+                                func(make_grid,   w, h)))
+
+// ── Host implementation ────────────────────────────────────────────
+
+struct Host {
+   int call_count = 0;
+   uint64_t fake_clock = 1000;
+
+   void log_u64(uint64_t n) {
+      ++call_count;
+      std::cout << "  [host] log_u64(" << n << ")\n";
+   }
+
+   void log_string(std::string_view msg) {
+      std::cout << "  [host] log_string(\"" << msg << "\")\n";
+   }
+
+   uint32_t sum_points_host(point a, point b) {
+      return a.x + a.y + b.x + b.y;
+   }
+
+   uint64_t now() { return fake_clock; }
+};
+
+PSIO_HOST_MODULE(Host,
+   interface(env,       log_u64, log_string, sum_points_host),
+   interface(clock_api, now))
+
+// ── Helpers ────────────────────────────────────────────────────────
+
 static std::vector<uint8_t> read_file(const char* path) {
    std::ifstream f(path, std::ios::binary);
    if (!f) return {};
    return {std::istreambuf_iterator<char>(f), {}};
 }
 
-// Gas handler: print consumed and advance deadline
-static void gas_handler_print(psizam::gas_state* gas, void*) {
-   std::cout << "  [gas] consumed=" << gas->consumed
-             << " deadline=" << gas->deadline << "\n";
-   gas->deadline += 10000;  // advance by another slice
-}
+// ── Main ───────────────────────────────────────────────────────────
 
 int main(int argc, char** argv) {
    if (argc < 2) {
@@ -48,58 +119,54 @@ int main(int argc, char** argv) {
    using namespace psizam;
 
    // ── Create runtime ──────────────────────────────────────────────
-   runtime rt({
-      .guarded_pool_size = 4,   // small pool for demo
-      .arena_size_gb     = 1,
-   });
+   runtime rt;
 
-   // ── Prepare module with policy ──────────────────────────────────
+   // ── Policy ──────────────────────────────────────────────────────
    auto policy = instance_policy{
       .trust_level = instance_policy::runtime_trust::untrusted,
       .floats      = instance_policy::float_mode::soft,
       .memory      = instance_policy::mem_safety::checked,
-      .initial     = instance_policy::compile_tier::jit1,
-      .optimized   = instance_policy::compile_tier::jit_llvm,
+      .initial     = instance_policy::compile_tier::interpret,
       .metering    = instance_policy::meter_mode::gas_trap,
-      .gas_budget  = 1'000'000,
+      .gas_budget  = 10'000'000,
    };
 
-   std::cout << "Policy:\n"
-             << "  trust:    untrusted\n"
-             << "  floats:   soft\n"
-             << "  memory:   checked\n"
-             << "  initial:  jit1\n"
-             << "  optimized: jit_llvm\n"
-             << "  metering: gas_trap\n"
-             << "  budget:   " << policy.gas_budget << "\n\n";
-
-   // ── Shared gas state ────────────────────────────────────────────
+   // ── Shared gas ──────────────────────────────────────────────────
    auto gas = std::make_shared<gas_state>();
-   gas->consumed = 0;
    gas->deadline = policy.gas_budget;
    policy.shared_gas = gas;
 
-   std::cout << "Gas state:\n"
-             << "  consumed: " << gas->consumed << "\n"
-             << "  deadline: " << gas->deadline << "\n\n";
+   // ── Register host functions ────────────────────────────────────
+   auto tmpl = rt.prepare(wasm_bytes{wasm_data}, policy);
 
-   // ── Check unresolved imports ────────────────────────────────────
-   auto unresolved = rt.check(wasm_bytes{wasm_data});
-   if (!unresolved.empty()) {
-      std::cout << "Unresolved imports:\n";
-      for (auto& imp : unresolved)
-         std::cout << "  " << imp.module_name << "." << imp.func_name << "\n";
-      std::cout << "\n";
-   }
+   Host host;
+   rt.provide(tmpl, host);
 
-   // TODO Phase 2: prepare, instantiate, call via typed proxy
-   // auto tmpl = rt.prepare(wasm_bytes{wasm_data}, policy);
-   // auto inst = rt.instantiate(tmpl);
-   // inst.as<greeter>().run(5);
-   // std::cout << "Gas consumed: " << inst.gas_consumed() << "\n";
+   std::cout << "Module prepared: " << tmpl.wasm_size() << " bytes WASM\n\n";
 
-   std::cout << "Runtime API surface compiles and links.\n";
-   std::cout << "Phase 2: wire prepare/instantiate/call.\n";
+   // ── Instantiate ─────────────────────────────────────────────────
+   auto inst = rt.instantiate(tmpl, policy);
+   std::cout << "Instance created\n";
+   std::cout << "  gas consumed: " << inst.gas_consumed() << "\n";
+   std::cout << "  gas deadline: " << inst.gas_deadline() << "\n";
+   std::cout << "  memory size:  " << inst.memory_size() << " bytes\n\n";
+
+   // ── Call exports via typed proxy ────────────────────────────────
+   std::cout << "=== add(7, 11, 13) ===\n";
+   auto sum = inst.as<greeter>().add(7u, 11u, 13u);
+   std::cout << "  result = " << sum << "\n\n";
+
+   std::cout << "=== concat(\"hello, \", \"world\") ===\n";
+   auto joined = inst.as<greeter>().concat(
+      std::string_view{"hello, "}, std::string_view{"world"});
+   std::cout << "  result = \"" << joined.view() << "\"\n\n";
+
+   std::cout << "=== make_point(10, 20) ===\n";
+   point p = inst.as<greeter>().make_point(10u, 20u);
+   std::cout << "  result = (" << p.x << ", " << p.y << ")\n\n";
+
+   std::cout << "Gas consumed: " << inst.gas_consumed() << "\n";
+   std::cout << "Gas deadline: " << inst.gas_deadline() << "\n";
 
    return 0;
 }
