@@ -45,9 +45,10 @@ dynamic charges" section. Weights live in `psizam/gas.hpp::gas_costs`.
 - [x] Parser plumbing (on_opcode / on_loop_enter / on_loop_exit / prologue patch)
 - [x] jit1 x86_64: always-imm32 emit + patch API wired
 - [x] jit1 aarch64: fixed-size MOVZ/MOVK sequence + patch API wired
+      (written on x86_64 host; aarch64-hardware verification tracked in `#0022`)
 - [x] jit2 x86_64 (`jit_codegen.hpp`): IR-node annotation, no byte patching
 - [ ] jit2 aarch64 (`jit_codegen_a64.hpp`): IR-node annotation + fill the
-      Phase 2a/3 prologue TODO while we're in there
+      Phase 2a/3 prologue TODO — **moved to `#0022`** for arm64 agent
 - [ ] jit_llvm: LLVM IR constant replacement before final compilation
 - [ ] interpreter: new `gas_charge_imm` bitcode op + `interpret_visitor` dispatch
 - [ ] Cross-backend test: same module + budget traps at same counter across
