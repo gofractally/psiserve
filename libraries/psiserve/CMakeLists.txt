@@ -35,3 +35,12 @@ target_link_libraries(psiserve PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 if(TARGET psizam-llvm)
    target_link_libraries(psiserve PUBLIC psizam-llvm)
 endif()
+
+# ── Tests ───────────────────────────────────────────────────────────────────────
+if(PSIZAM_ENABLE_TESTS)
+   add_executable(db_host_test tests/db_host_test.cpp)
+   target_link_libraries(db_host_test PRIVATE psiserve psi-api)
+   target_include_directories(db_host_test PRIVATE
+      ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
+   add_test(NAME db_host_test COMMAND db_host_test)
+endif()
