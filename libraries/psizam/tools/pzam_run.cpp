@@ -333,6 +333,24 @@ int pzam_run_main(int argc, char** argv) {
    }
    ctx._host_trampoline_ptrs = trampoline_ptrs.data();
 
+#if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS)
+   // Populate jit_func_ranges for crash diagnostics — lets the signal
+   // handler report "Crash in func[N] at +offset" instead of just a raw PC.
+   std::vector<jit_func_range> func_ranges(cs->functions.size());
+   {
+      uint32_t num_imported = mod.get_imported_functions_size();
+      for (size_t j = 0; j < cs->functions.size(); j++) {
+         func_ranges[j] = {
+            static_cast<uint32_t>(cs->functions[j].code_offset),
+            static_cast<uint32_t>(cs->functions[j].code_size),
+            static_cast<uint32_t>(j) + num_imported
+         };
+      }
+      jit_func_ranges = func_ranges.data();
+      jit_func_range_count = static_cast<uint32_t>(func_ranges.size());
+   }
+#endif
+
    // Handle page_size mismatch between compile-time and runtime
    if (is_jit && cs->page_size != 0) {
       uint32_t compile_ps = cs->page_size;
