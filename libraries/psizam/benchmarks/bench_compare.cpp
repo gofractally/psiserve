@@ -14,6 +14,7 @@
 #endif
 #include <chrono>
 #include <cstdio>
+#include <thread>
 #include <cstring>
 #include <string>
 
@@ -345,7 +346,7 @@ std::vector<uint8_t> build_bench_wasm() {
 
 using rhf_t = registered_host_functions<standalone_function_t>;
 
-static void register_eosvm_hosts() {
+static void register_psizam_hosts() {
    static bool done = false;
    if (done) return;
    rhf_t::add<&bench_host_identity>("env", "identity");
@@ -356,7 +357,7 @@ static void register_eosvm_hosts() {
    done = true;
 }
 
-static void register_eosvm_abi_hosts() {
+static void register_psizam_abi_hosts() {
    static bool done = false;
    if (done) return;
    rhf_t::add<&bench_host_noop>("env", "host_noop");
@@ -376,7 +377,7 @@ static void register_eosvm_abi_hosts() {
 }
 
 template<typename Impl>
-static double run_eosvm_abi(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n) {
+static double run_psizam_abi(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n) {
    using backend_t = psizam::backend<rhf_t, Impl>;
    wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
    wasm_allocator wa;
@@ -402,7 +403,7 @@ static double run_eosvm_abi(const std::vector<uint8_t>& wasm_bytes, const char* 
 }
 
 template<typename Impl>
-static double run_eosvm(wasm_code& code, wasm_allocator& wa, const char* func, uint32_t n) {
+static double run_psizam(wasm_code& code, wasm_allocator& wa, const char* func, uint32_t n) {
    using backend_t = psizam::backend<rhf_t, Impl>;
    backend_t bkend(code, &wa);
    rhf_t::resolve(bkend.get_module());
@@ -415,7 +416,7 @@ static double run_eosvm(wasm_code& code, wasm_allocator& wa, const char* func, u
 }
 
 template<typename Impl>
-static double compile_eosvm(const std::vector<uint8_t>& wasm_bytes) {
+static double compile_psizam(const std::vector<uint8_t>& wasm_bytes) {
    using backend_t = psizam::backend<std::nullptr_t, Impl>;
    wasm_code code = wasm_bytes;
    wasm_allocator wa;
@@ -427,7 +428,24 @@ static double compile_eosvm(const std::vector<uint8_t>& wasm_bytes) {
 }
 
 template<typename Impl>
-static double compile_eosvm_hostcall(wasm_code& code, wasm_allocator& wa) {
+static double compile_psizam_parallel(const std::vector<uint8_t>& wasm_bytes, uint32_t threads) {
+   struct parallel_opts : psizam::default_options {
+      uint32_t compile_threads;
+   };
+   using backend_t = psizam::backend<std::nullptr_t, Impl, parallel_opts>;
+   wasm_code code = wasm_bytes;
+   wasm_allocator wa;
+   parallel_opts opts;
+   opts.compile_threads = threads;
+
+   auto t1 = std::chrono::high_resolution_clock::now();
+   backend_t bkend(code, &wa, opts);
+   auto t2 = std::chrono::high_resolution_clock::now();
+   return std::chrono::duration<double, std::milli>(t2 - t1).count();
+}
+
+template<typename Impl>
+static double compile_psizam_hostcall(wasm_code& code, wasm_allocator& wa) {
    using backend_t = psizam::backend<rhf_t, Impl>;
 
    auto t1 = std::chrono::high_resolution_clock::now();
@@ -592,7 +610,7 @@ static void dump_code_sizes(const std::vector<uint8_t>& wasm_bytes, const char* 
 // Run a quick correctness check with n=1 and return the result.
 // Returns INT64_MIN on failure.
 template<typename Impl>
-static int64_t check_eosvm_compute(const std::vector<uint8_t>& wasm_bytes, const char* func) {
+static int64_t check_psizam_compute(const std::vector<uint8_t>& wasm_bytes, const char* func) {
    using backend_t = psizam::backend<std::nullptr_t, Impl>;
    try {
       wasm_code code = wasm_bytes;
@@ -607,7 +625,7 @@ static int64_t check_eosvm_compute(const std::vector<uint8_t>& wasm_bytes, const
 }
 
 template<typename Impl>
-static double run_eosvm_compute(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n,
+static double run_psizam_compute(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n,
                                 int64_t expected_result = INT64_MIN) {
    using backend_t = psizam::backend<std::nullptr_t, Impl>;
    try {
@@ -721,7 +739,7 @@ int main(int argc, char* argv[]) {
       return strcmp(section_filter, "all") == 0 || strcmp(section_filter, name) == 0;
    };
 
-   register_eosvm_hosts();
+   register_psizam_hosts();
 
    wasm_code wasm_bytes = build_bench_wasm();
    wasm_code& code = wasm_bytes;
@@ -871,16 +889,16 @@ int main(int argc, char* argv[]) {
    for (int t = 0; t < num_host_tests; t++) {
       host_labels[t] = benches[t].label;
       fprintf(stderr, "host[%d] interp...\n", t); fflush(stderr);
-      host_results[t][RT_INTERP] = run_eosvm<interpreter>(code, wa, benches[t].func, N);
+      host_results[t][RT_INTERP] = run_psizam<interpreter>(code, wa, benches[t].func, N);
 #if defined(__x86_64__) || defined(__aarch64__)
       fprintf(stderr, "host[%d] jit...\n", t); fflush(stderr);
-      host_results[t][RT_JIT] = run_eosvm<jit>(code, wa, benches[t].func, N);
+      host_results[t][RT_JIT] = run_psizam<jit>(code, wa, benches[t].func, N);
       fprintf(stderr, "host[%d] jit2...\n", t); fflush(stderr);
-      host_results[t][RT_JIT2] = run_eosvm<jit2>(code, wa, benches[t].func, N);
+      host_results[t][RT_JIT2] = run_psizam<jit2>(code, wa, benches[t].func, N);
 #endif
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       fprintf(stderr, "host[%d] jit_llvm...\n", t); fflush(stderr);
-      host_results[t][RT_JIT_LLVM] = run_eosvm<jit_llvm>(code, wa, benches[t].func, N);
+      host_results[t][RT_JIT_LLVM] = run_psizam<jit_llvm>(code, wa, benches[t].func, N);
 #endif
 #ifdef BENCH_HAS_WASM3
       host_results[t][RT_WASM3] = run_wasm3(wasm_bytes, benches[t].func, N);
@@ -909,7 +927,7 @@ int main(int argc, char* argv[]) {
 #ifdef BENCH_HAS_ABI
    fprintf(stderr, "\nstarting ABI benchmarks...\n"); fflush(stderr);
    {
-      register_eosvm_abi_hosts();
+      register_psizam_abi_hosts();
 
       std::vector<uint8_t> abi_wasm;
       try { abi_wasm = psizam::read_wasm(BENCH_ABI_WASM); } catch (...) {
@@ -941,16 +959,16 @@ int main(int argc, char* argv[]) {
          for (int t = 0; t < num_abi; t++) {
             abi_labels[t] = abi_tests[t].label;
             fprintf(stderr, "abi[%d] %s interp...\n", t, abi_tests[t].func); fflush(stderr);
-            abi_results[t][RT_INTERP] = run_eosvm_abi<interpreter>(abi_wasm, abi_tests[t].func, N);
+            abi_results[t][RT_INTERP] = run_psizam_abi<interpreter>(abi_wasm, abi_tests[t].func, N);
 #if defined(__x86_64__) || defined(__aarch64__)
             fprintf(stderr, "abi[%d] jit...\n", t); fflush(stderr);
-            abi_results[t][RT_JIT] = run_eosvm_abi<jit>(abi_wasm, abi_tests[t].func, N);
+            abi_results[t][RT_JIT] = run_psizam_abi<jit>(abi_wasm, abi_tests[t].func, N);
             fprintf(stderr, "abi[%d] jit2...\n", t); fflush(stderr);
-            abi_results[t][RT_JIT2] = run_eosvm_abi<jit2>(abi_wasm, abi_tests[t].func, N);
+            abi_results[t][RT_JIT2] = run_psizam_abi<jit2>(abi_wasm, abi_tests[t].func, N);
 #endif
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
             fprintf(stderr, "abi[%d] jit_llvm...\n", t); fflush(stderr);
-            abi_results[t][RT_JIT_LLVM] = run_eosvm_abi<jit_llvm>(abi_wasm, abi_tests[t].func, N);
+            abi_results[t][RT_JIT_LLVM] = run_psizam_abi<jit_llvm>(abi_wasm, abi_tests[t].func, N);
 #endif
 #ifdef BENCH_HAS_WASMTIME
             fprintf(stderr, "abi[%d] wasmtime...\n", t); fflush(stderr);
@@ -1220,19 +1238,19 @@ int main(int argc, char* argv[]) {
       // Get interpreter baseline result for correctness validation.
       // JIT backends verify their n=1 result matches before running the full benchmark,
       // catching codegen bugs that produce wrong results or infinite loops.
-      int64_t expected = check_eosvm_compute<interpreter>(wasm, func);
+      int64_t expected = check_psizam_compute<interpreter>(wasm, func);
 
       fprintf(stderr, "interp...\n"); fflush(stderr);
-      compute_results[t][RT_INTERP] = run_eosvm_compute<interpreter>(wasm, func, iters);
+      compute_results[t][RT_INTERP] = run_psizam_compute<interpreter>(wasm, func, iters);
 #if defined(__x86_64__) || defined(__aarch64__)
       fprintf(stderr, "jit1...\n"); fflush(stderr);
-      compute_results[t][RT_JIT] = run_eosvm_compute<jit>(wasm, func, iters, expected);
+      compute_results[t][RT_JIT] = run_psizam_compute<jit>(wasm, func, iters, expected);
       fprintf(stderr, "jit2...\n"); fflush(stderr);
-      compute_results[t][RT_JIT2] = run_eosvm_compute<jit2>(wasm, func, iters, expected);
+      compute_results[t][RT_JIT2] = run_psizam_compute<jit2>(wasm, func, iters, expected);
 #endif
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       fprintf(stderr, "jit_llvm...\n"); fflush(stderr);
-      compute_results[t][RT_JIT_LLVM] = run_eosvm_compute<jit_llvm>(wasm, func, iters, expected);
+      compute_results[t][RT_JIT_LLVM] = run_psizam_compute<jit_llvm>(wasm, func, iters, expected);
 #endif
 #ifdef BENCH_HAS_WASM3
       compute_results[t][RT_WASM3] = run_wasm3_compute(wasm, func, iters);
@@ -1284,16 +1302,16 @@ int main(int argc, char* argv[]) {
          const auto& wasm = *compile_tests[t].wasm;
 
          fprintf(stderr, "compile[%d] interp...\n", t); fflush(stderr);
-         compile_results[t][RT_INTERP] = compile_eosvm<interpreter>(wasm);
+         compile_results[t][RT_INTERP] = compile_psizam<interpreter>(wasm);
 #if defined(__x86_64__) || defined(__aarch64__)
          fprintf(stderr, "compile[%d] jit...\n", t); fflush(stderr);
-         compile_results[t][RT_JIT] = compile_eosvm<jit>(wasm);
+         compile_results[t][RT_JIT] = compile_psizam<jit>(wasm);
          fprintf(stderr, "compile[%d] jit2...\n", t); fflush(stderr);
-         compile_results[t][RT_JIT2] = compile_eosvm<jit2>(wasm);
+         compile_results[t][RT_JIT2] = compile_psizam<jit2>(wasm);
 #endif
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
          fprintf(stderr, "compile[%d] jit_llvm...\n", t); fflush(stderr);
-         compile_results[t][RT_JIT_LLVM] = compile_eosvm<jit_llvm>(wasm);
+         compile_results[t][RT_JIT_LLVM] = compile_psizam<jit_llvm>(wasm);
 #endif
 #ifdef BENCH_HAS_WASMTIME
          fprintf(stderr, "compile[%d] wasmtime...\n", t); fflush(stderr);
@@ -1308,6 +1326,44 @@ int main(int argc, char* argv[]) {
       print_table("COMPILE TIME (parse + validate + codegen)",
                   "Measures time to compile WASM bytes into executable form.",
                   num_compile, compile_labels, compile_results);
+
+      // --- Parallel compile-time comparison ---
+      {
+         uint32_t hw_threads = std::thread::hardware_concurrency();
+         if (hw_threads < 2) hw_threads = 2;
+         uint32_t thread_counts[] = {1, 2, 4, hw_threads};
+         int num_thread_counts = 4;
+         if (hw_threads <= 4) num_thread_counts = 3;
+
+         printf("\nPARALLEL COMPILE TIME (%u hardware threads)\n", hw_threads);
+         printf("Measures compilation with multi-threaded codegen.\n");
+
+         // Header
+         printf("\n  %-26s", "");
+         for (int ti = 0; ti < num_thread_counts; ti++)
+            printf("  %6ut", thread_counts[ti]);
+         printf("\n  %-26s", "");
+         for (int ti = 0; ti < num_thread_counts; ti++)
+            printf("  %7s", "(ms)");
+         printf("\n  %s\n", std::string(26 + 8 * num_thread_counts, '-').c_str());
+
+#if defined(__x86_64__) || defined(__aarch64__)
+         printf("  JIT2:\n");
+         for (int t = 0; t < num_compile; t++) {
+            const auto& wasm = *compile_tests[t].wasm;
+            printf("  %-26s", compile_tests[t].label);
+            for (int ti = 0; ti < num_thread_counts; ti++) {
+               fflush(stdout);
+               fprintf(stderr, "parallel jit2 %ut %s...\n", thread_counts[ti], compile_tests[t].label); fflush(stderr);
+               double ms = compile_psizam_parallel<jit2>(wasm, thread_counts[ti]);
+               printf("  %6.1f ", ms);
+            }
+            printf("\n");
+         }
+#endif
+// LLVM JIT uses a single LLVM module for all functions — parallel compilation
+// is only supported in the AOT path (ir_writer_llvm_aot), not the JIT path.
+      }
 
       if (native_was_enabled) { runtimes[RT_NATIVE].enabled = true; num_active++; }
    }
