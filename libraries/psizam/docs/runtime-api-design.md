@@ -89,6 +89,40 @@ struct instance_policy {
 };
 ```
 
+## Type-safe byte containers
+
+Raw `span<const uint8_t>` is never used in the public API. Distinct
+types prevent accidentally passing a `.pzam` where a `.wasm` is
+expected (or vice versa). The `explicit` constructor forces callers
+to name the type at the call site, making intent visible.
+
+```cpp
+struct wasm_bytes {
+   std::span<const uint8_t> data;
+   explicit wasm_bytes(std::span<const uint8_t> d) : data(d) {}
+};
+
+struct pzam_bytes {
+   std::span<const uint8_t> data;
+   explicit pzam_bytes(std::span<const uint8_t> d) : data(d) {}
+};
+
+struct archive_bytes {  // .a archive (collection of .o WASM objects)
+   std::span<const uint8_t> data;
+   explicit archive_bytes(std::span<const uint8_t> d) : data(d) {}
+};
+```
+
+Compile-time enforcement:
+```cpp
+rt.prepare(raw_span, policy);                     // ✗ build error
+rt.prepare(wasm_bytes{raw_span}, policy);          // ✓ explicit
+rt.register_library("libc++", wasm_bytes{x});      // ✗ wrong type
+rt.register_library("libc++", archive_bytes{x});   // ✓ correct
+rt.load_cached(wasm_bytes{x});                     // ✗ wrong type
+rt.load_cached(pzam_bytes{x});                     // ✓ correct
+```
+
 ## Runtime API
 
 ```cpp
@@ -97,12 +131,12 @@ public:
    explicit runtime(runtime_config config = {});
 
    // ── Library registration ────────────────────────────────────────
-   // Register chain-resident libraries. The runtime caches compiled
-   // native code (.pzam) keyed by content hash. Libraries are .wasm
-   // or .a archives.
+   // Register chain-resident libraries. Accepts .a archives (for
+   // selective linking of individual .o members) or standalone .wasm
+   // modules (linked as a whole).
 
-   void register_library(std::string_view name,
-                          std::span<const uint8_t> bytes);
+   void register_library(std::string_view name, archive_bytes archive);
+   void register_library(std::string_view name, wasm_bytes wasm);
 
    // ── Host interface registration ─────────────────────────────────
    // Register native C++ implementations for host-provided interfaces.
@@ -119,12 +153,13 @@ public:
    // The template is the "golden copy" — compiled code + resolved
    // link tables + initial memory snapshot. Never executed directly.
 
-   module_handle prepare(std::span<const uint8_t> wasm_bytes,
-                         const instance_policy& policy);
+   module_handle prepare(wasm_bytes wasm, const instance_policy& policy);
+
+   // Load a pre-compiled module directly (skip compilation).
+   module_handle load_cached(pzam_bytes pzam);
 
    // Check what imports are unresolved before preparing.
-   std::vector<unresolved_import> check(
-      std::span<const uint8_t> wasm_bytes);
+   std::vector<unresolved_import> check(wasm_bytes wasm);
 
    // ── Instantiation ───────────────────────────────────────────────
    // Create a live instance from a prepared template. The instance
