@@ -173,6 +173,8 @@ namespace psio {
    /// Example in function signatures:
    ///    own<cursor> open_cursor(uint32_t root);  // factory: returns new handle
    ///    void close(own<cursor> c);               // consumer: takes ownership
+   template<typename T> struct borrow;  // forward declaration
+
    template<typename T>
    struct own {
       static_assert(is_wit_resource_v<T>,
@@ -181,6 +183,8 @@ namespace psio {
       uint32_t handle;
 
       explicit own(uint32_t h) : handle(h) {}
+
+      operator borrow<T>() const { return borrow<T>{handle}; }
    };
 
    // =========================================================================
