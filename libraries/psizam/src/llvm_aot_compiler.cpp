@@ -95,6 +95,7 @@ namespace psizam::detail {
          {"__psizam_atomic_rmw",       reloc_symbol::llvm_atomic_rmw},
          {"__psizam_call_depth_dec",   reloc_symbol::llvm_call_depth_dec},
          {"__psizam_call_depth_inc",   reloc_symbol::llvm_call_depth_inc},
+         {"__psizam_gas_charge",       reloc_symbol::llvm_gas_charge},
          {"__psizam_trap",             reloc_symbol::llvm_trap},
          {"__psizam_get_memory",       reloc_symbol::llvm_get_memory},
          // Softfloat function symbols

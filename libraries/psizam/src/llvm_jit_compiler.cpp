@@ -116,6 +116,7 @@ namespace psizam::detail {
       add_sym("__psizam_table_fill",   reinterpret_cast<void*>(&__psizam_table_fill));
       add_sym("__psizam_call_depth_dec", reinterpret_cast<void*>(&__psizam_call_depth_dec));
       add_sym("__psizam_call_depth_inc", reinterpret_cast<void*>(&__psizam_call_depth_inc));
+      add_sym("__psizam_gas_charge",     reinterpret_cast<void*>(&__psizam_gas_charge));
       add_sym("__psizam_trap",           reinterpret_cast<void*>(&__psizam_trap));
 
       // WASM EH runtime helpers (try_table, throw, catch)

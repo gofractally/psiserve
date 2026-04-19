@@ -106,6 +106,7 @@ namespace psizam::detail {
       llvm_atomic_rmw,
       llvm_call_depth_dec,
       llvm_call_depth_inc,
+      llvm_gas_charge,
       llvm_trap,
       llvm_get_memory,
 

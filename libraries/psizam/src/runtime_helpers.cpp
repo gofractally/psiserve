@@ -187,4 +187,11 @@ uint64_t __psizam_atomic_rmw(void* ctx, uint8_t sub, uint32_t addr, uint32_t off
    }
 }
 
+void __psizam_gas_charge(void* ctx, int64_t cost) {
+   // All three primary JIT backends (jit, jit2, jit_llvm) use
+   // jit_execution_context<false>. jit_profile uses <true> but doesn't
+   // opt into gas metering in the current scope.
+   as_ctx(ctx).gas_charge(cost);
+}
+
 } // extern "C"

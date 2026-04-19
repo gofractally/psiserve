@@ -2,29 +2,41 @@
 
 Status: design (2026-04-19). Phase 1 complete. Phase 2a in progress.
 
-## Phase 2a first measurement (interpreter, call-boundary metering)
+## Phase 2a first measurement (call-boundary metering, all backends)
 
-Simplest possible Phase 2a: `gas_charge(cost)` hook called from the
-interpreter's `call()` dispatch with a placeholder cost of 1. No
-bitcode changes, no CFG walk yet (comes in Phase 2b). Recursive
-call-heavy workload (depth 100, 50K top-level invocations,
-≈5M total gas_charge calls), Linux x86_64:
+Simplest possible Phase 2a: a `gas_charge(cost)` hook called at every
+function entry — inlined as a method for the interpreter, as a host
+call to `__psizam_gas_charge` for the JIT backends. Placeholder cost
+of 1 per call; no CFG walk yet (that comes in Phase 2b).
 
-| Strategy | Debug ns/call | Release ns/call |
-|---|---|---|
-| off | 238 | 24.8 |
-| prepay_max (unlimited budget, atomic fetch_sub) | 239 | 29.6 |
+Recursive call-heavy workload (depth 100, 50K top-level invocations,
+≈5M total gas_charge calls), Linux x86_64 Release:
 
-**Release overhead: ~4.8 ns per call, ~19% on this workload.** Debug
-shows 0.3% because interpreter dispatch dominates; Release exposes
-the real cost — `lock xadd` (~15–20 cycles) for the relaxed
-atomic decrement. The atomicity is what enables the cross-thread
-interrupt path; a non-atomic counter would be ~1 ns per call but
-would not safely observe external `store(-1)` writes.
+| Backend | off ns/call | on ns/call | Δ ns/call | Overhead |
+|---|---|---|---|---|
+| interpreter | 26.5 | 32.4 | +5.9 | +22% |
+| jit1 | 3.6 | 6.8 | +3.1 | +86% |
+| jit2 | 4.1 | 7.2 | +3.1 | +75% |
+| jit_llvm | 8.4 | 9.3 | +0.9 | +11% |
+
+Observations:
+
+- **Gas metering works on every backend.** One helper, one prologue
+  hook per backend, same atomic-relaxed semantics.
+- **Interpreter pays ~6 ns per call.** Dominated by `lock xadd`.
+- **jit1/jit2 pay ~3 ns per call.** Pure host-call + atomic, cleaner
+  because the JIT doesn't have interpreter dispatch overhead baked in.
+- **jit_llvm pays ~1 ns.** The ORC JIT linker inlines/optimizes
+  around `__psizam_gas_charge` tighter than the hand-written JIT
+  templates do.
+- **High % numbers on jit1/jit2 reflect very fast baselines** (3–4
+  ns per WASM function call). Absolute cost is small.
 
 This is the cost *at call granularity*. Phase 2b's WASM-binary
-rewriter will hit function entries and loop headers (not every
-call), so the number on realistic workloads should be much lower.
+rewriter will hit function entries + loop headers (not every call),
+with real CFG-computed costs per function. Phase 3+ per-backend
+peepholes can replace the host call with an inline atomic decrement
+(e.g., `lock sub` on x86_64) and drop the overhead further.
 
 ## Opt-in at runtime (no compile flag)
 

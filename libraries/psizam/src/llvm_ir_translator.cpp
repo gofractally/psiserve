@@ -161,6 +161,7 @@ namespace psizam::detail {
       llvm::Function* rt_table_fill    = nullptr;
       llvm::Function* rt_trap           = nullptr;
       llvm::Function* rt_call_depth_dec = nullptr;
+      llvm::Function* rt_gas_charge = nullptr;
       llvm::Function* rt_call_depth_inc = nullptr;
       llvm::Function* rt_get_memory     = nullptr;
 
@@ -330,6 +331,12 @@ namespace psizam::detail {
          // void __psizam_call_depth_inc(void* ctx) — increments on return
          rt_call_depth_inc = decl("__psizam_call_depth_inc",
             llvm::FunctionType::get(void_ty, {ptr_ty}, false));
+
+         // void __psizam_gas_charge(void* ctx, int64_t cost) — Phase 2a
+         // placeholder call at every function entry. Helper early-returns
+         // when the context's strategy is off.
+         rt_gas_charge = decl("__psizam_gas_charge",
+            llvm::FunctionType::get(void_ty, {ptr_ty, i64_ty}, false));
 
          // void* __psizam_get_memory(void* ctx) — returns current linear memory base
          rt_get_memory = decl("__psizam_get_memory",
@@ -721,6 +728,12 @@ namespace psizam::detail {
          ctx_ptr->setName("ctx");
          llvm::Value* mem_arg = &*arg_it++;
          mem_arg->setName("mem");
+
+         // Gas metering (Phase 2a): emit a call to __psizam_gas_charge
+         // at function entry. The helper's early return when strategy
+         // is off keeps the disabled case cheap.
+         builder.CreateCall(rt_gas_charge,
+            {ctx_ptr, llvm::ConstantInt::get(i64_ty, 1, /*signed*/true)});
 
          // Store mem_ptr in an alloca so memory_grow can update it and LLVM's
          // mem2reg pass inserts PHI nodes at control flow merges. Without this,

@@ -132,6 +132,7 @@ namespace psizam {
       table[static_cast<uint32_t>(reloc_symbol::llvm_atomic_rmw)]       = reinterpret_cast<void*>(&__psizam_atomic_rmw);
       table[static_cast<uint32_t>(reloc_symbol::llvm_call_depth_dec)]   = reinterpret_cast<void*>(&__psizam_call_depth_dec);
       table[static_cast<uint32_t>(reloc_symbol::llvm_call_depth_inc)]   = reinterpret_cast<void*>(&__psizam_call_depth_inc);
+      table[static_cast<uint32_t>(reloc_symbol::llvm_gas_charge)]       = reinterpret_cast<void*>(&__psizam_gas_charge);
       table[static_cast<uint32_t>(reloc_symbol::llvm_trap)]             = reinterpret_cast<void*>(&__psizam_trap);
       table[static_cast<uint32_t>(reloc_symbol::llvm_get_memory)]       = reinterpret_cast<void*>(&__psizam_get_memory);
 

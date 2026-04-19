@@ -534,9 +534,26 @@ namespace psizam::detail {
 
       // ──────── Function prologue/epilogue ────────
 
+      // Emit a host call to __psizam_gas_charge(ctx=rdi, cost=rsi) at the
+      // function prologue. Mirrors the pattern in jit1's x86_64 emitter;
+      // paired push/pop of rdi+rsi keeps 16-byte stack alignment at the
+      // `call` site and preserves the JIT's ctx/linear-memory-base regs.
+      void emit_gas_charge(int64_t cost) {
+         this->emit_bytes(0x57);                 // pushq %rdi
+         this->emit_bytes(0x56);                 // pushq %rsi
+         this->emit_bytes(0xbe);                 // mov $cost, %esi
+         this->emit_operand32(static_cast<uint32_t>(cost));
+         this->emit_mov(&__psizam_gas_charge, rax);
+         this->emit(CALL, rax);
+         this->emit_bytes(0x5e);                 // popq %rsi
+         this->emit_bytes(0x5f);                 // popq %rdi
+      }
+
       void emit_function_prologue(ir_function& func) {
          this->emit_push_raw(rbp);
          this->emit_mov(rsp, rbp);
+         // Gas metering (Phase 2a): see x86_64.hpp for rationale.
+         emit_gas_charge(1);
 
          // Count body local slots, accounting for v128 locals using 2 slots (16 bytes)
          uint32_t body_local_slots = 0;

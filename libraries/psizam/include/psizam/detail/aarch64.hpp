@@ -330,7 +330,7 @@ namespace psizam::detail {
       // Prologue / Epilogue
       // ===================================================================
 
-      static constexpr std::size_t max_prologue_size = 80;  // includes 3-instruction stack limit check
+      static constexpr std::size_t max_prologue_size = 160;  // includes 3-instruction stack limit check + gas_charge host call
       static constexpr std::size_t max_epilogue_size = 80;  // includes 3-instruction stack limit restore + debug check
 
       void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& locals, uint32_t funcnum) {
@@ -357,6 +357,10 @@ namespace psizam::detail {
          emit32(0x910003FD);
 
          emit_check_stack_limit();
+         // Gas metering (Phase 2a): unconditional host call at every
+         // function entry. Mirrors x86_64.hpp; the helper early-returns
+         // when strategy is off.
+         emit_gas_charge(1);
 
          // Zero-initialize locals
          uint64_t count = 0;
@@ -4853,6 +4857,18 @@ namespace psizam::detail {
       void emit_restore_context() {
          // LDP X19, X20, [SP], #16
          emit32(0xA8C153F3);
+      }
+
+      // Host call to __psizam_gas_charge(ctx=X0, cost=X1). Saves context
+      // (X19/X20) across the call as other C-function helpers do, since
+      // the helper may throw wasm_gas_exhausted_exception and we want the
+      // catch site to see unmodified callee-saved state.
+      void emit_gas_charge(int64_t cost) {
+         emit32(0xAA1303E0);                  // MOV X0, X19 (ctx)
+         emit_mov_imm64(X1, cost);
+         emit_save_context();
+         emit_call_c_function(&__psizam_gas_charge);
+         emit_restore_context();
       }
 
       template<typename F>

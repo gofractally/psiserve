@@ -78,6 +78,13 @@ extern "C" {
    // Increments remaining call depth by 1 (called on function return).
    void __psizam_call_depth_inc(void* ctx);
 
+   // Gas metering (Phase 2a): atomic fetch_sub + branch-on-negative with
+   // handler dispatch. Early-returns if the context's insertion strategy
+   // is `off`, so the cost of having a metering entry in every prologue
+   // is one load + compare + predicted-taken branch when disabled.
+   // See libraries/psizam/docs/gas-metering-design.md.
+   void __psizam_gas_charge(void* ctx, int64_t cost);
+
    // Trap — throws a WASM trap exception. Does not return.
    [[noreturn]] void __psizam_trap(void* ctx, uint32_t trap_code);
    // trap codes: 0=unreachable, 1=div_by_zero, 2=int_overflow,

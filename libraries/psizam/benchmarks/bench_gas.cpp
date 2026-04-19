@@ -1,10 +1,8 @@
-// Phase 2a gas-metering microbench — interpreter only.
-//
-// Measures the overhead of the per-call gas_charge() hook. The hot path
-// is a recursive WASM function that performs N self-calls; we time it
-// with gas_insertion_strategy::off (baseline) vs prepay_max (metered
-// with an unlimited budget so the handler never fires — we isolate the
-// fetch_sub + branch cost from any trap path).
+// Phase 2a gas-metering microbench — runs the same workload twice
+// (gas_insertion_strategy::off vs prepay_max) across every compiled-in
+// backend: interpreter, jit (jit1), jit2, jit_llvm. The metered run
+// uses an unlimited budget so the trap path never fires; we isolate
+// the per-call fetch_sub + branch cost from any handler overhead.
 //
 // The WASM module is the same embedded binary used by
 // tests/implementation_limits.hpp: its `call` export is a recursive
@@ -17,6 +15,7 @@
 #include <cstdint>
 #include <chrono>
 #include <vector>
+#include <string>
 
 #include "../tests/implementation_limits.hpp"
 
@@ -26,23 +25,17 @@ void host_call() {}
 
 using namespace psizam;
 using namespace psizam::detail;
-using rhf_t     = registered_host_functions<standalone_function_t>;
-using backend_t = backend<rhf_t, interpreter>;
+using rhf_t = registered_host_functions<standalone_function_t>;
 
-double run(backend_t& bkend, uint32_t depth, uint32_t iterations) {
-   const auto t0 = std::chrono::high_resolution_clock::now();
-   for (uint32_t i = 0; i < iterations; ++i) {
-      (void)bkend.call_with_return("env", "call", depth);
-   }
-   const auto t1 = std::chrono::high_resolution_clock::now();
-   return std::chrono::duration<double, std::milli>(t1 - t0).count();
-}
+struct result {
+   double ms;
+   double ns_per_call;
+};
 
-} // namespace
-
-int main() {
-   rhf_t::add<&host_call>("env", "host.call");
-
+template <typename Impl>
+result run_once(uint32_t depth, uint32_t iterations,
+                gas_insertion_strategy strategy) {
+   using backend_t = backend<rhf_t, Impl>;
    wasm_code code(
       implementation_limits_wasm,
       implementation_limits_wasm + implementation_limits_wasm_len);
@@ -50,48 +43,68 @@ int main() {
    backend_t bkend(code, &wa);
    rhf_t::resolve(bkend.get_module());
 
-   constexpr uint32_t depth      = 100;    // WASM self-calls per top-level call
-   constexpr uint32_t iterations = 50'000; // top-level calls per timing run
-   constexpr uint32_t trials     = 5;
+   bkend.get_context().set_gas_strategy(strategy);
+   bkend.get_context().set_gas_budget(gas_budget_unlimited);
 
-   // Each iteration does one top-level call_with_return which enters
-   // the WASM `call` export that then recurses `depth` more times —
-   // so total gas_charge() invocations per iteration ≈ depth + 1.
-   const uint64_t gas_calls_per_run = uint64_t(iterations) * (depth + 1);
+   // Warm-up
+   (void)bkend.call_with_return("env", "call", depth);
 
-   std::printf("bench_gas — interpreter — depth=%u, iterations=%u, trials=%u\n",
-               depth, iterations, trials);
-   std::printf("gas_charge invocations per run: %llu\n",
-               (unsigned long long)gas_calls_per_run);
-   std::printf("\n  strategy     trial  ms         ns/call\n");
-
-   double best_off = 1e18, best_on = 1e18;
-   for (uint32_t trial = 0; trial < trials; ++trial) {
-      // Baseline: strategy::off → gas_charge is a single compare + return.
-      bkend.get_context().set_gas_strategy(gas_insertion_strategy::off);
-      double ms_off = run(bkend, depth, iterations);
-      double ns_off = ms_off * 1'000'000.0 / double(gas_calls_per_run);
-      std::printf("  off          %5u  %-10.2f %.2f\n", trial, ms_off, ns_off);
-      if (ms_off < best_off) best_off = ms_off;
-
-      // Metered: strategy::prepay_max → atomic fetch_sub + negative test.
-      // Unlimited budget (the default INT64_MAX) so the branch never
-      // triggers — measuring pure instrumentation overhead.
-      bkend.get_context().set_gas_strategy(gas_insertion_strategy::prepay_max);
-      bkend.get_context().set_gas_budget(gas_budget_unlimited);
-      double ms_on  = run(bkend, depth, iterations);
-      double ns_on  = ms_on * 1'000'000.0 / double(gas_calls_per_run);
-      std::printf("  prepay_max   %5u  %-10.2f %.2f\n", trial, ms_on, ns_on);
-      if (ms_on < best_on) best_on = ms_on;
+   const auto t0 = std::chrono::high_resolution_clock::now();
+   for (uint32_t i = 0; i < iterations; ++i) {
+      (void)bkend.call_with_return("env", "call", depth);
    }
+   const auto t1 = std::chrono::high_resolution_clock::now();
+   double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+   uint64_t calls = uint64_t(iterations) * (uint64_t(depth) + 1);
+   return { ms, ms * 1'000'000.0 / double(calls) };
+}
 
-   double delta_ms = best_on - best_off;
-   double overhead_ns = delta_ms * 1'000'000.0 / double(gas_calls_per_run);
+template <typename Impl>
+void run_backend(const char* name, uint32_t depth, uint32_t iterations,
+                 uint32_t trials) {
+   double best_off = 1e18, best_on = 1e18;
+   for (uint32_t t = 0; t < trials; ++t) {
+      auto off = run_once<Impl>(depth, iterations, gas_insertion_strategy::off);
+      auto on  = run_once<Impl>(depth, iterations, gas_insertion_strategy::prepay_max);
+      if (off.ms < best_off) best_off = off.ms;
+      if (on.ms  < best_on)  best_on  = on.ms;
+   }
+   double delta = best_on - best_off;
+   uint64_t calls = uint64_t(iterations) * (uint64_t(depth) + 1);
+   double overhead_ns = delta * 1'000'000.0 / double(calls);
    double pct = (best_on - best_off) / best_off * 100.0;
-   std::printf("\nBest-of-%u summary:\n", trials);
-   std::printf("  off:        %.2f ms\n", best_off);
-   std::printf("  prepay_max: %.2f ms\n", best_on);
-   std::printf("  delta:      %.2f ms (%.2f%% overhead)\n", delta_ms, pct);
-   std::printf("  ≈ %.2f ns per gas_charge() call\n", overhead_ns);
+   std::printf("  %-14s off %8.2f ms (%6.2f ns)  "
+               "on %8.2f ms (%6.2f ns)  "
+               "Δ %+7.2f ms (%+.2f%%, ~%.2f ns/call)\n",
+               name,
+               best_off, best_off * 1'000'000.0 / double(calls),
+               best_on,  best_on  * 1'000'000.0 / double(calls),
+               delta, pct, overhead_ns);
+}
+
+} // namespace
+
+int main() {
+   rhf_t::add<&host_call>("env", "host.call");
+
+   constexpr uint32_t depth      = 100;
+   constexpr uint32_t iterations = 50'000;
+   constexpr uint32_t trials     = 5;
+   const uint64_t calls = uint64_t(iterations) * (uint64_t(depth) + 1);
+
+   std::printf("bench_gas — depth=%u, iterations=%u, trials=%u (best-of)\n",
+               depth, iterations, trials);
+   std::printf("gas_charge invocations per run: %llu\n\n",
+               (unsigned long long)calls);
+
+   run_backend<interpreter>("interpreter", depth, iterations, trials);
+#if defined(__x86_64__) || defined(__aarch64__)
+   run_backend<jit>        ("jit",         depth, iterations, trials);
+   run_backend<jit2>       ("jit2",        depth, iterations, trials);
+#endif
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+   run_backend<jit_llvm>   ("jit_llvm",    depth, iterations, trials);
+#endif
+
    return 0;
 }

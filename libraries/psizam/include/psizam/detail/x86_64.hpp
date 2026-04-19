@@ -210,8 +210,33 @@ namespace psizam::detail {
          emit(RET);
       }
 
-      static constexpr std::size_t max_prologue_size = 33;
+      // Prologue max includes the gas_charge host-call prolog
+      // (push rdi/rsi, mov esi=cost, movabsq helper, call, pop rsi/rdi = 21 bytes).
+      static constexpr std::size_t max_prologue_size = 54;
       static constexpr std::size_t max_epilogue_size = 16; // single-value epilogue
+
+      // Emit a host call to __psizam_gas_charge(ctx=rdi, cost=rsi).
+      // Paired push/pop of rdi+rsi keeps 16-byte stack alignment at the
+      // `call` site (two 8-byte pushes from a 16-aligned base = aligned)
+      // and preserves the JIT's ctx/linear-memory-base registers.
+      void emit_gas_charge(int64_t cost) {
+         // pushq %rdi    (save ctx — caller-saved across the host call)
+         emit_bytes(0x57);
+         // pushq %rsi    (save linear memory base)
+         emit_bytes(0x56);
+         // movl $cost, %esi   — cost argument for the helper (fits in i32)
+         emit_bytes(0xbe);
+         emit_operand32(static_cast<uint32_t>(cost));
+         // movabsq $helper, %rax
+         emit_mov(&__psizam_gas_charge, rax);
+         // callq *%rax
+         emit(CALL, rax);
+         // popq %rsi
+         emit_bytes(0x5e);
+         // popq %rdi
+         emit_bytes(0x5f);
+      }
+
       void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& locals, uint32_t funcnum) {
          _ft = &_mod.types[_mod.functions[funcnum]];
          _params = function_parameters{_ft};
@@ -232,6 +257,12 @@ namespace psizam::detail {
          // movq RSP, RBP
          emit_bytes(0x48, 0x89, 0xe5);
          emit_check_stack_limit();
+         // Gas metering (Phase 2a): unconditional call to the host helper
+         // at every function entry. The helper's first branch checks the
+         // context's insertion_strategy and early-returns when off, so the
+         // runtime cost when disabled is one call + one branch in the
+         // helper (~5–10 ns). Phase 3 peephole work can inline this.
+         emit_gas_charge(1);
          uint64_t count = 0;
          for(uint32_t i = 0; i < locals.size(); ++i) {
             count += locals[i].count;
