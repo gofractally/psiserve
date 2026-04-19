@@ -352,6 +352,9 @@ namespace psizam {
                union { int64_t i; double f; } u;
                u.i = r;
                return u.f;
+            } else if constexpr (psizam::wasm_type_traits<std::decay_t<Ret>, void>::is_wasm_type) {
+               using wt = psizam::wasm_type_traits<std::decay_t<Ret>, void>;
+               return wt::wrap(static_cast<typename wt::wasm_type>(r));
             } else {
                return static_cast<Ret>(r);
             }

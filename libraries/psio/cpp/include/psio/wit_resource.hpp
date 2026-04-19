@@ -214,3 +214,25 @@ namespace psio {
    };
 
 }  // namespace psio
+
+// ── wasm_type_traits for own<T> and borrow<T> ──────────────────────
+// Both map to u32 (handle table index) at the WASM ABI level.
+namespace psizam {
+   template<typename T, typename> struct wasm_type_traits;
+
+   template<typename T>
+   struct wasm_type_traits<psio::own<T>, void> {
+      static constexpr bool is_wasm_type = true;
+      using wasm_type = uint32_t;
+      static constexpr uint32_t unwrap(psio::own<T> o) { return o.handle; }
+      static constexpr psio::own<T> wrap(uint32_t v) { return psio::own<T>{v}; }
+   };
+
+   template<typename T>
+   struct wasm_type_traits<psio::borrow<T>, void> {
+      static constexpr bool is_wasm_type = true;
+      using wasm_type = uint32_t;
+      static constexpr uint32_t unwrap(psio::borrow<T> b) { return b.handle; }
+      static constexpr psio::borrow<T> wrap(uint32_t v) { return psio::borrow<T>{v}; }
+   };
+} // namespace psizam

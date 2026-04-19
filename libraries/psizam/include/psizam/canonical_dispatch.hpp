@@ -53,9 +53,17 @@ namespace psizam {
    // psio's static_assert for the string_view case.
 
    namespace detail {
-      template <typename T>
+      template <typename T, typename = void>
       struct flat_count_impl {
          static constexpr size_t value = psio::canonical_flat_count_v<T>;
+      };
+
+      // Any type with wasm_type_traits maps to 1 flat slot
+      template <typename T>
+      struct flat_count_impl<T, std::enable_if_t<
+         psizam::wasm_type_traits<std::decay_t<T>, void>::is_wasm_type &&
+         !std::is_integral_v<T> && !std::is_floating_point_v<T>>> {
+         static constexpr size_t value = 1;
       };
 
       template <>
