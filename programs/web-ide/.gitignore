@@ -1,0 +1,9 @@
+# Binary toolchain artifacts — staged from the llvm-wasi build tree and
+# Homebrew formulas per README. Do not commit: clang.wasm is 45 MB,
+# wasm-ld.wasm is 25 MB, sysroot.tar is ~50 MB.
+toolchain/*.wasm
+toolchain/*.tar
+
+# Prebuilt sample .wasm — rebuildable from a one-liner (see README / vfs.js
+# DEFAULT_FILES). Kept out of git to avoid binary churn.
+samples/*.wasm
