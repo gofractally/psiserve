@@ -53,7 +53,7 @@ static std::vector<char> write_pzam(
    cs.instrumentation.softfloat = use_softfloat ? 1 : 0;
    cs.instrumentation.async_backtrace = use_backtrace ? 1 : 0;
    cs.stack_limit_mode = mod.stack_limit_is_bytes ? 1 : 0;
-   cs.page_size = 4096;
+   cs.page_size = static_cast<uint32_t>(wasm_allocator::table_size());
    cs.max_stack = static_cast<uint32_t>(mod.maximum_stack);
    cs.compiler.compiler_name = llvm_aot ? "psizam-llvm" : "psizam-jit2";
    cs.compiler.compiler_version = "0.1.0";

@@ -898,6 +898,19 @@ namespace psizam::detail {
          std::make_index_sequence<std::tuple_size_v<args_t>>{});
    }
 
+   /// Reverse-order WASI trampoline: args[0] = last WASM param (matches jit/jit2
+   /// zero-copy stack pass). backend::construct() picks this one for backends
+   /// with reverse_host_args=true.
+   template<auto Func>
+   native_value wasi_trampoline_rev(void* host, native_value* args, char* memory) {
+      using args_t = flatten_parameters_t<AUTO_PARAM_WORKAROUND(Func)>;
+      using ret_t  = return_type_t<AUTO_PARAM_WORKAROUND(Func)>;
+      static_cast<wasi_host*>(host)->memory = memory;
+      return fast_trampoline_rev_impl<Func, wasi_host, ret_t, args_t>(
+         static_cast<wasi_host*>(host), args, memory,
+         std::make_index_sequence<std::tuple_size_v<args_t>>{});
+   }
+
    /// Register a single WASI function on a host_function_table.
    template<auto Func>
    void add_wasi_func(host_function_table& table, const std::string& name) {
@@ -906,11 +919,12 @@ namespace psizam::detail {
       using TC     = psizam::type_converter<wasi_host>;
 
       host_function_table::entry e;
-      e.module_name = "wasi_snapshot_preview1";
-      e.func_name   = name;
-      e.signature   = function_types_provider<TC, ret_t, args_t>(
+      e.module_name     = "wasi_snapshot_preview1";
+      e.func_name       = name;
+      e.signature       = function_types_provider<TC, ret_t, args_t>(
          std::make_index_sequence<std::tuple_size_v<args_t>>{});
-      e.trampoline  = &wasi_trampoline<Func>;
+      e.trampoline      = &wasi_trampoline<Func>;
+      e.rev_trampoline  = &wasi_trampoline_rev<Func>;
       table.add_entry(std::move(e));
    }
 

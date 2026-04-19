@@ -273,6 +273,11 @@ int pzam_run_main(int argc, char** argv) {
                  static_cast<pzam_opt_tier>(cs->opt_tier) == pzam_opt_tier::jit2;
    if (is_jit) {
       mod.allocator._code_base = static_cast<char*>(exec_code);
+      // _code_size feeds growable_allocator::get_code_span(), which the
+      // signal handler reads to decide whether a fault is JIT code (→ wasm
+      // trap) or a corrupted PC (→ "control-flow corruption"). Without this,
+      // any SIGSEGV inside pzam-run's JIT code looks unrecognized.
+      mod.allocator._code_size = total_code_size;
       for (size_t j = 0; j < cs->functions.size(); j++) {
          mod.code[j].jit_code_offset = cs->functions[j].code_offset;
          mod.code[j].jit_code_size = cs->functions[j].code_size;
@@ -310,6 +315,23 @@ int pzam_run_main(int argc, char** argv) {
    ctx.set_wasm_allocator(&wa);
    ctx.set_host_table(&table);
    ctx.reset();
+
+   // Populate _host_trampoline_ptrs with reverse-order trampolines. jit/jit2
+   // pack args on the WASM operand stack with args[0] = last param, and
+   // call_host_function forwards that buffer verbatim to the trampoline —
+   // so the trampoline must be the rev variant. backend<>::construct() does
+   // this when reverse_host_args=true; pzam-run skips that path, so do it
+   // here by hand. (Falling through to host_function_table::call() would
+   // pick up the forward trampoline and read every arg swapped.)
+   std::vector<host_trampoline_t> trampoline_ptrs(mod.import_functions.size());
+   for (uint32_t i = 0; i < mod.import_functions.size(); i++) {
+      uint32_t mapped = mod.import_functions[i];
+      if (mapped < table.size()) {
+         const auto& e = table.get_entry(mapped);
+         trampoline_ptrs[i] = e.rev_trampoline ? e.rev_trampoline : e.trampoline;
+      }
+   }
+   ctx._host_trampoline_ptrs = trampoline_ptrs.data();
 
    // Handle page_size mismatch between compile-time and runtime
    if (is_jit && cs->page_size != 0) {
