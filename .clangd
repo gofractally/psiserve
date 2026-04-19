@@ -1,0 +1,16 @@
+# .clangd — project-wide clangd configuration
+#
+# Forces clangd to use Homebrew LLVM on macOS so include resolution matches
+# the compiler actually used to build the project. Without this, Apple clang's
+# headers are used for completion/diagnostics, causing false errors on C++23
+# features (e.g. std::is_base_of_v) and missing Homebrew-installed libraries.
+#
+# On Linux this has no effect — clangd falls through to compile_commands.json.
+
+If:
+  PathMatch: ".*"
+CompileFlags:
+  Compiler: /opt/homebrew/opt/llvm/bin/clang++
+  Add:
+    - -isystem/opt/homebrew/opt/llvm/include/c++/v1
+    - -isystem/opt/homebrew/opt/llvm/lib/clang/22/include
