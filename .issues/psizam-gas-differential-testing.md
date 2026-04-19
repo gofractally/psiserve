@@ -1,5 +1,5 @@
 ---
-id: "0018"
+id: psizam-gas-differential-testing
 title: psizam gas metering — differential test harness vs Wasmer / Near
 status: ready
 priority: medium
@@ -7,12 +7,12 @@ area: psizam
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0017"]
+depends_on: [psizam-gas-per-block-strategy]
 blocks: []
 ---
 
 ## Description
-Once `per_block` ships (#0017), wire a differential-testing harness that
+Once `per_block` ships (`psizam-gas-per-block-strategy`), wire a differential-testing harness that
 runs the same WASM module + same gas budget + matching opcode-weight table
 through (a) our `per_block` mode, and (b) a reference runner — Wasmer
 metering middleware and/or Near `pwasm-utils` injector. Assert both trap

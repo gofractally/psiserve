@@ -1,5 +1,5 @@
 ---
-id: "0022"
+id: psizam-gas-aarch64-verify
 title: psizam gas metering — aarch64 jit2 wiring + jit1 hardware verification
 status: open
 priority: high
@@ -7,11 +7,11 @@ area: psizam
 agent: _unassigned (needs arm64 host)_
 branch: main
 created: 2026-04-19
-depends_on: ["0016"]
+depends_on: [psizam-gas-heavy-opcodes]
 ---
 
 ## Description
-Carved out of `#0016` because the committed and queued aarch64 work
+Carved out of `psizam-gas-heavy-opcodes` because the committed and queued aarch64 work
 needs to actually run on aarch64 hardware. The x86 agent wrote and
 compiled it blind (compile-only on x86_64 catches syntax, not
 instruction-level correctness), so an arm64 agent must both verify
@@ -35,7 +35,7 @@ showed green, but the instruction-level correctness was not verified.
       encoding is correct, `patch_gas_imm_add_extra` reads/writes the
       imm16 fields at bits [20:5]).
 
-### 2. jit2 aarch64 wiring (originally box 6 of `#0016`)
+### 2. jit2 aarch64 wiring (originally box 6 of `psizam-gas-heavy-opcodes`)
 `libraries/psizam/include/psizam/detail/jit_codegen_a64.hpp` still has
 the pre-existing TODO in `mark_block_start` and no `emit_gas_charge`
 call in `emit_function_prologue`. The IR-annotation infrastructure
@@ -67,6 +67,6 @@ so this is purely a codegen-side change.
   — the working aarch64 reference for the three-way emission.
 
 ## Once verified
-Check off the two aarch64 boxes on `#0016` and keep the rest of that
+Check off the two aarch64 boxes on `psizam-gas-heavy-opcodes` and keep the rest of that
 issue (jit_llvm, interpreter, cross-backend test, benchmark) with the
 x86 agent since they're architecture-neutral.

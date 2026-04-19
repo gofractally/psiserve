@@ -1,5 +1,5 @@
 ---
-id: "0020"
+id: psizam-gas-timeout-handler
 title: psizam gas handler — wall-clock timeout variant
 status: ready
 priority: medium
@@ -7,7 +7,7 @@ area: psizam
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0004"]
+depends_on: [psizam-gas-metering]
 blocks: []
 ---
 
@@ -58,7 +58,7 @@ the timeout state via the ctx's allocator-backed scratch area).
       non-consensus.
 
 ## Notes
-- Wall clock is **not** consensus-safe — issue #0004's guidance is
+- Wall clock is **not** consensus-safe — issue `psizam-gas-metering`'s guidance is
   explicit on this. This handler is for psiserve request-timeout use,
   not for replayable consensus execution.
 - Slice tuning affects worst-case overshoot; document the tradeoff in the

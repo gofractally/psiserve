@@ -1,5 +1,5 @@
 ---
-id: "0019"
+id: psizam-gas-yield-handler
 title: psizam gas handler — yield variant (fiber cooperative scheduling)
 status: ready
 priority: high
@@ -7,7 +7,7 @@ area: psizam
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0004"]
+depends_on: [psizam-gas-metering]
 blocks: []
 ---
 
@@ -19,7 +19,7 @@ automatically — no async transforms, no explicit yield points in WASM,
 any function becomes yieldable.
 
 This is one of the three user-visible capabilities gas metering unlocks
-(with `timeout` (#0020) and `external_interrupt` (#0021)).
+(with `timeout` (`psizam-gas-timeout-handler`) and `external_interrupt` (`psizam-gas-interrupt-handler`)).
 
 ## Design Reference
 `libraries/psizam/docs/gas-metering-design.md` — "Gas handler (policy

@@ -1,5 +1,5 @@
 ---
-id: "0021"
+id: psizam-gas-interrupt-handler
 title: psizam gas handler — external interrupt (cross-thread cancel)
 status: ready
 priority: medium
@@ -7,7 +7,7 @@ area: psizam
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0004"]
+depends_on: [psizam-gas-metering]
 blocks: []
 ---
 

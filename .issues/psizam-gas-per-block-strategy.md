@@ -1,5 +1,5 @@
 ---
-id: "0017"
+id: psizam-gas-per-block-strategy
 title: psizam gas metering — per_block insertion strategy (industry-compat)
 status: ready
 priority: medium
@@ -7,8 +7,8 @@ area: psizam
 agent: ~
 branch: ~
 created: 2026-04-19
-depends_on: ["0016"]
-blocks: ["0018"]
+depends_on: [psizam-gas-heavy-opcodes]
+blocks: [psizam-gas-differential-testing]
 ---
 
 ## Description
@@ -21,7 +21,7 @@ The goal is not "more accurate metering" — our `prepay_max` default is
 cheaper and good enough. The goal is **adoption + validation**: Wasmer/Near
 users can migrate with bit-compatible charge points (they discover
 `prepay_max` is faster still), and we get a differential-testing harness
-against those engines (handled in #0018).
+against those engines (handled in `psizam-gas-differential-testing`).
 
 Design principle: this mode must be **faster than the competition at their
 own game**. Wasmer and Near both emit a host-call per check; we emit an
@@ -49,7 +49,7 @@ section and "Compatibility serves adoption and validation" principle.
       shape; tracks active-block cost alongside loop stack)
 - [ ] Per-backend emission of block-boundary gas charges, each using the
       Phase 3 inline peephole. Reuses the `reserve/patch` machinery from
-      #0016 (emit with placeholder, patch at block close).
+      `psizam-gas-heavy-opcodes` (emit with placeholder, patch at block close).
 - [ ] `gas_insertion_strategy::per_block` wired end-to-end; selecting it
       activates the block-boundary charges at runtime
 - [ ] Test: `gas_per_block_overpay` — verify charge totals match expected
@@ -60,6 +60,6 @@ section and "Compatibility serves adoption and validation" principle.
 ## Notes
 - `hybrid` strategy was **dropped** from the design (per principles in the
   design doc). Only `off`, `prepay_max`, and `per_block` ship.
-- Implementation ordering: finish #0016 first so all backends have the
+- Implementation ordering: finish `psizam-gas-heavy-opcodes` first so all backends have the
   reserve/patch infrastructure; per_block then only adds new emission
   sites, not new primitives.
