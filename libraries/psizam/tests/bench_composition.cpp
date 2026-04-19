@@ -27,6 +27,8 @@ struct bench_result {
    double scalar_i64_cps;
    double string_short_cps;
    double string_long_cps;
+   double record_cps;
+   double list_u32_cps;
    double direct_scalar_cps;
 };
 
@@ -95,6 +97,28 @@ bench_result<Backend> run_bench(const char* name,
       r.string_long_cps = iters / secs;
    }
 
+   // Record translate (cross-module, point = 2x u32)
+   {
+      point p{10, 20};
+      auto t0 = std::chrono::high_resolution_clock::now();
+      for (int i = 0; i < iters; ++i)
+         proxy.test_translate(p, int32_t{1}, int32_t{1});
+      auto t1 = std::chrono::high_resolution_clock::now();
+      double secs = std::chrono::duration<double>(t1 - t0).count();
+      r.record_cps = iters / secs;
+   }
+
+   // List<u32> sum (cross-module, 12 elements)
+   {
+      std::vector<uint32_t> xs{1,2,3,4,5,6,7,8,9,10,11,12};
+      auto t0 = std::chrono::high_resolution_clock::now();
+      for (int i = 0; i < iters; ++i)
+         proxy.test_sum_list(xs);
+      auto t1 = std::chrono::high_resolution_clock::now();
+      double secs = std::chrono::duration<double>(t1 - t0).count();
+      r.list_u32_cps = iters / secs;
+   }
+
    // Direct provider call (no bridge, single module)
    {
       auto t0 = std::chrono::high_resolution_clock::now();
@@ -142,6 +166,8 @@ int main() {
       print_row("scalar i64 (bridge)", r.scalar_i64_cps);
       print_row("string 12B (bridge)", r.string_short_cps);
       print_row("string 200B (bridge)", r.string_long_cps);
+      print_row("record (bridge)", r.record_cps);
+      print_row("list<u32> 12 (bridge)", r.list_u32_cps);
       print_row("scalar i32 (direct)", r.direct_scalar_cps);
       std::cout << "\n";
    }
@@ -155,6 +181,8 @@ int main() {
       print_row("scalar i64 (bridge)", r.scalar_i64_cps);
       print_row("string 12B (bridge)", r.string_short_cps);
       print_row("string 200B (bridge)", r.string_long_cps);
+      print_row("record (bridge)", r.record_cps);
+      print_row("list<u32> 12 (bridge)", r.list_u32_cps);
       print_row("scalar i32 (direct)", r.direct_scalar_cps);
       std::cout << "\n";
    }
@@ -168,6 +196,8 @@ int main() {
       print_row("scalar i64 (bridge)", r.scalar_i64_cps);
       print_row("string 12B (bridge)", r.string_short_cps);
       print_row("string 200B (bridge)", r.string_long_cps);
+      print_row("record (bridge)", r.record_cps);
+      print_row("list<u32> 12 (bridge)", r.list_u32_cps);
       print_row("scalar i32 (direct)", r.direct_scalar_cps);
       std::cout << "\n";
    }

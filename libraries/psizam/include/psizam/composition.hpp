@@ -27,6 +27,7 @@
 //   consumer.as<processor>().process(42);
 
 #include <psizam/backend.hpp>
+#include <psizam/bridge_executor.hpp>
 #include <psizam/canonical_dispatch.hpp>
 #include <psizam/host_function.hpp>
 #include <psizam/host_function_table.hpp>
@@ -71,13 +72,6 @@ struct bridge_fn_traits<R (*)(Args...)>
    using ArgTypes   = ::psio::TypeList<std::remove_cvref_t<Args>...>;
    static constexpr std::size_t arg_count = sizeof...(Args);
 };
-
-// Count the number of flat slots consumed by an arg type list
-template <typename... Ts>
-constexpr size_t count_flat_slots(::psio::TypeList<Ts...>)
-{
-   return (flat_count_v<Ts> + ... + std::size_t{0});
-}
 
 }  // namespace detail
 
@@ -363,220 +357,23 @@ private:
             return rv;
          };
       } else {
-         // CANONICAL PATH: complex types — full lift/lower/copy bridge
-         e.slow_dispatch = [provider_ptr, consumer_ptr, fn_name](
+         // THREADED-DISPATCH PATH: compile a bridge program from the
+         // function's type signature and execute it via computed-goto.
+         auto* prog_ptr = new bridge::bridge_program(
+            bridge::compile_bridge<FnPtr>(fn_name));
+
+         e.slow_dispatch = [prog_ptr, provider_ptr, consumer_ptr](
             void* host_void, native_value* args, char* consumer_memory) -> native_value
          {
-            return bridge_call<FnPtr>(
-               provider_ptr, consumer_ptr,
-               host_void, args, consumer_memory, fn_name);
+            return bridge::execute_bridge<Host, BackendKind>(
+               *prog_ptr, consumer_ptr, provider_ptr,
+               host_void, args, consumer_memory);
          };
       }
 
       consumer.table.add_entry(std::move(e));
    }
 
-   // ── Bridge call implementation ───────────────────────────────────
-   // This is the core of module-to-module calling. It:
-   // 1. Lifts args from consumer's flat slots + linear memory
-   // 2. Lowers them into provider's linear memory
-   // 3. Calls the provider's export
-   // 4. Lifts the result from provider
-   // 5. Lowers it back into consumer's linear memory (if needed)
-   template <typename FnPtr>
-   static native_value bridge_call(
-      instance_t* provider,
-      instance_t* consumer,
-      void* host_void,
-      native_value* args,
-      char* consumer_memory,
-      const std::string& export_name)
-   {
-      using Traits = detail::bridge_fn_traits<FnPtr>;
-      using Ret = typename Traits::ReturnType;
-      using ArgTypes = typename Traits::ArgTypes;
-
-      ::psio::native_value slots[16];
-      for (int i = 0; i < 16; ++i)
-         slots[i].i64 = args[i].i64;
-
-      const uint8_t* consumer_mem =
-         reinterpret_cast<const uint8_t*>(consumer_memory);
-
-      // 1. Lift args from consumer
-      detail::host_lift_policy lift{slots, consumer_mem};
-      auto lifted_args = [&]<typename... As>(::psio::TypeList<As...>) {
-         return std::tuple{canonical_lift_flat<As>(lift)...};
-      }(ArgTypes{});
-
-      // 2. Lower into provider
-      detail::void_host_lower_policy<backend_t> lp{*provider->be, host_void};
-      std::apply([&](const auto&... a) {
-         (canonical_lower_flat(a, lp), ...);
-      }, lifted_args);
-
-      // 3. Call provider's export with 16-wide flat vals
-      auto& fv = lp.flat_values;
-      auto slot_u64 = [&](size_t i) -> uint64_t {
-         return i < fv.size() ? fv[i].i64 : uint64_t{0};
-      };
-
-      auto r = provider->be->call_with_return(
-         host_void, std::string_view{export_name},
-         slot_u64(0),  slot_u64(1),  slot_u64(2),  slot_u64(3),
-         slot_u64(4),  slot_u64(5),  slot_u64(6),  slot_u64(7),
-         slot_u64(8),  slot_u64(9),  slot_u64(10), slot_u64(11),
-         slot_u64(12), slot_u64(13), slot_u64(14), slot_u64(15));
-
-      // 4+5. Handle the return value
-      if constexpr (std::is_void_v<Ret>) {
-         return native_value{uint64_t{0}};
-      } else {
-         uint64_t raw_ret = r ? r->to_ui64() : uint64_t{0};
-         using U = std::remove_cvref_t<Ret>;
-         constexpr size_t rflat = flat_count_v<U>;
-
-         if constexpr (rflat <= psio::MAX_FLAT_RESULTS) {
-            // Single-slot flat return (scalar) — pass through
-            native_value rv;
-            rv.i64 = raw_ret;
-            return rv;
-         } else if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>) {
-            // String return: provider wrote {ptr, len} into a return area.
-            // Read the string from provider's memory, allocate in consumer's
-            // memory, copy the bytes, write {ptr, len} into consumer's
-            // return area.
-            uint32_t provider_retptr = static_cast<uint32_t>(raw_ret);
-            const uint8_t* provider_mem =
-               reinterpret_cast<const uint8_t*>(provider->be->get_context().linear_memory());
-
-            uint32_t s_ptr, s_len;
-            std::memcpy(&s_ptr, provider_mem + provider_retptr, 4);
-            std::memcpy(&s_len, provider_mem + provider_retptr + 4, 4);
-
-            // Consumer's retptr is the next arg slot after the real args
-            constexpr size_t num_arg_flats = detail::count_flat_slots(ArgTypes{});
-            uint32_t consumer_retptr = static_cast<uint32_t>(slots[num_arg_flats].i64);
-
-            // Allocate in consumer's memory for the string data
-            uint32_t consumer_str_ptr = 0;
-            if (s_len > 0) {
-               auto alloc_ret = consumer->be->call_with_return(
-                  host_void, std::string_view{"cabi_realloc"},
-                  uint32_t{0}, uint32_t{0}, uint32_t{1}, s_len);
-               consumer_str_ptr = alloc_ret ? alloc_ret->to_ui32() : 0u;
-               // Copy string bytes from provider to consumer
-               char* consumer_mem_w = consumer->be->get_context().linear_memory();
-               std::memcpy(consumer_mem_w + consumer_str_ptr,
-                           provider_mem + s_ptr, s_len);
-            }
-
-            // Write {ptr, len} into consumer's return area
-            char* consumer_mem_w = consumer->be->get_context().linear_memory();
-            std::memcpy(consumer_mem_w + consumer_retptr, &consumer_str_ptr, 4);
-            std::memcpy(consumer_mem_w + consumer_retptr + 4, &s_len, 4);
-
-            native_value rv;
-            rv.i64 = static_cast<uint64_t>(consumer_retptr);
-            return rv;
-         } else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
-            // Vector return: similar to string but for arrays
-            using E = typename detail_dispatch::is_wit_vector<U>::element_type;
-            uint32_t provider_retptr = static_cast<uint32_t>(raw_ret);
-            const uint8_t* provider_mem =
-               reinterpret_cast<const uint8_t*>(provider->be->get_context().linear_memory());
-
-            uint32_t e_ptr, e_len;
-            std::memcpy(&e_ptr, provider_mem + provider_retptr, 4);
-            std::memcpy(&e_len, provider_mem + provider_retptr + 4, 4);
-
-            constexpr size_t num_arg_flats = detail::count_flat_slots(ArgTypes{});
-            uint32_t consumer_retptr = static_cast<uint32_t>(slots[num_arg_flats].i64);
-
-            uint32_t byte_len = e_len * static_cast<uint32_t>(sizeof(E));
-            uint32_t consumer_e_ptr = 0;
-            if (byte_len > 0) {
-               auto alloc_ret = consumer->be->call_with_return(
-                  host_void, std::string_view{"cabi_realloc"},
-                  uint32_t{0}, uint32_t{0},
-                  uint32_t{static_cast<uint32_t>(alignof(E))}, byte_len);
-               consumer_e_ptr = alloc_ret ? alloc_ret->to_ui32() : 0u;
-               char* consumer_mem_w = consumer->be->get_context().linear_memory();
-               std::memcpy(consumer_mem_w + consumer_e_ptr,
-                           provider_mem + e_ptr, byte_len);
-            }
-
-            char* consumer_mem_w = consumer->be->get_context().linear_memory();
-            std::memcpy(consumer_mem_w + consumer_retptr, &consumer_e_ptr, 4);
-            std::memcpy(consumer_mem_w + consumer_retptr + 4, &e_len, 4);
-
-            native_value rv;
-            rv.i64 = static_cast<uint64_t>(consumer_retptr);
-            return rv;
-         } else {
-            // Record/optional: use psio's canonical_lift_fields + lower_fields
-            uint32_t provider_retptr = static_cast<uint32_t>(raw_ret);
-            const uint8_t* provider_mem =
-               reinterpret_cast<const uint8_t*>(provider->be->get_context().linear_memory());
-
-            detail::host_lift_policy ret_lift{nullptr, provider_mem};
-            U result = psio::canonical_lift_fields<U>(ret_lift, provider_retptr);
-
-            constexpr size_t num_arg_flats = detail::count_flat_slots(ArgTypes{});
-            uint32_t consumer_retptr = static_cast<uint32_t>(slots[num_arg_flats].i64);
-
-            lower_into_consumer_retarea<U>(
-               result, consumer, host_void,
-               consumer->be->get_context().linear_memory(),
-               consumer_retptr);
-
-            native_value rv;
-            rv.i64 = static_cast<uint64_t>(consumer_retptr);
-            return rv;
-         }
-      }
-   }
-
-   // Lower a result value into the consumer's return area.
-   // Handles strings, records, optionals by allocating in consumer's
-   // memory via cabi_realloc and writing the canonical layout.
-   template <typename U>
-   static void lower_into_consumer_retarea(
-      const U& value,
-      instance_t* consumer,
-      void* host_void,
-      char* consumer_memory,
-      uint32_t retptr)
-   {
-      // Use a store policy that writes to consumer's linear memory
-      // and allocates via consumer's cabi_realloc
-      struct consumer_store_policy {
-         char*        mem;
-         instance_t*  inst;
-         void*        host;
-
-         uint32_t alloc(uint32_t align, uint32_t size) {
-            if (size == 0) return 0;
-            auto ret = inst->be->call_with_return(
-               host, std::string_view{"cabi_realloc"},
-               uint32_t{0}, uint32_t{0}, align, size);
-            return ret ? ret->to_ui32() : 0u;
-         }
-
-         void store_u8(uint32_t off, uint8_t v)   { std::memcpy(mem + off, &v, 1); }
-         void store_u16(uint32_t off, uint16_t v) { std::memcpy(mem + off, &v, 2); }
-         void store_u32(uint32_t off, uint32_t v) { std::memcpy(mem + off, &v, 4); }
-         void store_u64(uint32_t off, uint64_t v) { std::memcpy(mem + off, &v, 8); }
-         void store_f32(uint32_t off, float v)    { std::memcpy(mem + off, &v, 4); }
-         void store_f64(uint32_t off, double v)   { std::memcpy(mem + off, &v, 8); }
-         void store_bytes(uint32_t off, const char* data, uint32_t len) {
-            if (len > 0) std::memcpy(mem + off, data, len);
-         }
-      };
-
-      consumer_store_policy sp{consumer_memory, consumer, host_void};
-      psio::canonical_lower_fields(value, sp, retptr);
-   }
 };
 
 // ── Linking mode tags ───────────────────────────────────────────────
