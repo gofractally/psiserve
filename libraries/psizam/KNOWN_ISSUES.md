@@ -642,17 +642,16 @@ seed 1776492783 (3K modules) show 0 mismatches.
 helper script). A fresh regen of `select.json` produced correctly-numbered
 `.wasm` files and the checked-in `select_tests.cpp` now matches them.
 
-### unit_tests heap corruption running full suite
+### ~~unit_tests heap corruption / jit_llvm invoke_on failure~~ — fixed
 
-**Status:** pre-existing, not an engine bug.
-
-`./bin/unit_tests` (running every test) aborts near the end with
-`corrupted double-linked list` / `corrupted size vs. prev_size` /
-`malloc(): unaligned tcache chunk detected`. Individual test-case
-groups all pass clean when run in isolation. Catch2 v2.7.2 (the
-version shipped under `external/Catch2/`) has known fixture-cleanup
-ordering issues; the crash reproduces independent of the JIT code
-path. Upgrading Catch2 is the likely fix.
+**Status:** fixed. The heap corruption no longer reproduces. The
+`invoke_on - psizam::jit_llvm` test failure was caused by a missing
+forward-order slow trampoline: for host functions with preconditions,
+only `slow_trampoline_rev` existed. jit_llvm packs args in forward
+order but fell back to the reverse trampoline (since the forward slot
+was null), causing argument values to be swapped/garbled. Fix: added
+`slow_trampoline_fwd` in `host_function.hpp` and wired it into the
+`fast_fwd` slot for non-fast-eligible functions.
 
 ### ~~~150 spec_test "wasm file not found" failures~~ — fixed
 

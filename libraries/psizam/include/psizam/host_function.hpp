@@ -676,21 +676,18 @@ namespace psizam {
          std::make_index_sequence<std::tuple_size_v<Args>>{});
    }
 
-   // Slow rev trampoline: handles host functions with custom from_wasm/to_wasm
-   // conversions or pointer/reference parameters or returns — the cases the
-   // fast path skips. Reconstructs the operand stack (in WASM stack order:
-   // first param at bottom, last param on top) from JIT's reverse-order
-   // native_value array, runs through the full type_converter pipeline, and
-   // reads the resulting top-of-stack back into a native_value for the JIT.
+   // Slow trampoline: handles host functions with custom from_wasm/to_wasm
+   // conversions, pointer/reference parameters, or preconditions — the cases
+   // the fast path skips. Reconstructs the operand stack from the native_value
+   // array and runs through the full type_converter pipeline.
    //
-   // Without this, the JIT's _trampoline_ptrs slot for non-fast-eligible host
-   // functions was nullptr — calling such a function would jump to address 0.
+   // Two variants exist for the two argument orders:
+   //   _rev: args[0] = last WASM stack slot (used by jit, jit2)
+   //   _fwd: args[0] = first WASM parameter  (used by jit_llvm)
    template<auto F, typename Cls, typename TC, typename R, typename Args, typename Preconditions>
    native_value slow_trampoline_rev(Cls* host, native_value* args, char* memory) {
       constexpr uint32_t total_slots = detail::total_native_slots_v<Args>;
       detail::operand_stack temp_stack;
-      // Reverse-order: args[0] = last WASM stack slot. To rebuild WASM stack
-      // order (last on top), push args[total-1] first, args[0] last.
       for (int32_t i = static_cast<int32_t>(total_slots) - 1; i >= 0; i--) {
          temp_stack.push(i64_const_t{args[i].i64});
       }
@@ -703,11 +700,36 @@ namespace psizam {
             std::make_index_sequence<std::tuple_size_v<Args>>{});
          return native_value{uint64_t{0}};
       } else {
-         // decltype(auto) preserves the reference category of F's return.
-         // `auto` would strip references — for a host function returning
-         // T& (e.g. get<char&>), that turns the offset-from-memory we
-         // expected into the byte VALUE because as_result picks the
-         // integral branch instead of the void* branch.
+         decltype(auto) result = invoke_with_host<F, Preconditions, Args>(
+            tc, static_cast<Cls*>(host),
+            std::make_index_sequence<std::tuple_size_v<Args>>{});
+         auto wasm_result = detail::resolve_result(tc, std::forward<decltype(result)>(result));
+         using WT = std::decay_t<decltype(wasm_result)>;
+         native_value nv{uint64_t{0}};
+         if constexpr (std::is_same_v<WT, i32_const_t>) nv.i32 = wasm_result.data.ui;
+         else if constexpr (std::is_same_v<WT, i64_const_t>) nv.i64 = wasm_result.data.ui;
+         else if constexpr (std::is_same_v<WT, f32_const_t>) nv.f32 = wasm_result.data.f;
+         else if constexpr (std::is_same_v<WT, f64_const_t>) nv.f64 = wasm_result.data.f;
+         return nv;
+      }
+   }
+
+   template<auto F, typename Cls, typename TC, typename R, typename Args, typename Preconditions>
+   native_value slow_trampoline_fwd(Cls* host, native_value* args, char* memory) {
+      constexpr uint32_t total_slots = detail::total_native_slots_v<Args>;
+      detail::operand_stack temp_stack;
+      for (uint32_t i = 0; i < total_slots; i++) {
+         temp_stack.push(i64_const_t{args[i].i64});
+      }
+      execution_interface ei{memory, &temp_stack};
+      TC tc{static_cast<Cls*>(host), std::move(ei)};
+
+      if constexpr (std::is_void_v<R>) {
+         invoke_with_host<F, Preconditions, Args>(
+            tc, static_cast<Cls*>(host),
+            std::make_index_sequence<std::tuple_size_v<Args>>{});
+         return native_value{uint64_t{0}};
+      } else {
          decltype(auto) result = invoke_with_host<F, Preconditions, Args>(
             tc, static_cast<Cls*>(host),
             std::make_index_sequence<std::tuple_size_v<Args>>{});
@@ -838,7 +860,7 @@ namespace psizam {
                // direct call jumps to 0). slow_trampoline_rev handles
                // pointer/reference params and returns by going through the full
                // type_converter pipeline.
-               fast_fwd.push_back(nullptr);
+               fast_fwd.push_back(&slow_trampoline_fwd<F, Cls, Type_Converter, R, Args, Preconditions>);
                fast_rev.push_back(&slow_trampoline_rev<F, Cls, Type_Converter, R, Args, Preconditions>);
             }
             // Store raw function pointer for direct JIT calls.
