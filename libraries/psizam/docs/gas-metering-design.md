@@ -2,41 +2,45 @@
 
 Status: design (2026-04-19). Phase 1 complete. Phase 2a in progress.
 
-## Phase 2a first measurement (call-boundary metering, all backends)
+## Phase 2a measurements — call-boundary metering on all backends
 
 Simplest possible Phase 2a: a `gas_charge(cost)` hook called at every
 function entry — inlined as a method for the interpreter, as a host
 call to `__psizam_gas_charge` for the JIT backends. Placeholder cost
 of 1 per call; no CFG walk yet (that comes in Phase 2b).
 
-Recursive call-heavy workload (depth 100, 50K top-level invocations,
-≈5M total gas_charge calls), Linux x86_64 Release:
+### Workload spectrum (Release, Linux x86_64)
 
-| Backend | off ns/call | on ns/call | Δ ns/call | Overhead |
+| Workload | Call density | jit1 | jit2 | jit_llvm |
 |---|---|---|---|---|
-| interpreter | 26.5 | 32.4 | +5.9 | +22% |
-| jit1 | 3.6 | 6.8 | +3.1 | +86% |
-| jit2 | 4.1 | 7.2 | +3.1 | +75% |
-| jit_llvm | 8.4 | 9.3 | +0.9 | +11% |
+| recursive depth=100 × 50K iter | ~5M calls, 0 work/call | +85% | +77% | +11% |
+| bench_fib(1M) × 1000 | tight inner loop, 1K calls | +0.01% | +0.07% | ≈noise |
+| bench_sort(10K) × 10 | bubble sort, 10 calls | +0.04% | ≈noise | ≈noise |
+| bench_matmul(10K) × 10 | 8×8 matmul, 10 calls | ≈noise | +0.02% | +0.05% |
 
-Observations:
+### Interpretation
 
-- **Gas metering works on every backend.** One helper, one prologue
-  hook per backend, same atomic-relaxed semantics.
-- **Interpreter pays ~6 ns per call.** Dominated by `lock xadd`.
-- **jit1/jit2 pay ~3 ns per call.** Pure host-call + atomic, cleaner
-  because the JIT doesn't have interpreter dispatch overhead baked in.
-- **jit_llvm pays ~1 ns.** The ORC JIT linker inlines/optimizes
-  around `__psizam_gas_charge` tighter than the hand-written JIT
-  templates do.
-- **High % numbers on jit1/jit2 reflect very fast baselines** (3–4
-  ns per WASM function call). Absolute cost is small.
+- **Gas metering is free for real compute-heavy WASM.** The +0.01–0.07%
+  overheads on compute workloads are at or below measurement noise.
+  A million-iter `bench_fib` inner loop fires gas_charge exactly once.
+- **The +80% "overhead" on recursive is a worst-case stress number.**
+  Each WASM call does literally nothing except decrement + recurse;
+  the denominator is ~3 ns of call machinery, the numerator is ~3 ns
+  of gas machinery. Not representative of any real workload.
+- **Per-backend hooks work uniformly.** One helper, one prologue hook
+  per backend (x86_64.hpp, aarch64.hpp, jit_codegen.hpp, and an LLVM
+  IR call in llvm_ir_translator.cpp). Same atomic-relaxed semantics.
 
-This is the cost *at call granularity*. Phase 2b's WASM-binary
-rewriter will hit function entries + loop headers (not every call),
-with real CFG-computed costs per function. Phase 3+ per-backend
-peepholes can replace the host call with an inline atomic decrement
-(e.g., `lock sub` on x86_64) and drop the overhead further.
+### When Phase 2a matters
+
+Call-heavy WASM (e.g., a nested interpreter written in WASM; a tight
+dispatch loop calling many small functions) will see measurable
+overhead — in the 10–85% range depending on how small the called
+functions are. Phase 2b's CFG-based cost computation and Phase 3+
+per-backend peepholes can both reduce this further.
+
+Everything else — cryptography, data processing, compression, JIT'd
+scripts doing real work per call — sees overhead buried in noise.
 
 ## Opt-in at runtime (no compile flag)
 

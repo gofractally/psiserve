@@ -430,6 +430,13 @@ if(TARGET psizam-llvm)
    target_link_libraries(bench-gas psizam-llvm)
    target_compile_definitions(bench-gas PRIVATE PSIZAM_ENABLE_LLVM_BACKEND)
 endif()
+if(PSIZAM_ENABLE_BENCH_COMPUTE)
+   add_dependencies(bench-gas compute-wasm)
+   target_compile_definitions(bench-gas PRIVATE
+      BENCH_MISC_WASM="${MISC_WASM}"
+      BENCH_SHA256_WASM="${SHA256_WASM}"
+      BENCH_HAS_COMPUTE)
+endif()
 # Ensure our fetched wasmtime headers take priority over any system-installed
 # wasmtime (e.g. via Homebrew) that might be on -isystem /opt/homebrew/include.
 if(PSIZAM_ENABLE_BENCH_WASMTIME AND EXISTS "${WASMTIME_DIR}/include")
