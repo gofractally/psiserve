@@ -17,19 +17,56 @@ not the contract author.
 
 ```cpp
 struct instance_policy {
+   // ── Runtime trust ─────────────────────────────────────────────
+   //
+   // Runtime trust controls what safety checks are applied during
+   // EXECUTION. Separate from compile trust (where code is compiled).
+   //
+   //   untrusted — first execution: full safety checks (bounds
+   //               checks on every memory access, gas metering,
+   //               stack depth checks). The module hasn't been
+   //               validated by consensus yet.
+   //
+   //   trusted   — replay / validated: the block containing this
+   //               transaction was finalized by consensus. The
+   //               module ran correctly on the producer. Strip all
+   //               per-access checks — no bounds checks, no gas
+   //               (or use unchecked metering mode). Maximum speed.
+
+   enum class runtime_trust { untrusted, trusted };
+
    // ── Safety ──────────────────────────────────────────────────────
    enum class float_mode  { soft, native };
    enum class mem_safety  { guarded, checked, unchecked };
 
-   float_mode  floats = float_mode::soft;    // deterministic by default
-   mem_safety  memory = mem_safety::checked;  // bounded by default
+   runtime_trust trust_level = runtime_trust::untrusted;
+   float_mode    floats      = float_mode::soft;
+   mem_safety    memory      = mem_safety::checked;
 
    // ── Compilation ─────────────────────────────────────────────────
-   enum class compile_tier  { interpret, jit_fast, jit_optimized };
+   //
+   // Four backend tiers, each trading compile time for code quality:
+   //   interpret    — zero compile, ~50× slower execution
+   //   jit1         — fast single-pass compile (~1ms), decent code
+   //   jit2         — two-pass with IR optimization (~10ms), good code
+   //   jit_llvm     — full LLVM pipeline (~100ms), optimal code
+   //
+   // The runtime starts with `initial` tier for instant execution,
+   // then background-compiles to `optimized` tier and hot-swaps.
+
+   enum class compile_tier  { interpret, jit1, jit2, jit_llvm };
+
+   // Trust determines WHERE compilation runs:
+   //   native    — compile on host CPU (trusted modules, fast)
+   //   sandboxed — compile inside a WASM sandbox (untrusted modules,
+   //               the LLVM compiler itself runs as a WASM module
+   //               so a malicious .wasm can't crash the host via
+   //               compiler bugs)
+
    enum class compile_trust { native, sandboxed };
 
-   compile_tier   initial    = compile_tier::jit_fast;
-   compile_tier   optimized  = compile_tier::jit_optimized;
+   compile_tier   initial    = compile_tier::jit1;
+   compile_tier   optimized  = compile_tier::jit_llvm;
    compile_trust  trust      = compile_trust::native;
    uint32_t       compile_timeout_ms = 5000;
 
@@ -165,19 +202,21 @@ public:
 
 ## Typical Usage
 
-### Block producer
+### Block producer (untrusted, first execution)
 ```cpp
 runtime rt;
 rt.register_library("libc++", chain.load(libc_hash));
 rt.provide<chain_api, crypto_api>(host);
 
 auto tmpl = rt.prepare(chain.load(contract_hash), {
-   .floats   = float_mode::soft,
-   .memory   = mem_safety::guarded,
-   .initial  = compile_tier::jit_fast,
-   .optimized = compile_tier::jit_optimized,
-   .metering = meter_mode::timeout,
-   .timeout_ms = 5000,
+   .trust_level = runtime_trust::untrusted,
+   .floats      = float_mode::soft,
+   .memory      = mem_safety::guarded,    // few instances, 8GB guard OK
+   .initial     = compile_tier::jit1,     // instant start
+   .optimized   = compile_tier::jit_llvm, // background upgrade
+   .trust       = compile_trust::sandboxed, // untrusted .wasm → compile in sandbox
+   .metering    = meter_mode::timeout,
+   .timeout_ms  = 5000,
 });
 
 // Per transaction:
@@ -186,13 +225,15 @@ inst.as<contract>().apply(tx.action, tx.data);
 // inst dropped — memory returned to guard-page pool
 ```
 
-### Replay node
+### Replay node (trusted, validated blocks)
 ```cpp
 auto tmpl = rt.prepare(chain.load(contract_hash), {
-   .floats   = float_mode::soft,
-   .memory   = mem_safety::unchecked,
-   .initial  = compile_tier::jit_optimized,
-   .metering = meter_mode::none,
+   .trust_level = runtime_trust::trusted,
+   .floats      = float_mode::soft,       // determinism required
+   .memory      = mem_safety::unchecked,  // validated, skip bounds checks
+   .initial     = compile_tier::jit_llvm, // max speed, compile cost amortized
+   .trust       = compile_trust::native,  // trusted .pzam from cache
+   .metering    = meter_mode::none,       // no gas, no timeout
 });
 
 for (auto& tx : block.transactions) {
@@ -201,18 +242,20 @@ for (auto& tx : block.transactions) {
 }
 ```
 
-### HTTP server (psiserve)
+### HTTP server (psiserve, many concurrent fibers)
 ```cpp
 runtime rt;
 rt.provide<http_api, db_api>(host);
 
 auto tmpl = rt.prepare(app_wasm, {
-   .floats   = float_mode::native,
-   .memory   = mem_safety::checked,
-   .initial  = compile_tier::jit_fast,
-   .optimized = compile_tier::jit_optimized,
-   .metering = meter_mode::gas_yield,
-   .gas_slice = 10'000,
+   .trust_level = runtime_trust::trusted,  // our own code
+   .floats      = float_mode::native,      // max perf, no consensus
+   .memory      = mem_safety::checked,     // many fibers, arena pool
+   .initial     = compile_tier::jit1,      // fast startup
+   .optimized   = compile_tier::jit_llvm,  // background optimize
+   .trust       = compile_trust::native,   // trusted source
+   .metering    = meter_mode::gas_yield,   // cooperative scheduling
+   .gas_slice   = 10'000,
 });
 
 // Per HTTP request (on a fiber):
@@ -249,12 +292,18 @@ churn. Reset via madvise(MADV_DONTNEED).
 
 The cache key is:
 ```
-hash(wasm_content_hash, floats, compile_tier, mem_safety)
+hash(wasm_content_hash, floats, compile_tier, mem_safety, runtime_trust)
 ```
 
-Different policies that affect native code generation produce different
-cache entries. Policies that only affect runtime behavior (gas_budget,
-timeout_ms, max_pages) share the same cached .pzam.
+Fields that affect native code generation produce different cache
+entries:
+- `floats`: soft → softfloat calls; native → hardware FP instructions
+- `compile_tier`: jit1/jit2/jit_llvm produce different native code
+- `mem_safety`: checked → bounds check instructions; unchecked → none
+- `runtime_trust`: untrusted → gas metering inserted; trusted → none
+
+Fields that only affect runtime behavior share the same cached .pzam:
+- gas_budget, gas_slice, timeout_ms, max_pages, compile_timeout_ms
 
 The .pzam is stored in the psitri table alongside the .wasm. Loading
 it is a view (zero-copy). If the .pzam doesn't exist for a given
