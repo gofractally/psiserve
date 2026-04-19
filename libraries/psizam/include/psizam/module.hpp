@@ -148,6 +148,18 @@ void guest_import_lower(flat_val* slots, size_t& idx, const T& v) {
       slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
       slots[idx++] = static_cast<flat_val>(v.size());
    }
+   else if constexpr (psio::detail::is_std_vector_ct<U>::value) {
+      slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
+      slots[idx++] = static_cast<flat_val>(v.size());
+   }
+   else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
+      slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
+      slots[idx++] = static_cast<flat_val>(v.size());
+   }
+   else if constexpr (detail_dispatch::is_std_span<U>::value) {
+      slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
+      slots[idx++] = static_cast<flat_val>(v.size());
+   }
    else if constexpr (psio::Reflected<U>) {
       psio::apply_members(
          (typename psio::reflect<U>::data_members*)nullptr,
@@ -200,11 +212,37 @@ void guest_import_lower(flat_val* slots, size_t& idx, const T& v) {
    BOOST_PP_SEQ_FOR_EACH(PSIO_IMPORT_EMIT_CALL_FN, IFACE,                      \
                          BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))
 
+// ── PSIO_IMPORT_IMPL — generate full import method bodies ───────────────────
+// Uses ImportProxy for automatic lowering/lifting including return-area
+// protocol. Usage:
+//
+//   PSIO_IMPORT_IMPL(greeter, add, concat, translate, ...)
+//
+// Generates both raw import declarations AND method bodies for each
+// method of the interface. The method signature comes from the static
+// declaration in shared.hpp.
+
+#define PSIO_IMPORT_IMPL_ONE(r, IFACE, METHOD)                                 \
+   PSIO_IMPORT_EMIT_THUNK(r, IFACE, METHOD)
+
+#define PSIO_IMPORT_IMPL_BODY(IFACE, METHOD, ...)                               \
+   {                                                                            \
+      return ::psizam::ImportProxy::call_impl<decltype(&IFACE::METHOD)>(        \
+         reinterpret_cast<::psizam::raw_import_fn>(                             \
+            &PSIO_IMPORT_RAW_NAME(IFACE, METHOD)),                              \
+         __VA_ARGS__);                                                          \
+   }
+
+#define PSIO_IMPORT_IMPL(IFACE, ...)                                            \
+   BOOST_PP_SEQ_FOR_EACH(PSIO_IMPORT_IMPL_ONE, IFACE,                           \
+                         BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))
+
 #else  // !__wasm__
 
 // Host build: no thunks. The impl class is plain C++ code; native
 // tests instantiate and call it directly.
 #define PSIO_MODULE(IMPL, ...) /* guest-only */
 #define PSIO_GUEST_IMPORTS(IFACE, ...) /* guest-only */
+#define PSIO_IMPORT_IMPL(IFACE, ...) /* guest-only */
 
 #endif  // __wasm__

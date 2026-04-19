@@ -282,4 +282,168 @@ namespace psizam {
       }
    };
 
+   // ── ImportProxy — guest-side import thunk dispatch ─────────────────────
+   //
+   // The mirror of ComponentProxy: takes C++ args, lowers to flat_vals,
+   // calls a raw 16-wide import, lifts the return. Handles return-area
+   // protocol for multi-slot returns (strings, records, lists).
+   //
+   // Usage (in guest code):
+   //   extern "C" flat_val _raw_import(flat_val, ..., flat_val);
+   //   ReturnType Interface::method(args...) {
+   //      return ImportProxy::call<&Interface::method, &_raw_import>(args...);
+   //   }
+
+   using raw_import_fn = flat_val(*)(
+      flat_val, flat_val, flat_val, flat_val,
+      flat_val, flat_val, flat_val, flat_val,
+      flat_val, flat_val, flat_val, flat_val,
+      flat_val, flat_val, flat_val, flat_val);
+
+   namespace detail_component {
+      template <typename F> struct fn_traits;
+      template <typename R, typename... Args>
+      struct fn_traits<R(*)(Args...)> {
+         using ReturnType = R;
+         using ArgTuple = std::tuple<Args...>;
+      };
+   }
+
+   // Forward declaration — defined in module.hpp
+   template <typename T>
+   void guest_import_lower(flat_val* slots, size_t& idx, const T& v);
+
+   struct ImportProxy {
+
+      template <typename FnPtr, typename... CppArgs>
+      static auto call_impl(raw_import_fn raw, const CppArgs&... args)
+      {
+         using Traits = detail_component::fn_traits<FnPtr>;
+         using Ret = typename Traits::ReturnType;
+
+         // Lower C++ args to flat_vals. Data is already in guest linear
+         // memory — just emit pointers and sizes, no copy needed.
+         flat_val slots[16] = {};
+         std::size_t idx = 0;
+         (guest_import_lower(slots, idx, args), ...);
+
+         constexpr size_t rflat = detail_component::result_flat_count<Ret>();
+
+         if constexpr (std::is_void_v<Ret>) {
+            raw(slots[0],  slots[1],  slots[2],  slots[3],
+                slots[4],  slots[5],  slots[6],  slots[7],
+                slots[8],  slots[9],  slots[10], slots[11],
+                slots[12], slots[13], slots[14], slots[15]);
+         }
+         else if constexpr (rflat <= psio::MAX_FLAT_RESULTS) {
+            // Scalar return — direct cast from flat_val
+            flat_val r = raw(
+                slots[0],  slots[1],  slots[2],  slots[3],
+                slots[4],  slots[5],  slots[6],  slots[7],
+                slots[8],  slots[9],  slots[10], slots[11],
+                slots[12], slots[13], slots[14], slots[15]);
+            if constexpr (std::is_integral_v<Ret>)
+               return static_cast<Ret>(r);
+            else if constexpr (std::is_same_v<Ret, float>) {
+               union { int32_t i; float f; } u;
+               u.i = static_cast<int32_t>(r);
+               return u.f;
+            } else if constexpr (std::is_same_v<Ret, double>) {
+               union { int64_t i; double f; } u;
+               u.i = r;
+               return u.f;
+            } else {
+               return static_cast<Ret>(r);
+            }
+         }
+         else {
+            // Multi-slot return — return area protocol.
+            // Allocate a return area, pass its pointer as an extra arg
+            // after the regular args. The bridge writes the canonical
+            // result into it and returns the pointer.
+            // String and list returns are always {i32 ptr, i32 len} = 8 bytes.
+            // Records use their canonical size from reflection.
+            constexpr uint32_t ret_align = []() -> uint32_t {
+               using U = std::remove_cvref_t<Ret>;
+               if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>)
+                  return 4;
+               else if constexpr (detail_dispatch::is_wit_vector<U>::value)
+                  return 4;
+               else
+                  return psio::canonical_align_v<U>;
+            }();
+            constexpr uint32_t ret_size = []() -> uint32_t {
+               using U = std::remove_cvref_t<Ret>;
+               if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>)
+                  return 8;
+               else if constexpr (detail_dispatch::is_wit_vector<U>::value)
+                  return 8;
+               else
+                  return psio::canonical_size_v<U>;
+            }();
+#ifdef __wasm__
+            uint8_t* ret_area = static_cast<uint8_t*>(
+               ::cabi_realloc(nullptr, 0, ret_align, ret_size));
+#else
+            static uint8_t fallback[256];
+            uint8_t* ret_area = fallback;
+#endif
+            slots[idx] = static_cast<flat_val>(
+               reinterpret_cast<uintptr_t>(ret_area));
+
+            raw(slots[0],  slots[1],  slots[2],  slots[3],
+                slots[4],  slots[5],  slots[6],  slots[7],
+                slots[8],  slots[9],  slots[10], slots[11],
+                slots[12], slots[13], slots[14], slots[15]);
+
+            // Lift the result from the return area
+            return lift_from_retarea<Ret>(ret_area);
+         }
+      }
+
+   private:
+      template <typename Ret>
+      static Ret lift_from_retarea(const uint8_t* ret_area) {
+         using U = std::remove_cvref_t<Ret>;
+         if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>) {
+            uint32_t ptr, len;
+            std::memcpy(&ptr, ret_area, 4);
+            std::memcpy(&len, ret_area + 4, 4);
+            return psio::owned<std::string, psio::wit>::adopt(
+               reinterpret_cast<char*>(static_cast<uintptr_t>(ptr)), len);
+         }
+         else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
+            using E = typename detail_dispatch::is_wit_vector<U>::element_type;
+            uint32_t ptr, len;
+            std::memcpy(&ptr, ret_area, 4);
+            std::memcpy(&len, ret_area + 4, 4);
+            return U::adopt(
+               reinterpret_cast<E*>(static_cast<uintptr_t>(ptr)), len);
+         }
+         else if constexpr (psio::Reflected<U>) {
+            // Record return — lift from canonical layout in return area
+            export_lift_policy lift(nullptr, ret_area);
+            // The return area IS the base; fields are at canonical offsets
+            // relative to ret_area. Use psio::canonical_lift_fields.
+            struct retarea_load_policy {
+               const uint8_t* base;
+               uint8_t  load_u8(uint32_t off)  { return base[off]; }
+               uint16_t load_u16(uint32_t off) { uint16_t v; std::memcpy(&v, base+off, 2); return v; }
+               uint32_t load_u32(uint32_t off) { uint32_t v; std::memcpy(&v, base+off, 4); return v; }
+               uint64_t load_u64(uint32_t off) { uint64_t v; std::memcpy(&v, base+off, 8); return v; }
+               float    load_f32(uint32_t off) { float v;    std::memcpy(&v, base+off, 4); return v; }
+               double   load_f64(uint32_t off) { double v;   std::memcpy(&v, base+off, 8); return v; }
+               const char* load_bytes(uint32_t off, uint32_t) {
+                  return reinterpret_cast<const char*>(base + off);
+               }
+            };
+            retarea_load_policy lp{ret_area};
+            return psio::canonical_lift_fields<U>(lp, 0);
+         }
+         else {
+            static_assert(sizeof(Ret) == 0, "ImportProxy: unsupported multi-slot return type");
+         }
+      }
+   };
+
 } // namespace psizam
