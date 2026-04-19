@@ -74,3 +74,10 @@ if(PSISERVE_ENABLE AND NOT PSISERVE_WASI)
    add_subdirectory(programs/psiserve-cli)
    add_subdirectory(programs/chat-bench)
 endif()
+
+# source-to-pzam driver: host CLI that runs clang.pzam + wasm-ld.pzam under
+# pzam-run (which itself runs inside psizam), then pzam-compile native on the
+# resulting .wasm. Only relevant for native host builds.
+if(NOT PSISERVE_WASI)
+   add_subdirectory(programs/source-to-pzam)
+endif()
