@@ -2,9 +2,9 @@
 
 // shared.hpp — interfaces for the runtime-resource example.
 //
-// Uses name_id (u64) for all identifiers — no string dispatch on
-// the hot path. Function names are resolved to integer indices at
-// instantiate time via resolve_export.
+// Resources: module and instance are opaque u32 handles with
+// constructor/method/drop semantics. The host manages handle
+// tables with generation counters and capacity limits.
 
 #include <stdint.h>
 #include <string_view>
@@ -15,42 +15,90 @@
 
 PSIO_PACKAGE(runtime_resource, "0.1.0");
 
-// ── wasm_runtime — host-provided resource ──────────────────────────
+// ── wasm_runtime — host-provided resource interface ────────────────
+// Resources are u32 handles. Methods take the handle as first arg.
+// Drop functions release the handle back to the pool.
 
 struct wasm_runtime
 {
-   // Load a WASM module from bytes, returns a module handle
-   PSIO_IMPORT(wasm_runtime, load_module)
-   static uint32_t load_module(std::string_view wasm_bytes);
+   // module resource
+   PSIO_IMPORT(wasm_runtime, module_create)
+   static uint32_t module_create(std::string_view wasm_bytes);
 
-   // Instantiate a loaded module, returns an instance handle
-   PSIO_IMPORT(wasm_runtime, instantiate)
-   static uint32_t instantiate(uint32_t module_handle);
+   PSIO_IMPORT(wasm_runtime, module_instantiate)
+   static uint32_t module_instantiate(uint32_t module_handle);
 
-   // Resolve an export name to an integer index (once, at setup)
-   PSIO_IMPORT(wasm_runtime, resolve_export)
-   static uint32_t resolve_export(uint32_t instance_handle, psio::name_id func_name);
+   PSIO_IMPORT(wasm_runtime, module_drop)
+   static void module_drop(uint32_t module_handle);
 
-   // Call by pre-resolved index — no string lookup
-   PSIO_IMPORT(wasm_runtime, call_by_index)
-   static uint64_t call_by_index(uint32_t instance_handle,
+   // instance resource
+   PSIO_IMPORT(wasm_runtime, instance_resolve)
+   static uint32_t instance_resolve(uint32_t instance_handle,
+                                    psio::name_id func_name);
+
+   PSIO_IMPORT(wasm_runtime, instance_call)
+   static uint64_t instance_call(uint32_t instance_handle,
                                  uint32_t func_index,
                                  uint64_t arg0, uint64_t arg1);
 
-   PSIO_IMPORT(wasm_runtime, destroy_instance)
-   static void destroy_instance(uint32_t instance_handle);
-
-   PSIO_IMPORT(wasm_runtime, destroy_module)
-   static void destroy_module(uint32_t module_handle);
+   PSIO_IMPORT(wasm_runtime, instance_drop)
+   static void instance_drop(uint32_t instance_handle);
 };
 
 PSIO_INTERFACE(wasm_runtime, types(),
-   funcs(func(load_module,      wasm_bytes),
-         func(instantiate,      module_handle),
-         func(resolve_export,   instance_handle, func_name),
-         func(call_by_index,    instance_handle, func_index, arg0, arg1),
-         func(destroy_instance, instance_handle),
-         func(destroy_module,   module_handle)))
+   funcs(func(module_create,      wasm_bytes),
+         func(module_instantiate, module_handle),
+         func(module_drop,        module_handle),
+         func(instance_resolve,   instance_handle, func_name),
+         func(instance_call,      instance_handle, func_index, arg0, arg1),
+         func(instance_drop,      instance_handle)))
+
+// ── Guest-side RAII wrappers ───────────────────────────────────────
+// These live in the shared header so the guest gets type-safe
+// resource handles with automatic drop.
+
+#ifdef __wasm__
+namespace rt {
+
+class instance;
+
+class module {
+   uint32_t h_;
+public:
+   explicit module(uint32_t h) : h_(h) {}
+   module(module&& o) noexcept : h_(o.h_) { o.h_ = UINT32_MAX; }
+   ~module() { if (h_ != UINT32_MAX) wasm_runtime::module_drop(h_); }
+   module(const module&) = delete;
+   module& operator=(const module&) = delete;
+
+   instance instantiate();
+   uint32_t handle() const { return h_; }
+};
+
+class instance {
+   uint32_t h_;
+public:
+   explicit instance(uint32_t h) : h_(h) {}
+   instance(instance&& o) noexcept : h_(o.h_) { o.h_ = UINT32_MAX; }
+   ~instance() { if (h_ != UINT32_MAX) wasm_runtime::instance_drop(h_); }
+   instance(const instance&) = delete;
+   instance& operator=(const instance&) = delete;
+
+   uint32_t resolve(psio::name_id name) {
+      return wasm_runtime::instance_resolve(h_, name);
+   }
+   uint64_t call(uint32_t func_idx, uint64_t a0, uint64_t a1) {
+      return wasm_runtime::instance_call(h_, func_idx, a0, a1);
+   }
+   uint32_t handle() const { return h_; }
+};
+
+inline instance module::instantiate() {
+   return instance{wasm_runtime::module_instantiate(h_)};
+}
+
+} // namespace rt
+#endif
 
 // ── module_store — host returns contract bytes ─────────────────────
 
@@ -83,15 +131,3 @@ struct blockchain
 
 PSIO_INTERFACE(blockchain, types(),
    funcs(func(run_contract, contract_name, arg0, arg1)))
-
-// ── calculator — the smart contract exports ────────────────────────
-
-struct calculator
-{
-   static uint32_t add(uint32_t a, uint32_t b);
-   static uint32_t multiply(uint32_t a, uint32_t b);
-};
-
-PSIO_INTERFACE(calculator, types(),
-   funcs(func(add, a, b),
-         func(multiply, a, b)))
