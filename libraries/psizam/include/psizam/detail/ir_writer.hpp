@@ -208,6 +208,22 @@ namespace psizam::detail {
       }
       growable_allocator& get_ir_allocator() { return _ir_alloc; }
       jit_scratch_allocator& get_ir_scratch() { return _scratch; }
+
+      // Phase 4 gas-metering handles. The parser hooks these via SFINAE:
+      // after emit_prologue it captures prologue_gas_handle(), after
+      // emit_loop it captures last_loop_gas_handle(), and at end-of-scope
+      // it calls patch_gas_imm_add_extra(handle, extras) to widen the
+      // per-scope heavy-op sum. For jit2 there's no byte patching —
+      // codegen is deferred, so the handle points directly at the IR
+      // field (prologue_gas_extra / loop_gas_extra) that codegen reads.
+      void* prologue_gas_handle() const {
+         return _func ? static_cast<void*>(&_func->prologue_gas_extra) : nullptr;
+      }
+      void* last_loop_gas_handle() const { return _last_loop_gas_ptr; }
+      void patch_gas_imm_add_extra(void* handle, int64_t extra) {
+         if (!handle || extra == 0) return;
+         *static_cast<int64_t*>(handle) += extra;
+      }
       // Branch/label types — dummy values since IR tracks control flow directly.
       // The parser stores and passes these between emit_if/emit_else/emit_end/emit_br
       // but never interprets them. fix_branch is a no-op.
@@ -355,6 +371,7 @@ namespace psizam::detail {
          _func->func_index = funcnum;
          _func->type = &ft;
          _func->num_params = ft.param_types.size();
+         _last_loop_gas_ptr = nullptr;
 
          // Count total locals (params + body locals)
          uint32_t total = ft.param_types.size();
@@ -761,6 +778,7 @@ namespace psizam::detail {
          ir_control_entry entry{};
          entry.block_idx = _func->new_block();
          _func->blocks[entry.block_idx].is_loop = 1;
+         _last_loop_gas_ptr = &_func->blocks[entry.block_idx].loop_gas_extra;
          entry.param_count = static_cast<uint8_t>(param_count);
          std::memset(entry.param_vregs, 0xFF, sizeof(entry.param_vregs));
          if (!_unreachable && param_count <= _func->vstack_depth()) {
@@ -3379,6 +3397,10 @@ namespace psizam::detail {
       std::size_t _source_bytes;
       bool _unreachable = false;
       const uint8_t* _wasm_pc = nullptr;
+      // Phase 4 gas-metering: points at the current function's most
+      // recently entered loop's loop_gas_extra field. Reset on each
+      // emit_prologue so the value does not leak across functions.
+      int64_t* _last_loop_gas_ptr = nullptr;
       // Side-channel for multi-value result types: parser fills these before the
       // next emit_block/loop/if/try_table/return so the IR writer can size the
       // vstack correctly for v128 (which occupies 2 slots, not 1). Consumed and

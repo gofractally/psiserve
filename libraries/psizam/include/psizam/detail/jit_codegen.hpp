@@ -605,8 +605,12 @@ namespace psizam::detail {
       void emit_function_prologue(ir_function& func) {
          this->emit_push_raw(rbp);
          this->emit_mov(rsp, rbp);
-         // Gas metering (Phase 2b): cost = function body byte size.
-         emit_gas_charge(static_cast<int64_t>(_mod.code[func.func_index].wasm_body_bytes));
+         // Gas metering (Phase 4): per-function cost = body size in bytes
+         // + prepay_extra (heavy-op weights for opcodes outside any loop,
+         // accumulated by the parser and stored on the IR before codegen).
+         // No byte patching needed — codegen happens after accumulation.
+         emit_gas_charge(static_cast<int64_t>(_mod.code[func.func_index].wasm_body_bytes)
+                         + func.prologue_gas_extra);
 
          // Count body local slots, accounting for v128 locals using 2 slots (16 bytes)
          uint32_t body_local_slots = 0;
@@ -4112,10 +4116,12 @@ namespace psizam::detail {
                _block_fixups[block_idx] = nullptr;
             }
             // Loop-header gas metering: branches back to the label land
-            // ahead of this gas_charge, so each iteration pays gas.
+            // ahead of this gas_charge, so each iteration pays gas. Cost
+            // is 1 per iteration plus any heavy-op extras the parser
+            // accumulated inside this loop (Phase 4).
             if (_cur_func && _cur_func->blocks &&
                 _cur_func->blocks[block_idx].is_loop) {
-               emit_gas_charge(1);
+               emit_gas_charge(1 + _cur_func->blocks[block_idx].loop_gas_extra);
             }
          }
       }

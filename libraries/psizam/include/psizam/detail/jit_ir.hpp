@@ -423,6 +423,11 @@ namespace psizam::detail {
       uint8_t  is_if;
       uint8_t  branch_to_entry; // When set, br/br_if targeting this block go to entry, not exit
       uint32_t loop_depth;
+      // Phase 4 gas-metering: sum of heavy-opcode extras the parser
+      // accumulated for opcodes inside this loop. Added to the
+      // per-iteration gas_charge(1) emitted at the loop header during
+      // codegen. Only meaningful when is_loop == 1.
+      int64_t  loop_gas_extra;
    };
    static_assert(std::is_trivially_copyable_v<ir_basic_block>);
    static_assert(std::is_trivially_destructible_v<ir_basic_block>);
@@ -526,6 +531,12 @@ namespace psizam::detail {
       uint32_t        callee_saved_used = 0;  // bitmask of callee-saved regs assigned by regalloc
       bool            has_simd = false;       // true if function contains v128_op instructions
 
+      // Phase 4 gas-metering: sum of heavy-opcode extras the parser
+      // accumulated for opcodes outside any loop (the "prepay"). Added
+      // to the per-function body-bytes cost emitted in the prologue
+      // gas_charge during codegen.
+      int64_t         prologue_gas_extra = 0;
+
       // Exception handling data (indexed by eh_enter's ri.imm)
       ir_eh_data*     eh_data       = nullptr;
       uint32_t        eh_data_count = 0;
@@ -568,6 +579,7 @@ namespace psizam::detail {
          intervals = nullptr;
          interval_count = 0;
          num_spill_slots = 0;
+         prologue_gas_extra = 0;
       }
 
       // No per-function release needed — scratch allocator frees all in bulk.
@@ -597,6 +609,7 @@ namespace psizam::detail {
          b.is_if = 0;
          b.branch_to_entry = 0;
          b.loop_depth = 0;
+         b.loop_gas_extra = 0;
          return idx;
       }
 
