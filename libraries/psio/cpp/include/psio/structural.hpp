@@ -198,7 +198,7 @@ struct package_of
 
 #define PSIO_IFACE_REV_LOOKUP(s, TAG, T)                             \
    template <>                                                       \
-   struct ::psio::interface_of<T>                                    \
+   struct psio::interface_of<T>                                      \
    {                                                                 \
       using type = TAG;                                              \
    };
@@ -372,7 +372,7 @@ struct package_of
 
 #define PSIO_HOST_MODULE_EMIT_ENTRY(r, IMPL, entry)                                              \
    template <>                                                                            \
-   struct ::psio::detail::iface_impl<IMPL, ::PSIO_HOST_MODULE_IFACE_TAG(entry)>                  \
+   struct psio::detail::iface_impl<IMPL, ::PSIO_HOST_MODULE_IFACE_TAG(entry)>                    \
    {                                                                                      \
       using host = IMPL;                                                                  \
       using tag  = ::PSIO_HOST_MODULE_IFACE_TAG(entry);                                          \
@@ -393,14 +393,14 @@ struct package_of
 #define PSIO_HOST_MODULE(IMPL, ...)                                                                  \
    BOOST_PP_SEQ_FOR_EACH(PSIO_HOST_MODULE_EMIT_ENTRY, IMPL, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))   \
    template <>                                                                                \
-   struct ::psio::impl_of<IMPL>                                                               \
+   struct psio::impl_of<IMPL>                                                                 \
    {                                                                                          \
       using type = ::std::tuple<PSIO_SEQ_TO_VA_ARGS(                                          \
           BOOST_PP_SEQ_TRANSFORM(PSIO_HOST_MODULE_IFACE_TAG_TYPE, _,                                 \
                                  BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__)))>;                    \
    };                                                                                         \
    template <>                                                                                \
-   struct ::psio::detail::impl_info<IMPL>                                                     \
+   struct psio::detail::impl_info<IMPL>                                                       \
    {                                                                                          \
       using interfaces = ::psio::detail::iface_impls_tuple<IMPL, PSIO_SEQ_TO_VA_ARGS(         \
           BOOST_PP_SEQ_TRANSFORM(PSIO_HOST_MODULE_IFACE_TAG_TYPE, _,                                 \
