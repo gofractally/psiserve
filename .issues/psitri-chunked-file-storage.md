@@ -142,9 +142,18 @@ refcount (the owning file).
 
 ## Open Design Questions
 
-- **4MB block header format**: slot liveness + chunk offsets + sizes +
-  compression flag + uncompressed-payload-size. Target: one cacheline
-  (64 bytes) so the header is exactly one SAL allocation unit of overhead.
+- **Block size and header placement (TBD)**: the current design says 4MB
+  logical blocks, but 2MB would align exactly to a huge page at the cost
+  of halving the capacity ceiling (8 PB vs 16 PB) and doubling
+  control_block consumption. Either way, the usable payload is
+  `aligned_size - header_size`, which doesn't divide evenly into 256KB
+  chunks. Open sub-question: put the header at block *end* so the payload
+  stays aligned at the start and the last slot reads cleanly to the
+  header boundary? Or accept an odd-sized final slot? Benchmarks needed
+  to settle 2MB vs 4MB; the header placement decision follows from that.
+  Header contents are fixed: slot liveness + chunk offsets + sizes +
+  compression flag + uncompressed-payload-size, target one cacheline
+  (64 bytes).
 - **Partial-final-chunk handling**: last chunk of a file is usually <256KB.
   Inline the remainder in the file_node, or waste the slot?
 - **SAL fragmentation with 4MB logical allocations**: SAL works at cacheline
