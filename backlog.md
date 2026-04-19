@@ -35,6 +35,8 @@ Last updated: 2026-04-19
 | [psiserve-snapshot-api](.issues/psiserve-snapshot-api.md) | backlog | medium | psiserve,psitri | — | — |
 | [psizam-memory-sandboxing-modes](.issues/psizam-memory-sandboxing-modes.md) | ready | high | psizam | agent3 | — |
 | [psio-wit-resource-drop-specializations](.issues/psio-wit-resource-drop-specializations.md) | ready | high | psio,psiserve,wasi | — | psiserve-wit-host-guest-api |
+| [psitri-chunked-file-storage](.issues/psitri-chunked-file-storage.md) | ready | high | psitri | — | ipfs-filesystem-api |
+| [ipfs-filesystem-api](.issues/ipfs-filesystem-api.md) | backlog | medium | psiserve,psio,psitri | — | — |
 
 ## Dependency Graph
 
@@ -60,6 +62,9 @@ psio-dynamic-schema-validation
 
 psio-wit-resource-drop-specializations
   └→ psiserve-wit-host-guest-api
+
+psitri-chunked-file-storage
+  └→ ipfs-filesystem-api
 ```
 
 ## Conflict Map (agents touching overlapping areas)
