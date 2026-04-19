@@ -52,19 +52,17 @@ PSIO_INTERFACE(wasm_runtime, types(),
          func(destroy_instance, instance_handle),
          func(destroy_module,   module_handle)))
 
-// ── module_store — host pre-loads modules, returns handles ─────────
-// Returns a module handle for a named contract. The host has already
-// loaded the WASM bytes into the runtime — the blockchain WASM just
-// gets the handle (a u32 scalar, no string return needed).
+// ── module_store — host returns contract bytes ─────────────────────
+// Returns the WASM bytes for a named contract. The host has the
+// bytes embedded; in production this would read from psitri.
 
 struct module_store
 {
-   PSIO_IMPORT(module_store, get_module_handle)
-   static uint32_t get_module_handle(std::string_view name);
+   static wit::string get_module(std::string_view name);
 };
 
 PSIO_INTERFACE(module_store, types(),
-   funcs(func(get_module_handle, name)))
+   funcs(func(get_module, name)))
 
 // ── env — basic logging ────────────────────────────────────────────
 

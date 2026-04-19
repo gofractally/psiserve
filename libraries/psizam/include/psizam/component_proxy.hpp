@@ -365,7 +365,8 @@ namespace psizam {
             // Records use their canonical size from reflection.
             constexpr uint32_t ret_align = []() -> uint32_t {
                using U = std::remove_cvref_t<Ret>;
-               if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>)
+               if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>> ||
+                             psio::detail::is_std_string_ct<U>::value)
                   return 4;
                else if constexpr (detail_dispatch::is_wit_vector<U>::value)
                   return 4;
@@ -374,7 +375,8 @@ namespace psizam {
             }();
             constexpr uint32_t ret_size = []() -> uint32_t {
                using U = std::remove_cvref_t<Ret>;
-               if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>)
+               if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>> ||
+                             psio::detail::is_std_string_ct<U>::value)
                   return 8;
                else if constexpr (detail_dispatch::is_wit_vector<U>::value)
                   return 8;
@@ -419,6 +421,15 @@ namespace psizam {
             std::memcpy(&len, ret_area + 4, 4);
             return U::adopt(
                reinterpret_cast<E*>(static_cast<uintptr_t>(ptr)), len);
+         }
+         else if constexpr (psio::detail::is_std_string_ct<U>::value) {
+            // std::string return — read {ptr, len} from return area,
+            // construct string from linear memory
+            uint32_t ptr, len;
+            std::memcpy(&ptr, ret_area, 4);
+            std::memcpy(&len, ret_area + 4, 4);
+            return std::string(
+               reinterpret_cast<const char*>(static_cast<uintptr_t>(ptr)), len);
          }
          else if constexpr (psio::Reflected<U>) {
             // Record return — lift from canonical layout in return area

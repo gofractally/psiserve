@@ -73,6 +73,23 @@ struct member_fn_types<R (Host::*)(Args...)>
 template <typename Host, typename R, typename... Args>
 struct member_fn_types<R (Host::*)(Args...) const> : member_fn_types<R (Host::*)(Args...)> {};
 
+// ── Thread-local active backend for re-entrant cabi_realloc ─────────
+// Set by invoke_canonical_export before calling an export, used by
+// canonical host handlers to call cabi_realloc in the guest.
+inline thread_local void* tl_active_backend = nullptr;
+inline thread_local void* tl_active_host    = nullptr;
+
+// Helper: call cabi_realloc on the active backend
+inline uint32_t host_cabi_realloc(uint32_t align, uint32_t size) {
+   if (!tl_active_backend) return 0;
+   using be_t = backend<std::nullptr_t, interpreter>;
+   auto* be = static_cast<be_t*>(tl_active_backend);
+   auto r = be->call_with_return(tl_active_host,
+      std::string_view{"cabi_realloc"},
+      uint32_t{0}, uint32_t{0}, align, size);
+   return r ? r->to_ui32() : 0u;
+}
+
 // ── host_lift_policy ─────────────────────────────────────────────────
 // Reads flat slots + linear memory to reconstruct a host C++ value from
 // a guest export's return (or a guest import's args on the host side).
@@ -152,14 +169,14 @@ auto make_canonical_host_handler()
          auto result = std::apply([host](auto&&... a) {
             return (host->*MemPtr)(std::forward<decltype(a)>(a)...);
          }, args);
-         // Lower the return to a single i64
-         // For scalars, direct cast; for multi-slot returns, would need
-         // return-area threading (not yet implemented for host returns).
+
+         using U = std::remove_cvref_t<ReturnType>;
          uint64_t rv = 0;
-         if constexpr (std::is_integral_v<ReturnType>)
+
+         if constexpr (std::is_integral_v<U>)
             rv = static_cast<uint64_t>(result);
-         else if constexpr (std::is_floating_point_v<ReturnType>) {
-            if constexpr (sizeof(ReturnType) == 4) {
+         else if constexpr (std::is_floating_point_v<U>) {
+            if constexpr (sizeof(U) == 4) {
                union { float f; uint32_t u; } cvt{result};
                rv = cvt.u;
             } else {
@@ -167,6 +184,65 @@ auto make_canonical_host_handler()
                rv = cvt.u;
             }
          }
+         else if constexpr (std::is_same_v<U, std::string> ||
+                            std::is_same_v<U, std::string_view> ||
+                            std::is_same_v<U, psio::owned<std::string, psio::wit>>) {
+            // String return: allocate in guest memory via cabi_realloc,
+            // copy the string data, write {ptr, len} into a return area,
+            // return the pointer to the return area.
+            std::string_view sv;
+            if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>)
+               sv = result.view();
+            else
+               sv = result;
+
+            char* guest_mem = static_cast<char*>(tc.get_interface().get_memory());
+
+            // The guest passed a retptr as the next flat arg after the
+            // real args. It's in slots[num_consumed_slots].
+            uint32_t retptr = static_cast<uint32_t>(slots[lift.idx].i64);
+
+            // Allocate space for the string data in guest memory via
+            // cabi_realloc (called re-entrantly through the backend).
+            uint32_t str_ptr = 0;
+            if (!sv.empty()) {
+               str_ptr = host_cabi_realloc(1, static_cast<uint32_t>(sv.size()));
+               // Re-read guest memory (cabi_realloc may have grown it)
+               guest_mem = static_cast<char*>(tc.get_interface().get_memory());
+               std::memcpy(guest_mem + str_ptr, sv.data(), sv.size());
+            }
+
+            // Write {ptr, len} into the return area
+            uint32_t str_len = static_cast<uint32_t>(sv.size());
+            std::memcpy(guest_mem + retptr, &str_ptr, 4);
+            std::memcpy(guest_mem + retptr + 4, &str_len, 4);
+
+            rv = static_cast<uint64_t>(retptr);
+         }
+         else if constexpr (psio::Reflected<U>) {
+            // Record return: lower fields into guest return area
+            char* guest_mem = static_cast<char*>(tc.get_interface().get_memory());
+            uint32_t retptr = static_cast<uint32_t>(slots[lift.idx].i64);
+
+            // Use a store policy that writes to guest memory
+            struct guest_store {
+               char* mem;
+               uint32_t alloc(uint32_t, uint32_t) { return 0; }
+               void store_u8(uint32_t off, uint8_t v)   { std::memcpy(mem+off, &v, 1); }
+               void store_u16(uint32_t off, uint16_t v) { std::memcpy(mem+off, &v, 2); }
+               void store_u32(uint32_t off, uint32_t v) { std::memcpy(mem+off, &v, 4); }
+               void store_u64(uint32_t off, uint64_t v) { std::memcpy(mem+off, &v, 8); }
+               void store_f32(uint32_t off, float v)    { std::memcpy(mem+off, &v, 4); }
+               void store_f64(uint32_t off, double v)   { std::memcpy(mem+off, &v, 8); }
+               void store_bytes(uint32_t off, const char* data, uint32_t len) {
+                  if (len > 0) std::memcpy(mem+off, data, len);
+               }
+            };
+            guest_store sp{guest_mem};
+            psio::canonical_lower_fields(result, sp, retptr);
+            rv = static_cast<uint64_t>(retptr);
+         }
+
          tc.get_interface().push_operand(
             ::psizam::detail::i64_const_t{rv});
       }
@@ -475,8 +551,24 @@ struct proxy_adapter
       using Traits = free_fn_traits<Fn>;
       using Ret    = typename Traits::ReturnType;
       std::string_view name = Info::func_names[Index];
-      return invoke_canonical_export<Ret>(*_backend, *_host, name,
-                                          std::forward<Args>(args)...);
+
+      // Set thread-locals so canonical host handlers can call
+      // cabi_realloc re-entrantly for string/record returns
+      tl_active_backend = static_cast<void*>(_backend);
+      tl_active_host    = static_cast<void*>(_host);
+
+      if constexpr (std::is_void_v<Ret>) {
+         invoke_canonical_export<Ret>(*_backend, *_host, name,
+                                     std::forward<Args>(args)...);
+         tl_active_backend = nullptr;
+         tl_active_host    = nullptr;
+      } else {
+         auto result = invoke_canonical_export<Ret>(*_backend, *_host, name,
+                                             std::forward<Args>(args)...);
+         tl_active_backend = nullptr;
+         tl_active_host    = nullptr;
+         return result;
+      }
    }
 };
 
@@ -588,8 +680,22 @@ struct void_proxy_adapter
       using Traits = free_fn_traits<Fn>;
       using Ret    = typename Traits::ReturnType;
       std::string_view name = Info::func_names[Index];
-      return invoke_canonical_export_void<Ret>(*_backend, _host, name,
-                                               std::forward<Args>(args)...);
+
+      tl_active_backend = static_cast<void*>(_backend);
+      tl_active_host    = _host;
+
+      if constexpr (std::is_void_v<Ret>) {
+         invoke_canonical_export_void<Ret>(*_backend, _host, name,
+                                          std::forward<Args>(args)...);
+         tl_active_backend = nullptr;
+         tl_active_host    = nullptr;
+      } else {
+         auto result = invoke_canonical_export_void<Ret>(*_backend, _host, name,
+                                                  std::forward<Args>(args)...);
+         tl_active_backend = nullptr;
+         tl_active_host    = nullptr;
+         return result;
+      }
    }
 };
 

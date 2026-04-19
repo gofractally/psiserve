@@ -1,7 +1,8 @@
 // host.cpp — native host for the runtime-resource example.
 //
 // Provides wasm_runtime + module_store + env to the blockchain WASM.
-// Pre-loads the contract WASM into the runtime and returns handles.
+// module_store::get_module returns contract WASM bytes as a string
+// (tests host→guest canonical string returns).
 
 #include <psizam/runtime.hpp>
 #include <psizam/hosted.hpp>
@@ -22,23 +23,29 @@ struct Host
    psizam::runtime rt;
    std::vector<psizam::module_handle> modules;
    std::vector<psizam::instance>      instances;
-
-   // Pre-loaded module handles by name
-   std::unordered_map<std::string, uint32_t> module_handles;
+   std::unordered_map<std::string, std::vector<uint8_t>> store;
 
    // ── wasm_runtime ────────────────────────────────────────────────
 
+   uint32_t load_module(std::string_view wasm_bytes)
+   {
+      std::vector<uint8_t> bytes(
+         reinterpret_cast<const uint8_t*>(wasm_bytes.data()),
+         reinterpret_cast<const uint8_t*>(wasm_bytes.data()) + wasm_bytes.size());
+
+      auto policy = psizam::instance_policy{};
+      auto mod = rt.prepare(psizam::wasm_bytes{bytes}, policy);
+      uint32_t handle = static_cast<uint32_t>(modules.size());
+      modules.push_back(std::move(mod));
+      return handle;
+   }
+
    uint32_t instantiate(uint32_t module_handle)
    {
-      try {
-         auto inst = rt.instantiate(modules[module_handle]);
-         uint32_t handle = static_cast<uint32_t>(instances.size());
-         instances.push_back(std::move(inst));
-         return handle;
-      } catch (const std::exception& e) {
-         std::cerr << "  instantiate failed: " << e.what() << "\n";
-         return UINT32_MAX;
-      }
+      auto inst = rt.instantiate(modules[module_handle]);
+      uint32_t handle = static_cast<uint32_t>(instances.size());
+      instances.push_back(std::move(inst));
+      return handle;
    }
 
    uint64_t call(uint32_t instance_handle,
@@ -48,13 +55,9 @@ struct Host
       auto& inst = instances[instance_handle];
       auto* be = static_cast<psizam::backend<std::nullptr_t, psizam::interpreter>*>(
          inst.backend_ptr());
-
-      // Pass args matching the export's actual signature.
-      // The contract uses natural WASM types (not 16-wide PSIO_MODULE).
       auto r = be->call_with_return(
          inst.host_ptr(), func_name,
          static_cast<uint32_t>(arg0), static_cast<uint32_t>(arg1));
-
       return r ? static_cast<uint64_t>(r->to_ui32()) : 0;
    }
 
@@ -68,14 +71,14 @@ struct Host
          modules[handle] = psizam::module_handle{};
    }
 
-   // ── module_store ────────────────────────────────────────────────
-   // Returns a pre-loaded module handle (scalar u32, no string return)
+   // ── module_store — returns contract bytes as string ─────────────
 
-   uint32_t get_module_handle(std::string_view name)
+   std::string_view get_module(std::string_view name)
    {
-      auto it = module_handles.find(std::string{name});
-      if (it == module_handles.end()) return UINT32_MAX;
-      return it->second;
+      auto it = store.find(std::string{name});
+      if (it == store.end()) return {};
+      return {reinterpret_cast<const char*>(it->second.data()),
+              it->second.size()};
    }
 
    // ── env ─────────────────────────────────────────────────────────
@@ -83,41 +86,24 @@ struct Host
    void log(std::string_view msg) {
       std::cout << "  [" << msg << "]\n";
    }
-
-   // ── Pre-load a module ───────────────────────────────────────────
-
-   void preload(const std::string& name,
-                const uint8_t* data, size_t size)
-   {
-      std::vector<uint8_t> bytes(data, data + size);
-      auto policy = psizam::instance_policy{};
-      auto mod = rt.prepare(psizam::wasm_bytes{bytes}, policy);
-      uint32_t handle = static_cast<uint32_t>(modules.size());
-      modules.push_back(std::move(mod));
-      module_handles[name] = handle;
-   }
 };
 
 PSIO_HOST_MODULE(Host,
-   interface(wasm_runtime, instantiate, call,
+   interface(wasm_runtime, load_module, instantiate, call,
              destroy_instance, destroy_module),
-   interface(module_store, get_module_handle),
+   interface(module_store, get_module),
    interface(env, log))
 
 int main()
 {
    Host host;
-
-   // Pre-load the calculator contract into the runtime
-   host.preload("calculator",
-      contract_wasm_bytes.data(), contract_wasm_bytes.size());
+   host.store["calculator"] = std::vector<uint8_t>(
+      std::begin(contract_wasm_bytes),
+      std::end(contract_wasm_bytes));
 
    std::cout << "=== Runtime Resource Example ===\n\n";
-   std::cout << "Host loads blockchain WASM.\n";
-   std::cout << "Blockchain WASM uses wasm_runtime resource to:\n";
-   std::cout << "  1. Get pre-loaded module handle from module_store\n";
-   std::cout << "  2. Instantiate via wasm_runtime\n";
-   std::cout << "  3. Call add(7, 11)\n\n";
+   std::cout << "Blockchain WASM fetches contract bytes via string return,\n";
+   std::cout << "loads into runtime, instantiates, calls add(7, 11).\n\n";
 
    psizam::hosted<Host, psizam::interpreter> vm{blockchain_wasm_bytes, host};
 
