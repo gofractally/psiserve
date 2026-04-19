@@ -188,10 +188,27 @@ uint64_t __psizam_atomic_rmw(void* ctx, uint8_t sub, uint32_t addr, uint32_t off
 }
 
 void __psizam_gas_charge(void* ctx, int64_t cost) {
-   // All three primary JIT backends (jit, jit2, jit_llvm) use
-   // jit_execution_context<false>. jit_profile uses <true> but doesn't
-   // opt into gas metering in the current scope.
-   as_ctx(ctx).gas_charge(cost);
+   // Callable from JIT-generated code across every backend. Do the
+   // decrement + exhaustion dispatch directly (rather than forwarding
+   // to the inline method) so the throw path uses escape_or_throw,
+   // which hands off to the JIT's setjmp trampoline. Forwarding
+   // through the inline gas_charge method uses a plain C++ throw,
+   // which fails to unwind through jit2 / jit_llvm frames.
+   auto& c = as_ctx(ctx);
+   if (c.gas_strategy() == gas_insertion_strategy::off) return;
+   int64_t prev;
+   if (c.gas_atomic()) {
+      prev = c.gas_counter().fetch_sub(cost, std::memory_order_relaxed);
+   } else {
+      int64_t cur = c.gas_counter().load(std::memory_order_relaxed);
+      prev = cur;
+      c.gas_counter().store(cur - cost, std::memory_order_relaxed);
+   }
+   if (prev - cost < 0) {
+      auto h = c.gas_handler();
+      if (h) h(&c);
+      else   escape_or_throw<wasm_gas_exhausted_exception>("gas exhausted");
+   }
 }
 
 void __psizam_gas_exhausted_check(void* ctx) {

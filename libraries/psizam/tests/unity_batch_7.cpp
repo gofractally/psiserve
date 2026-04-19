@@ -45,3 +45,7 @@ namespace unity_null_tests {
 namespace unity_watchdog_tests {
 #include "watchdog_tests.cpp"
 }
+
+namespace unity_gas_metering_tests {
+#include "gas_metering_tests.cpp"
+}
