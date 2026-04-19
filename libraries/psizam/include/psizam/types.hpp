@@ -293,6 +293,11 @@ namespace psizam {
 
    struct function_body {
       uint32_t                    size;
+      // WASM body byte count (code bytes after locals section). Parser sets
+      // it from the raw binary and no writer mutates it. `size` is not
+      // deterministic across backends — bitcode_writer repurposes it to mean
+      // "bitcode opcode count" — so gas costs use this field instead.
+      uint32_t                    wasm_body_bytes = 0;
       std::vector<local_entry>    locals;
       opcode*                     code;
       std::size_t                 jit_code_offset;

@@ -1,6 +1,51 @@
 # Gas Metering + Interrupt + Yield Design
 
-Status: design (2026-04-19). Phase 1 complete. Phase 2a in progress.
+Status: design (2026-04-19). Phases 1, 2a, and 2b complete. Phase 3 in progress.
+
+## Phase 2b — per-function cost proxy (implemented)
+
+Instead of the full CFG max-path computation originally planned, Phase 2b
+ships a simpler proxy: per-function cost = WASM body byte count (code
+section bytes after the locals header). Loop back-edges still charge 1
+per iteration (that stays Phase 3's behavior).
+
+Why the proxy over a full CFG walk:
+
+- Body bytes are ~2-3 per opcode in WASM, so the cost scales with function
+  size roughly the way a CFG sum-of-weights would, at a tiny fraction of
+  the implementation cost.
+- It's computed at parse time with no extra passes and no new data
+  structures — just one uint32 snapshot in `function_body`.
+- It preserves the design's determinism requirement across backends.
+
+### Cross-backend determinism fix
+
+`function_body::size` is NOT deterministic across backends:
+`bitcode_writer::finalize()` overwrites it with a bitcode opcode count,
+while native JIT finalizers leave the parser's WASM byte count in place.
+Gas costs therefore use a dedicated `wasm_body_bytes` field populated in
+the parser (right after locals are stripped) and never mutated. All five
+backends (interpreter, jit1 x86_64 + aarch64, jit2, jit_llvm) read the
+same integer and charge identically — the `gas: cross-backend
+determinism` test asserts this.
+
+### Charge-point differences between backends
+
+The JIT prologues fire on every native function entry, including the
+top-level `bkend.call("export", ...)` invocation. The interpreter's
+`execute()` sets PC directly and does NOT route through
+`context.call()`, so the interpreter's top-level call is not charged.
+Both paths are charged for every *internal* WASM `call` opcode.
+
+The cross-backend determinism test observes the counter value at the
+first handler invocation and every backend sees the same number — both
+backends perform the same per-charge cost, so their first charge (at
+their own first charge point) decrements by the same amount. The
+*logical program point* at which the trap fires differs by one frame
+between JIT and interpreter; callers that care about frame-exact
+alignment (e.g. trap-style handlers that must abort before the body
+runs) need to pick one backend family or add a top-level charge to the
+interpreter's `execute()`.
 
 ## Phase 2a measurements — call-boundary metering on all backends
 

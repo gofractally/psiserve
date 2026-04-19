@@ -357,10 +357,9 @@ namespace psizam::detail {
          emit32(0x910003FD);
 
          emit_check_stack_limit();
-         // Gas metering (Phase 2a): unconditional host call at every
-         // function entry. Mirrors x86_64.hpp; the helper early-returns
-         // when strategy is off.
-         emit_gas_charge(1);
+         // Gas metering (Phase 2b): per-function cost = body byte size.
+         // See x86_64.hpp for rationale.
+         emit_gas_charge(static_cast<int64_t>(_mod.code[funcnum].wasm_body_bytes));
 
          // Zero-initialize locals
          uint64_t count = 0;
@@ -4917,8 +4916,15 @@ namespace psizam::detail {
          PSIZAM_ASSERT((counter_off & 7) == 0 && (counter_off / 8) < 4096,
                         wasm_interpreter_exception, "counter offset outside LDR range");
          emit32(0xF9400269u | (((counter_off / 8) & 0xFFF) << 10));
-         // SUBS X9, X9, #cost  (imm12 unsigned; shift=0)
-         emit32(0xF1000129u | ((static_cast<uint32_t>(cost) & 0xFFF) << 10));
+         // Decrement: SUBS X9, X9, #imm12 when it fits; else materialize
+         // the cost in X10 first (MOVZ/MOVK chain) and SUBS reg-reg.
+         if (cost >= 0 && cost <= 4095) {
+            emit32(0xF1000129u | ((static_cast<uint32_t>(cost) & 0xFFF) << 10));
+         } else {
+            emit_mov_imm64(X10, cost);
+            // SUBS X9, X9, X10 — 0xEB0A0129 (sf=1, op=SUBS, shift=0, Rm=X10, imm6=0, Rn=X9, Rd=X9)
+            emit32(0xEB0A0129u);
+         }
          // STR X9, [X19, #counter_off]
          emit32(0xF9000269u | (((counter_off / 8) & 0xFFF) << 10));
          // B.PL done  (positive or zero → skip trap). B.cond imm19 signed.

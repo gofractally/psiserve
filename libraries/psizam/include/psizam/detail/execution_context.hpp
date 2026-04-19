@@ -1267,11 +1267,15 @@ namespace psizam::detail {
       std::uint32_t get_remaining_call_depth() const { return _remaining_call_depth; }
 
       inline void call(uint32_t index) {
-         // Gas metering (Phase 2a): charge a placeholder cost at every
-         // function-call boundary. Real per-function costs (max-path
-         // CFG walk) land in Phase 2b; the fetch_sub + branch overhead
-         // is what Phase 2a's microbench measures.
-         gas_charge(1);
+         // Gas metering (Phase 2b): body-size proxy for local functions,
+         // fixed small charge for host imports. Matches the JIT's
+         // per-function-entry cost so the interpreter's trap point
+         // tracks identically to every compiled backend.
+         const uint32_t imported = _mod->get_imported_functions_size();
+         const int64_t cost = (index < imported)
+            ? int64_t{1}
+            : static_cast<int64_t>(_mod->code[index - imported].wasm_body_bytes);
+         gas_charge(cost);
          // TODO validate index is valid
          if (index < _mod->get_imported_functions_size()) {
             const auto& ft = _mod->get_function_type(index);

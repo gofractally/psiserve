@@ -1031,6 +1031,11 @@ namespace psizam::detail {
          fb.locals = std::move(locals);
 
          fb.size -= code.offset() - before;
+         // Snapshot the WASM body byte count before any backend writer
+         // repurposes fb.size (bitcode_writer::finalize overwrites it with
+         // its opcode count). Used by gas metering as a deterministic
+         // cross-backend per-function cost.
+         fb.wasm_body_bytes = fb.size;
          auto guard = code.scoped_shrink_bounds(fb.size);
          _function_bodies.emplace_back(wasm_code_ptr{code.raw(), fb.size}, local_checker);
 

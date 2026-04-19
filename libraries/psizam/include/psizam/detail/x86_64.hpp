@@ -258,11 +258,18 @@ namespace psizam::detail {
          emit_bytes(0x75, 0x00);
 
          // ── inline non-atomic fast path ──
-         // subq $cost, counter_off(%rdi)   — use REX.W + 0x83 /5 (imm8) when cost fits
-         // SUB r/m64, imm8: REX.W=0x48 0x83 /5 modrm disp32 imm8 = 8 bytes
-         emit_bytes(0x48, 0x83, 0xAF);
-         emit_operand32(counter_off);
-         emit_bytes(static_cast<uint8_t>(cost & 0xFF));
+         // subq $cost, counter_off(%rdi) — REX.W 0x83 /5 (imm8, 8 bytes)
+         // when cost fits in a signed byte, else REX.W 0x81 /5 (imm32,
+         // 11 bytes) so Phase 2b's real costs don't get truncated.
+         if (cost >= -128 && cost <= 127) {
+            emit_bytes(0x48, 0x83, 0xAF);
+            emit_operand32(counter_off);
+            emit_bytes(static_cast<uint8_t>(cost & 0xFF));
+         } else {
+            emit_bytes(0x48, 0x81, 0xAF);
+            emit_operand32(counter_off);
+            emit_operand32(static_cast<uint32_t>(cost));
+         }
          // jns done_rel8
          auto* jns_done_imm = reinterpret_cast<uint8_t*>(code) + 1;
          emit_bytes(0x79, 0x00);
@@ -318,12 +325,11 @@ namespace psizam::detail {
          // movq RSP, RBP
          emit_bytes(0x48, 0x89, 0xe5);
          emit_check_stack_limit();
-         // Gas metering (Phase 2a): unconditional call to the host helper
-         // at every function entry. The helper's first branch checks the
-         // context's insertion_strategy and early-returns when off, so the
-         // runtime cost when disabled is one call + one branch in the
-         // helper (~5–10 ns). Phase 3 peephole work can inline this.
-         emit_gas_charge(1);
+         // Gas metering (Phase 2b): per-function cost = body size in
+         // bytes. Proxy for opcode count (~2-3 bytes/opcode in WASM),
+         // lets big functions cost proportionally at entry. Loops
+         // still charge 1 per iteration (Phase 3 behavior).
+         emit_gas_charge(static_cast<int64_t>(_mod.code[funcnum].wasm_body_bytes));
          uint64_t count = 0;
          for(uint32_t i = 0; i < locals.size(); ++i) {
             count += locals[i].count;

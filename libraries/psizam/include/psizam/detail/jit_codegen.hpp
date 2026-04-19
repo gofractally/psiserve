@@ -561,9 +561,16 @@ namespace psizam::detail {
          this->emit_bytes(0x75, 0x00);
 
          // Inline non-atomic: subq $cost, counter_off(%rdi); jns done
-         this->emit_bytes(0x48, 0x83, 0xAF);
-         this->emit_operand32(counter_off);
-         this->emit_bytes(static_cast<uint8_t>(cost & 0xFF));
+         // imm8 form when cost fits, else imm32 (see x86_64.hpp).
+         if (cost >= -128 && cost <= 127) {
+            this->emit_bytes(0x48, 0x83, 0xAF);
+            this->emit_operand32(counter_off);
+            this->emit_bytes(static_cast<uint8_t>(cost & 0xFF));
+         } else {
+            this->emit_bytes(0x48, 0x81, 0xAF);
+            this->emit_operand32(counter_off);
+            this->emit_operand32(static_cast<uint32_t>(cost));
+         }
          auto* jns_done_imm = reinterpret_cast<uint8_t*>(this->code) + 1;
          this->emit_bytes(0x79, 0x00);
          // Slow: call __psizam_gas_exhausted_check(ctx)
@@ -598,8 +605,8 @@ namespace psizam::detail {
       void emit_function_prologue(ir_function& func) {
          this->emit_push_raw(rbp);
          this->emit_mov(rsp, rbp);
-         // Gas metering (Phase 2a): see x86_64.hpp for rationale.
-         emit_gas_charge(1);
+         // Gas metering (Phase 2b): cost = function body byte size.
+         emit_gas_charge(static_cast<int64_t>(_mod.code[func.func_index].wasm_body_bytes));
 
          // Count body local slots, accounting for v128 locals using 2 slots (16 bytes)
          uint32_t body_local_slots = 0;

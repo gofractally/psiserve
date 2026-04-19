@@ -790,9 +790,14 @@ namespace psizam::detail {
          llvm::Value* mem_arg = &*arg_it++;
          mem_arg->setName("mem");
 
-         // Gas metering (Phase 3): three-way branch at function entry.
-         // Matches the native JIT emission (see x86_64.hpp::emit_gas_charge).
-         emit_gas_prologue_check(builder, ctx_ptr, /*cost=*/1);
+         // Gas metering (Phase 2b): three-way branch at function entry
+         // with cost = function body byte size. Matches the native JIT
+         // emission (see x86_64.hpp::emit_gas_charge).
+         {
+            const auto& fb = wasm_mod.code[func.func_index];
+            emit_gas_prologue_check(builder, ctx_ptr,
+                                    static_cast<int64_t>(fb.wasm_body_bytes));
+         }
 
          // Store mem_ptr in an alloca so memory_grow can update it and LLVM's
          // mem2reg pass inserts PHI nodes at control flow merges. Without this,
