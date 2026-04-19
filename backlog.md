@@ -24,6 +24,7 @@ Last updated: 2026-04-19
 | [0013](.issues/0013-psiserve-virtual-db-config.md) | psiserve virtual DB config + permissions | backlog | medium | psiserve | — | — |
 | [0014](.issues/0014-psiserve-snapshot-api.md) | psiserve snapshot API (blockchain) | backlog | medium | psiserve,psitri | — | — |
 | [0015](.issues/0015-psizam-memory-sandboxing-modes.md) | psizam memory sandboxing modes (guarded/checked/unchecked) | ready | high | psizam | agent3 | — |
+| [0016](.issues/0016-psio-wit-resource-drop-specializations.md) | Wire wit_resource_drop specializations (host + guest) | ready | high | psio,psiserve,wasi | — | 0012 |
 
 ## Dependency Graph
 
@@ -36,6 +37,7 @@ Last updated: 2026-04-19
                    → 0007
                    → 0009
 0011 → 0012
+0016 [resource RAII] → 0012
 ```
 
 ## Conflict Map (agents touching overlapping areas)
