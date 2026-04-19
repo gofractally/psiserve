@@ -164,6 +164,67 @@ namespace psizam::detail {
       std::vector<code_relocation> _relocs;
    };
 
+   /// Zero out the immediate/displacement bits at each relocation site.
+   /// Used before serializing a code blob to a .pzam file so that the
+   /// on-disk bytes don't depend on where the code was laid out in memory
+   /// at compile time (ASLR). The bits cleared here are overwritten by
+   /// apply_relocations at load time.
+   inline void canonicalize_reloc_sites(char* code_base,
+                                        const code_relocation* relocs,
+                                        uint32_t num_relocs) {
+      for (uint32_t i = 0; i < num_relocs; i++) {
+         const auto& r = relocs[i];
+         char* site = code_base + r.code_offset;
+
+         switch (r.type) {
+            case reloc_type::abs64: {
+               uint64_t z = 0;
+               std::memcpy(site, &z, 8);
+               break;
+            }
+            case reloc_type::x86_64_pc32: {
+               uint32_t z = 0;
+               std::memcpy(site, &z, 4);
+               break;
+            }
+            case reloc_type::aarch64_call26: {
+               uint32_t insn;
+               std::memcpy(&insn, site, 4);
+               insn &= 0xFC000000u;  // clear imm26
+               std::memcpy(site, &insn, 4);
+               break;
+            }
+            case reloc_type::aarch64_movw_uabs_g0_nc:
+            case reloc_type::aarch64_movw_uabs_g1_nc:
+            case reloc_type::aarch64_movw_uabs_g2_nc:
+            case reloc_type::aarch64_movw_uabs_g3: {
+               uint32_t insn;
+               std::memcpy(&insn, site, 4);
+               insn &= ~(0xFFFFu << 5);  // clear imm16 (bits 5-20)
+               std::memcpy(site, &insn, 4);
+               break;
+            }
+            case reloc_type::aarch64_adr_prel_pg_hi21: {
+               uint32_t insn;
+               std::memcpy(&insn, site, 4);
+               insn &= 0x9F00001Fu;  // clear immlo (29-30) and immhi (5-23)
+               std::memcpy(site, &insn, 4);
+               break;
+            }
+            case reloc_type::aarch64_add_abs_lo12_nc:
+            case reloc_type::aarch64_ldst8_abs_lo12_nc:
+            case reloc_type::aarch64_ldst32_abs_lo12_nc:
+            case reloc_type::aarch64_ldst64_abs_lo12_nc: {
+               uint32_t insn;
+               std::memcpy(&insn, site, 4);
+               insn &= ~(0xFFFu << 10);  // clear imm12 (bits 10-21)
+               std::memcpy(site, &insn, 4);
+               break;
+            }
+         }
+      }
+   }
+
    /// Apply relocations to a loaded code blob.
    /// symbol_table must have NUM_SYMBOLS entries (void* per symbol).
    inline void apply_relocations(char* code_base,

@@ -90,6 +90,15 @@ static std::vector<char> write_pzam(
       cs.code_blob.assign(code_start, code_start + actual_size);
    }
 
+   // Canonicalize reloc sites so byte-level output is deterministic
+   // regardless of where the code was laid out in memory at compile time.
+   // The bits cleared here are overwritten by apply_relocations at load time.
+   if (!cs.code_blob.empty() && !result.relocs.empty()) {
+      canonicalize_reloc_sites(reinterpret_cast<char*>(cs.code_blob.data()),
+                               result.relocs.data(),
+                               static_cast<uint32_t>(result.relocs.size()));
+   }
+
    file.code_sections.push_back(std::move(cs));
 
    return pzam_save(file);
