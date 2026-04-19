@@ -1,6 +1,7 @@
 #pragma once
 
 #include <psi/db.hpp>
+#include <psio/structural.hpp>
 #include <psizam/handle_table.hpp>
 #include <psitri/database_impl.hpp>
 #include <psitri/read_session_impl.hpp>
@@ -371,7 +372,7 @@ struct DbHost
    }
 
    std::expected<psi::db::bytes, psi::db::error>
-   table_get(psio::borrow<psi::db::table> self, psi::db::bytes key,
+   get(psio::borrow<psi::db::table> self, psi::db::bytes key,
              uint32_t offset, std::optional<uint32_t> len)
    {
       auto* t = tables.get(self.handle);
@@ -403,7 +404,7 @@ struct DbHost
    }
 
    std::expected<void, psi::db::error>
-   table_upsert(psio::borrow<psi::db::table> self, psi::db::bytes key, psi::db::bytes value)
+   upsert(psio::borrow<psi::db::table> self, psi::db::bytes key, psi::db::bytes value)
    {
       auto* t = tables.get(self.handle);
       if (!t)
@@ -417,7 +418,7 @@ struct DbHost
    }
 
    std::expected<bool, psi::db::error>
-   table_remove(psio::borrow<psi::db::table> self, psi::db::bytes key)
+   remove(psio::borrow<psi::db::table> self, psi::db::bytes key)
    {
       auto* t = tables.get(self.handle);
       if (!t)
@@ -432,7 +433,7 @@ struct DbHost
    }
 
    std::expected<uint32_t, psi::db::error>
-   table_remove_range(psio::borrow<psi::db::table> self, psi::db::bytes low, psi::db::bytes high)
+   remove_range(psio::borrow<psi::db::table> self, psi::db::bytes low, psi::db::bytes high)
    {
       auto* t = tables.get(self.handle);
       if (!t)
@@ -446,7 +447,7 @@ struct DbHost
       return static_cast<uint32_t>(n);
    }
 
-   psi::db::stats table_get_stats(psio::borrow<psi::db::table> self)
+   psi::db::stats get_stats(psio::borrow<psi::db::table> self)
    {
       auto* t = tables.get(self.handle);
       if (!t)
@@ -464,7 +465,7 @@ struct DbHost
    }
 
    psio::own<psi::db::cursor>
-   table_open_cursor(psio::borrow<psi::db::table> self)
+   open_cursor(psio::borrow<psi::db::table> self)
    {
       auto* t = tables.get(self.handle);
       if (!t)
@@ -483,7 +484,7 @@ struct DbHost
    // ── cursor ───────────────────────────────────────────────────────
 
    std::expected<bool, psi::db::error>
-   cursor_seek(psio::borrow<psi::db::cursor> self, psi::db::bytes key)
+   seek(psio::borrow<psi::db::cursor> self, psi::db::bytes key)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -492,7 +493,7 @@ struct DbHost
    }
 
    std::expected<bool, psi::db::error>
-   cursor_seek_first(psio::borrow<psi::db::cursor> self)
+   seek_first(psio::borrow<psi::db::cursor> self)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -502,7 +503,7 @@ struct DbHost
    }
 
    std::expected<bool, psi::db::error>
-   cursor_seek_last(psio::borrow<psi::db::cursor> self)
+   seek_last(psio::borrow<psi::db::cursor> self)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -512,7 +513,7 @@ struct DbHost
    }
 
    std::expected<bool, psi::db::error>
-   cursor_lower_bound(psio::borrow<psi::db::cursor> self, psi::db::bytes key)
+   lower_bound(psio::borrow<psi::db::cursor> self, psi::db::bytes key)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -521,7 +522,7 @@ struct DbHost
    }
 
    std::expected<bool, psi::db::error>
-   cursor_upper_bound(psio::borrow<psi::db::cursor> self, psi::db::bytes key)
+   upper_bound(psio::borrow<psi::db::cursor> self, psi::db::bytes key)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -530,7 +531,7 @@ struct DbHost
    }
 
    std::expected<bool, psi::db::error>
-   cursor_next(psio::borrow<psi::db::cursor> self)
+   next(psio::borrow<psi::db::cursor> self)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -539,7 +540,7 @@ struct DbHost
    }
 
    std::expected<bool, psi::db::error>
-   cursor_prev(psio::borrow<psi::db::cursor> self)
+   prev(psio::borrow<psi::db::cursor> self)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -547,7 +548,7 @@ struct DbHost
       return c->inner.prev();
    }
 
-   bool cursor_on_row(psio::borrow<psi::db::cursor> self)
+   bool on_row(psio::borrow<psi::db::cursor> self)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -556,7 +557,7 @@ struct DbHost
    }
 
    std::expected<psi::db::bytes, psi::db::error>
-   cursor_key(psio::borrow<psi::db::cursor> self)
+   key(psio::borrow<psi::db::cursor> self)
    {
       auto* c = cursors.get(self.handle);
       if (!c)
@@ -567,7 +568,7 @@ struct DbHost
    }
 
    std::expected<psi::db::bytes, psi::db::error>
-   cursor_value(psio::borrow<psi::db::cursor> self,
+   value(psio::borrow<psi::db::cursor> self,
                 uint32_t offset, std::optional<uint32_t> len)
    {
       auto* c = cursors.get(self.handle);
@@ -606,4 +607,55 @@ struct DbHost
    }
 };
 
+   using db_host = DbHost<psitri::std_lock_policy>;
+
 }  // namespace psiserve
+
+// ── interface_info specializations (host-side module names) ──────────
+
+namespace psio::detail
+{
+   template <>
+   struct interface_info<psi::db::store>
+   {
+      static constexpr ::psio::FixedString name = "psi:db/store";
+   };
+   template <>
+   struct interface_info<psi::db::database>
+   {
+      static constexpr ::psio::FixedString name = "psi:db/database";
+   };
+   template <>
+   struct interface_info<psi::db::transaction>
+   {
+      static constexpr ::psio::FixedString name = "psi:db/transaction";
+   };
+   template <>
+   struct interface_info<psi::db::table>
+   {
+      static constexpr ::psio::FixedString name = "psi:db/table";
+   };
+   template <>
+   struct interface_info<psi::db::cursor>
+   {
+      static constexpr ::psio::FixedString name = "psi:db/cursor";
+   };
+}  // namespace psio::detail
+
+// ── Host module registration ────────────────────────────────────────
+
+PSIO_HOST_MODULE(psiserve::db_host,
+   interface(psi::db::store,
+             open),
+   interface(psi::db::database,
+             start_write, start_read, database_drop),
+   interface(psi::db::transaction,
+             commit, abort, open_table, create_table,
+             drop_table, list_tables, transaction_drop),
+   interface(psi::db::table,
+             get, upsert, remove, remove_range,
+             get_stats, open_cursor, table_drop),
+   interface(psi::db::cursor,
+             seek, seek_first, seek_last, lower_bound,
+             upper_bound, next, prev, on_row, key,
+             value, cursor_drop))
