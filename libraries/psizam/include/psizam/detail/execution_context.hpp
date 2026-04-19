@@ -633,6 +633,15 @@ namespace psizam::detail {
          this->_remaining_call_depth = max_call_depth;
       }
 
+      // Byte offset of _gas_strategy within this derived class. JIT
+      // codegen embeds this as an immediate in a `cmpb $0, off(ctx); je`
+      // fast-path that skips the gas_charge host call entirely when
+      // strategy == off. Not constexpr (offsetof on non-standard-layout
+      // types isn't), but called once per compile.
+      static std::size_t gas_strategy_offset() {
+         return offsetof(jit_execution_context, _gas_strategy);
+      }
+
       std::uint32_t get_remaining_call_depth() const { return this->_remaining_call_depth; }
 
       inline native_value call_host_function(native_value* stack, uint32_t index) {

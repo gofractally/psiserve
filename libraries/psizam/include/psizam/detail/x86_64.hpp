@@ -210,31 +210,44 @@ namespace psizam::detail {
          emit(RET);
       }
 
-      // Prologue max includes the gas_charge host-call prolog
-      // (push rdi/rsi, mov esi=cost, movabsq helper, call, pop rsi/rdi = 21 bytes).
-      static constexpr std::size_t max_prologue_size = 54;
+      // Prologue max includes the gas_charge fast-path (cmp+je skip, 9 bytes)
+      // plus the full host-call sequence (push rdi/rsi + cost + helper + call +
+      // pop rsi/rdi = 21 bytes) = 30 bytes total when strategy != off.
+      static constexpr std::size_t max_prologue_size = 72;
       static constexpr std::size_t max_epilogue_size = 16; // single-value epilogue
 
-      // Emit a host call to __psizam_gas_charge(ctx=rdi, cost=rsi).
-      // Paired push/pop of rdi+rsi keeps 16-byte stack alignment at the
-      // `call` site (two 8-byte pushes from a 16-aligned base = aligned)
-      // and preserves the JIT's ctx/linear-memory-base registers.
+      // Emit a gas_charge prologue with a fast-path that skips the host
+      // call when the instance's _gas_strategy byte is off.
+      //
+      //   cmpb $0, strategy_off(%rdi)   ; 7 bytes (mod=10 disp32)
+      //   je   skip                     ; 2 bytes (rel8 = 21)
+      //   pushq %rdi / %rsi
+      //   movl  $cost, %esi
+      //   movabsq $&__psizam_gas_charge, %rax
+      //   call  *%rax
+      //   popq  %rsi / %rdi
+      //   skip:
+      //
+      // The cmp+je pair is ~2 cycles branch-predicted-taken when gas
+      // is disabled; when enabled, fallthrough pays the host call.
       void emit_gas_charge(int64_t cost) {
-         // pushq %rdi    (save ctx — caller-saved across the host call)
-         emit_bytes(0x57);
-         // pushq %rsi    (save linear memory base)
-         emit_bytes(0x56);
-         // movl $cost, %esi   — cost argument for the helper (fits in i32)
-         emit_bytes(0xbe);
+         const uint32_t strategy_off = static_cast<uint32_t>(
+            jit_execution_context<false>::gas_strategy_offset());
+         // cmpb $0, strategy_off(%rdi) — ModRM 0xBF = mod=10, /7=CMP, rm=rdi
+         emit_bytes(0x80, 0xBF);
+         emit_operand32(strategy_off);
+         emit_bytes(0x00);          // imm8 = 0
+         // je rel8 — patched after we know the skip distance
+         emit_bytes(0x74, 21);      // skip exactly 21 bytes (the call sequence)
+         // ── full call sequence (21 bytes) ──
+         emit_bytes(0x57);                       // pushq %rdi
+         emit_bytes(0x56);                       // pushq %rsi
+         emit_bytes(0xbe);                       // mov $cost, %esi
          emit_operand32(static_cast<uint32_t>(cost));
-         // movabsq $helper, %rax
          emit_mov(&__psizam_gas_charge, rax);
-         // callq *%rax
          emit(CALL, rax);
-         // popq %rsi
-         emit_bytes(0x5e);
-         // popq %rdi
-         emit_bytes(0x5f);
+         emit_bytes(0x5e);                       // popq %rsi
+         emit_bytes(0x5f);                       // popq %rdi
       }
 
       void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& locals, uint32_t funcnum) {

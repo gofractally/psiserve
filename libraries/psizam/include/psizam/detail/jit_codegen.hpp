@@ -534,11 +534,17 @@ namespace psizam::detail {
 
       // ──────── Function prologue/epilogue ────────
 
-      // Emit a host call to __psizam_gas_charge(ctx=rdi, cost=rsi) at the
-      // function prologue. Mirrors the pattern in jit1's x86_64 emitter;
-      // paired push/pop of rdi+rsi keeps 16-byte stack alignment at the
-      // `call` site and preserves the JIT's ctx/linear-memory-base regs.
+      // Gas_charge prologue with fast-path skip (see x86_64.hpp for the
+      // detailed rationale). When _gas_strategy == off the call is
+      // skipped by a branch-predicted `je`; ~2 cycles vs a full host-
+      // call roundtrip.
       void emit_gas_charge(int64_t cost) {
+         const uint32_t strategy_off = static_cast<uint32_t>(
+            jit_execution_context<false>::gas_strategy_offset());
+         this->emit_bytes(0x80, 0xBF);           // cmpb $0, disp32(%rdi)
+         this->emit_operand32(strategy_off);
+         this->emit_bytes(0x00);                 // imm8 = 0
+         this->emit_bytes(0x74, 21);             // je skip (over 21 bytes)
          this->emit_bytes(0x57);                 // pushq %rdi
          this->emit_bytes(0x56);                 // pushq %rsi
          this->emit_bytes(0xbe);                 // mov $cost, %esi

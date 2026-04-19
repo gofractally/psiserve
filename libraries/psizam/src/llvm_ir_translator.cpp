@@ -729,11 +729,32 @@ namespace psizam::detail {
          llvm::Value* mem_arg = &*arg_it++;
          mem_arg->setName("mem");
 
-         // Gas metering (Phase 2a): emit a call to __psizam_gas_charge
-         // at function entry. The helper's early return when strategy
-         // is off keeps the disabled case cheap.
-         builder.CreateCall(rt_gas_charge,
-            {ctx_ptr, llvm::ConstantInt::get(i64_ty, 1, /*signed*/true)});
+         // Gas metering (Phase 2a): fast-path skip when _gas_strategy ==
+         // off. Emit:
+         //   %strategy = load i8, ptr (ctx + strategy_off)
+         //   %on = icmp ne i8 %strategy, 0
+         //   br i1 %on, label %gas_call, label %gas_skip
+         // gas_call: call __psizam_gas_charge(ctx, 1); br %gas_skip
+         // gas_skip:
+         {
+            const std::size_t strategy_off =
+               detail::jit_execution_context<false>::gas_strategy_offset();
+            auto* strategy_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr,
+                                                            strategy_off,
+                                                            "strategy_ptr");
+            auto* strategy_val = builder.CreateLoad(i8_ty, strategy_gep,
+                                                    "strategy");
+            auto* is_on = builder.CreateICmpNE(strategy_val,
+               llvm::ConstantInt::get(i8_ty, 0), "gas_on");
+            auto* gas_call_bb = llvm::BasicBlock::Create(*ctx, "gas_call", fn);
+            auto* gas_skip_bb = llvm::BasicBlock::Create(*ctx, "gas_skip", fn);
+            builder.CreateCondBr(is_on, gas_call_bb, gas_skip_bb);
+            builder.SetInsertPoint(gas_call_bb);
+            builder.CreateCall(rt_gas_charge,
+               {ctx_ptr, llvm::ConstantInt::get(i64_ty, 1, /*signed*/true)});
+            builder.CreateBr(gas_skip_bb);
+            builder.SetInsertPoint(gas_skip_bb);
+         }
 
          // Store mem_ptr in an alloca so memory_grow can update it and LLVM's
          // mem2reg pass inserts PHI nodes at control flow merges. Without this,

@@ -4859,16 +4859,41 @@ namespace psizam::detail {
          emit32(0xA8C153F3);
       }
 
-      // Host call to __psizam_gas_charge(ctx=X0, cost=X1). Saves context
-      // (X19/X20) across the call as other C-function helpers do, since
-      // the helper may throw wasm_gas_exhausted_exception and we want the
-      // catch site to see unmodified callee-saved state.
+      // Gas_charge prologue with fast-path skip. Loads the _gas_strategy
+      // byte, compares to 0, skips the host-call sequence entirely when
+      // metering is disabled.
+      //
+      //   LDRB W9, [X19, #strategy_off]    ; load strategy byte
+      //   CBZ  W9, skip                    ; skip when == 0
+      //   MOV  X0, X19
+      //   MOV  X1, #cost
+      //   STP  X19, X20, [SP, #-16]!
+      //   BL   __psizam_gas_charge
+      //   LDP  X19, X20, [SP], #16
+      //   skip:
       void emit_gas_charge(int64_t cost) {
-         emit32(0xAA1303E0);                  // MOV X0, X19 (ctx)
+         const uint32_t strategy_off = static_cast<uint32_t>(
+            jit_execution_context<false>::gas_strategy_offset());
+         // LDRB W9, [X19, #strategy_off] — imm12 unsigned, scaled by 1
+         emit32(0x39400269u | ((strategy_off & 0xFFF) << 10));
+         // CBZ W9, +<skip_bytes>/4
+         // Skip distance = all instructions after this CBZ up to 'skip:'.
+         // emit_call_c_function expands to ~14 insn (stack-align + mov_imm64 +
+         // BLR + restore). We bound it with a 32-bit branch if needed.
+         // Simplest: patch after emission.
+         auto* cbz_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x34000009u); // CBZ W9, 0 (patched below)
+         // ── full call sequence ──
+         emit32(0xAA1303E0);                    // MOV X0, X19
          emit_mov_imm64(X1, cost);
          emit_save_context();
          emit_call_c_function(&__psizam_gas_charge);
          emit_restore_context();
+         // Patch CBZ offset: (skip_target - cbz_pos) / 4
+         auto* skip_target = reinterpret_cast<uint8_t*>(code);
+         int32_t delta = static_cast<int32_t>(skip_target - cbz_pos) / 4;
+         uint32_t cbz_insn = 0x34000009u | ((delta & 0x7FFFF) << 5);
+         std::memcpy(cbz_pos, &cbz_insn, 4);
       }
 
       template<typename F>
