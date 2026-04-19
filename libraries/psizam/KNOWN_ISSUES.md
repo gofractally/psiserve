@@ -513,47 +513,23 @@ block that psizam's parser accepts).
 
 **Shape.** Module is dense `try_table` + `throw 0` + `return_call`/`return_call_indirect` — a WASM `throw` propagates through several tail-call frames with no matching catch, so it's legitimately uncaught. The jit2 fault signature was `LR=PC=fault_addr=stack_address` (RET through a stomped LR slot); the jit_llvm fault was `LDR X8,[X8,#8]` with `X8=0` inside its personality/unwind helper. Both now classify cleanly as interp_trap.
 
-### jit2 non-deterministic timeout (counter+try_table loop)
+### ~~jit2 non-deterministic timeout (counter+try_table loop)~~ — fixed
 
-**Status:** open — ~1 mismatch per 10K fuzzed modules; not consistently
-reproducible (run-to-run hangs vs traps depending on stack contents).
+**Status:** fixed — no longer reproduces. Seed 1776492727 runs 10K
+modules with 0 mismatches across 3 consecutive runs (was ~4/5 hangs).
+Likely resolved by the 0-catch try_table fix (`b2ee2f7`) or the
+EH force-spill fix (`b88c3af`/`6e909ec`).
 
-**Reproducer.** `mismatch_1041_seed1776492727.wasm` (2555 B). All
-non-jit2 backends trap with `interp_trap (unreachable)` instantly. jit2
-hangs forever about 4 of every 5 runs; the remaining run traps
-correctly. The wasm pattern is the standard "global counter + body that
-decrements" with the body containing `try_table` constructs (also
-common in fuzzer output to bound recursion).
+### ~~jit2 ctx pointer corrupted after throw+catch into helper calls~~ — fixed
 
-**What was investigated:** the bug is NOT the eh_setjmp saved-rsp
-corruption (that's fixed in commit `5c8d694`). It also isn't reproducible
-with a minimal 2-level nested try_table inside a counter loop — the
-original module has many nested try_tables with explicit catch_tag
-handlers and `br_if` jumping out to the loop, which is what likely
-exercises the buggy path. Likely the same family as the documented
-"stack-mode fusion: missing if_/br_if fixup push" bug, but the path
-through regalloc-mode codegen with all-spilled vregs hasn't been
-narrowed down.
-
-**Investigation hint:** the function loops on a global counter that
-should reach 0 after ~100 iterations, then `unreachable`. jit2's
-infinite loop suggests either the global decrement is wrong, the
-condition is evaluated wrong, or the `br_if` direction is reversed in
-the JIT. Trace `global.get`/`global.set` and `i32.eqz`/`br_if` codegen
-in regalloc-mode for functions with `eh_data_count > 0` and large
-operand stacks.
-
-### jit2 ctx pointer corrupted after throw+catch into helper calls
-
-**Status:** mostly fixed by commit `371db25` (see below). One
-reproducer remains open with a different-mechanism failure.
+**Status:** fixed. All three reproducers resolved:
 
 **Reproducers.**
-- `mismatch_308_seed100.wasm` — **fixed**.
-- `mismatch_6998_seed1776497367.wasm` — **fixed**.
-- `mismatch_9677_seed1776497367.wasm` — **still open**, now crashes
-  inside `__longjmp` instead of returning `memory_trap`. Orthogonal
-  stack-inversion bug; see below.
+- `mismatch_308_seed100.wasm` — **fixed** (commit `371db25`).
+- `mismatch_6998_seed1776497367.wasm` — **fixed** (commit `371db25`).
+- `mismatch_9677_seed1776497367.wasm` — **fixed** by 0-catch try_table
+  fix (commit `b2ee2f7`). Full 10K-module fuzzer pass on seed
+  1776497367 shows 0 mismatches.
 
 All three historically: interpreter, jit1, and jit_llvm emit
 `interp_trap (unreachable)` cleanly; jit2 returned `memory_trap`.
