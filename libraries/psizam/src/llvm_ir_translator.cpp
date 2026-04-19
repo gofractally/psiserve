@@ -790,13 +790,17 @@ namespace psizam::detail {
          llvm::Value* mem_arg = &*arg_it++;
          mem_arg->setName("mem");
 
-         // Gas metering (Phase 2b): three-way branch at function entry
-         // with cost = function body byte size. Matches the native JIT
-         // emission (see x86_64.hpp::emit_gas_charge).
+         // Gas metering (Phase 4): three-way branch at function entry
+         // with cost = body byte size + prepay_extra (heavy-op weights
+         // the parser accumulated for opcodes outside any loop). Since
+         // LLVM codegen runs after the full parser pass, the extras are
+         // already on the IR and the final ConstantInt is known here —
+         // no post-hoc patching needed.
          {
             const auto& fb = wasm_mod.code[func.func_index];
             emit_gas_prologue_check(builder, ctx_ptr,
-                                    static_cast<int64_t>(fb.wasm_body_bytes));
+                                    static_cast<int64_t>(fb.wasm_body_bytes)
+                                    + func.prologue_gas_extra);
          }
 
          // Store mem_ptr in an alloca so memory_grow can update it and LLVM's
@@ -1273,9 +1277,12 @@ namespace psizam::detail {
                      // Loop-header gas metering: back-branches to this
                      // block land at `target`, so emitting the gas check
                      // here means every iteration (including the first)
-                     // charges gas.
+                     // charges gas. Cost = 1 per iteration + heavy-op
+                     // extras the parser accumulated inside this loop
+                     // (Phase 4).
                      if (func.blocks && func.blocks[block_idx].is_loop) {
-                        emit_gas_prologue_check(builder, ctx_ptr, /*cost=*/1);
+                        emit_gas_prologue_check(builder, ctx_ptr,
+                           1 + func.blocks[block_idx].loop_gas_extra);
                      }
                   }
                   break;

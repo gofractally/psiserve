@@ -49,7 +49,10 @@ dynamic charges" section. Weights live in `psizam/gas.hpp::gas_costs`.
 - [x] jit2 x86_64 (`jit_codegen.hpp`): IR-node annotation, no byte patching
 - [ ] jit2 aarch64 (`jit_codegen_a64.hpp`): IR-node annotation + fill the
       Phase 2a/3 prologue TODO — **moved to `psizam-gas-aarch64-verify`** for arm64 agent
-- [ ] jit_llvm: LLVM IR constant replacement before final compilation
+- [x] jit_llvm: uses the same ir_writer IR-annotation path as jit2, so
+      emit_gas_prologue_check reads the final prologue_gas_extra /
+      loop_gas_extra directly. No runtime IR patching needed since LLVM
+      codegen runs after the full parser pass completes.
 - [ ] interpreter: new `gas_charge_imm` bitcode op + `interpret_visitor` dispatch
 - [ ] Cross-backend test: same module + budget traps at same counter across
       all five backends when heavy ops are present
