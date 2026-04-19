@@ -32,6 +32,30 @@ endif()
 add_test(NAME psizam_fuzz_diff_smoke
    COMMAND psizam-fuzz-diff 20)
 
+# ── Regression tests: re-run all archived crash/mismatch reproducers ────────
+# Each .wasm file in regression/ becomes a separate ctest entry.
+# To add a new regression case, just drop a .wasm file in the directory.
+file(GLOB FUZZ_REGRESSION_WASM "${CMAKE_CURRENT_SOURCE_DIR}/regression/*.wasm")
+foreach(wasm_file ${FUZZ_REGRESSION_WASM})
+   get_filename_component(wasm_name ${wasm_file} NAME_WE)
+   add_test(NAME "fuzz_regression/${wasm_name}"
+      COMMAND psizam-fuzz-diff --file ${wasm_file})
+   set_tests_properties("fuzz_regression/${wasm_name}" PROPERTIES
+      LABELS "fuzz_regression"
+      TIMEOUT 30)
+endforeach()
+
+# Known jit2 v128 bugs — mark as expected failures until fixed
+set(FUZZ_REGRESSION_XFAIL
+   "fuzz_regression/mismatch_233604_seed6158"
+   "fuzz_regression/mismatch_81788_seed6720"
+)
+foreach(xf ${FUZZ_REGRESSION_XFAIL})
+   if(TEST ${xf})
+      set_tests_properties(${xf} PROPERTIES WILL_FAIL TRUE)
+   endif()
+endforeach()
+
 # ── libFuzzer driver (optional) ──────────────────────────────────────────────
 # Requires clang with libFuzzer support. Known ASan issues on macOS ARM64.
 

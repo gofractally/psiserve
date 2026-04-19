@@ -629,6 +629,22 @@ was null), causing argument values to be swapped/garbled. Fix: added
 `slow_trampoline_fwd` in `host_function.hpp` and wired it into the
 `fast_fwd` slot for non-fast-eligible functions.
 
+### ~~Ref-typed locals initialized to zero instead of null~~ — fixed
+
+**Status:** fixed. All JIT backends (jit, jit2, jit_llvm) zero-initialized
+all body locals, but the WASM spec requires funcref/externref/exnref locals
+to default to `ref.null` (represented as UINT32_MAX in psizam). The
+interpreter (`setup_locals` in execution_context.hpp) was correct; all JIT
+prologues were wrong. Fix: after zero-init, store UINT32_MAX to ref-typed
+local slots in x86_64 jit1 (x86_64.hpp), x86_64 jit2 (jit_codegen.hpp),
+aarch64 jit1 (aarch64.hpp), aarch64 jit2 (jit_codegen_a64.hpp), and
+jit_llvm (llvm_ir_translator.cpp). Also fixed jit2's self-tail-call
+re-zero path.
+
+**Reproducer.** `mismatch_66383_seed4.wasm` — function returns externref,
+has one externref local, returns `local.get 0`. interpreter=0xffffffff
+(correct null), all JITs=0x0 (wrong).
+
 ### ~~~150 spec_test "wasm file not found" failures~~ — fixed
 
 **Status:** fixed by `tests/spec_test_helpers.sh` (the wast2json step

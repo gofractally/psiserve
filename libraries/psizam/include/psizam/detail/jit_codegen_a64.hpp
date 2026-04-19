@@ -824,6 +824,28 @@ namespace psizam::detail {
             }
          }
 
+         // Ref-typed locals default to null (UINT32_MAX sentinel), not zero
+         {
+            const auto& locals = _mod.code[func.func_index].locals;
+            bool loaded = false;
+            uint32_t slot = 0;
+            for (uint32_t g = 0; g < locals.size(); ++g) {
+               bool is_ref = (locals[g].type == types::funcref ||
+                              locals[g].type == types::externref ||
+                              locals[g].type == types::exnref);
+               for (uint32_t j = 0; j < locals[g].count; ++j) {
+                  if (is_ref) {
+                     if (!loaded) {
+                        emit_mov_imm32(X8, UINT32_MAX);
+                        loaded = true;
+                     }
+                     emit_str_offset(X8, SP, slot * 8);
+                  }
+                  slot += (locals[g].type == types::v128) ? 2 : 1;
+               }
+            }
+         }
+
          // Save callee-saved registers used by regalloc
          if (_use_regalloc && _callee_saved_used) {
             int32_t save_offset = (body_local_slots + _num_spill_slots) * 8;

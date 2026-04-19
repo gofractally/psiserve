@@ -635,6 +635,9 @@ namespace psizam::detail {
             }
          }
 
+         // Ref-typed locals default to null (UINT32_MAX sentinel), not zero
+         emit_ref_local_init(func);
+
          // Save callee-saved registers to the frame (after locals and spill slots)
          if (_use_regalloc) {
             int32_t save_offset = -static_cast<int32_t>((body_local_slots + _num_spill_slots + 1) * 8);
@@ -4332,6 +4335,21 @@ namespace psizam::detail {
          return -static_cast<int32_t>((_body_locals + static_cast<uint32_t>(slot) + 1) * 8);
       }
 
+      void emit_ref_local_init(ir_function& func) {
+         const auto& locals = _mod.code[func.func_index].locals;
+         uint32_t slot = 0;
+         for (uint32_t g = 0; g < locals.size(); ++g) {
+            bool is_ref = (locals[g].type == types::funcref ||
+                           locals[g].type == types::externref ||
+                           locals[g].type == types::exnref);
+            for (uint32_t j = 0; j < locals[g].count; ++j) {
+               if (is_ref)
+                  this->emit_movd(UINT32_MAX, *(rbp - static_cast<int32_t>((slot + 1) * 8)));
+               slot += (locals[g].type == types::v128) ? 2 : 1;
+            }
+         }
+      }
+
       // Get the XMM register assigned to a v128 vreg (-1 if spilled/none)
       int8_t get_xmm(uint32_t vreg) const {
          if (!_xmm_map || vreg >= _num_vregs) return -1;
@@ -6744,6 +6762,7 @@ namespace psizam::detail {
                for (uint32_t i = 0; i < _body_locals; ++i)
                   this->emit_mov(rax, *(rbp - static_cast<int32_t>((i + 1) * 8)));
             }
+            emit_ref_local_init(func);
             // Reset RSP to frame bottom (rbp - total_slots*8)
             uint32_t total_slots = _body_locals + _num_spill_slots + _callee_saved_count;
             this->emit_mov(rbp, rsp);

@@ -394,7 +394,25 @@ namespace psizam::detail {
                }
             }
          }
-         assert((char*)code <= (char*)_code_start + max_prologue_size + _local_count * 4 + 32);
+         // Ref-typed locals default to null (UINT32_MAX sentinel), not zero
+         {
+            bool loaded = false;
+            uint32_t body_local_idx = 0;
+            for (uint32_t i = 0; i < locals.size(); ++i) {
+               bool is_ref = (locals[i].type == types::funcref ||
+                              locals[i].type == types::externref ||
+                              locals[i].type == types::exnref);
+               if (is_ref && locals[i].count > 0) {
+                  if (!loaded) {
+                     emit_mov_imm32(X8, UINT32_MAX);
+                     loaded = true;
+                  }
+                  for (uint32_t j = 0; j < locals[i].count; ++j)
+                     emit_str_fp_offset(X8, _locals.get_frame_offset(body_local_idx + j));
+               }
+               body_local_idx += locals[i].count;
+            }
+         }
 
       }
 

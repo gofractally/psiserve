@@ -979,10 +979,15 @@ namespace psizam::detail {
             builder.CreateStore(&*arg_it, locals[i]);
          }
 
-         // Zero-initialize non-param locals
+         // Initialize non-param locals (ref types to UINT32_MAX null sentinel, others to zero)
          for (uint32_t i = func.num_params; i < num_locals; i++) {
             llvm::Type* lt = locals[i]->getAllocatedType();
-            builder.CreateStore(llvm::Constant::getNullValue(lt), locals[i]);
+            uint8_t wt = local_wasm_types[i];
+            if (wt == types::funcref || wt == types::externref || wt == types::exnref) {
+               builder.CreateStore(llvm::ConstantInt::get(lt, UINT32_MAX), locals[i]);
+            } else {
+               builder.CreateStore(llvm::Constant::getNullValue(lt), locals[i]);
+            }
          }
 
          // ── Pre-scan: max host call args (for entry-block alloca) ──
