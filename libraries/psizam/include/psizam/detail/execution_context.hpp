@@ -4,6 +4,7 @@
 #include <psizam/config.hpp>
 #include <psizam/constants.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/gas.hpp>
 #include <psizam/detail/execution_interface.hpp>
 #include <psizam/host_function.hpp>
 #include <psizam/host_function_table.hpp>
@@ -14,6 +15,7 @@
 #include <psizam/detail/wasm_stack.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <signal.h>
 #include <setjmp.h>
@@ -206,6 +208,26 @@ namespace psizam::detail {
       inline void set_host_table(host_function_table* table) { _table = table; }
       inline std::vector<bool>&  get_dropped_elems() { return _dropped_elems; }
       inline std::vector<bool>&  get_dropped_data()  { return _dropped_data; }
+
+      // ── Gas metering (see libraries/psizam/docs/gas-metering-design.md) ──
+      //
+      // Storage for the per-instance gas counter and exhaustion handler.
+      // The load-time injection pass (Phase 2+) will emit decrement+check
+      // sequences that decrement this counter; for now the fields are
+      // inert plumbing.
+      //
+      // Accessors return the atomic by reference so external threads can
+      // issue stores (e.g., `gas_counter().store(-1, relaxed)` for
+      // external interrupt) without going through a non-const method.
+      inline std::atomic<int64_t>&       gas_counter()       { return _gas_counter; }
+      inline const std::atomic<int64_t>& gas_counter() const { return _gas_counter; }
+      inline gas_handler_t               gas_handler() const { return _gas_handler; }
+      inline void set_gas_handler(gas_handler_t h) { _gas_handler = h; }
+      inline void set_gas_budget(int64_t n) { _gas_counter.store(n, std::memory_order_relaxed); }
+      inline void set_gas_slice(int64_t n)  { _gas_slice = n; }
+      inline int64_t gas_slice() const { return _gas_slice; }
+      // Refill convenience used by yield / timeout-check handlers.
+      inline void restock_gas(int64_t n) { _gas_counter.store(n, std::memory_order_relaxed); }
 
       template<typename Module>
       inline void reset(Module& mod) {
@@ -474,6 +496,13 @@ namespace psizam::detail {
          // Clone dropped state
          ctx->_dropped_elems = _dropped_elems;
          ctx->_dropped_data  = _dropped_data;
+         // Propagate gas policy to the child fiber. The counter itself is
+         // per-fiber (each fiber gets its own budget); handler + slice
+         // inherit from the parent so yield/timeout policy is consistent.
+         ctx->_gas_counter.store(_gas_counter.load(std::memory_order_relaxed),
+                                 std::memory_order_relaxed);
+         ctx->_gas_handler = _gas_handler;
+         ctx->_gas_slice   = _gas_slice;
          // Set call depth limit via derived accessor
          ctx->set_max_call_depth(derived().get_remaining_call_depth());
          return ctx;
@@ -521,6 +550,13 @@ namespace psizam::detail {
       std::vector<bool>               _dropped_elems;
       std::vector<bool>               _dropped_data;
       fp_mode                         _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
+      // Gas metering — defaults to unlimited + no handler (i.e., no trap
+      // can fire until a non-default budget/handler is installed). The
+      // injection pass (Phase 2) is a no-op while the counter stays at
+      // its default, so existing modules see zero behavioral change.
+      std::atomic<int64_t>            _gas_counter{gas_budget_unlimited};
+      gas_handler_t                   _gas_handler = nullptr;
+      int64_t                         _gas_slice   = gas_slice_default;
    };
 
    struct jit_visitor { template<typename T> jit_visitor(T&&) {} };

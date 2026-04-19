@@ -56,6 +56,7 @@ namespace psizam {
    DECLARE_EXCEPTION( guarded_ptr_exception,             4010000, "pointer out of bounds" )
    DECLARE_EXCEPTION( timeout_exception,                 4010001, "timeout" )
    DECLARE_EXCEPTION( wasm_exit_exception,               4010002, "exit" )
+   DECLARE_EXCEPTION( wasm_gas_exhausted_exception,      4010003, "gas exhausted" )
    DECLARE_EXCEPTION( span_exception,                    4020000, "span exception" )
    DECLARE_EXCEPTION( profile_exception,                 4030000, "profile exception" )
 
