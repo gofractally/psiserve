@@ -22,13 +22,18 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace psizam;
 using namespace psizam::detail;
 
+struct compile_options : default_options {
+   std::uint32_t compile_threads = 0;
+};
+
 static void usage(const char* prog) {
-   std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [--opt-level=0|1|2] [--softfloat] [--backtrace] [-o output.pzam] input.wasm\n";
+   std::cerr << "Usage: " << prog << " --target=x86_64|aarch64 [--backend=jit2|llvm] [--opt-level=0|1|2] [--softfloat] [--backtrace] [-jN] [-o output.pzam] input.wasm\n";
 }
 
 static std::vector<char> write_pzam(
@@ -112,7 +117,8 @@ static bool compile_wasm(
       bool use_softfloat = false,
       bool use_backtrace = false,
       const std::string& target_triple = {},
-      int opt_level = 2) {
+      int opt_level = 2,
+      std::uint32_t compile_threads = 0) {
 
    module mod;
    mod.allocator.use_default_memory();
@@ -124,8 +130,11 @@ static bool compile_wasm(
    compile_result.opt_level = opt_level;
    null_debug_info debug;
 
-   using parser_t = binary_parser<IrWriter, default_options, null_debug_info>;
-   parser_t parser(mod.allocator, default_options{}, use_backtrace, false);
+   compile_options opts;
+   opts.compile_threads = compile_threads;
+
+   using parser_t = binary_parser<IrWriter, compile_options, null_debug_info>;
+   parser_t parser(mod.allocator, opts, use_backtrace, false);
    parser.set_compile_result(&compile_result);
 
 #ifdef __EXCEPTIONS
@@ -173,6 +182,8 @@ int pzam_compile_main(int argc, char** argv) {
    bool use_softfloat = false;
    bool use_backtrace = false;
    int opt_level = 2;
+   std::uint32_t compile_threads = std::thread::hardware_concurrency();
+   if (compile_threads == 0) compile_threads = 1;
 
    for (int i = 1; i < argc; i++) {
       std::string arg = argv[i];
@@ -182,6 +193,15 @@ int pzam_compile_main(int argc, char** argv) {
          backend_str = arg.substr(10);
       } else if (arg.starts_with("--opt-level=")) {
          opt_level = std::stoi(arg.substr(12));
+      } else if (arg == "-j") {
+         if (i + 1 < argc) {
+            compile_threads = static_cast<std::uint32_t>(std::stoul(argv[++i]));
+         } else {
+            compile_threads = std::thread::hardware_concurrency();
+            if (compile_threads == 0) compile_threads = 1;
+         }
+      } else if (arg.starts_with("-j")) {
+         compile_threads = static_cast<std::uint32_t>(std::stoul(arg.substr(2)));
       } else if (arg == "--softfloat") {
          use_softfloat = true;
       } else if (arg == "--backtrace") {
@@ -234,18 +254,20 @@ int pzam_compile_main(int argc, char** argv) {
 
    bool ok;
    if (backend_str == "jit2") {
+      // jit2 backend ignores compile_threads; pass 0 to keep it serial.
       if (target_arch == pzam_arch::x86_64) {
          ok = compile_wasm<ir_writer_x64>(wasm_bytes, target_arch, output_file,
-                                           false, use_backtrace);
+                                           false, use_backtrace, {}, 2, 0);
       } else {
          ok = compile_wasm<ir_writer_a64>(wasm_bytes, target_arch, output_file,
-                                           false, use_backtrace);
+                                           false, use_backtrace, {}, 2, 0);
       }
    } else if (backend_str == "llvm") {
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       ok = compile_wasm<ir_writer_llvm_aot>(wasm_bytes, target_arch, output_file,
                                              use_softfloat, use_backtrace,
-                                             target_triple, opt_level);
+                                             target_triple, opt_level,
+                                             compile_threads);
 #else
       std::cerr << "Error: LLVM backend not available (build with -DPSIZAM_ENABLE_LLVM=ON)\n";
       return 1;
@@ -259,8 +281,9 @@ int pzam_compile_main(int argc, char** argv) {
    if (!ok) return 1;
 
    std::cerr << "Compiled " << input_file << " -> " << output_file
-             << " (target: " << target_str << ", backend: " << backend_str
-             << (use_softfloat ? ", softfloat" : "")
+             << " (target: " << target_str << ", backend: " << backend_str;
+   if (backend_str == "llvm") std::cerr << ", -j" << compile_threads;
+   std::cerr << (use_softfloat ? ", softfloat" : "")
              << (use_backtrace ? ", backtrace" : "") << ")\n";
    return 0;
 }

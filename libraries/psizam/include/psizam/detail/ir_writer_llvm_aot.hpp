@@ -108,20 +108,47 @@ namespace psizam::detail {
       }
 
 #if !defined(__wasi__)
+      // Batch compilation: group consecutive function indices into batches and
+      // compile each batch as a single LLVM module. Amortizes LLVMContext /
+      // TargetMachine / PassBuilder / ELF emission cost across many functions.
+      //
+      // Determinism: batch_i = function indices [i*batch_size, (i+1)*batch_size),
+      // a pure function of (input, thread_count). Final code blob lays batches
+      // in batch-index order → bit-identical output for a given thread count.
+      //
+      // NOTE: batch_size depends on _compile_threads, so .pzam output is
+      // thread-count-dependent. For consensus use, pin thread count in the
+      // compiler identity hash.
+
+      // Minimum batch size — tiny batches lose the amortization benefit of
+      // batching (per-batch overhead dominates).
+      static constexpr uint32_t k_min_batch_size = 256;
+
       void parallel_llvm_compile_all() {
          uint32_t N = _compile_threads;
          if (_num_functions == 0) return;
-         if (N > _num_functions) N = _num_functions;
 
-         // Per-function results (populated by workers, read by merge)
-         struct func_result_t {
+         // Fixed batch size: empirically tuned for best wall-clock balance
+         // between amortizing per-batch overhead and keeping enough batches
+         // for load balancing across heterogeneous function sizes.
+         // Scaling batch_size with N / num_functions (fewer larger batches)
+         // was measured to HURT wall time — less load balancing beats the
+         // reduced per-batch setup cost.
+         const uint32_t batch_size = 1024;
+         const uint32_t num_batches = (_num_functions + batch_size - 1) / batch_size;
+         if (N > num_batches) N = num_batches;
+
+         // Per-batch results
+         struct batch_result_t {
             std::vector<uint8_t> code;
             std::vector<code_relocation> relocations;
+            // Sized to _num_functions; only indices in [batch_start, batch_end)
+            // are populated for this batch.
             std::vector<std::pair<uint32_t, uint32_t>> function_offsets;
             std::vector<std::pair<uint32_t, uint32_t>> body_offsets;
             uint32_t blob_offset = 0;  // set during between phase
          };
-         auto func_results = std::make_unique<func_result_t[]>(_num_functions);
+         auto batch_results = std::make_unique<batch_result_t[]>(num_batches);
 
          // Per-worker state
          struct worker_state {
@@ -137,6 +164,10 @@ namespace psizam::detail {
          topts.opt_level        = _compile_result->opt_level;
          topts.fp               = _compile_result->softfloat ? fp_mode::softfloat
                                                              : fp_mode::hw_deterministic;
+         // Batch mode still uses ExternalLinkage for all wasm_func_N so that
+         // cross-batch refs resolve via the symbol table. Same-batch refs
+         // produce negative-addend relocs that resolve_cross_function_relocs
+         // later patches to the final merged-blob offsets.
          topts.per_function     = true;
          topts.enable_backtrace = _compile_result->backtrace;
          const std::string& target_triple = _compile_result->target_triple;
@@ -150,18 +181,22 @@ namespace psizam::detail {
          std::atomic<bool> any_error{false};
 
          reactor.run_batch(
-            _num_functions,
+            num_batches,
 
-            // work_fn: parse + translate + LLVM compile one function
-            [this, &workers, &func_results, &topts, &target_triple, &any_error]
-            (uint32_t worker_id, uint32_t func_idx) {
+            // work_fn: parse + translate + LLVM compile a batch of functions
+            [this, &workers, &batch_results, &topts, &target_triple, &any_error,
+             batch_size]
+            (uint32_t worker_id, uint32_t batch_idx) {
                if (any_error.load(std::memory_order_relaxed)) return;
                auto& ws = workers[worker_id];
 
                // Lazy init worker IR allocator
                if (!ws.ir_alloc._base) {
 #if defined(PSIZAM_COMPILE_ONLY) && !defined(__LP64__)
-                  // WASM32: fixed allocation sized for largest function
+                  // WASM32: fixed allocation sized for largest function.
+                  // Only ONE function's IR is alive at a time (reset between
+                  // translations within the batch), so batching does not
+                  // increase the IR-alloc footprint.
                   ws.ir_alloc.use_fixed_memory(growable_allocator::align_to_page(
                      _max_func_bytes * 250 + 1024 * 1024));
 #else
@@ -170,19 +205,27 @@ namespace psizam::detail {
 #endif
                }
 
-               // Create per-function worker writer for parsing
-               ir_writer_impl worker_writer(_mod, _functions, _num_functions,
-                                           ws.ir_alloc, _enable_backtrace, _stack_limit_is_bytes);
+               const uint32_t start = batch_idx * batch_size;
+               const uint32_t end = std::min(start + batch_size, _num_functions);
 
-               // Parse WASM bytecodes → IR
-               _parse_callback(func_idx, worker_writer, ws.max_stack);
-
-               auto& func = _functions[func_idx];
-
-               // Translate IR → LLVM IR → native code
+               // Translate all functions in the batch into a single LLVM module,
+               // then compile once. ELF emission + parse + TargetMachine cost
+               // is amortized across `end - start` functions.
                auto do_compile = [&]() {
                   llvm_ir_translator translator(get_ir_module(), topts);
-                  translator.translate_function(func);
+
+                  for (uint32_t func_idx = start; func_idx < end; ++func_idx) {
+                     ir_writer_impl worker_writer(_mod, _functions, _num_functions,
+                                                 ws.ir_alloc, _enable_backtrace,
+                                                 _stack_limit_is_bytes);
+                     _parse_callback(func_idx, worker_writer, ws.max_stack);
+
+                     translator.translate_function(_functions[func_idx]);
+
+                     // Release this function's IR — LLVM IR is in the module now
+                     ws.ir_alloc._offset = 0;
+                  }
+
                   translator.finalize();
 
                   auto llvm_mod = translator.take_module();
@@ -197,10 +240,10 @@ namespace psizam::detail {
                      return;
                   }
 
-                  func_results[func_idx].code = std::move(result.code);
-                  func_results[func_idx].relocations = std::move(result.relocations);
-                  func_results[func_idx].function_offsets = std::move(result.function_offsets);
-                  func_results[func_idx].body_offsets = std::move(result.body_offsets);
+                  batch_results[batch_idx].code = std::move(result.code);
+                  batch_results[batch_idx].relocations = std::move(result.relocations);
+                  batch_results[batch_idx].function_offsets = std::move(result.function_offsets);
+                  batch_results[batch_idx].body_offsets = std::move(result.body_offsets);
                };
 
 #ifdef __EXCEPTIONS
@@ -218,13 +261,10 @@ namespace psizam::detail {
 #else
                do_compile();
 #endif
-
-               // Reset IR allocator — only 1 function's IR alive at a time
-               ws.ir_alloc._offset = 0;
             },
 
-            // between_fn: compute prefix sums, set blob offsets
-            [this, &workers, &func_results, N]() {
+            // between_fn: compute per-batch blob offsets, set global function offsets
+            [this, &workers, &batch_results, num_batches, batch_size, N]() {
                // Check for errors
                for (uint32_t w = 0; w < N; ++w) {
                   if (workers[w].had_error) {
@@ -234,29 +274,36 @@ namespace psizam::detail {
                   }
                }
 
-               // Compute total code size and per-function offsets (prefix sum)
+               // Compute per-batch blob offsets (prefix sum, 16-byte aligned)
                size_t total_size = 0;
-               for (uint32_t f = 0; f < _num_functions; ++f) {
-                  // Align to 16 bytes
+               for (uint32_t b = 0; b < num_batches; ++b) {
                   size_t align_pad = (16 - (total_size % 16)) % 16;
                   total_size += align_pad;
-                  func_results[f].blob_offset = static_cast<uint32_t>(total_size);
-                  total_size += func_results[f].code.size();
+                  batch_results[b].blob_offset = static_cast<uint32_t>(total_size);
+                  total_size += batch_results[b].code.size();
                }
 
                // Pre-allocate merged code blob
                _accumulated_code.resize(total_size, 0x00);
 
-               // Set function/body offsets in merged blob
-               for (uint32_t f = 0; f < _num_functions; ++f) {
-                  uint32_t blob_offset = func_results[f].blob_offset;
-                  if (f < func_results[f].function_offsets.size()) {
-                     auto [entry_off, entry_sz] = func_results[f].function_offsets[f];
-                     _function_offsets[f] = {blob_offset + entry_off, entry_sz};
-                  }
-                  if (f < func_results[f].body_offsets.size()) {
-                     auto [body_off, body_sz] = func_results[f].body_offsets[f];
-                     _func_body_offsets[f] = {blob_offset + body_off, body_sz};
+               // Set global function/body offsets from each batch's offsets
+               for (uint32_t b = 0; b < num_batches; ++b) {
+                  uint32_t blob_offset = batch_results[b].blob_offset;
+                  uint32_t batch_start = b * batch_size;
+                  uint32_t batch_end = std::min(batch_start + batch_size, _num_functions);
+                  for (uint32_t f = batch_start; f < batch_end; ++f) {
+                     if (f < batch_results[b].function_offsets.size()) {
+                        auto [entry_off, entry_sz] = batch_results[b].function_offsets[f];
+                        if (entry_sz != 0) {
+                           _function_offsets[f] = {blob_offset + entry_off, entry_sz};
+                        }
+                     }
+                     if (f < batch_results[b].body_offsets.size()) {
+                        auto [body_off, body_sz] = batch_results[b].body_offsets[f];
+                        if (body_sz != 0) {
+                           _func_body_offsets[f] = {blob_offset + body_off, body_sz};
+                        }
+                     }
                   }
                }
 
@@ -266,27 +313,24 @@ namespace psizam::detail {
                }
             },
 
-            // merge_fn: parallel copy + reloc adjustment
-            [this, &func_results](uint32_t worker_id) {
+            // merge_fn: parallel copy + reloc adjustment per batch
+            [this, &batch_results, num_batches](uint32_t worker_id) {
                if (_had_error) return;
-               // Each worker copies a stripe of functions
-               uint32_t funcs_per_worker = (_num_functions + _compile_threads - 1) / _compile_threads;
-               uint32_t start = worker_id * funcs_per_worker;
-               uint32_t end = std::min(start + funcs_per_worker, _num_functions);
+               uint32_t batches_per_worker = (num_batches + _compile_threads - 1) / _compile_threads;
+               uint32_t start = worker_id * batches_per_worker;
+               uint32_t end = std::min(start + batches_per_worker, num_batches);
 
-               for (uint32_t f = start; f < end; ++f) {
-                  auto& fr = func_results[f];
-                  if (fr.code.empty()) continue;
+               for (uint32_t b = start; b < end; ++b) {
+                  auto& br = batch_results[b];
+                  if (br.code.empty()) continue;
 
-                  // Copy this function's code into merged blob
-                  std::memcpy(_accumulated_code.data() + fr.blob_offset,
-                              fr.code.data(), fr.code.size());
+                  std::memcpy(_accumulated_code.data() + br.blob_offset,
+                              br.code.data(), br.code.size());
 
-                  // Adjust relocations and accumulate
-                  for (auto& reloc : fr.relocations) {
-                     reloc.code_offset += fr.blob_offset;
+                  for (auto& reloc : br.relocations) {
+                     reloc.code_offset += br.blob_offset;
                      if (reloc.symbol == reloc_symbol::code_blob_self && reloc.addend >= 0) {
-                        reloc.addend += static_cast<int32_t>(fr.blob_offset);
+                        reloc.addend += static_cast<int32_t>(br.blob_offset);
                      }
                   }
                }
@@ -295,14 +339,14 @@ namespace psizam::detail {
 
          if (_had_error) return;
 
-         // Collect all relocations (serial — order matters for determinism)
-         for (uint32_t f = 0; f < _num_functions; ++f) {
-            for (auto& reloc : func_results[f].relocations) {
+         // Collect all relocations in batch-index order for determinism
+         for (uint32_t b = 0; b < num_batches; ++b) {
+            for (auto& reloc : batch_results[b].relocations) {
                _accumulated_relocs.push_back(std::move(reloc));
             }
          }
 
-         // Resolve cross-function relocations
+         // Resolve cross-function relocations (negative-addend → final blob offset)
          resolve_cross_function_relocs();
 
          _compile_result->relocs = std::move(_accumulated_relocs);

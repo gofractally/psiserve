@@ -91,8 +91,14 @@ namespace psizam::detail {
       llvm::VectorType* v4xf32_ty  = nullptr;
       llvm::VectorType* v2xf64_ty  = nullptr;
 
-      // WASM function declarations (indexed by function index)
+      // WASM function declarations (indexed by function index). Lazy: entry
+      // is null until `get_or_declare_wasm_func(i)` creates the declaration.
       std::vector<llvm::Function*> wasm_funcs;
+
+      // Function indices actually translated in this module (in translation
+      // order). Used by generate_entry_wrappers to avoid iterating over
+      // unused external declarations.
+      std::vector<uint32_t> translated_funcs;
 
       impl(const module& mod, const llvm_translate_options& options)
          : wasm_mod(mod), opts(options)
@@ -657,43 +663,44 @@ namespace psizam::detail {
          }
       }
 
+      // Lazy declaration: wasm_funcs[i] starts null; we only create the
+      // llvm::Function when something actually references it. For batch
+      // compilation this avoids paying for 100k+ unused declarations in
+      // every batch (each batch typically references only its own functions
+      // plus their direct callees).
       void declare_functions() {
          uint32_t num_imports = wasm_mod.get_imported_functions_size();
          uint32_t total_funcs = num_imports + static_cast<uint32_t>(wasm_mod.code.size());
          wasm_funcs.resize(total_funcs, nullptr);
+      }
 
-         for (uint32_t i = num_imports; i < total_funcs; i++) {
-            const auto& ft = wasm_mod.get_function_type(i);
+      llvm::Function* get_or_declare_wasm_func(uint32_t i) {
+         uint32_t num_imports = wasm_mod.get_imported_functions_size();
+         if (i < num_imports) return nullptr; // imports have no wasm_func_N
+         if (i >= wasm_funcs.size()) return nullptr; // out of range
+         if (wasm_funcs[i]) return wasm_funcs[i];
 
-            // Build function type: (ptr ctx, ptr mem, params...) -> ret
-            std::vector<llvm::Type*> params;
-            params.push_back(ptr_ty); // ctx
-            params.push_back(ptr_ty); // mem
-
-            for (auto pt : ft.param_types) {
-               params.push_back(wasm_type_to_llvm(pt));
-            }
-
-            llvm::Type* ret_ty = ft.return_count ? wasm_type_to_llvm(ft.return_type) : void_ty;
-            auto* fn_ty = llvm::FunctionType::get(ret_ty, params, false);
-
-            std::string name = "wasm_func_" + std::to_string(i);
-            // Per-function mode: all functions are external declarations except the
-            // one being compiled. Use ExternalLinkage so LLVM doesn't reject
-            // body-less internal functions.
-            auto linkage = opts.per_function
-               ? llvm::Function::ExternalLinkage
-               : llvm::Function::InternalLinkage;
-            auto* fn = llvm::Function::Create(fn_ty, linkage, name, llvm_mod.get());
-            // In deterministic/softfloat mode, WASM requires precise FP semantics —
-            // identity operations (x-0, x*1) must not be folded away because they
-            // quiet sNaN to qNaN.
-            if (opts.fp != fp_mode::fast)
-               fn->addFnAttr(llvm::Attribute::StrictFP);
-            if (opts.enable_backtrace)
-               fn->addFnAttr("frame-pointer", "all");
-            wasm_funcs[i] = fn;
+         const auto& ft = wasm_mod.get_function_type(i);
+         std::vector<llvm::Type*> params;
+         params.push_back(ptr_ty); // ctx
+         params.push_back(ptr_ty); // mem
+         for (auto pt : ft.param_types) {
+            params.push_back(wasm_type_to_llvm(pt));
          }
+         llvm::Type* ret_ty = ft.return_count ? wasm_type_to_llvm(ft.return_type) : void_ty;
+         auto* fn_ty = llvm::FunctionType::get(ret_ty, params, false);
+
+         std::string name = "wasm_func_" + std::to_string(i);
+         auto linkage = opts.per_function
+            ? llvm::Function::ExternalLinkage
+            : llvm::Function::InternalLinkage;
+         auto* fn = llvm::Function::Create(fn_ty, linkage, name, llvm_mod.get());
+         if (opts.fp != fp_mode::fast)
+            fn->addFnAttr(llvm::Attribute::StrictFP);
+         if (opts.enable_backtrace)
+            fn->addFnAttr("frame-pointer", "all");
+         wasm_funcs[i] = fn;
+         return fn;
       }
 
       // ──── Translation helpers ────
@@ -764,8 +771,9 @@ namespace psizam::detail {
 
       void translate(const ir_function& func) {
          uint32_t func_idx = func.func_index + wasm_mod.get_imported_functions_size();
-         auto* fn = wasm_funcs[func_idx];
+         auto* fn = get_or_declare_wasm_func(func_idx);
          if (!fn) return;
+         translated_funcs.push_back(func_idx);
 
 
          llvm::IRBuilder<> builder(*ctx);
@@ -1897,9 +1905,11 @@ namespace psizam::detail {
                         args.push_back(ctx_ptr);
                         args.push_back(load_mem_ptr());
 
+                        llvm::Function* callee = get_or_declare_wasm_func(funcnum);
+
                         // Convert each arg to match callee's parameter types
-                        if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
-                           auto* callee_ty = wasm_funcs[funcnum]->getFunctionType();
+                        if (callee) {
+                           auto* callee_ty = callee->getFunctionType();
                            for (uint32_t a = 0; a < call_args.size(); a++) {
                               uint32_t param_idx = a + 2; // skip ctx, mem
                               if (param_idx < callee_ty->getNumParams()) {
@@ -1911,9 +1921,9 @@ namespace psizam::detail {
                         for (auto* a : call_args) args.push_back(a);
                         call_args.clear();
 
-                        if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
+                        if (callee) {
                            emit_backtrace_set_top(builder, ctx_ptr);
-                           auto* result = builder.CreateCall(wasm_funcs[funcnum], args);
+                           auto* result = builder.CreateCall(callee, args);
                            emit_backtrace_clear_top(builder, ctx_ptr);
                            if (inst.dest != ir_vreg_none && !result->getType()->isVoidTy()) {
                               if (inst.type == types::v128) {
@@ -2052,8 +2062,9 @@ namespace psizam::detail {
                      std::vector<llvm::Value*> args;
                      args.push_back(ctx_ptr);
                      args.push_back(load_mem_ptr());
-                     if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
-                        auto* callee_ty = wasm_funcs[funcnum]->getFunctionType();
+                     llvm::Function* callee = get_or_declare_wasm_func(funcnum);
+                     if (callee) {
+                        auto* callee_ty = callee->getFunctionType();
                         for (uint32_t a = 0; a < call_args.size(); a++) {
                            uint32_t param_idx = a + 2;
                            if (param_idx < callee_ty->getNumParams())
@@ -2062,9 +2073,9 @@ namespace psizam::detail {
                      }
                      for (auto* a : call_args) args.push_back(a);
                      call_args.clear();
-                     if (funcnum < wasm_funcs.size() && wasm_funcs[funcnum]) {
+                     if (callee) {
                         emit_backtrace_set_top(builder, ctx_ptr);
-                        auto* result = builder.CreateCall(wasm_funcs[funcnum], args);
+                        auto* result = builder.CreateCall(callee, args);
                         result->setTailCallKind(llvm::CallInst::TCK_Tail);
                         emit_backtrace_clear_top(builder, ctx_ptr);
                         builder.CreateCall(rt_call_depth_inc, {ctx_ptr});
@@ -5041,11 +5052,13 @@ namespace psizam::detail {
       // Entry wrapper signature: i64 @wasm_entry_N(ptr %ctx, ptr %mem, ptr %args)
       // Unpacks native_value args from the array and calls the real function.
       void generate_entry_wrappers() {
-         uint32_t num_imports = wasm_mod.get_imported_functions_size();
          // Entry wrapper type: i64(ptr, ptr, ptr)
          auto* entry_ty = llvm::FunctionType::get(i64_ty, {ptr_ty, ptr_ty, ptr_ty}, false);
 
-         for (uint32_t i = num_imports; i < static_cast<uint32_t>(wasm_funcs.size()); i++) {
+         // Only iterate functions we actually translated — avoids scanning
+         // the entire module's function table (most entries are null under
+         // lazy declaration).
+         for (uint32_t i : translated_funcs) {
             auto* real_fn = wasm_funcs[i];
             if (!real_fn || real_fn->isDeclaration()) continue;
 

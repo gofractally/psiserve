@@ -385,16 +385,58 @@ namespace psizam::detail {
                // emits relocations for calls between symbols in the same .text
                // section (e.g., wasm_entry_N → wasm_func_N within one compilation
                // unit). These are NOT pre-resolved by the assembler.
+               //
+               // Batch mode optimization: if the target symbol is DEFINED in
+               // this .text (same batch) AND the relocation is PC-relative,
+               // the final operand value is independent of where the batch
+               // sits in the merged blob. Patch the code bytes directly and
+               // skip emitting an output relocation.
                if (sym_name.starts_with("wasm_entry_") || sym_name.starts_with("wasm_func_")) {
                   bool is_entry = sym_name.starts_with("wasm_entry_");
                   std::string idx_str = is_entry ? sym_name.substr(11) : sym_name.substr(10);
                   uint32_t func_idx = std::stoul(idx_str);
                   uint32_t num_imports_val = mod.get_imported_functions_size();
                   if (func_idx >= num_imports_val) {
+                     auto mapped_type = map_elf_reloc_type(reloc.getType(), is_x86_64);
+                     uint32_t reloc_off = static_cast<uint32_t>(reloc.getOffset());
+
+                     // Same-batch + PC-relative → resolve at compile time.
+                     // `is_internal_code` means the symbol is defined in this
+                     // object's .text section (batch-local).
+                     bool pc_relative_intra_text =
+                        is_internal_code &&
+                        (mapped_type == reloc_type::aarch64_call26 ||
+                         mapped_type == reloc_type::x86_64_pc32);
+
+                     if (pc_relative_intra_text) {
+                        auto sym_addr_or_err = sym_it->getAddress();
+                        auto elf_addend_or_err = llvm::object::ELFRelocationRef(reloc).getAddend();
+                        if (sym_addr_or_err && reloc_off + 4 <= result.code.size()) {
+                           int64_t target = static_cast<int64_t>(*sym_addr_or_err);
+                           int64_t addend = elf_addend_or_err ? *elf_addend_or_err : 0;
+                           int64_t pc = static_cast<int64_t>(reloc_off);
+
+                           if (mapped_type == reloc_type::aarch64_call26) {
+                              // BL/B imm26: (target - pc + addend) >> 2
+                              int64_t offset = (target - pc + addend) >> 2;
+                              uint32_t insn;
+                              std::memcpy(&insn, result.code.data() + reloc_off, 4);
+                              insn = (insn & 0xFC000000u) |
+                                     (static_cast<uint32_t>(offset) & 0x03FFFFFFu);
+                              std::memcpy(result.code.data() + reloc_off, &insn, 4);
+                           } else {
+                              // x86_64 CALL/JMP rel32: target - pc + addend
+                              int32_t rel32 = static_cast<int32_t>(target - pc + addend);
+                              std::memcpy(result.code.data() + reloc_off, &rel32, 4);
+                           }
+                           continue; // no output reloc needed
+                        }
+                     }
+
                      code_relocation cr;
-                     cr.code_offset = static_cast<uint32_t>(reloc.getOffset());
+                     cr.code_offset = reloc_off;
                      cr.symbol = reloc_symbol::code_blob_self;
-                     cr.type = map_elf_reloc_type(reloc.getType(), is_x86_64);
+                     cr.type = mapped_type;
                      uint32_t code_idx = func_idx - num_imports_val;
                      // Negative addend = pending function ref
                      // Body refs:  -(code_idx + 1)             [range -1..-N]
