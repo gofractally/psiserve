@@ -10,6 +10,7 @@
 #include <psizam/utils.hpp>
 #include <psizam/detail/vector.hpp>
 #include <psizam/detail/debug_info.hpp>
+#include <psizam/detail/gas_injector.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -1059,6 +1060,11 @@ namespace psizam::detail {
          uint32_t label_result;      // single label result for blocks
          bool is_if;
          bool is_try_table = false;  // true for try_table blocks (emit_eh_leave at end)
+         bool is_loop     = false;   // true for loop scopes (drives gas patching at end)
+         // Backend-opaque handle to a reserved gas-charge emission point for
+         // this loop's per-iteration charge. Set iff is_loop and the backend
+         // exposes reserve_loop_gas_charge; patched on matching end.
+         void* gas_handle = nullptr;
          std::variant<label_t, std::vector<branch_t>> relocations;
          // For multi-value: non-empty when the block has >1 results
          std::vector<uint8_t> expected_results;
@@ -1221,6 +1227,20 @@ namespace psizam::detail {
          }
          std::vector<pc_element_t> pc_stack{std::move(func_scope)};
 
+         // Gas metering (Phase 4 heavy-opcode accumulator): single-pass
+         // state machine that tallies heavy-op extras into prepay_extra
+         // (outside any loop) and per-loop buckets (inside a loop). On
+         // loop close and function close we patch the backend's
+         // previously-reserved gas-charge immediates with the sums.
+         // Backends that don't expose the patch API silently skip — they
+         // keep the flat Phase 2b behavior until wired up.
+         gas_injection_state gas_state;
+         gas_state.reset();
+         void* prologue_gas_handle = nullptr;
+         if constexpr (requires { code_writer.prologue_gas_handle(); }) {
+            prologue_gas_handle = code_writer.prologue_gas_handle();
+         }
+
          // writes the continuation of a label to address.  If the continuation
          // is not yet available, address will be recorded in the relocations
          // list for label.
@@ -1265,6 +1285,15 @@ namespace psizam::detail {
          auto exit_scope = [&]() {
             // There must be at least one element
             PSIZAM_ASSERT(pc_stack.size(), wasm_parse_exception, "unexpected end instruction");
+            // Gas metering: close out this scope's heavy-op accumulator.
+            // Must run before the pc_stack.pop_back() below so we can
+            // read is_loop / gas_handle off the element being closed.
+            if (pc_stack.back().is_loop) {
+               const int64_t loop_extra = gas_state.on_loop_exit();
+               if constexpr (requires { code_writer.patch_gas_imm_add_extra(nullptr, int64_t{0}); }) {
+                  code_writer.patch_gas_imm_add_extra(pc_stack.back().gas_handle, loop_extra);
+               }
+            }
             // an if with an empty else requires params == results (identity)
             if (pc_stack.back().is_if) {
                if (!pc_stack.back().block_params.empty() || !pc_stack.back().expected_results.empty()) {
@@ -1364,7 +1393,9 @@ namespace psizam::detail {
             if constexpr (requires { code_writer.set_wasm_pc(code.raw()); })
                code_writer.set_wasm_pc(code.raw());
 
-            switch (*code++) {
+            const uint8_t op_byte = *code++;
+            gas_state.on_opcode(op_byte);
+            switch (op_byte) {
                case opcodes::unreachable: check_in_bounds(); code_writer.emit_unreachable(); op_stack.start_unreachable(); break;
                case opcodes::nop: code_writer.emit_nop(); break;
                case opcodes::end: {
@@ -1488,11 +1519,16 @@ namespace psizam::detail {
                   elem.expected_result = single_type;
                   elem.label_result = types::pseudo;  // loops: labels carry params, not results
                   elem.is_if = false;
+                  elem.is_loop = true;
+                  if constexpr (requires { code_writer.last_loop_gas_handle(); }) {
+                     elem.gas_handle = code_writer.last_loop_gas_handle();
+                  }
                   elem.relocations = pos;
                   if (!br.empty()) elem.expected_results = br;
                   if (!bp.empty()) elem.label_results = bp;  // loop labels carry param types
                   elem.block_params = std::move(bp);
                   pc_stack.push_back(std::move(elem));
+                  gas_state.on_loop_enter();
                   op_stack.push_scope();
                   // Push params back inside the loop scope
                   for (auto p : pc_stack.back().block_params)
@@ -3157,6 +3193,14 @@ namespace psizam::detail {
          }
          PSIZAM_ASSERT( pc_stack.empty(), wasm_parse_exception, "function body too long" );
          max_stack_out = std::max(max_stack_out, static_cast<uint64_t>(op_stack.maximum_operand_depth) + local_types.locals_count());
+
+         // Gas metering: patch the function's prologue gas charge with
+         // the accumulated prepay_extra (heavy opcodes outside any
+         // loop). Backends that don't expose the patch API silently
+         // skip — they stay on Phase 2b body-bytes-only behavior.
+         if constexpr (requires { code_writer.patch_gas_imm_add_extra(nullptr, int64_t{0}); }) {
+            code_writer.patch_gas_imm_add_extra(prologue_gas_handle, gas_state.prepay_extra);
+         }
       }
 
       void parse_data_segment(wasm_code_ptr& code, data_segment& ds) {

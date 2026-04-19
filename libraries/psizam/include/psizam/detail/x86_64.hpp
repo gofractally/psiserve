@@ -235,7 +235,14 @@ namespace psizam::detail {
       //
       // Non-atomic hot path: cmp + je-NT + cmp + jne-NT + subq + jns-T.
       // Taken branches are predicted; non-taken too after warmup.
-      void emit_gas_charge(int64_t cost) {
+      //
+      // Returns a pointer to the subq immediate (imm32, 4 bytes) so
+      // the parser can patch the cost once the surrounding scope
+      // (function body or loop body) has finished accumulating heavy-
+      // opcode extras. Use REX.W 0x81 /5 unconditionally — the ~3
+      // wasted bytes per charge when cost fits in imm8 are the price
+      // of being able to patch without relocating the branches below.
+      void* emit_gas_charge(int64_t cost) {
          using ctx_t = jit_execution_context<false>;
          const uint32_t strategy_off = static_cast<uint32_t>(ctx_t::gas_strategy_offset());
          const uint32_t atomic_off   = static_cast<uint32_t>(ctx_t::gas_atomic_offset());
@@ -258,18 +265,14 @@ namespace psizam::detail {
          emit_bytes(0x75, 0x00);
 
          // ── inline non-atomic fast path ──
-         // subq $cost, counter_off(%rdi) — REX.W 0x83 /5 (imm8, 8 bytes)
-         // when cost fits in a signed byte, else REX.W 0x81 /5 (imm32,
-         // 11 bytes) so Phase 2b's real costs don't get truncated.
-         if (cost >= -128 && cost <= 127) {
-            emit_bytes(0x48, 0x83, 0xAF);
-            emit_operand32(counter_off);
-            emit_bytes(static_cast<uint8_t>(cost & 0xFF));
-         } else {
-            emit_bytes(0x48, 0x81, 0xAF);
-            emit_operand32(counter_off);
-            emit_operand32(static_cast<uint32_t>(cost));
-         }
+         // subq $cost, counter_off(%rdi) — REX.W 0x81 /5 (imm32, 11 bytes)
+         // Always imm32 so the imm can be patched post-hoc with larger
+         // costs (heavy-op extras accumulated over the scope) without
+         // shifting the downstream jumps.
+         emit_bytes(0x48, 0x81, 0xAF);
+         emit_operand32(counter_off);
+         uint8_t* gas_imm_ptr = reinterpret_cast<uint8_t*>(code);
+         emit_operand32(static_cast<uint32_t>(cost));
          // jns done_rel8
          auto* jns_done_imm = reinterpret_cast<uint8_t*>(code) + 1;
          emit_bytes(0x79, 0x00);
@@ -303,7 +306,33 @@ namespace psizam::detail {
          *jne_helper_imm  = static_cast<uint8_t>(helper_path_target - (jne_helper_imm + 1));
          *jns_done_imm    = static_cast<uint8_t>(done_target        - (jns_done_imm + 1));
          *jmp_done_imm    = static_cast<uint8_t>(done_target        - (jmp_done_imm + 1));
+         return gas_imm_ptr;
       }
+
+      // Add heavy-opcode extras onto a previously-emitted gas-charge
+      // imm32. Additive so the parser only needs to know the sum of
+      // extras it accumulated for this scope — the base cost (body
+      // bytes for the prologue, 1 for a loop) is already in the imm.
+      void patch_gas_imm_add_extra(void* imm_ptr, int64_t extra) {
+         if (!imm_ptr || extra == 0) return;
+         uint8_t* p = reinterpret_cast<uint8_t*>(imm_ptr);
+         uint32_t cur = static_cast<uint32_t>(p[0])
+                      | (static_cast<uint32_t>(p[1]) << 8)
+                      | (static_cast<uint32_t>(p[2]) << 16)
+                      | (static_cast<uint32_t>(p[3]) << 24);
+         uint32_t v = cur + static_cast<uint32_t>(extra);
+         p[0] = static_cast<uint8_t>(v       & 0xFF);
+         p[1] = static_cast<uint8_t>((v>>8)  & 0xFF);
+         p[2] = static_cast<uint8_t>((v>>16) & 0xFF);
+         p[3] = static_cast<uint8_t>((v>>24) & 0xFF);
+      }
+
+      // Parse-time handle accessors. Each call to emit_gas_charge
+      // overwrites _last_gas_imm_ptr; callers retrieve it immediately
+      // (after emit_prologue for the function prepay, after emit_loop
+      // for the per-iteration charge).
+      void* prologue_gas_handle() const  { return _prologue_gas_imm_ptr; }
+      void* last_loop_gas_handle() const { return _last_loop_gas_imm_ptr; }
 
       void emit_prologue(const func_type& /*ft*/, const std::vector<local_entry>& locals, uint32_t funcnum) {
          _ft = &_mod.types[_mod.functions[funcnum]];
@@ -325,11 +354,13 @@ namespace psizam::detail {
          // movq RSP, RBP
          emit_bytes(0x48, 0x89, 0xe5);
          emit_check_stack_limit();
-         // Gas metering (Phase 2b): per-function cost = body size in
-         // bytes. Proxy for opcode count (~2-3 bytes/opcode in WASM),
-         // lets big functions cost proportionally at entry. Loops
-         // still charge 1 per iteration (Phase 3 behavior).
-         emit_gas_charge(static_cast<int64_t>(_mod.code[funcnum].wasm_body_bytes));
+         // Gas metering (Phase 4): per-function cost = body size in
+         // bytes + prepay_extra (heavy-op weights for opcodes outside
+         // any loop, accumulated by the parser and patched in at
+         // end-of-function). Loops still charge 1-per-iteration plus
+         // their own heavy-op extras, patched at end-of-loop.
+         _prologue_gas_imm_ptr =
+            emit_gas_charge(static_cast<int64_t>(_mod.code[funcnum].wasm_body_bytes));
          uint64_t count = 0;
          for(uint32_t i = 0; i < locals.size(); ++i) {
             count += locals[i].count;
@@ -444,7 +475,9 @@ namespace psizam::detail {
          // Loop-header gas metering: every iteration (including the first)
          // passes through the loop label before executing the body, so
          // emitting gas_charge here correctly accounts for iteration count.
-         emit_gas_charge(1);
+         // Placeholder cost of 1; parser patches via patch_gas_imm to
+         // 1 + sum(heavy_op_extras inside this loop) when END is reached.
+         _last_loop_gas_imm_ptr = emit_gas_charge(1);
          return label;
       }
       void* emit_if(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {
@@ -6277,6 +6310,13 @@ namespace psizam::detail {
       void* memory_handler;
       uint64_t _local_count;
       uint32_t _table_element_size;
+
+      // Gas-metering patch handles (Phase 4 heavy-op accumulator).
+      // Point at the imm32 bytes of the relevant emit_gas_charge
+      // sequence. Parser patches through patch_gas_imm once per-scope
+      // heavy-op extras are known.
+      void* _prologue_gas_imm_ptr  = nullptr;
+      void* _last_loop_gas_imm_ptr = nullptr;
 
       std::uint32_t stack_usage;
       void* stack_limit_entry = nullptr;
