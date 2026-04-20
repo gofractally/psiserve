@@ -605,6 +605,13 @@ template <typename HostImpl>
 void runtime::provide(module_handle& mod, HostImpl& host) {
    if (!mod) return;
 
+   // Publish the host pointer on the module so `instantiate()` can thread
+   // it through to the backend's execution context. Without this the JIT
+   // sees host=null in its entry trampoline and crashes with
+   // "jit control-flow corruption" on the first export call (the
+   // interpreter's slow_dispatch path tolerates null; JIT does not).
+   mod.set_host_ptr(&host);
+
    if constexpr (requires { typename ::psio::detail::impl_info<HostImpl>::interfaces; })
    {
       using interfaces = typename ::psio::detail::impl_info<HostImpl>::interfaces;
