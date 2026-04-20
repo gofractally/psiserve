@@ -1,16 +1,118 @@
-// runtime.cpp — Phase 2: wired to real backend infrastructure.
-// prepare() parses + compiles WASM; instantiate() creates live instances;
+// runtime.cpp — Phase 2 + Step 1 of psizam-runtime-api-maturation.
+// prepare() parses + compiles WASM; instantiate() creates live instances
+// dispatched on the requested backend kind via the abstract `instance_be`.
 // instance provides gas_state, linear_memory, and typed proxy access.
 
 #include <psizam/runtime.hpp>
 #include <psizam/backend.hpp>
+#include <psizam/detail/instance_be.hpp>
 #include <psizam/host_function.hpp>
 #include <psizam/host_function_table.hpp>
 
 #include <chrono>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace psizam {
+
+// ═════════════════════════════════════════════════════════════════════
+// detail::instance_be_impl<Impl>
+// ═════════════════════════════════════════════════════════════════════
+//
+// One concrete realization per backend variant. Each owns a fresh
+// wasm_allocator and the typed `backend<std::nullptr_t, Impl>` that
+// drives execution.
+
+namespace detail {
+
+template <typename Impl>
+class instance_be_impl final : public instance_be {
+   using backend_t = backend<std::nullptr_t, Impl>;
+
+   wasm_allocator             alloc_;
+   std::unique_ptr<backend_t> be_;
+   backend_kind               kind_;
+
+public:
+   instance_be_impl(backend_kind kind,
+                    const std::vector<uint8_t>& wasm,
+                    host_function_table table,
+                    void* host_ptr)
+      : kind_(kind)
+   {
+      // backend<>'s wasm_code constructor expects a non-const reference.
+      // The runtime owns the bytes for the lifetime of the backend, so
+      // a const_cast here is safe (the backend reads but does not mutate
+      // the source bytes through this reference).
+      auto& code = const_cast<std::vector<uint8_t>&>(wasm);
+      be_ = std::make_unique<backend_t>(
+         code, std::move(table), host_ptr, &alloc_);
+   }
+
+   backend_kind kind()         const noexcept override { return kind_; }
+   void*        raw_backend()        noexcept override { return be_.get(); }
+
+   char* linear_memory() noexcept override {
+      return be_->get_context().linear_memory();
+   }
+   uint32_t current_pages() const noexcept override {
+      return be_->get_context().current_linear_memory();
+   }
+};
+
+std::unique_ptr<instance_be> make_instance_be(
+   backend_kind kind,
+   const std::vector<uint8_t>& wasm,
+   host_function_table table,
+   void* host_ptr)
+{
+   switch (kind) {
+      case backend_kind::interpreter:
+         return std::make_unique<instance_be_impl<interpreter>>(
+            kind, wasm, std::move(table), host_ptr);
+
+#if defined(__x86_64__) || defined(__aarch64__)
+      case backend_kind::jit:
+         return std::make_unique<instance_be_impl<jit>>(
+            kind, wasm, std::move(table), host_ptr);
+      case backend_kind::jit2:
+         return std::make_unique<instance_be_impl<jit2>>(
+            kind, wasm, std::move(table), host_ptr);
+#else
+      case backend_kind::jit:
+      case backend_kind::jit2:
+         throw std::runtime_error{
+            "psizam: jit / jit2 backend requires x86_64 or aarch64"};
+#endif
+
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
+      case backend_kind::jit_llvm:
+         return std::make_unique<instance_be_impl<jit_llvm>>(
+            kind, wasm, std::move(table), host_ptr);
+#else
+      case backend_kind::jit_llvm:
+         throw std::runtime_error{
+            "psizam: jit_llvm backend not built (PSIZAM_ENABLE_LLVM_BACKEND=OFF)"};
+#endif
+   }
+   throw std::runtime_error{"psizam: unknown backend_kind"};
+}
+
+// Map instance_policy::compile_tier → detail::backend_kind. Lives here
+// (rather than the public header) so the policy enum can keep its
+// runtime-facing names while the dispatch switch reads the canonical
+// backend identity.
+backend_kind tier_to_backend_kind(instance_policy::compile_tier t) noexcept {
+   switch (t) {
+      case instance_policy::compile_tier::interpret: return backend_kind::interpreter;
+      case instance_policy::compile_tier::jit1:      return backend_kind::jit;
+      case instance_policy::compile_tier::jit2:      return backend_kind::jit2;
+      case instance_policy::compile_tier::jit_llvm:  return backend_kind::jit_llvm;
+   }
+   return backend_kind::interpreter;
+}
+
+} // namespace detail
 
 // ═════════════════════════════════════════════════════════════════════
 // module_handle_impl — owns the WASM bytes and host function table
@@ -41,17 +143,14 @@ uint32_t module_handle::wasm_size() const {
 std::vector<std::string> module_handle::wit_sections() const { return {}; }
 
 // ═════════════════════════════════════════════════════════════════════
-// instance_impl — owns a live backend + allocator + gas state
+// instance_impl — owns a polymorphic backend holder + gas state
 // ═════════════════════════════════════════════════════════════════════
 
 struct instance_impl {
-   using backend_t = backend<std::nullptr_t, interpreter>;
-
-   wasm_allocator                 alloc;
-   std::unique_ptr<backend_t>    be;
-   gas_state                     local_gas;
-   std::shared_ptr<gas_state>    shared_gas;
-   void*                         host_ptr = nullptr;
+   std::unique_ptr<detail::instance_be> be;
+   gas_state                            local_gas;
+   std::shared_ptr<gas_state>           shared_gas;
+   void*                                host_ptr = nullptr;
 
    gas_state* active_gas() {
       return shared_gas ? shared_gas.get() : &local_gas;
@@ -83,18 +182,18 @@ const gas_state* instance::gas() const {
    return impl_ ? impl_->active_gas() : nullptr;
 }
 void* instance::backend_ptr() {
-   return impl_ ? static_cast<void*>(impl_->be.get()) : nullptr;
+   return impl_ && impl_->be ? impl_->be->raw_backend() : nullptr;
 }
 void* instance::host_ptr() {
    return impl_ ? impl_->host_ptr : nullptr;
 }
 
 char* instance::linear_memory() {
-   return impl_ && impl_->be ? impl_->be->get_context().linear_memory() : nullptr;
+   return impl_ && impl_->be ? impl_->be->linear_memory() : nullptr;
 }
 std::size_t instance::memory_size() const {
    return impl_ && impl_->be
-      ? static_cast<std::size_t>(impl_->be->get_context().current_linear_memory()) * 65536
+      ? static_cast<std::size_t>(impl_->be->current_pages()) * 65536
       : 0;
 }
 
@@ -162,13 +261,13 @@ instance runtime::instantiate(const module_handle& tmpl,
       inst->local_gas.deadline = policy.gas_budget;
    }
 
-   // Create backend from WASM bytes + host function table.
-   // The host_ptr is passed to the backend so host function
-   // trampolines can access the Host object.
+   // Pick the backend impl per `policy.initial`. The factory throws on
+   // backends gated out of this build (jit/jit2 on non-x86/arm,
+   // jit_llvm without PSIZAM_ENABLE_LLVM_BACKEND).
+   auto be_kind = detail::tier_to_backend_kind(policy.initial);
    auto table_copy = mod->table;
-   inst->be = std::make_unique<instance_impl::backend_t>(
-      mod->wasm_copy, std::move(table_copy),
-      mod->host_ptr, &inst->alloc);
+   inst->be = detail::make_instance_be(
+      be_kind, mod->wasm_copy, std::move(table_copy), mod->host_ptr);
 
    return instance{std::move(inst)};
 }

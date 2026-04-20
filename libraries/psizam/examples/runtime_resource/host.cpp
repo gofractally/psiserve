@@ -35,7 +35,14 @@ struct Host
       std::vector<uint8_t> bytes(
          reinterpret_cast<const uint8_t*>(wasm_bytes.data()),
          reinterpret_cast<const uint8_t*>(wasm_bytes.data()) + wasm_bytes.size());
-      auto mod = rt.prepare(psizam::wasm_bytes{bytes}, psizam::instance_policy{});
+      // Explicitly request the interpreter tier: `instance_resolve` and
+      // `instance_call` below `static_cast` `backend_ptr()` to the
+      // interpreter backend type, which is only sound when this matches
+      // the dispatched kind. The cross-backend proxy lands in Step 10
+      // of psizam-runtime-api-maturation.
+      auto mod = rt.prepare(psizam::wasm_bytes{bytes}, psizam::instance_policy{
+         .initial = psizam::instance_policy::compile_tier::interpret,
+      });
       return psio::own<wasm_module>{modules.create(module_resource{std::move(mod)})};
    }
 
