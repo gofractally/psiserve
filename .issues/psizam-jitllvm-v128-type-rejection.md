@@ -1,7 +1,7 @@
 ---
 id: psizam-jitllvm-v128-type-rejection
 title: "jit_llvm rejects valid module: v128 passed where i32 expected in table_get"
-status: open
+status: fixed
 priority: medium
 area: psizam
 agent: agent-arm

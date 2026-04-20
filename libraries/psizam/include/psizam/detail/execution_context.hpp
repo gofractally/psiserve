@@ -1205,7 +1205,8 @@ namespace psizam::detail {
       }
 
       inline const wasm_exception_t& jit_get_caught_exception(uint32_t idx) const {
-         return _jit_eh_exn_stack.at(idx);
+         PSIZAM_ASSERT(idx < _jit_eh_exn_stack.size(), wasm_interpreter_exception, "invalid exception reference index");
+         return _jit_eh_exn_stack[idx];
       }
 
       // Accessors for the staging area (written by throw, read after longjmp)
@@ -1445,7 +1446,10 @@ namespace psizam::detail {
          _eh_exn_stack.push_back({tag_index, std::move(values)});
          return idx;
       }
-      inline const wasm_exception_t& get_caught_exception(uint32_t idx) const { return _eh_exn_stack.at(idx); }
+      inline const wasm_exception_t& get_caught_exception(uint32_t idx) const {
+         PSIZAM_ASSERT(idx < _eh_exn_stack.size(), wasm_interpreter_exception, "invalid exception reference index");
+         return _eh_exn_stack[idx];
+      }
       inline void unwind_call_stack_to(uint32_t depth) {
          while (_as.size() > depth) {
             const auto& af = _as.pop();

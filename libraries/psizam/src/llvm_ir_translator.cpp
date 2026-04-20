@@ -1135,6 +1135,18 @@ namespace psizam::detail {
                if (src_bits > dst_bits) return builder.CreateFPTrunc(val, target);
                else return builder.CreateFPExt(val, target);
             }
+            // Vector to scalar: bitcast to same-width integer, then truncate
+            if (src->isVectorTy() && !target->isVectorTy()) {
+               auto* int_wide = builder.getIntNTy(src_bits);
+               val = builder.CreateBitCast(val, int_wide);
+               if (target->isIntegerTy()) {
+                  return (src_bits == dst_bits) ? val : builder.CreateTrunc(val, target);
+               }
+               if (target->isFloatingPointTy()) {
+                  val = builder.CreateTrunc(val, builder.getIntNTy(dst_bits));
+                  return builder.CreateBitCast(val, target);
+               }
+            }
             return val;
          };
 

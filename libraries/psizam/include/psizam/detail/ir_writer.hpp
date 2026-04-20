@@ -2984,7 +2984,19 @@ namespace psizam::detail {
                   _func->emit(binst);
                }
             }
-            // Fall through to last handler (default)
+            // Branch to last handler (default) — can't rely on fallthrough
+            // because non-last handler blocks are emitted between dispatch and
+            // the last handler.
+            {
+               ir_inst binst{};
+               binst.opcode = ir_op::br;
+               binst.type = types::pseudo;
+               binst.flags = IR_SIDE_EFFECT;
+               binst.dest = 0;
+               binst.br.target = handler_blocks[num_catches - 1];
+               binst.br.src1 = ir_vreg_none;
+               _func->emit(binst);
+            }
          }
 
          // Emit each handler block
@@ -2993,16 +3005,10 @@ namespace psizam::detail {
             bool has_exnref = (clause.kind == 1 || clause.kind == 3);
             uint32_t tag_payload = has_exnref ? (clause.payload_count > 0 ? clause.payload_count - 1 : 0) : clause.payload_count;
 
-            // For non-last single-clause or last clause: inline. Others: start handler block.
-            if (num_catches > 1 && ci < num_catches - 1) {
-               // Non-last clause: br_if already targets this block
-               // The previous clause's br_if or the default fallthrough will reach here
-            }
-            // For multi-clause non-last handlers, start the block
-            if (num_catches > 1 && ci < num_catches - 1) {
+            // Each handler gets its own block_start (reached via br_if or br)
+            if (num_catches > 1) {
                _func->start_block(handler_blocks[ci]);
             }
-            // For single-clause or last clause: the code is inline (fallthrough)
 
             // Read payload values from staging area into temp vregs
             std::vector<uint32_t> payload_vregs;

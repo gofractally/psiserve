@@ -1641,8 +1641,16 @@ namespace psizam::detail {
                _block_v128_result[inst.dest] = v128_result_bytes;
                if (_block_has_start[inst.dest]) {
                   uint32_t target = _block_v128_sp[inst.dest] + v128_result_bytes;
-                  if (_v128_sp_bytes > target)
-                     emit_add_imm(SP, SP, _v128_sp_bytes - target);
+                  if (_v128_sp_bytes > target) {
+                     uint32_t excess = _v128_sp_bytes - target;
+                     if (v128_result_bytes > 0) {
+                        for (uint32_t off = 0; off < v128_result_bytes; off += 16) {
+                           emit_ldr_offset(X0, SP, off);
+                           emit_str_offset(X0, SP, off + excess);
+                        }
+                     }
+                     emit_add_imm(SP, SP, excess);
+                  }
                   _v128_sp_bytes = target;
                }
             }
@@ -1700,6 +1708,7 @@ namespace psizam::detail {
 
          // ── Mov ──
          case ir_op::mov: {
+            if (inst.type == types::v128) break; // v128 lives on native stack; no register copy needed
             int8_t pr_d = get_phys(inst.dest);
             int8_t pr_s = get_phys(inst.rr.src1);
             if (pr_d >= 0 && pr_s >= 0) emit_mov_reg(phys_to_reg(pr_d), phys_to_reg(pr_s));

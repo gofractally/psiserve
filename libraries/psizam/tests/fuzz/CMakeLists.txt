@@ -47,12 +47,6 @@ endforeach()
 
 # Tests with known pre-existing bugs — marked XFAIL so ctest stays green.
 set(FUZZ_REGRESSION_XFAIL
-   "fuzz_regression/crash_398116_seed111"
-   "fuzz_regression/crash_482002_seed111"
-   "fuzz_regression/mismatch_103590_seed333"
-   "fuzz_regression/mismatch_151857_seed333"
-   "fuzz_regression/mismatch_158736_seed333"
-   "fuzz_regression/mismatch_191445_seed222"
 )
 foreach(xf ${FUZZ_REGRESSION_XFAIL})
    set_tests_properties(${xf} PROPERTIES WILL_FAIL TRUE)

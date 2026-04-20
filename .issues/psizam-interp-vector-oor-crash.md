@@ -1,7 +1,7 @@
 ---
 id: psizam-interp-vector-oor-crash
 title: "Interpreter crashes with std::out_of_range: vector on valid wasm"
-status: open
+status: fixed
 priority: high
 area: psizam
 agent: agent-arm

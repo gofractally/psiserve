@@ -1,7 +1,7 @@
 ---
 id: psizam-jit2-v128-global-mismatch
 title: "jit2 returns zero v128 instead of correct value through global.set/get"
-status: open
+status: fixed
 priority: high
 area: psizam
 agent: agent-arm

@@ -170,7 +170,7 @@ namespace psizam::detail {
                           wasm_memory_exception, "memory address out of range");
             return context.linear_memory() + effective;
          }
-         return context.linear_memory() + op.offset + ptr.to_ui32();
+         return context.linear_memory() + static_cast<uint64_t>(op.offset) + static_cast<uint64_t>(ptr.to_ui32());
       }
       [[gnu::always_inline]] inline void operator()(const i32_load_t& op) {
          context.inc_pc();
@@ -3169,12 +3169,10 @@ namespace psizam::detail {
 
       // ── throw_ref: pop exnref and re-throw ──
       [[gnu::always_inline]] inline void operator()(const throw_ref_t& op) {
-         // Pop exnref from operand stack. In our representation, exnref is an index
-         // into the caught exception stack. UINT64_MAX means null exnref → trap.
-         uint64_t exn_idx = context.pop_operand().to_ui64();
-         if (exn_idx == UINT64_MAX)
+         uint32_t exn_idx = context.pop_operand().to_ui32();
+         if (exn_idx == UINT32_MAX)
             throw wasm_interpreter_exception{ "null exception reference" };
-         auto& exn = context.get_caught_exception(static_cast<uint32_t>(exn_idx));
+         auto& exn = context.get_caught_exception(exn_idx);
          dispatch_exception(exn.tag_index, std::vector<uint64_t>(exn.values));
       }
 

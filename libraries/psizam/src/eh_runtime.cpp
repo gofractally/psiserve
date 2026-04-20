@@ -106,6 +106,14 @@ void __psizam_eh_leave(void* ctx) {
 }
 
 [[noreturn]] void __psizam_eh_throw_ref(void* ctx, uint32_t exnref_idx) {
+   if (exnref_idx == UINT32_MAX) {
+      if (trap_jmp_ptr) {
+         saved_exception = std::make_exception_ptr(
+            wasm_interpreter_exception{"null exception reference"});
+         longjmp(*trap_jmp_ptr, -1);
+      }
+      throw wasm_interpreter_exception{"null exception reference"};
+   }
    auto& c = as_ctx(ctx);
    const auto& exn = c.jit_get_caught_exception(exnref_idx);
    __psizam_eh_throw(ctx, exn.tag_index, exn.values.data(),

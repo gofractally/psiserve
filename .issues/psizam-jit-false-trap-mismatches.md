@@ -1,7 +1,7 @@
 ---
 id: psizam-jit-false-trap-mismatches
 title: "JIT backends falsely trap on modules the interpreter executes successfully"
-status: open
+status: fixed
 priority: high
 area: psizam
 agent: agent-arm
