@@ -239,6 +239,23 @@ std::size_t instance::memory_size() const {
       : 0;
 }
 
+// Enum value parity (one source of truth, two declarations) — public
+// `psizam::backend_kind` and internal `detail::backend_kind` must stay
+// in lockstep because instance::kind() casts between them.
+static_assert(static_cast<uint8_t>(backend_kind::interpreter) ==
+              static_cast<uint8_t>(detail::backend_kind::interpreter));
+static_assert(static_cast<uint8_t>(backend_kind::jit) ==
+              static_cast<uint8_t>(detail::backend_kind::jit));
+static_assert(static_cast<uint8_t>(backend_kind::jit2) ==
+              static_cast<uint8_t>(detail::backend_kind::jit2));
+static_assert(static_cast<uint8_t>(backend_kind::jit_llvm) ==
+              static_cast<uint8_t>(detail::backend_kind::jit_llvm));
+
+backend_kind instance::kind() const {
+   if (!impl_ || !impl_->be) return backend_kind::interpreter;
+   return static_cast<backend_kind>(impl_->be->kind());
+}
+
 int instance::run_start() {
    if (!impl_ || !impl_->be) return -1;
    return impl_->be->run_start(impl_->host_ptr);

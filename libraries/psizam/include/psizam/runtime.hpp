@@ -175,6 +175,16 @@ public:
 
 struct instance_impl;
 
+// Backend variant the instance was constructed with. Public re-export
+// of detail::backend_kind so callers can guard `as<Tag>()` (which is
+// presently interpreter-only — see Step 10).
+enum class backend_kind : uint8_t {
+   interpreter,
+   jit,
+   jit2,
+   jit_llvm,
+};
+
 class instance {
    std::unique_ptr<instance_impl> impl_;
 
@@ -191,8 +201,19 @@ public:
 
    explicit operator bool() const { return impl_ != nullptr; }
 
+   // Which backend this instance is running on. Set by `instantiate()`
+   // from `instance_policy::initial`.
+   backend_kind kind() const;
+
    // ── Typed call (shared header available) ────────────────────────
    // Returns a proxy: inst.as<greeter>().concat("a", "b")
+   //
+   // PRE-Step-10 LIMITATION: the proxy adapter currently hardcodes the
+   // interpreter backend type, so `as<Tag>()` is only correct when
+   // `kind() == backend_kind::interpreter`. Callers that need to
+   // dispatch on JIT instances must use `backend_ptr()` directly with
+   // explicit knowledge of the backend type until Step 10 lands a
+   // call-erasure path through `instance_be`.
    template <typename Tag>
    auto as();
 
