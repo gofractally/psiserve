@@ -1,6 +1,11 @@
 # Gas Metering + Interrupt + Yield Design
 
-Status: design (2026-04-19). Phases 1, 2a, and 2b complete. Phase 3 in progress.
+Status: design (2026-04-20). Phases 1–4 landed. Phase 5 (gas_state
+redesign — see §"gas_state redesign" at the end of this document)
+replaces the atomic-counter model described in §"Injected WASM sequence"
+and §"Gas handler (policy callback)" with a `consumed`/`deadline` pair.
+The earlier sections are preserved for historical accuracy; the
+gas_state section is authoritative for the current codebase.
 
 ## Design principles
 
@@ -382,3 +387,271 @@ on every backend.
   trap at the same logical point under our `per_block` and under a
   reference runner (Wasmer middleware, Near pwasm-utils)
 - Microbench — `off` vs each strategy, per backend
+
+## gas_state redesign
+
+The earlier sections describe the atomic-counter model
+(`_gas_counter : std::atomic<int64_t>`, `fetch_sub` per charge,
+`store(-1)` for external interrupt). That model has four honest
+weaknesses:
+
+1. `fetch_sub` is an atomic RMW on the hot path, paid every charge
+   site. On aarch64 this is a `ldaxr/stlxr` loop in the worst case;
+   on x86_64 it's a `lock`-prefixed instruction.
+2. "How much did the run consume?" requires a separate budget tracker
+   outside the counter — the counter is a *remaining* value, not a
+   monotonic total.
+3. Handler contract couples three independent concerns (trap policy,
+   yield slice size, wall-clock deadline) through one opaque
+   `void* ctx`, forcing each handler to recover its state through the
+   context instead of having a dedicated closure.
+4. External interrupt and metering share one atomic u64 via a magic
+   `-1` sentinel — extending the deadline and shortening the deadline
+   use different operations (an `fetch_add` and a `store`), and the
+   sentinel collides with any legitimate negative value a yield-style
+   handler might restock with.
+
+The gas_state redesign splits the concerns across two fields, both
+living in one `gas_state` struct.
+
+### Type layout
+
+```cpp
+// libraries/psizam/include/psizam/gas.hpp
+struct gas_tag {};
+using gas_units = ucc::typed_int<uint64_t, gas_tag>;  // costs, consumed, deadline
+
+struct gas_state {
+   uint64_t              consumed  = 0;                                    // plain — owner-thread only
+   std::atomic<uint64_t> deadline  = std::numeric_limits<uint64_t>::max(); // any thread may store
+   gas_handler_t         handler   = nullptr;                              // null = throw on exhaustion
+   void*                 user_data = nullptr;                              // handler closure
+};
+
+using gas_handler_t = void (*)(gas_state* gas, void* user_data);
+```
+
+`consumed` is plain `uint64_t` (written only by the owning execution
+thread). `deadline` is `std::atomic<uint64_t>` — any thread may store
+any u64 value (0 to trap ASAP, `consumed + slice` to extend, or any
+target). Storage is zero-overhead: relaxed atomic loads on x86_64 and
+aarch64 compile to plain `mov`/`ldr` when the slot is naturally aligned,
+which it is.
+
+Raw `uint64_t` inside `gas_state` (rather than `gas_units`) is
+load-bearing: under `PSITRI_PLATFORM_OPTIMIZATIONS` the typed_int is
+packed (alignment 1) and can't be inside `std::atomic<>`. `gas_units`
+appears at the public API boundary; the raw storage is what the codegen
+and atomic stores target.
+
+### Hot-path encoding — by mode and charge-site class
+
+Charge sites split into two classes, distinguished at parse time by
+the injector:
+
+- **Forward sites** — function prologue, `br_if`/`br_table` forward
+  branches. Bounded runtime by construction (functions terminate, call
+  stack is bounded).
+- **Back-edge sites** — loop header. The only sites that can execute
+  unboundedly, so the only ones that need to observe external
+  deadline updates in interrupt mode.
+
+| Mode                           | Forward-site check                | Back-edge-site check                           |
+|--------------------------------|-----------------------------------|------------------------------------------------|
+| `off`                          | no injection                      | no injection                                   |
+| `trap` (no interrupt)          | DTD: `sub rDtd,cost; js slow`     | Same (DTD)                                     |
+| `yield` (slice, no interrupt)  | DTD                               | Same (DTD; handler refreshes rDtd on resume)   |
+| `timeout` (wall-clock)         | DTD                               | Same (DTD; handler checks clock on slow path)  |
+| `trap + interrupt`             | DTD (stale deadline OK)           | Memory-deadline: re-read `[deadline]`, refresh rDtd, branch |
+| `yield + interrupt`            | DTD                               | Same as trap+interrupt                         |
+
+Where:
+- **DTD** = "deadline-to-death", a pinned register holding
+  `deadline − consumed`. Per charge site: `sub rDtd, cost; js exhausted`
+  — 2 instructions, 0 memory ops. Matches the old atomic-counter
+  model's hot-path cost without the memory RMW. Not yet emitted; the
+  current landed codegen uses the universal memory-deadline shape
+  below at every site (Phase 5a).
+- **Memory-deadline refresh** (landed — universal shape in Phase 5a):
+  `mov rTmp,[consumed]; add rTmp,cost; mov [consumed],rTmp; cmp [deadline],rTmp; jb done`
+  — 5 insns, 1 load, 1 store, 1 cmp-with-mem. Emitted at every charge
+  site in the current code. Phase 5b will split forward vs back-edge
+  emission per the table above.
+
+### Interrupt latency
+
+External thread writes `deadline.store(target, relaxed)`. The owning
+thread observes it on its next back-edge charge site (universal shape:
+every charge site), which in the worst case is the next loop iteration
+or function call. Worst-case latency = one forward-only chain on the
+order of microseconds — the `gas: cross-thread interrupt via watcher
+thread` test measures this and asserts the trap happens within one
+second of the watcher's store, which on any real hardware is at least
+a thousand times slower than the real latency.
+
+### `consumed` accuracy
+
+`consumed` is monotonic from instance creation. After the run (at
+function return, handler entry, or a quiescent point between calls)
+a billing query returns the exact total charged. Between charge sites
+`consumed` lags by at most the cost that the current site is about to
+add — and the current site's own addition is always observed before the
+next charge.
+
+### Handler contract
+
+- Called when `consumed >= deadline` at a charge site.
+- Receives `gas_state*` (can read `consumed`, can store into
+  `deadline`) and `user_data` (handler closure: slice size, hard cap,
+  wall-clock deadline, pool pointer, etc.).
+- Returning resumes execution with whatever deadline it has set.
+- Throwing traps the module. JIT-emitted charge sites call
+  `__psizam_gas_exhausted_check` which routes throws through the
+  backend's setjmp trampoline (`escape_or_throw`) so unwinding is
+  correct across jit2 / jit_llvm frames.
+- Null handler ⇒ throws `wasm_gas_exhausted_exception` (matches the
+  prior default).
+
+Canonical handler shapes, all expressible on top of this contract:
+
+- **trap** — null handler.
+- **yield with slice** — `user_data = {slice}`; handler stores
+  `consumed + slice` into `deadline`; returns.
+- **yield with slice + hard cap** — `user_data = {slice, hard_cap}`;
+  handler throws if `consumed >= hard_cap`, else stores
+  `min(consumed + slice, hard_cap)` into `deadline`; returns.
+- **wall-clock timeout** — `user_data = {wall_deadline, slice}`;
+  handler throws if `now() >= wall_deadline`, else advances `deadline`
+  by slice.
+- **wall-clock + gas cap** — combine the above.
+
+### Capability bits and codegen shape
+
+The full mode matrix collapses to three distinct JIT emission shapes.
+`meter_cap` (in `gas.hpp`) is a bitmask of orthogonal feature bits
+(`gas_budget`, `wall_budget`, `yield`, `interrupt`, `pool`) that
+classify a metering configuration; `shape_for(caps)` reduces the cap
+set to one of:
+
+| Shape              | When                                                  | Per-site cost |
+|--------------------|-------------------------------------------------------|---------------|
+| `none`             | No gas budget and no wall budget                      | zero          |
+| `dtd_only`         | Budget present, no interrupt                          | 2 insns (sub imm, js slow) |
+| `dtd_with_refresh` | Budget present + `interrupt` bit set                  | 2 insns forward; 4 insns + 1 L1-hot load back-edge |
+
+Phase 5a lands the universal memory-deadline shape (unchanged per
+site regardless of caps). Phase 5b adds the three-way split so
+non-interrupt modes drop to `dtd_only`.
+
+`compatible(have, want)` and `missing(have, want)` validate an
+instance policy (`want`) against a compiled module (`have`) at
+instantiation time, so an instance that asks for `interrupt` against
+a module compiled without `meter_cap::interrupt` fails with a clear
+diagnostic instead of silently running without the back-edge refresh.
+
+### Prior art
+
+Every major consensus / sandboxed WASM runtime meters, but no two use
+the same split. The pattern worth naming: **runtimes that only trap on
+exhaust use a plain counter; runtimes that need external cancellation
+use a separate atomic epoch.** The gas_state redesign unifies both
+concerns into one `deadline` variable, parameterized by mode.
+
+- **Wasmer — wasmer-middlewares::metering.** Compiler-pass injection at
+  basic-block boundaries (matches our `per_block`). The "points" field
+  is a plain `u64` — no atomicity, no external-cancel path. A separate
+  `InternalEvent::GetMiddlewareFail` mechanism exists but is not
+  configured for cross-thread interrupt. Source:
+  [wasmer-middlewares metering.rs](https://github.com/wasmerio/wasmer/blob/main/lib/middlewares/src/metering.rs).
+
+- **Wasmtime — `fuel` vs `epoch_interruption`.** Two independent
+  mechanisms in the same engine. `fuel` is the metering counter
+  (`Store::get_fuel` / `Store::set_fuel`, per-store, single-thread
+  read/write contract documented). `epoch_interruption` is a separate
+  atomic `u64` bumped by another thread (`Engine::increment_epoch`) for
+  async cancellation. Both are checked at loop back-edges and function
+  entries; wiring is orthogonal. The two counters don't share state.
+  Source: `wasmtime::Store` and `Engine::increment_epoch` in the
+  Wasmtime API docs.
+
+- **WAMR (Intel).** The `wasm_runtime_set_instruction_count_limit` API
+  sets a plain per-instance counter with trap-on-exhaust semantics.
+  Cross-thread cancellation is a separate `wasm_runtime_terminate`
+  call that sets an atomic flag checked at loop back-edges —
+  essentially the same split as Wasmtime, just with different names.
+
+- **Near-vm (wasmer-derived).** Consensus-safe. Uses
+  `pwasm-utils`-style gas injection at basic-block boundaries, plain
+  counter, trap-only. No external interrupt path — the chain's
+  deterministic replay contract makes async cancellation actively
+  unsafe.
+
+- **V8 / SpiderMonkey.** No gas metering. They do support thread-level
+  interrupt via stack-guard polls (`Isolate::RequestInterrupt` in V8,
+  `JS_RequestInterruptCallback` in SpiderMonkey) — reference design
+  only, not a metering model.
+
+Hypothesis validated: runtimes that support only trap-on-exhaust use
+plain counters; runtimes that support external interrupt add a
+separate atomic variable for it. Nobody unifies them. The gas_state
+redesign's unification gives us three things the split-variable
+approach can't:
+
+1. The `consumed >= deadline` check is one comparison, not two
+   (skipping "is interrupt pending AND is gas exhausted").
+2. Yield-style handlers advance the *same* variable that external
+   interrupts shorten — so a yield handler that just raced an
+   external cancel will observe the cancel on its next charge site
+   with no extra state to track.
+3. Policies that combine gas + wall-clock + interrupt collapse to a
+   single deadline, computed as `min(gas_deadline, next_poll_point,
+   current_deadline)`. The handler recomputes on entry.
+
+### Implementation phases (Phase 5)
+
+- **5a — landed (ae5d854, 07b132b).** `gas_state` struct replaces
+  `_gas_counter`/`_gas_handler`/`_gas_strategy` on
+  `execution_context_base`. New handler signature
+  `(gas_state*, void*)`. `ucc::typed_int<uint64_t, gas_tag>` as the
+  public `gas_units`. Universal memory-deadline codegen emitted by
+  every JIT backend (x86_64, aarch64, jit2 x86_64, jit_llvm).
+  `__psizam_gas_charge` / `__psizam_gas_exhausted_check` rewritten.
+  `gas_metering_tests.cpp` ported; cross-backend determinism,
+  heavy-op prologue-extra, heavy-op loop-extra, and a new
+  `gas: cross-thread interrupt via watcher thread` test all pass
+  across interpreter, jit, jit2, and jit_llvm.
+
+- **5b — next.** DTD register-pinning for non-interrupt modes (drop
+  `dtd_only` sites from 5 insns + mem ops to 2 insns, 0 mem ops).
+  Split forward vs back-edge emission so `dtd_with_refresh` is paid
+  only at back-edge sites in interrupt mode.
+
+- **5c — deferred.** `meter_cap` enforcement at
+  `runtime::instantiate(tmpl, policy)`: reject runtime caps not a
+  subset of compile-time caps. Currently `meter_cap` is defined in
+  `gas.hpp` but not consulted by the instance path. This belongs in
+  the runtime-API work, not the engine.
+
+- **5d — deferred.** Handler issues (`psizam-gas-yield-handler`,
+  `psizam-gas-timeout-handler`, `psizam-gas-interrupt-handler`) port
+  to the new `(gas_state*, void*)` signature. Mostly cosmetic now
+  that the storage layer is settled — the tests in 5a already cover
+  the behavior; what's left is a public example / reference handler
+  in the docs and/or a small `psizam/handlers.hpp` with canonical
+  implementations.
+
+### Superseded sections
+
+The following earlier parts of this document describe the
+atomic-counter model and are kept for historical reference only:
+
+- "Injected WASM sequence" (`i64.const <cost>; call $gas_check`) —
+  superseded by the inline memory-deadline shape.
+- "Gas handler (policy callback)" — the `void(*)(void*)` signature
+  has been replaced by `void(*)(gas_state*, void*)`.
+- "Atomic counter with relaxed ordering" (Key design decision #3) —
+  the hot path is now a plain load/store of `consumed`; the atomic
+  is on `deadline`, and only external threads ever write it.
+- "External interrupt: `gas_counter().store(-1)`" — now
+  `gas().deadline.store(0)` (or any value ≤ consumed).
+
