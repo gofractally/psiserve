@@ -99,6 +99,21 @@ public:
          slot(8),  slot(9),  slot(10), slot(11),
          slot(12), slot(13), slot(14), slot(15));
    }
+
+   // ── Gas plumbing ──────────────────────────────────────────────────
+   void set_gas_budget(uint64_t budget) override {
+      be_->get_context().set_gas_budget(gas_units{budget});
+   }
+   void set_gas_handler(void (*handler)(gas_state*, void*),
+                        void* user_data) override {
+      be_->get_context().set_gas_handler(handler, user_data);
+   }
+   uint64_t gas_consumed_raw() const override {
+      return *be_->get_context().gas_consumed();
+   }
+   uint64_t gas_deadline_raw() const override {
+      return *be_->get_context().gas_deadline();
+   }
 };
 
 std::unique_ptr<instance_be> make_instance_be(
@@ -215,10 +230,28 @@ struct instance_impl {
    std::unique_ptr<detail::instance_be> be;
    gas_state                            local_gas;
    std::shared_ptr<gas_state>           shared_gas;
+   // Shared pool for multi-module gas tracking. Kept alive for the
+   // instance's lifetime so the pool outlives any leases.
+   std::shared_ptr<gas_pool>            pool;
    void*                                host_ptr = nullptr;
 
    gas_state* active_gas() {
       return shared_gas ? shared_gas.get() : &local_gas;
+   }
+
+   ~instance_impl() {
+      // Multi-module pool: credit any unused lease back to the pool so
+      // subsequent instances (or teardown reporting) see the correct
+      // remaining balance. When the pool handler failed (threw), the
+      // deadline equals consumed so the delta is zero — no credit.
+      if (pool && be) {
+         const uint64_t consumed = be->gas_consumed_raw();
+         const uint64_t deadline = be->gas_deadline_raw();
+         if (deadline > consumed) {
+            pool->remaining.fetch_add(deadline - consumed,
+                                      std::memory_order_relaxed);
+         }
+      }
    }
 };
 
@@ -437,6 +470,21 @@ instance runtime::instantiate(const module_handle& tmpl,
    auto table_copy = mod->table;
    inst->be = detail::make_instance_be(
       be_kind, mod->wasm_copy, std::move(table_copy), mod->host_ptr);
+
+   // Multi-module gas tracking: if a pool is provided, lease an initial
+   // deadline from it and wire pool_yield_handler so future handler
+   // entries debit more from the pool. Each instance's teardown credits
+   // any unused lease back (see instance_impl::~instance_impl).
+   if (policy.pool) {
+      auto lease = policy.pool->try_lease(policy.pool->lease_size);
+      if (*lease == 0) {
+         throw std::runtime_error{
+            "runtime::instantiate: gas_pool exhausted at instance creation"};
+      }
+      inst->pool = policy.pool;
+      inst->be->set_gas_budget(*lease);
+      inst->be->set_gas_handler(&pool_yield_handler, policy.pool.get());
+   }
 
    return instance{std::move(inst)};
 }

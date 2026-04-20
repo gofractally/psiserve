@@ -12,6 +12,8 @@
 // with `call_with_return_erased(...)` so `instance::as<Tag>()` can drive any
 // backend kind via the proxy adapter.
 
+#include <psizam/gas.hpp>   // gas_state, gas_handler_t
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -87,6 +89,16 @@ public:
                             std::string_view   name,
                             const uint64_t*    args,
                             std::size_t        count) = 0;
+
+   // ── Gas plumbing (backend-erased accessors on execution_context) ──
+   // Multi-module gas tracking sets these at instantiate time (and reads
+   // them at teardown to credit unused lease back to a shared pool).
+
+   virtual void set_gas_budget(uint64_t budget) = 0;
+   virtual void set_gas_handler(void (*handler)(gas_state*, void*),
+                                void* user_data) = 0;
+   virtual uint64_t gas_consumed_raw() const = 0;
+   virtual uint64_t gas_deadline_raw() const = 0;
 };
 
 // Factory: pick the impl for `kind`, construct the concrete backend with

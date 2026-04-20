@@ -12,6 +12,7 @@
 // TEMPLATE_TEST_CASE runs each test once per available backend.
 
 #include <psizam/runtime.hpp>
+#include <psizam/gas_pool.hpp>
 #include <catch2/catch.hpp>
 
 #include <cstdint>
@@ -301,4 +302,60 @@ PARITY_TEST_CASE("runtime parity: host functions are callable",
    // were resolved on both modules; exercise one call-through to confirm.
    auto proc = lc.consumer.template as<processor>();
    CHECK(proc.test_add(3u, 4u) == 7u);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// gas_pool — standalone primitive tests (no WASM fixtures needed)
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("gas_pool: lease debits and credit restores", "[gas-pool]")
+{
+   psizam::gas_pool pool{psizam::gas_units{10'000}};
+   REQUIRE(*pool.balance() == 10'000);
+
+   auto leased = pool.try_lease(psizam::gas_units{3'000});
+   CHECK(*leased == 3'000);
+   CHECK(*pool.balance() == 7'000);
+
+   pool.add(psizam::gas_units{500});
+   CHECK(*pool.balance() == 7'500);
+}
+
+TEST_CASE("gas_pool: try_lease returns 0 and preserves balance on overdraw",
+          "[gas-pool]")
+{
+   psizam::gas_pool pool{psizam::gas_units{1'000}};
+   auto overdraw = pool.try_lease(psizam::gas_units{5'000});
+   CHECK(*overdraw == 0);
+   CHECK(*pool.balance() == 1'000);    // unchanged
+}
+
+TEST_CASE("gas_pool: handler advances deadline by lease_size", "[gas-pool]")
+{
+   psizam::gas_pool pool{psizam::gas_units{5'000},
+                          /*lease_size=*/psizam::gas_units{1'000}};
+   psizam::gas_state gs;
+   gs.consumed = 0;
+   gs.deadline.store(0);   // simulates "deadline reached"
+
+   psizam::pool_yield_handler(&gs, &pool);
+
+   CHECK(gs.deadline.load() == 1'000);
+   CHECK(*pool.balance() == 4'000);
+}
+
+TEST_CASE("gas_pool: handler throws when pool cannot cover lease",
+          "[gas-pool]")
+{
+   psizam::gas_pool pool{psizam::gas_units{500},
+                          /*lease_size=*/psizam::gas_units{1'000}};
+   psizam::gas_state gs;
+   gs.consumed = 0;
+   gs.deadline.store(0);
+
+   REQUIRE_THROWS_AS(psizam::pool_yield_handler(&gs, &pool),
+                     psizam::wasm_gas_exhausted_exception);
+
+   // try_lease rolls back on failure; pool must be unchanged.
+   CHECK(*pool.balance() == 500);
 }

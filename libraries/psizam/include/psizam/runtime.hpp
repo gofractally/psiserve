@@ -24,6 +24,7 @@
 //   inst.as<greeter>().run(5);
 
 #include <psizam/gas.hpp>
+#include <psizam/gas_pool.hpp>
 #include <psizam/host_function_table.hpp>
 
 #include <cstddef>
@@ -110,9 +111,17 @@ struct instance_policy {
 
    // ── Gas sharing ─────────────────────────────────────────────────
    // If set, this instance shares the gas counter with other instances
-   // that hold the same shared_ptr. Used for billing a whole call chain
-   // as one unit regardless of how many isolated modules are crossed.
+   // that hold the same shared_ptr. DEPRECATED (pre-pool stop-gap).
+   // Orphaned from codegen today — the live path is `pool` below.
    std::shared_ptr<gas_state> shared_gas;
+
+   // Multi-module gas tracking. When set, this instance leases gas from
+   // the shared pool at lease boundaries (handler entry and instance
+   // teardown). Multiple instances pointing at the same pool collectively
+   // bill against a single budget — the canonical way to account gas
+   // across a consumer → provider call chain. See psizam/gas_pool.hpp
+   // for the lease mechanics.
+   std::shared_ptr<gas_pool> pool;
 };
 
 // ═════════════════════════════════════════════════════════════════════
