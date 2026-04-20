@@ -91,25 +91,51 @@ Phase B.
     their inline copies; they migrate onto the shared helper as part
     of `psizam-unify-host-registration-under-runtime` Step 3.
   — commit `8be3a8c`
+- **Step 8 — fast-trampoline memory-injection hook**
+  - Added concept `detail::has_memory_field<Cls>` and
+    `if constexpr` branch in `fast_void_trampoline` /
+    `fast_void_trampoline_rev` that auto-sets `host->memory = m`
+    before dispatch when the host class has a matching field.
+  - Backwards-compatible (hosts without the field see no behavior
+    change). Makes `wasi_trampoline` / `wasi_trampoline_rev`
+    redundant; their retirement happens in
+    `psizam-unify-host-registration-under-runtime`.
+  — commit `1ea30a7`
+- **Step 10 (partial) — `instance::kind()` accessor**
+  - New public `psizam::backend_kind` enum mirroring the internal
+    `detail::backend_kind` (parity enforced by `static_assert`s).
+  - `instance::kind() const` lets callers pick the right explicit
+    `backend_ptr()` cast for jit/jit2/jit_llvm and guard against the
+    `as<Tag>()` interpreter-only constraint.
+  - Full Step 10 (call-erasure path through `instance_be` so
+    `as<Tag>()` works for any backend) is deferred — it needs
+    either per-backend instantiation of `void_proxy_adapter` at the
+    `as<Tag>()` site or marshalling args through a uniform
+    `native_value*` interface, both of which warrant their own
+    design pass.
+  — commit `fe581d9`
 
 ### In progress
 
-- **Step 8 — fast-trampoline memory-injection hook** — adding the
-  `requires(Cls* h) { h->memory = m; }` SFINAE branch to
-  `fast_void_trampoline` / `fast_void_trampoline_rev` so any host
-  class with a `char* memory` field gets it auto-set before each
-  dispatch. Eliminates the need for `wasi_trampoline` /
-  `wasi_trampoline_rev` shims (which exist only for that purpose).
+- _(none — handing back; substantive next chunks remain, see below)_
 
 ### Remaining Track A
 
 - **Step 6** — dynamic WIT-driven `bind(consumer, provider, name)`.
+  Requires a parser for the `component-wit` custom section and the
+  bridge generator that turns WIT-declared methods into entries on
+  the consumer's `host_function_table`. Largest remaining piece.
 - **Step 7** — `register_library` / `cache_stats` / `evict` /
-  `clear_cache` (real implementations).
+  `clear_cache` (real implementations). The module cache key
+  composition (`module_cache_key`) sits naturally here, but its
+  `compile_hash` input depends on Track B's final `compile_policy`
+  shape; a Track-A-only stop-gap can key on raw `instance_policy`
+  bytes until then.
 - **Step 9** — retire `composition.hpp`; move `bridge_executor.hpp`
-  to `detail/` once Steps 1, 3, 5–8 are all in place.
-- **Step 10** — `instance::as<Tag>()` cross-backend proxy via a new
-  `call_with_return_erased` virtual on `instance_be`.
+  to `detail/` once Steps 1, 3, 5, 6, 7, 8, 10 are all in place.
+- **Step 10 (full)** — `as<Tag>()` cross-backend proxy via
+  `call_with_return_erased` on `instance_be` (or per-backend
+  template instantiation gated on `kind()`).
 
 ### Blocked / deferred
 
