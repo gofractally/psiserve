@@ -18,6 +18,7 @@
 #include <psizam/pzam_format.hpp>
 #include <psizam/types.hpp>
 #ifndef PSIZAM_COMPILE_ONLY
+#include <psizam/detail/jit_runtime_helpers.hpp>
 #include <psizam/detail/llvm_runtime_helpers.hpp>
 #endif
 #ifdef PSIZAM_SOFTFLOAT
@@ -46,55 +47,57 @@ namespace psizam {
    /// This is the "linker" that resolves symbols at load time.
    /// The table must be kept in sync with the reloc_symbol enum.
    ///
-   /// Note: This function must be defined per-backend since different code
-   /// generators have different static functions. This version is for jit2 (jit_codegen).
-   template <typename CodeGen>
+   /// These helpers are free functions in `psizam::detail` (see
+   /// `detail/jit_runtime_helpers.hpp`); they used to live as static
+   /// members of `jit_codegen` but access-control coupling made adding
+   /// new external callers (like this function) fragile.
+   template <typename /*CodeGen*/ = void>
    void build_symbol_table(void** table) {
       using namespace detail;
       // Zero-initialize
       std::memset(table, 0, static_cast<size_t>(reloc_symbol::NUM_SYMBOLS) * sizeof(void*));
 
       // Core runtime
-      table[static_cast<uint32_t>(reloc_symbol::call_host_function)] = reinterpret_cast<void*>(&CodeGen::call_host_function);
-      table[static_cast<uint32_t>(reloc_symbol::current_memory)]     = reinterpret_cast<void*>(&CodeGen::current_memory);
-      table[static_cast<uint32_t>(reloc_symbol::grow_memory)]        = reinterpret_cast<void*>(&CodeGen::grow_memory);
+      table[static_cast<uint32_t>(reloc_symbol::call_host_function)] = reinterpret_cast<void*>(&call_host_function);
+      table[static_cast<uint32_t>(reloc_symbol::current_memory)]     = reinterpret_cast<void*>(&current_memory_impl);
+      table[static_cast<uint32_t>(reloc_symbol::grow_memory)]        = reinterpret_cast<void*>(&grow_memory_impl);
 
       // Bulk memory
-      table[static_cast<uint32_t>(reloc_symbol::memory_fill)]  = reinterpret_cast<void*>(&CodeGen::memory_fill_impl);
-      table[static_cast<uint32_t>(reloc_symbol::memory_copy)]  = reinterpret_cast<void*>(&CodeGen::memory_copy_impl);
-      table[static_cast<uint32_t>(reloc_symbol::memory_init)]  = reinterpret_cast<void*>(&CodeGen::memory_init_impl);
-      table[static_cast<uint32_t>(reloc_symbol::data_drop)]    = reinterpret_cast<void*>(&CodeGen::data_drop_impl);
-      table[static_cast<uint32_t>(reloc_symbol::table_init)]   = reinterpret_cast<void*>(&CodeGen::table_init_impl);
-      table[static_cast<uint32_t>(reloc_symbol::elem_drop)]    = reinterpret_cast<void*>(&CodeGen::elem_drop_impl);
-      table[static_cast<uint32_t>(reloc_symbol::table_copy)]   = reinterpret_cast<void*>(&CodeGen::table_copy_impl);
+      table[static_cast<uint32_t>(reloc_symbol::memory_fill)]  = reinterpret_cast<void*>(&memory_fill_impl);
+      table[static_cast<uint32_t>(reloc_symbol::memory_copy)]  = reinterpret_cast<void*>(&memory_copy_impl);
+      table[static_cast<uint32_t>(reloc_symbol::memory_init)]  = reinterpret_cast<void*>(&memory_init_impl);
+      table[static_cast<uint32_t>(reloc_symbol::data_drop)]    = reinterpret_cast<void*>(&data_drop_impl);
+      table[static_cast<uint32_t>(reloc_symbol::table_init)]   = reinterpret_cast<void*>(&table_init_impl);
+      table[static_cast<uint32_t>(reloc_symbol::elem_drop)]    = reinterpret_cast<void*>(&elem_drop_impl);
+      table[static_cast<uint32_t>(reloc_symbol::table_copy)]   = reinterpret_cast<void*>(&table_copy_impl);
 
       // Error handlers
-      table[static_cast<uint32_t>(reloc_symbol::on_unreachable)]        = reinterpret_cast<void*>(&CodeGen::on_unreachable);
-      table[static_cast<uint32_t>(reloc_symbol::on_fp_error)]           = reinterpret_cast<void*>(&CodeGen::on_fp_error);
-      table[static_cast<uint32_t>(reloc_symbol::on_memory_error)]       = reinterpret_cast<void*>(&CodeGen::on_memory_error);
-      table[static_cast<uint32_t>(reloc_symbol::on_call_indirect_error)] = reinterpret_cast<void*>(&CodeGen::on_call_indirect_error);
-      table[static_cast<uint32_t>(reloc_symbol::on_type_error)]         = reinterpret_cast<void*>(&CodeGen::on_type_error);
-      table[static_cast<uint32_t>(reloc_symbol::on_stack_overflow)]     = reinterpret_cast<void*>(&CodeGen::on_stack_overflow);
+      table[static_cast<uint32_t>(reloc_symbol::on_unreachable)]         = reinterpret_cast<void*>(&on_unreachable);
+      table[static_cast<uint32_t>(reloc_symbol::on_fp_error)]            = reinterpret_cast<void*>(&on_fp_error);
+      table[static_cast<uint32_t>(reloc_symbol::on_memory_error)]        = reinterpret_cast<void*>(&on_memory_error);
+      table[static_cast<uint32_t>(reloc_symbol::on_call_indirect_error)] = reinterpret_cast<void*>(&on_call_indirect_error);
+      table[static_cast<uint32_t>(reloc_symbol::on_type_error)]          = reinterpret_cast<void*>(&on_type_error);
+      table[static_cast<uint32_t>(reloc_symbol::on_stack_overflow)]      = reinterpret_cast<void*>(&on_stack_overflow);
 
       // Trunc (trapping)
-      table[static_cast<uint32_t>(reloc_symbol::trunc_f32_i32s)] = reinterpret_cast<void*>(&CodeGen::trunc_f32_i32s);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_f32_i32u)] = reinterpret_cast<void*>(&CodeGen::trunc_f32_i32u);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_f64_i32s)] = reinterpret_cast<void*>(&CodeGen::trunc_f64_i32s);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_f64_i32u)] = reinterpret_cast<void*>(&CodeGen::trunc_f64_i32u);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_f32_i64s)] = reinterpret_cast<void*>(&CodeGen::trunc_f32_i64s);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_f32_i64u)] = reinterpret_cast<void*>(&CodeGen::trunc_f32_i64u);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_f64_i64s)] = reinterpret_cast<void*>(&CodeGen::trunc_f64_i64s);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_f64_i64u)] = reinterpret_cast<void*>(&CodeGen::trunc_f64_i64u);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_f32_i32s)] = reinterpret_cast<void*>(&trunc_f32_i32s);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_f32_i32u)] = reinterpret_cast<void*>(&trunc_f32_i32u);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_f64_i32s)] = reinterpret_cast<void*>(&trunc_f64_i32s);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_f64_i32u)] = reinterpret_cast<void*>(&trunc_f64_i32u);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_f32_i64s)] = reinterpret_cast<void*>(&trunc_f32_i64s);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_f32_i64u)] = reinterpret_cast<void*>(&trunc_f32_i64u);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_f64_i64s)] = reinterpret_cast<void*>(&trunc_f64_i64s);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_f64_i64u)] = reinterpret_cast<void*>(&trunc_f64_i64u);
 
       // Trunc_sat (non-trapping)
-      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f32_i32s)] = reinterpret_cast<void*>(&CodeGen::trunc_sat_f32_i32s);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f32_i32u)] = reinterpret_cast<void*>(&CodeGen::trunc_sat_f32_i32u);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f64_i32s)] = reinterpret_cast<void*>(&CodeGen::trunc_sat_f64_i32s);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f64_i32u)] = reinterpret_cast<void*>(&CodeGen::trunc_sat_f64_i32u);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f32_i64s)] = reinterpret_cast<void*>(&CodeGen::trunc_sat_f32_i64s);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f32_i64u)] = reinterpret_cast<void*>(&CodeGen::trunc_sat_f32_i64u);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f64_i64s)] = reinterpret_cast<void*>(&CodeGen::trunc_sat_f64_i64s);
-      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f64_i64u)] = reinterpret_cast<void*>(&CodeGen::trunc_sat_f64_i64u);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f32_i32s)] = reinterpret_cast<void*>(&trunc_sat_f32_i32s);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f32_i32u)] = reinterpret_cast<void*>(&trunc_sat_f32_i32u);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f64_i32s)] = reinterpret_cast<void*>(&trunc_sat_f64_i32s);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f64_i32u)] = reinterpret_cast<void*>(&trunc_sat_f64_i32u);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f32_i64s)] = reinterpret_cast<void*>(&trunc_sat_f32_i64s);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f32_i64u)] = reinterpret_cast<void*>(&trunc_sat_f32_i64u);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f64_i64s)] = reinterpret_cast<void*>(&trunc_sat_f64_i64s);
+      table[static_cast<uint32_t>(reloc_symbol::trunc_sat_f64_i64u)] = reinterpret_cast<void*>(&trunc_sat_f64_i64u);
 
       // SIMD data
       // popcnt4 table is static data in the code generator — address resolved at template instantiation
