@@ -287,9 +287,38 @@ int instance::run_start() {
 // runtime_impl
 // ═════════════════════════════════════════════════════════════════════
 
+// Stored bytes for a registered library — the runtime keeps the bytes
+// for future link / lookup; archive parsing into member .o files is left
+// to whatever consumes them downstream (this layer just owns the data).
+struct registered_library {
+   enum class kind { wasm, archive };
+   kind                   kind;
+   std::vector<uint8_t>   bytes;
+};
+
+// Stable 64-bit hash over a wasm byte range. Used as the module-cache
+// key. Track B will replace this with module_cache_key (composing
+// wasm_hash + compile_hash + env_hash) once compile_policy lands.
+inline uint64_t hash_wasm_bytes(std::span<const uint8_t> bytes) noexcept {
+   return std::hash<std::string_view>{}(std::string_view{
+      reinterpret_cast<const char*>(bytes.data()), bytes.size()});
+}
+
 struct runtime_impl {
    runtime_config config;
-   // TODO: .pzam cache, library registry, memory pools
+
+   // wasm_hash → prepared module. weak_ptr keeps the cache from
+   // pinning modules indefinitely; an entry whose module_handle has
+   // been dropped by every external owner is garbage on the next
+   // lookup. Track B will key on the full module_cache_key
+   // (wasm + compile_policy + env) once compile_policy lands.
+   std::unordered_map<uint64_t, std::weak_ptr<module_handle_impl>>
+      module_cache;
+
+   // Library name → bytes + kind. Lookup-by-name is what consumers
+   // need; archive parsing happens on demand at link time.
+   std::unordered_map<std::string, registered_library>
+      libraries;
 };
 
 runtime::runtime(runtime_config config)
@@ -299,24 +328,48 @@ runtime::~runtime() = default;
 runtime::runtime(runtime&&) noexcept = default;
 runtime& runtime::operator=(runtime&&) noexcept = default;
 
-void runtime::register_library(std::string_view, archive_bytes) {
-   // TODO: parse .a archive, cache member .o files
+void runtime::register_library(std::string_view name, archive_bytes archive) {
+   if (!impl_) return;
+   registered_library lib;
+   lib.kind = registered_library::kind::archive;
+   lib.bytes.assign(archive.data.begin(), archive.data.end());
+   impl_->libraries[std::string{name}] = std::move(lib);
 }
 
-void runtime::register_library(std::string_view, wasm_bytes) {
-   // TODO: parse standalone .wasm library
+void runtime::register_library(std::string_view name, wasm_bytes wasm) {
+   if (!impl_) return;
+   registered_library lib;
+   lib.kind = registered_library::kind::wasm;
+   lib.bytes.assign(wasm.data.begin(), wasm.data.end());
+   impl_->libraries[std::string{name}] = std::move(lib);
 }
 
 module_handle runtime::prepare(wasm_bytes wasm, const instance_policy& policy) {
-   auto t0 = std::chrono::high_resolution_clock::now();
+   const uint64_t key = hash_wasm_bytes(wasm.data);
+
+   // Cache hit? Track A keys only on wasm bytes; Track B will extend the
+   // key to include compile_policy so divergent policies don't collide.
+   if (impl_) {
+      auto it = impl_->module_cache.find(key);
+      if (it != impl_->module_cache.end()) {
+         if (auto live = it->second.lock())
+            return module_handle{std::move(live)};
+         impl_->module_cache.erase(it);
+      }
+   }
+
+   const auto t0 = std::chrono::high_resolution_clock::now();
 
    auto mod = std::make_shared<module_handle_impl>();
    mod->wasm_copy.assign(wasm.data.begin(), wasm.data.end());
    mod->policy = policy;
 
-   auto t1 = std::chrono::high_resolution_clock::now();
+   const auto t1 = std::chrono::high_resolution_clock::now();
    mod->compile_ms = static_cast<uint32_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+
+   if (impl_)
+      impl_->module_cache[key] = std::weak_ptr<module_handle_impl>{mod};
 
    return module_handle{std::move(mod)};
 }
@@ -389,10 +442,30 @@ void runtime::bind(module_handle&, instance&, std::string_view) {
 }
 
 runtime::cache_stats runtime::stats() const {
-   return {0, 0, 0};
+   if (!impl_) return {0, 0, 0};
+
+   std::size_t modules            = 0;
+   std::size_t pzam_bytes_total   = 0;
+   std::size_t compile_time_total = 0;
+   for (const auto& [_, weak] : impl_->module_cache) {
+      if (auto live = weak.lock()) {
+         ++modules;
+         if (live->pzam) pzam_bytes_total += live->pzam->total_code_size;
+         compile_time_total += live->compile_ms;
+      }
+   }
+   return {modules, pzam_bytes_total, compile_time_total};
 }
 
-void runtime::evict(wasm_bytes) {}
-void runtime::clear_cache() {}
+void runtime::evict(wasm_bytes wasm) {
+   if (!impl_) return;
+   impl_->module_cache.erase(hash_wasm_bytes(wasm.data));
+}
+
+void runtime::clear_cache() {
+   if (!impl_) return;
+   impl_->module_cache.clear();
+   impl_->libraries.clear();
+}
 
 } // namespace psizam
