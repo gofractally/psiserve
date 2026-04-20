@@ -124,105 +124,13 @@ namespace psio::constexpr_wit {
 // lower C++ args → 16 flat_vals, call the raw WASM import, and lift
 // the return. Data is already in guest linear memory (no alloc/copy).
 
-namespace psizam {
-
-template <typename T>
-void guest_import_lower(flat_val* slots, size_t& idx, const T& v) {
-   using U = std::remove_cvref_t<T>;
-   if constexpr (std::is_same_v<U, bool>)
-      slots[idx++] = v ? 1 : 0;
-   else if constexpr (std::is_integral_v<U> && sizeof(U) <= 4)
-      slots[idx++] = static_cast<flat_val>(static_cast<uint32_t>(v));
-   else if constexpr (std::is_integral_v<U> && sizeof(U) == 8)
-      slots[idx++] = static_cast<flat_val>(v);
-   else if constexpr (std::is_same_v<U, float>) {
-      union { float f; int32_t i; } u; u.f = v;
-      slots[idx++] = static_cast<flat_val>(u.i);
-   }
-   else if constexpr (std::is_same_v<U, double>) {
-      union { double f; int64_t i; } u; u.f = v;
-      slots[idx++] = u.i;
-   }
-   else if constexpr (std::is_enum_v<U>)
-      guest_import_lower(slots, idx, static_cast<std::underlying_type_t<U>>(v));
-   else if constexpr (psio::detail::is_psio_own<U>::value)
-      slots[idx++] = static_cast<flat_val>(v.handle);
-   else if constexpr (psio::detail::is_psio_borrow<U>::value)
-      slots[idx++] = static_cast<flat_val>(v.handle);
-   else if constexpr (std::is_same_v<U, std::monostate>) {
-   }
-   else if constexpr (std::is_same_v<U, std::string_view> ||
-                      std::is_same_v<U, psio::owned<std::string, psio::wit>>) {
-      slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
-      slots[idx++] = static_cast<flat_val>(v.size());
-   }
-   else if constexpr (psio::detail::is_std_vector_ct<U>::value) {
-      slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
-      slots[idx++] = static_cast<flat_val>(v.size());
-   }
-   else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
-      slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
-      slots[idx++] = static_cast<flat_val>(v.size());
-   }
-   else if constexpr (detail_dispatch::is_std_span<U>::value) {
-      slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
-      slots[idx++] = static_cast<flat_val>(v.size());
-   }
-   else if constexpr (psio::is_std_tuple<U>::value) {
-      [&]<size_t... Is>(std::index_sequence<Is...>) {
-         (guest_import_lower(slots, idx, std::get<Is>(v)), ...);
-      }(std::make_index_sequence<std::tuple_size_v<U>>{});
-   }
-   else if constexpr (psio::detail::is_std_optional_ct<U>::value) {
-      if (v.has_value()) {
-         slots[idx++] = 1;
-         guest_import_lower(slots, idx, *v);
-      } else {
-         slots[idx++] = 0;
-         using E = typename psio::detail::optional_elem_ct<U>::type;
-         constexpr size_t payload_count = psio::canonical_flat_count_v<E>;
-         for (size_t i = 0; i < payload_count; i++)
-            slots[idx++] = 0;
-      }
-   }
-   else if constexpr (psio::is_std_variant_v<U>) {
-      constexpr size_t N = std::variant_size_v<U>;
-      constexpr size_t max_payload = []<size_t... Is>(std::index_sequence<Is...>) {
-         size_t m = 0;
-         ((m = std::max(m, psio::detail_canonical::canonical_flat_count_impl<
-            std::variant_alternative_t<Is, U>>())), ...);
-         return m;
-      }(std::make_index_sequence<N>{});
-      slots[idx++] = static_cast<flat_val>(v.index());
-      size_t payload_start = idx;
-      std::visit([&](const auto& alt) {
-         using A = std::remove_cvref_t<decltype(alt)>;
-         if constexpr (!std::is_same_v<A, std::monostate>)
-            guest_import_lower(slots, idx, alt);
-      }, v);
-      size_t emitted = idx - payload_start;
-      for (size_t i = emitted; i < max_payload; i++)
-         slots[idx++] = 0;
-   }
-   else if constexpr (std::is_array_v<U>) {
-      constexpr uint32_t n = std::extent_v<U>;
-      for (uint32_t i = 0; i < n; i++)
-         guest_import_lower(slots, idx, v[i]);
-   }
-   else if constexpr (psio::Reflected<U>) {
-      psio::apply_members(
-         (typename psio::reflect<U>::data_members*)nullptr,
-         [&](auto... ptrs) {
-            (guest_import_lower(slots, idx, v.*ptrs), ...);
-         }
-      );
-   }
-   else {
-      static_assert(sizeof(U) == 0, "guest_import_lower: unsupported type");
-   }
-}
-
-} // namespace psizam
+// `guest_import_lower` lives in psizam/component_proxy.hpp (included
+// above). PSIO_IMPORT_EMIT_CALL_FN below qualifies the call as
+// `::psizam::guest_import_lower` and picks up that canonical
+// definition. This header previously carried a duplicate copy; the
+// two have been merged into component_proxy.hpp with all the prior
+// specializations (enum, monostate, tuple, variant, array,
+// is_psio_own / is_psio_borrow) preserved.
 
 #define PSIO_IMPORT_RAW_NAME(IFACE, METHOD) \
    BOOST_PP_CAT(BOOST_PP_CAT(_psio_raw_, BOOST_PP_CAT(IFACE, _)), METHOD)

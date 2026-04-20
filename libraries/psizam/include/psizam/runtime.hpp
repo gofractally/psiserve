@@ -469,12 +469,18 @@ namespace detail_runtime {
    };
 
    // Bridge entry: forward call from consumer to provider's live backend
+   // via the erased `instance_be::call_export_canonical` — the same
+   // call-erasure path used by `instance::as<Tag>()` (Step 10). Works
+   // for interpreter / jit / jit2 / jit_llvm. The previous
+   // interpreter-hardcoded `static_cast<backend<_, interpreter>*>(...)`
+   // was silently wrong for non-interpreter providers and manifested as
+   // "jit control-flow corruption" in parity tests.
    template <typename FnPtr>
    void register_bind_entry(
       host_function_table& table,
       std::string_view iface_name,
       std::string_view func_name,
-      void* provider_backend,
+      detail::instance_be* provider_be,
       void* provider_host)
    {
       using Traits = bind_fn_traits<FnPtr>;
@@ -485,36 +491,18 @@ namespace detail_runtime {
       e.signature.params.assign(16, types::i64);
       e.signature.ret = {types::i64};
 
-      using backend_t = backend<std::nullptr_t, interpreter>;
-      auto* be_ptr = static_cast<backend_t*>(provider_backend);
-      void* host_ptr = provider_host;
       std::string export_name{func_name};
 
-      // Forward call to provider's live backend.
-      // For all signatures: use the 16-wide flat_val convention
-      // (same as PSIO_MODULE thunks). The provider's export expects
-      // 16 i64 args regardless of the logical param count.
-      e.slow_dispatch = [be_ptr, host_ptr, export_name](
+      // Forward via the canonical-ABI 16-slot flat call through the
+      // backend-erased interface.
+      e.slow_dispatch = [provider_be, provider_host, export_name](
          void*, native_value* args, char*) -> native_value
       {
-         auto r = be_ptr->call_with_return(
-            host_ptr, std::string_view{export_name},
-            static_cast<uint64_t>(args[0].i64),
-            static_cast<uint64_t>(args[1].i64),
-            static_cast<uint64_t>(args[2].i64),
-            static_cast<uint64_t>(args[3].i64),
-            static_cast<uint64_t>(args[4].i64),
-            static_cast<uint64_t>(args[5].i64),
-            static_cast<uint64_t>(args[6].i64),
-            static_cast<uint64_t>(args[7].i64),
-            static_cast<uint64_t>(args[8].i64),
-            static_cast<uint64_t>(args[9].i64),
-            static_cast<uint64_t>(args[10].i64),
-            static_cast<uint64_t>(args[11].i64),
-            static_cast<uint64_t>(args[12].i64),
-            static_cast<uint64_t>(args[13].i64),
-            static_cast<uint64_t>(args[14].i64),
-            static_cast<uint64_t>(args[15].i64));
+         uint64_t slots[16];
+         for (int i = 0; i < 16; ++i)
+            slots[i] = static_cast<uint64_t>(args[i].i64);
+         auto r = provider_be->call_export_canonical(
+            provider_host, std::string_view{export_name}, slots, 16);
          native_value rv;
          rv.i64 = r ? r->to_ui64() : 0;
          return rv;
@@ -526,7 +514,7 @@ namespace detail_runtime {
    template <typename InterfaceTag, std::size_t... Is>
    void bind_interface_methods(
       host_function_table& table,
-      void* provider_backend,
+      detail::instance_be* provider_be,
       void* provider_host,
       std::index_sequence<Is...>)
    {
@@ -535,7 +523,7 @@ namespace detail_runtime {
 
       (register_bind_entry<std::tuple_element_t<Is, func_types>>(
          table, info::name, info::func_names[Is],
-         provider_backend, provider_host), ...);
+         provider_be, provider_host), ...);
    }
 }
 
@@ -548,7 +536,7 @@ void runtime::bind(module_handle& consumer_mod, instance& provider) {
 
    detail_runtime::bind_interface_methods<InterfaceTag>(
       consumer_mod.table(),
-      provider.backend_ptr(),
+      provider.get_instance_be(),
       provider.host_ptr(),
       std::make_index_sequence<N>{});
 }

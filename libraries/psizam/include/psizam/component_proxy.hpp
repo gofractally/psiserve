@@ -309,6 +309,19 @@ namespace psizam {
       };
    }
 
+   // Helper: has wasm_type_traits been specialized for T? Using a
+   // bare `wasm_type_traits<T, void>::is_wasm_type` inside if-constexpr
+   // instantiates the primary (forward-declared, incomplete) template
+   // for any T without a specialization and errors out. This trait uses
+   // SFINAE on void_t so the check short-circuits cleanly for unrelated
+   // user types (e.g. reflected structs).
+   template <typename T, typename = void>
+   struct has_wasm_type_traits_impl : std::false_type {};
+   template <typename T>
+   struct has_wasm_type_traits_impl<
+      T, std::void_t<decltype(wasm_type_traits<T, void>::is_wasm_type)>>
+      : std::bool_constant<wasm_type_traits<T, void>::is_wasm_type> {};
+
    template <typename T>
    void guest_import_lower(flat_val* slots, size_t& idx, const T& v) {
       using U = std::remove_cvref_t<T>;
@@ -325,6 +338,11 @@ namespace psizam {
       else if constexpr (std::is_same_v<U, double>) {
          union { double f; int64_t i; } u; u.f = v;
          slots[idx++] = u.i;
+      }
+      else if constexpr (std::is_enum_v<U>)
+         guest_import_lower(slots, idx, static_cast<std::underlying_type_t<U>>(v));
+      else if constexpr (std::is_same_v<U, std::monostate>) {
+         // empty payload — nothing to emit
       }
       else if constexpr (std::is_same_v<U, std::string_view> ||
                          std::is_same_v<U, psio::owned<std::string, psio::wit>> ||
@@ -357,12 +375,43 @@ namespace psizam {
          slots[idx++] = static_cast<flat_val>(v.size());
       }
       else if constexpr (psio::detail::is_own_ct<U>::value ||
-                         psio::detail::is_borrow_ct<U>::value) {
+                         psio::detail::is_borrow_ct<U>::value ||
+                         psio::detail::is_psio_own<U>::value ||
+                         psio::detail::is_psio_borrow<U>::value) {
          slots[idx++] = static_cast<flat_val>(v.handle);
       }
-      else if constexpr (wasm_type_traits<std::decay_t<U>, void>::is_wasm_type) {
+      else if constexpr (has_wasm_type_traits_impl<std::decay_t<U>>::value) {
          slots[idx++] = static_cast<flat_val>(
             wasm_type_traits<std::decay_t<U>, void>::unwrap(v));
+      }
+      else if constexpr (psio::is_std_tuple<U>::value) {
+         [&]<size_t... Is>(std::index_sequence<Is...>) {
+            (guest_import_lower(slots, idx, std::get<Is>(v)), ...);
+         }(std::make_index_sequence<std::tuple_size_v<U>>{});
+      }
+      else if constexpr (psio::is_std_variant_v<U>) {
+         constexpr size_t N = std::variant_size_v<U>;
+         constexpr size_t max_payload = []<size_t... Is>(std::index_sequence<Is...>) {
+            size_t m = 0;
+            ((m = std::max(m, psio::detail_canonical::canonical_flat_count_impl<
+               std::variant_alternative_t<Is, U>>())), ...);
+            return m;
+         }(std::make_index_sequence<N>{});
+         slots[idx++] = static_cast<flat_val>(v.index());
+         size_t payload_start = idx;
+         std::visit([&](const auto& alt) {
+            using A = std::remove_cvref_t<decltype(alt)>;
+            if constexpr (!std::is_same_v<A, std::monostate>)
+               guest_import_lower(slots, idx, alt);
+         }, v);
+         size_t emitted = idx - payload_start;
+         for (size_t i = emitted; i < max_payload; i++)
+            slots[idx++] = 0;
+      }
+      else if constexpr (std::is_array_v<U>) {
+         constexpr uint32_t n = std::extent_v<U>;
+         for (uint32_t i = 0; i < n; i++)
+            guest_import_lower(slots, idx, v[i]);
       }
       else if constexpr (psio::Reflected<U>) {
          psio::apply_members(
