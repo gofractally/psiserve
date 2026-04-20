@@ -46,9 +46,8 @@ add_custom_command(
 add_executable(psizam_runtime_resource
    host.cpp
    ${_contract_hpp}
-   ${_blockchain_hpp}
-   ${CMAKE_SOURCE_DIR}/libraries/psizam/src/runtime.cpp)
+   ${_blockchain_hpp})
 target_include_directories(psizam_runtime_resource PRIVATE
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(psizam_runtime_resource PRIVATE psizam wasi-cpp)
+target_link_libraries(psizam_runtime_resource PRIVATE psizam psizam-exec wasi-cpp)

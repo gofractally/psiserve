@@ -135,7 +135,7 @@ struct wasi_echo_impl
          if (accept_r.index() == 1)
             break;
 
-         auto [client_sock, is, os] = std::get<0>(accept_r);
+         auto [client_sock, is, os] = std::get<0>(std::move(accept_r));
 
          // Echo loop for this connection
          for (;;)

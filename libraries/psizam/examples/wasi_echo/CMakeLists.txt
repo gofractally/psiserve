@@ -32,4 +32,4 @@ add_executable(wasi_echo_host host.cpp ${_hpp})
 target_include_directories(wasi_echo_host PRIVATE
    ${CMAKE_CURRENT_SOURCE_DIR}
    ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(wasi_echo_host PRIVATE psizam wasi-host)
+target_link_libraries(wasi_echo_host PRIVATE psizam psizam-exec wasi-host)

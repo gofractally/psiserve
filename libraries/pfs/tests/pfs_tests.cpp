@@ -12,6 +12,7 @@
 #include <psio/fracpack.hpp>
 
 #include <psitri/database.hpp>
+#include <psitri/database_impl.hpp>
 
 #include <cstring>
 #include <filesystem>

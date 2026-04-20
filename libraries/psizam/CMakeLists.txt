@@ -132,6 +132,7 @@ target_link_libraries(psizam-jit2-arm INTERFACE psizam)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    add_library(psizam-exec STATIC
       src/runtime_helpers.cpp
+      src/runtime.cpp
       src/call_on_stack.cpp
       src/llvm_runtime_helpers.cpp
       src/eh_runtime.cpp
