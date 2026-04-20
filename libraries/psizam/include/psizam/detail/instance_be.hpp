@@ -90,6 +90,35 @@ public:
                             const uint64_t*    args,
                             std::size_t        count) = 0;
 
+   // Resolve an exported function name to its WASM function index. Used
+   // by bridge_executor_erased to cache indices for cabi_realloc and
+   // the target export, avoiding per-call re-resolution on the hot
+   // cross-module path.
+   virtual uint32_t resolve_export(std::string_view name) = 0;
+
+   // Canonical 16-slot flat call by resolved index. Counterpart to
+   // `call_export_canonical` that skips the export-name lookup; used
+   // by bridge_executor_erased to invoke the bound export without a
+   // string search per call.
+   virtual std::optional<operand_stack_elem>
+      call_export_by_index(void*              host,
+                           uint32_t           index,
+                           const uint64_t*    args,
+                           std::size_t        count) = 0;
+
+   // Call `cabi_realloc(old_ptr, old_size, align, size) -> ptr` with
+   // its declared (i32, i32, i32, i32) → i32 signature. Carved out
+   // from the generic index call because the interpreter type-checks
+   // template arg types against the WASM function's declared params
+   // — passing uint64_t here would mismatch the i32 declaration.
+   // Returns 0 on failure (caller treats as allocation failure).
+   virtual uint32_t call_cabi_realloc(void*    host,
+                                      uint32_t index,
+                                      uint32_t old_ptr,
+                                      uint32_t old_size,
+                                      uint32_t align,
+                                      uint32_t size) = 0;
+
    // ── Gas plumbing (backend-erased accessors on execution_context) ──
    // Multi-module gas tracking sets these at instantiate time (and reads
    // them at teardown to credit unused lease back to a shared pool).

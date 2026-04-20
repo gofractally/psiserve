@@ -21,10 +21,12 @@
 #include <psio/wit_owned.hpp>
 
 #include <psizam/canonical_dispatch.hpp>
+#include <psizam/detail/instance_be.hpp>
 #include <psizam/host_function_table.hpp>
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <type_traits>
 
@@ -616,6 +618,241 @@ do_return_record:
       // For records with embedded pointers (strings, lists), we'd need a
       // recursive copy — but that's a future extension.
       char* consumer_mem_w = consumer->be->get_context().linear_memory();
+      std::memcpy(consumer_mem_w + consumer_retptr,
+                  provider_mem + prov_retptr, ip->size);
+
+      result.i64 = static_cast<uint64_t>(consumer_retptr);
+   }
+   goto do_done;
+
+do_done:
+   #undef DISPATCH
+   #undef NEXT
+   return result;
+}
+
+// ── Backend-erased bridge executor (Step 9) ────────────────────────────────
+// Mirrors `execute_bridge<Host, BackendKind>` but routes every backend
+// operation through `detail::instance_be`'s virtual interface so
+// `runtime::bind` can use the threaded-dispatch path without baking the
+// backend kind into a template.
+
+inline uint32_t bridge_cabi_realloc_erased(
+   detail::instance_be* be, void* host, uint32_t& cached_idx,
+   uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t size)
+{
+   if (cached_idx == std::numeric_limits<uint32_t>::max())
+      cached_idx = be->resolve_export("cabi_realloc");
+   return be->call_cabi_realloc(host, cached_idx,
+                                old_ptr, old_size, align, size);
+}
+
+inline native_value execute_bridge_erased(
+   bridge_program&      prog,       // non-const: caches resolved indices
+   detail::instance_be* consumer,
+   detail::instance_be* provider,
+   void*                host,
+   native_value*        consumer_args)
+{
+   uint64_t provider_slots[16] = {};
+
+   native_value result;
+   result.i64 = 0;
+
+   uint32_t provider_retptr = 0;
+   uint32_t consumer_retptr = 0;
+
+   const instruction* ip = prog.code;
+
+   static constexpr void* dispatch_table[] = {
+      &&do_fwd_i32,
+      &&do_fwd_i64,
+      &&do_fwd_f32,
+      &&do_fwd_f64,
+      &&do_copy_string_arg,
+      &&do_copy_list_arg,
+      &&do_copy_record_arg,
+      &&do_set_retptr,
+      &&do_call_export,
+      &&do_return_scalar,
+      &&do_return_string,
+      &&do_return_list,
+      &&do_return_record,
+      &&do_done,
+   };
+
+   #define DISPATCH() goto *dispatch_table[ip->opcode]
+   #define NEXT() do { ++ip; DISPATCH(); } while(0)
+
+   DISPATCH();
+
+do_fwd_i32:
+   provider_slots[ip->dst] = static_cast<uint64_t>(
+      static_cast<uint32_t>(consumer_args[ip->src].i64));
+   NEXT();
+
+do_fwd_i64:
+do_fwd_f32:
+do_fwd_f64:
+   provider_slots[ip->dst] = consumer_args[ip->src].i64;
+   NEXT();
+
+do_copy_string_arg:
+   {
+      uint32_t src_ptr = static_cast<uint32_t>(consumer_args[ip->src].i64);
+      uint32_t src_len = static_cast<uint32_t>(consumer_args[ip->src + 1].i64);
+
+      uint32_t dst_ptr = 0;
+      if (src_len > 0) {
+         dst_ptr = bridge_cabi_realloc_erased(
+            provider, host, prog.provider_realloc_idx,
+            0u, 0u, 1u, src_len);
+
+         char* provider_mem = provider->linear_memory();
+         char* cons_mem     = consumer->linear_memory();
+         std::memcpy(provider_mem + dst_ptr, cons_mem + src_ptr, src_len);
+      }
+
+      provider_slots[ip->dst]     = static_cast<uint64_t>(dst_ptr);
+      provider_slots[ip->dst + 1] = static_cast<uint64_t>(src_len);
+   }
+   NEXT();
+
+do_copy_list_arg:
+   {
+      uint32_t src_ptr = static_cast<uint32_t>(consumer_args[ip->src].i64);
+      uint32_t src_len = static_cast<uint32_t>(consumer_args[ip->src + 1].i64);
+      uint32_t elem_size  = ip->size;
+      uint32_t elem_align = ip->align;
+
+      uint32_t byte_len = src_len * elem_size;
+      uint32_t dst_ptr = 0;
+      if (byte_len > 0) {
+         dst_ptr = bridge_cabi_realloc_erased(
+            provider, host, prog.provider_realloc_idx,
+            0u, 0u, elem_align, byte_len);
+
+         char* provider_mem = provider->linear_memory();
+         char* cons_mem     = consumer->linear_memory();
+         std::memcpy(provider_mem + dst_ptr, cons_mem + src_ptr, byte_len);
+      }
+
+      provider_slots[ip->dst]     = static_cast<uint64_t>(dst_ptr);
+      provider_slots[ip->dst + 1] = static_cast<uint64_t>(src_len);
+   }
+   NEXT();
+
+do_copy_record_arg:
+   {
+      uint32_t src_ptr = static_cast<uint32_t>(consumer_args[ip->src].i64);
+
+      uint32_t dst_ptr = bridge_cabi_realloc_erased(
+         provider, host, prog.provider_realloc_idx,
+         0u, 0u, static_cast<uint32_t>(ip->align), ip->size);
+
+      char* provider_mem = provider->linear_memory();
+      char* cons_mem     = consumer->linear_memory();
+      std::memcpy(provider_mem + dst_ptr, cons_mem + src_ptr, ip->size);
+
+      provider_slots[ip->dst] = static_cast<uint64_t>(dst_ptr);
+   }
+   NEXT();
+
+do_set_retptr:
+   {
+      provider_retptr = bridge_cabi_realloc_erased(
+         provider, host, prog.provider_realloc_idx,
+         0u, 0u, static_cast<uint32_t>(ip->align), ip->size);
+      provider_slots[ip->dst] = static_cast<uint64_t>(provider_retptr);
+   }
+   NEXT();
+
+do_call_export:
+   {
+      // Resolve export index lazily (first call) then reuse on subsequent
+      // invocations of the same bridge.
+      if (!prog.has_resolved_index())
+         prog.export_index = provider->resolve_export(prog.export_name);
+
+      auto r = provider->call_export_by_index(
+         host, prog.export_index, provider_slots, 16);
+      result.i64 = r ? r->to_ui64() : 0;
+   }
+   NEXT();
+
+do_return_scalar:
+   goto do_done;
+
+do_return_string:
+   {
+      uint32_t prov_retptr = static_cast<uint32_t>(result.i64);
+      const uint8_t* provider_mem =
+         reinterpret_cast<const uint8_t*>(provider->linear_memory());
+
+      uint32_t s_ptr, s_len;
+      std::memcpy(&s_ptr, provider_mem + prov_retptr, 4);
+      std::memcpy(&s_len, provider_mem + prov_retptr + 4, 4);
+
+      consumer_retptr = static_cast<uint32_t>(consumer_args[ip->src].i64);
+
+      uint32_t consumer_str_ptr = 0;
+      if (s_len > 0) {
+         consumer_str_ptr = bridge_cabi_realloc_erased(
+            consumer, host, prog.consumer_realloc_idx,
+            0u, 0u, 1u, s_len);
+         char* consumer_mem_w = consumer->linear_memory();
+         std::memcpy(consumer_mem_w + consumer_str_ptr,
+                     provider_mem + s_ptr, s_len);
+      }
+
+      char* consumer_mem_w = consumer->linear_memory();
+      std::memcpy(consumer_mem_w + consumer_retptr,     &consumer_str_ptr, 4);
+      std::memcpy(consumer_mem_w + consumer_retptr + 4, &s_len,            4);
+
+      result.i64 = static_cast<uint64_t>(consumer_retptr);
+   }
+   goto do_done;
+
+do_return_list:
+   {
+      uint32_t prov_retptr = static_cast<uint32_t>(result.i64);
+      const uint8_t* provider_mem =
+         reinterpret_cast<const uint8_t*>(provider->linear_memory());
+
+      uint32_t e_ptr, e_len;
+      std::memcpy(&e_ptr, provider_mem + prov_retptr,     4);
+      std::memcpy(&e_len, provider_mem + prov_retptr + 4, 4);
+
+      consumer_retptr = static_cast<uint32_t>(consumer_args[ip->src].i64);
+
+      uint32_t byte_len = e_len * ip->size;
+      uint32_t consumer_e_ptr = 0;
+      if (byte_len > 0) {
+         consumer_e_ptr = bridge_cabi_realloc_erased(
+            consumer, host, prog.consumer_realloc_idx,
+            0u, 0u, static_cast<uint32_t>(ip->align), byte_len);
+         char* consumer_mem_w = consumer->linear_memory();
+         std::memcpy(consumer_mem_w + consumer_e_ptr,
+                     provider_mem + e_ptr, byte_len);
+      }
+
+      char* consumer_mem_w = consumer->linear_memory();
+      std::memcpy(consumer_mem_w + consumer_retptr,     &consumer_e_ptr, 4);
+      std::memcpy(consumer_mem_w + consumer_retptr + 4, &e_len,          4);
+
+      result.i64 = static_cast<uint64_t>(consumer_retptr);
+   }
+   goto do_done;
+
+do_return_record:
+   {
+      uint32_t prov_retptr = static_cast<uint32_t>(result.i64);
+      const uint8_t* provider_mem =
+         reinterpret_cast<const uint8_t*>(provider->linear_memory());
+
+      consumer_retptr = static_cast<uint32_t>(consumer_args[ip->src].i64);
+
+      char* consumer_mem_w = consumer->linear_memory();
       std::memcpy(consumer_mem_w + consumer_retptr,
                   provider_mem + prov_retptr, ip->size);
 

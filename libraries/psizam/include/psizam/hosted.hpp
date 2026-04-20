@@ -696,6 +696,9 @@ struct void_host_lower_policy_erased
 {
    instance_be* be;
    void*        host;
+   // Cached cabi_realloc index on `be` — resolved lazily on first
+   // alloc(), reused for subsequent allocs within the same call.
+   uint32_t     realloc_idx = std::numeric_limits<uint32_t>::max();
    std::vector<::psio::native_value> flat_values;
 
    void_host_lower_policy_erased(instance_be& b, void* h) : be(&b), host(h) {}
@@ -703,10 +706,9 @@ struct void_host_lower_policy_erased
    uint32_t alloc(uint32_t align, uint32_t size)
    {
       if (size == 0) return 0;
-      const uint64_t args[4] = {0, 0, align, size};
-      auto ret = be->call_export_canonical(
-         host, std::string_view{"cabi_realloc"}, args, 4);
-      return ret ? ret->to_ui32() : uint32_t{0};
+      if (realloc_idx == std::numeric_limits<uint32_t>::max())
+         realloc_idx = be->resolve_export("cabi_realloc");
+      return be->call_cabi_realloc(host, realloc_idx, 0u, 0u, align, size);
    }
 
    char* linear_memory() { return be->linear_memory(); }

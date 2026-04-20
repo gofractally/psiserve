@@ -87,17 +87,89 @@ public:
                             const uint64_t*  args,
                             std::size_t      count) override
    {
-      // Canonical ABI flat call: always 16 u64 slots. Pad with zero
-      // for callers that pass fewer (e.g. shorter argument lists).
-      auto slot = [&](std::size_t i) -> uint64_t {
-         return i < count ? args[i] : uint64_t{0};
-      };
-      return be_->call_with_return(
-         host, name,
-         slot(0),  slot(1),  slot(2),  slot(3),
-         slot(4),  slot(5),  slot(6),  slot(7),
-         slot(8),  slot(9),  slot(10), slot(11),
-         slot(12), slot(13), slot(14), slot(15));
+      // `backend::call_with_return` is templated on arg count and the
+      // interpreter type-checks `sizeof...(Args) == WASM param count`.
+      // Pass exactly `count` args so cabi_realloc (4 params),
+      // canonical-ABI PSIO_MODULE exports (16 flat slots), and
+      // WIT-declared narrow signatures each match their declared arity.
+      switch (count) {
+         case 0:  return be_->call_with_return(host, name);
+         case 1:  return be_->call_with_return(host, name, args[0]);
+         case 2:  return be_->call_with_return(host, name, args[0], args[1]);
+         case 3:  return be_->call_with_return(host, name, args[0], args[1], args[2]);
+         case 4:  return be_->call_with_return(host, name, args[0], args[1], args[2], args[3]);
+         case 5:  return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4]);
+         case 6:  return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5]);
+         case 7:  return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+         case 8:  return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
+         case 9:  return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]);
+         case 10: return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]);
+         case 11: return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]);
+         case 12: return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]);
+         case 13: return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]);
+         case 14: return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]);
+         case 15: return be_->call_with_return(host, name, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]);
+         default: /* 16 */
+            return be_->call_with_return(
+               host, name,
+               args[0],  args[1],  args[2],  args[3],
+               args[4],  args[5],  args[6],  args[7],
+               args[8],  args[9],  args[10], args[11],
+               args[12], args[13], args[14], args[15]);
+      }
+   }
+
+   uint32_t resolve_export(std::string_view name) override {
+      return be_->resolve_export(name);
+   }
+
+   uint32_t call_cabi_realloc(void*    host,
+                              uint32_t index,
+                              uint32_t old_ptr,
+                              uint32_t old_size,
+                              uint32_t align,
+                              uint32_t size) override
+   {
+      auto r = be_->call_by_index(host, index, old_ptr, old_size, align, size);
+      return r ? r->to_ui32() : 0u;
+   }
+
+   std::optional<operand_stack_elem>
+      call_export_by_index(void*           host,
+                           uint32_t        index,
+                           const uint64_t* args,
+                           std::size_t     count) override
+   {
+      // `backend::call_by_index` is templated on arg count and the
+      // interpreter type-checks `sizeof...(Args) == WASM param count`.
+      // We must pass exactly `count` args so cabi_realloc (4 params)
+      // and canonical-ABI exports (16 flat slots) each match their
+      // declared signature.
+      switch (count) {
+         case 0:  return be_->call_by_index(host, index);
+         case 1:  return be_->call_by_index(host, index, args[0]);
+         case 2:  return be_->call_by_index(host, index, args[0], args[1]);
+         case 3:  return be_->call_by_index(host, index, args[0], args[1], args[2]);
+         case 4:  return be_->call_by_index(host, index, args[0], args[1], args[2], args[3]);
+         case 5:  return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4]);
+         case 6:  return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5]);
+         case 7:  return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+         case 8:  return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
+         case 9:  return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]);
+         case 10: return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]);
+         case 11: return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]);
+         case 12: return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11]);
+         case 13: return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12]);
+         case 14: return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13]);
+         case 15: return be_->call_by_index(host, index, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10], args[11], args[12], args[13], args[14]);
+         default: /* 16 */
+            return be_->call_by_index(
+               host, index,
+               args[0],  args[1],  args[2],  args[3],
+               args[4],  args[5],  args[6],  args[7],
+               args[8],  args[9],  args[10], args[11],
+               args[12], args[13], args[14], args[15]);
+      }
    }
 
    // ── Gas plumbing ──────────────────────────────────────────────────
@@ -193,6 +265,18 @@ struct module_handle_impl {
    // wire instantiate() to consume this state.
    std::unique_ptr<detail::pzam_load_result> pzam;
 
+   // Late-bound back-pointer to the currently-live instance's
+   // `instance_be*`. Set by `runtime::instantiate` and nulled by the
+   // instance's destructor. Cross-module bridges registered before
+   // the consumer is instantiated capture a pointer to this field
+   // and deref it at call time — the composition pattern, adapted
+   // to the module_handle / instance split.
+   //
+   // Single-instance-per-module today; multi-instance sharing of a
+   // module_handle through the bridge path is a follow-up (would
+   // need per-instance bridge tables or a lookup indirection).
+   detail::instance_be*  live_be = nullptr;
+
    module_handle_impl() = default;
 
    ~module_handle_impl() {
@@ -208,6 +292,12 @@ struct module_handle_impl {
 
 host_function_table& module_handle::table() { return impl_->table; }
 void module_handle::set_host_ptr(void* p) { impl_->host_ptr = p; }
+
+namespace detail_runtime {
+   detail::instance_be* live_be_of(const module_handle_impl* mod) {
+      return mod ? mod->live_be : nullptr;
+   }
+}
 
 uint32_t module_handle::compile_time_ms() const {
    return impl_ ? impl_->compile_ms : 0;
@@ -227,6 +317,10 @@ std::vector<std::string> module_handle::wit_sections() const { return {}; }
 // ═════════════════════════════════════════════════════════════════════
 
 struct instance_impl {
+   // Strong reference to the module; keeps module_handle_impl alive as
+   // long as the instance does so bridge lambdas registered on the
+   // module's host_function_table can deref `module->live_be` safely.
+   std::shared_ptr<module_handle_impl>  module;
    std::unique_ptr<detail::instance_be> be;
    gas_state                            local_gas;
    std::shared_ptr<gas_state>           shared_gas;
@@ -240,6 +334,13 @@ struct instance_impl {
    }
 
    ~instance_impl() {
+      // Null the module's live_be back-pointer if it was pointing at us.
+      // Guards against a later instantiate() overwriting it first and
+      // this destructor then mistakenly nulling the newer instance.
+      if (module && be && module->live_be == be.get()) {
+         module->live_be = nullptr;
+      }
+
       // Multi-module pool: credit any unused lease back to the pool so
       // subsequent instances (or teardown reporting) see the correct
       // remaining balance. When the pool handler failed (threw), the
@@ -457,6 +558,7 @@ instance runtime::instantiate(const module_handle& tmpl,
    if (!mod) return instance{};
 
    auto inst = std::make_unique<instance_impl>();
+   inst->module = tmpl.share_impl();   // keep module_handle_impl alive
    inst->host_ptr = mod->host_ptr;
    inst->shared_gas = policy.shared_gas;
    if (!inst->shared_gas) {
@@ -470,6 +572,11 @@ instance runtime::instantiate(const module_handle& tmpl,
    auto table_copy = mod->table;
    inst->be = detail::make_instance_be(
       be_kind, mod->wasm_copy, std::move(table_copy), mod->host_ptr);
+
+   // Publish the instance's be pointer on the module so any bridge
+   // lambdas registered on the module's table (by a prior bind()) can
+   // reach the consumer at call time.
+   mod->live_be = inst->be.get();
 
    // Multi-module gas tracking: if a pool is provided, lease an initial
    // deadline from it and wire pool_yield_handler so future handler

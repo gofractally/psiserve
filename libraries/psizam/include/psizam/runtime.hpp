@@ -39,6 +39,17 @@ namespace psizam {
 
 namespace detail { class instance_be; }   // detail/instance_be.hpp
 
+struct module_handle_impl;
+
+namespace detail_runtime {
+   // Reach into an incomplete-in-this-TU module_handle_impl for its
+   // late-bound live_be back-pointer. Defined in runtime.cpp where the
+   // full type is visible. Used by bind<>'s bridge lambdas to get the
+   // consumer's instance_be at call time (consumer is typically not
+   // instantiated yet at bind time, so the pointer is resolved late).
+   detail::instance_be* live_be_of(const module_handle_impl* mod);
+}
+
 // ═════════════════════════════════════════════════════════════════════
 // Type-safe byte containers
 // ═════════════════════════════════════════════════════════════════════
@@ -161,6 +172,12 @@ public:
    void set_host_ptr(void* p);
 
    module_handle_impl* get() const { return impl_.get(); }
+
+   // Shared reference to the impl — used by runtime::instantiate to
+   // keep the module alive for the instance's lifetime so bridge
+   // lambdas on the module's host_function_table can safely deref
+   // the late-bound `live_be` back-pointer at call time.
+   std::shared_ptr<module_handle_impl> share_impl() const { return impl_; }
 };
 
 // ═════════════════════════════════════════════════════════════════════
@@ -328,6 +345,7 @@ public:
 
 // Include after the class definitions so the template body can see
 // the proxy/adapter types from hosted.hpp.
+#include <psizam/bridge_executor.hpp>
 #include <psizam/hosted.hpp>
 
 namespace psizam {
@@ -468,20 +486,30 @@ namespace detail_runtime {
          (detail::is_scalar_wasm_type_v<std::remove_cvref_t<Args>> && ...);
    };
 
-   // Bridge entry: forward call from consumer to provider's live backend
-   // via the erased `instance_be::call_export_canonical` — the same
-   // call-erasure path used by `instance::as<Tag>()` (Step 10). Works
-   // for interpreter / jit / jit2 / jit_llvm. The previous
-   // interpreter-hardcoded `static_cast<backend<_, interpreter>*>(...)`
-   // was silently wrong for non-interpreter providers and manifested as
-   // "jit control-flow corruption" in parity tests.
+   // Bridge entry: forward a consumer import to a provider export.
+   //
+   // For all-scalar signatures (bool / int / float all the way through):
+   // the fast path uses `instance_be::call_export_canonical` directly,
+   // passing the 16-slot flat call without marshalling — scalars don't
+   // need memory translation.
+   //
+   // For signatures with strings / lists / records: compile a
+   // bridge_program at bind time (template introspection of FnPtr's
+   // C++ types) and execute it at call time via
+   // `bridge::execute_bridge_erased`. The mini-interpreter handles
+   // cross-module canonical-ABI marshalling: copy strings/lists/
+   // records between consumer and provider linear memories via
+   // cabi_realloc on each side. Same path composition.hpp uses,
+   // generalized from the typed `module_instance<Host, BackendKind>`
+   // to `detail::instance_be` (backend-erased).
    template <typename FnPtr>
    void register_bind_entry(
       host_function_table& table,
       std::string_view iface_name,
       std::string_view func_name,
       detail::instance_be* provider_be,
-      void* provider_host)
+      void* provider_host,
+      module_handle_impl* consumer_mod)   // for late-bound consumer live_be
    {
       using Traits = bind_fn_traits<FnPtr>;
 
@@ -493,20 +521,50 @@ namespace detail_runtime {
 
       std::string export_name{func_name};
 
-      // Forward via the canonical-ABI 16-slot flat call through the
-      // backend-erased interface.
-      e.slow_dispatch = [provider_be, provider_host, export_name](
-         void*, native_value* args, char*) -> native_value
-      {
-         uint64_t slots[16];
-         for (int i = 0; i < 16; ++i)
-            slots[i] = static_cast<uint64_t>(args[i].i64);
-         auto r = provider_be->call_export_canonical(
-            provider_host, std::string_view{export_name}, slots, 16);
-         native_value rv;
-         rv.i64 = r ? r->to_ui64() : 0;
-         return rv;
-      };
+      if constexpr (Traits::all_scalar) {
+         // Fast scalar path — no marshalling needed. Cache the export
+         // index on first call and route through `call_export_by_index`
+         // (matching composition's pattern; avoids a string resolve on
+         // every bridge invocation and is what the JIT fast path uses
+         // internally).
+         auto cached_idx = std::make_shared<uint32_t>(
+            std::numeric_limits<uint32_t>::max());
+         e.slow_dispatch = [provider_be, provider_host, export_name, cached_idx](
+            void*, native_value* args, char*) -> native_value
+         {
+            if (*cached_idx == std::numeric_limits<uint32_t>::max())
+               *cached_idx = provider_be->resolve_export(export_name);
+            uint64_t slots[16];
+            for (int i = 0; i < 16; ++i)
+               slots[i] = static_cast<uint64_t>(args[i].i64);
+            auto r = provider_be->call_export_by_index(
+               provider_host, *cached_idx, slots, 16);
+            native_value rv;
+            rv.i64 = r ? r->to_ui64() : 0;
+            return rv;
+         };
+      } else {
+         // Threaded-dispatch path — compile a bridge_program once from
+         // the FnPtr's C++ type signature, then at each call run the
+         // mini-interpreter against consumer + provider linear memories.
+         //
+         // The bridge_program outlives the lambda via shared_ptr; when
+         // the last bridge_executor call captures it, it stays alive
+         // until the host_function_table entry (and thus the module)
+         // is destroyed.
+         auto prog_ptr = std::make_shared<bridge::bridge_program>(
+            bridge::compile_bridge<FnPtr>(func_name));
+
+         e.slow_dispatch = [prog_ptr, provider_be, provider_host, consumer_mod](
+            void*, native_value* args, char*) -> native_value
+         {
+            // Consumer's live_be is filled in at instantiate time
+            // (after bind). At call time it must be non-null.
+            detail::instance_be* consumer_be = live_be_of(consumer_mod);
+            return bridge::execute_bridge_erased(
+               *prog_ptr, consumer_be, provider_be, provider_host, args);
+         };
+      }
 
       table.add_entry(std::move(e));
    }
@@ -516,6 +574,7 @@ namespace detail_runtime {
       host_function_table& table,
       detail::instance_be* provider_be,
       void* provider_host,
+      module_handle_impl* consumer_mod,
       std::index_sequence<Is...>)
    {
       using info = ::psio::detail::interface_info<InterfaceTag>;
@@ -523,7 +582,7 @@ namespace detail_runtime {
 
       (register_bind_entry<std::tuple_element_t<Is, func_types>>(
          table, info::name, info::func_names[Is],
-         provider_be, provider_host), ...);
+         provider_be, provider_host, consumer_mod), ...);
    }
 }
 
@@ -538,6 +597,7 @@ void runtime::bind(module_handle& consumer_mod, instance& provider) {
       consumer_mod.table(),
       provider.get_instance_be(),
       provider.host_ptr(),
+      consumer_mod.get(),
       std::make_index_sequence<N>{});
 }
 
