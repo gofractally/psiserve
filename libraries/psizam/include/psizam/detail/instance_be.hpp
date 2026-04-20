@@ -14,6 +14,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 namespace psizam {
@@ -22,6 +24,8 @@ class wasm_allocator;
 class host_function_table;
 
 namespace detail {
+
+class operand_stack_elem;   // detail/stack_elem.hpp
 
 enum class backend_kind : uint8_t {
    interpreter,
@@ -69,6 +73,20 @@ public:
    // Step 5 of psizam-runtime-api-maturation. Lets pzam-run's main shrink
    // to `return inst.run_start(&host);`.
    virtual int run_start(void* host_ptr) = 0;
+
+   // Call an exported function by name with up to 16 u64 arguments.
+   // Matches the `backend::call_with_return(host, name, u64×16)` shape
+   // that `invoke_canonical_export_void` already uses — the canonical-ABI
+   // 16-slot flat-call convention.
+   //
+   // Step 10 of psizam-runtime-api-maturation: this is the call-erasure
+   // path that lets `instance::as<Tag>()` work for any backend variant.
+   // Args beyond `count` are zero-padded to 16 by the implementation.
+   virtual std::optional<operand_stack_elem>
+      call_export_canonical(void*              host,
+                            std::string_view   name,
+                            const uint64_t*    args,
+                            std::size_t        count) = 0;
 };
 
 // Factory: pick the impl for `kind`, construct the concrete backend with

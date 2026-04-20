@@ -76,6 +76,25 @@ public:
       }
       return 0;
    }
+
+   std::optional<operand_stack_elem>
+      call_export_canonical(void*            host,
+                            std::string_view name,
+                            const uint64_t*  args,
+                            std::size_t      count) override
+   {
+      // Canonical ABI flat call: always 16 u64 slots. Pad with zero
+      // for callers that pass fewer (e.g. shorter argument lists).
+      auto slot = [&](std::size_t i) -> uint64_t {
+         return i < count ? args[i] : uint64_t{0};
+      };
+      return be_->call_with_return(
+         host, name,
+         slot(0),  slot(1),  slot(2),  slot(3),
+         slot(4),  slot(5),  slot(6),  slot(7),
+         slot(8),  slot(9),  slot(10), slot(11),
+         slot(12), slot(13), slot(14), slot(15));
+   }
 };
 
 std::unique_ptr<instance_be> make_instance_be(
@@ -228,6 +247,9 @@ void* instance::backend_ptr() {
 }
 void* instance::host_ptr() {
    return impl_ ? impl_->host_ptr : nullptr;
+}
+detail::instance_be* instance::get_instance_be() {
+   return impl_ ? impl_->be.get() : nullptr;
 }
 
 char* instance::linear_memory() {

@@ -35,6 +35,8 @@
 
 namespace psizam {
 
+namespace detail { class instance_be; }   // detail/instance_be.hpp
+
 // ═════════════════════════════════════════════════════════════════════
 // Type-safe byte containers
 // ═════════════════════════════════════════════════════════════════════
@@ -208,12 +210,9 @@ public:
    // ── Typed call (shared header available) ────────────────────────
    // Returns a proxy: inst.as<greeter>().concat("a", "b")
    //
-   // PRE-Step-10 LIMITATION: the proxy adapter currently hardcodes the
-   // interpreter backend type, so `as<Tag>()` is only correct when
-   // `kind() == backend_kind::interpreter`. Callers that need to
-   // dispatch on JIT instances must use `backend_ptr()` directly with
-   // explicit knowledge of the backend type until Step 10 lands a
-   // call-erasure path through `instance_be`.
+   // Works for any backend kind — the proxy routes through
+   // `instance_be::call_export_canonical`, an erased call surface
+   // (Step 10).
    template <typename Tag>
    auto as();
 
@@ -245,6 +244,12 @@ public:
    // Internal accessors for template code
    void* backend_ptr();
    void* host_ptr();
+
+   // Erased instance-backend pointer for `as<Tag>()`'s template body.
+   // Forward-declared in detail/instance_be.hpp; the cast to the
+   // forward-declared type is finalized when hosted.hpp pulls the full
+   // declaration in below.
+   detail::instance_be* get_instance_be();
 
    instance_impl* get() const { return impl_.get(); }
 };
@@ -337,11 +342,14 @@ namespace psizam {
 
 template <typename Tag>
 auto instance::as() {
-   using backend_t = backend<std::nullptr_t, interpreter>;
-   using info      = ::psio::detail::interface_info<Tag>;
-   using adapter   = detail::void_proxy_adapter<backend_t, info>;
-   using proxy_t   = typename info::template proxy<adapter>;
-   return proxy_t{*static_cast<backend_t*>(backend_ptr()), host_ptr()};
+   // Step 10: dispatch through `instance_be::call_export_canonical` so
+   // the proxy works for any backend kind (interpreter / jit / jit2 /
+   // jit_llvm). The adapter no longer carries a typed Backend
+   // parameter; it routes everything through the abstract base.
+   using info    = ::psio::detail::interface_info<Tag>;
+   using adapter = detail::void_proxy_adapter_erased<info>;
+   using proxy_t = typename info::template proxy<adapter>;
+   return proxy_t{*get_instance_be(), host_ptr()};
 }
 
 // ── provide<HostImpl> ───────────────────────────────────────────────
