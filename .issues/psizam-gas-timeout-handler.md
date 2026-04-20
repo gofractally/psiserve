@@ -12,9 +12,10 @@ blocks: []
 ---
 
 ## Description
-Implement a wall-clock timeout gas handler. On counter exhaustion, compares
-elapsed wall-clock time against a per-instance deadline. If past the
-deadline, traps; otherwise restocks a slice and continues.
+Implement a wall-clock timeout gas handler. When `consumed >= deadline`,
+compares elapsed wall-clock time against a per-instance wall deadline.
+If past the wall deadline, traps; otherwise advances the gas deadline
+by a slice and continues.
 
 Worst-case detection latency = one slice (≈1µs at `gas_slice_default=10K`
 on current backends). This is the replacement for the SIGALRM-based
@@ -26,31 +27,35 @@ perfectly fine for serving request timeouts in psiserve.
 callback)" section, Timeout variant.
 
 ## Mechanism
-Per-instance state (stored alongside the counter):
+Per-instance state (passed via the gas_state user_data pointer):
 ```cpp
-struct timeout_state {
-    std::chrono::steady_clock::time_point deadline;
-    int64_t slice;
+struct timeout_cfg {
+    std::chrono::steady_clock::time_point wall_deadline;
+    uint64_t                              slice;
 };
 
-void timeout_gas_handler(void* ctx_raw) {
-    auto* ctx = static_cast<execution_context_base*>(ctx_raw);
-    auto* ts  = static_cast<timeout_state*>(ctx->handler_userdata());
-    if (std::chrono::steady_clock::now() >= ts->deadline) {
+void timeout_gas_handler(psizam::gas_state* gs, void* user_data) {
+    auto* cfg = static_cast<timeout_cfg*>(user_data);
+    if (std::chrono::steady_clock::now() >= cfg->wall_deadline) {
         throw wasm_timeout_exception{"wall-clock deadline exceeded"};
     }
-    ctx->restock_gas(ts->slice);
+    gs->deadline.store(gs->consumed + cfg->slice,
+                       std::memory_order_relaxed);
 }
+
+// Setup:
+static timeout_cfg cfg{ .wall_deadline = now + 10ms, .slice = 10'000 };
+bkend.get_context().set_gas_budget(psizam::gas_units{cfg.slice});
+bkend.get_context().set_gas_handler(&timeout_gas_handler, &cfg);
 ```
 
-Requires a `handler_userdata` slot on `execution_context_base` (or passing
-the timeout state via the ctx's allocator-backed scratch area).
+No new context slot needed — the gas_state already carries
+`user_data` alongside the handler pointer.
 
 ## Acceptance Criteria
 - [ ] `wasm_timeout_exception` (or reuse `wasm_gas_exhausted_exception`
       with a flag; design choice)
-- [ ] `handler_userdata` (or equivalent) slot on `execution_context_base`
-- [ ] Canonical timeout handler implementation
+- [ ] Canonical timeout handler implementation (uses gas_state.user_data)
 - [ ] Test: `gas_handler_timeout` — set a 10ms deadline, run an unbounded
       loop, verify the exception fires within (deadline + one slice)
 - [ ] Replaces the `watchdog.hpp`/SIGALRM path for non-consensus timeout

@@ -12,11 +12,11 @@ blocks: []
 ---
 
 ## Description
-Implement the yield-style gas handler. When the counter goes negative,
-the handler restocks to a slice and yields the current fiber; the
-scheduler picks the next fiber. Cooperative scheduling falls out
-automatically — no async transforms, no explicit yield points in WASM,
-any function becomes yieldable.
+Implement the yield-style gas handler. When `consumed >= deadline`,
+the handler advances the deadline by a slice and yields the current
+fiber; the scheduler picks the next fiber. Cooperative scheduling
+falls out automatically — no async transforms, no explicit yield
+points in WASM, any function becomes yieldable.
 
 This is one of the three user-visible capabilities gas metering unlocks
 (with `timeout` (`psizam-gas-timeout-handler`) and `external_interrupt` (`psizam-gas-interrupt-handler`)).
@@ -27,18 +27,21 @@ callback)" section, Yield variant.
 
 ## Mechanism
 ```cpp
-void yield_gas_handler(void* ctx_raw) {
-    auto* ctx = static_cast<execution_context_base*>(ctx_raw);
-    ctx->restock_gas(gas_slice_default);  // let execution resume
-    current_fiber().yield();               // transfer to scheduler
+struct yield_cfg { uint64_t slice; };
+
+void yield_gas_handler(psizam::gas_state* gs, void* user_data) {
+    auto* cfg = static_cast<yield_cfg*>(user_data);
+    gs->deadline.store(gs->consumed + cfg->slice,
+                       std::memory_order_relaxed); // let execution resume
+    current_fiber().yield();                       // transfer to scheduler
 }
 ```
 
 Plus per-instance setup:
 ```cpp
-bkend.get_context().set_gas_strategy(gas_insertion_strategy::prepay_max);
-bkend.get_context().set_gas_budget(gas_slice_default);
-bkend.get_context().set_gas_handler(&yield_gas_handler);
+static yield_cfg cfg{ .slice = psizam::gas_slice_default };
+bkend.get_context().set_gas_budget(psizam::gas_units{psizam::gas_slice_default});
+bkend.get_context().set_gas_handler(&yield_gas_handler, &cfg);
 ```
 
 ## Acceptance Criteria
