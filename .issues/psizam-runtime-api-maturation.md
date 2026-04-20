@@ -65,12 +65,48 @@ Phase B.
   - Public `int instance::run_start()` declared in `runtime.hpp`,
     forwards to the impl with the stored `host_ptr`.
   — commit `5edf26f`
+- **Step 3 — `runtime::load_cached` absorbs `pzam_run` loader**
+  - New header `psizam/detail/pzam_loader.hpp` exposing
+    `detail::load_pzam(const pzam_file&) -> pzam_load_result` — the
+    full eight-step dance (arch-section pick, restore_module, symbol
+    table, aarch64 veneers, jit_allocator alloc + RW + memcpy +
+    relocations + RX + icache flush, code metadata population,
+    element-segment fixup, trampoline-direction derivation).
+  - Trampoline-direction (`reverse_host_args`) derived ONCE from
+    `cs.opt_tier` and stored on `pzam_load_result` — single source
+    of truth for downstream `_host_trampoline_ptrs` writers (the
+    96cba71-style invariant).
+  - `module_handle_impl` gains `unique_ptr<pzam_load_result>`;
+    destructor returns `exec_code` to `jit_allocator`.
+  - `runtime::load_cached(pzam_bytes)` parses + validates the .pzam
+    envelope, calls `load_pzam`, stashes the result, records real
+    `compile_ms`. `module_handle::native_code_size()` reports the
+    real loader-allocated size for pzam-loaded modules.
+  - Verified: `pzam_loader.hpp` + `runtime.cpp` syntax-clean (only
+    pre-existing `gas_handler_t` collision remains);
+    `composition_tests` + `pzam-run` link.
+  - **Not yet wired into `instantiate()`** — that's Step 4 (Track B,
+    needs final `gas_state` shape from `psizam-gas-state-redesign`).
+    `pzam_typed.hpp::pzam_instance` and `tools/pzam_run.cpp` keep
+    their inline copies; they migrate onto the shared helper as part
+    of `psizam-unify-host-registration-under-runtime` Step 3.
+  — commit `8be3a8c`
 
 ### In progress
 
-- **Step 3 — `runtime::load_cached` absorbs `pzam_run` loader**
-  (next; ~350 lines from `tools/pzam_run.cpp` 87–344 moves into
-  `runtime::load_cached`).
+- _(none — handing back for review / next-session direction)_
+
+### Remaining Track A
+
+- **Step 6** — dynamic WIT-driven `bind(consumer, provider, name)`.
+- **Step 7** — `register_library` / `cache_stats` / `evict` /
+  `clear_cache` (real implementations).
+- **Step 8** — fast-trampoline memory-injection hook in
+  `host_function_table.hpp`.
+- **Step 9** — retire `composition.hpp`; move `bridge_executor.hpp`
+  to `detail/` once Steps 1, 3, 5–8 are all in place.
+- **Step 10** — `instance::as<Tag>()` cross-backend proxy via a new
+  `call_with_return_erased` virtual on `instance_be`.
 
 ### Blocked / deferred
 
