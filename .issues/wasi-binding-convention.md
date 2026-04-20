@@ -16,7 +16,23 @@ blocks: []
 `libraries/wasi/cpp/include/wasi/0.2.3/` contains hand-written C++
 bindings for WASI Preview 2 (sockets, clocks, filesystem, http, cli,
 io, random). They map the WIT IDL to C++ types + static methods.
-There is no generator today.
+
+What the psio macros do (and what they do not):
+- `PSIO_REFLECT(T, ...)` — records the shape of hand-authored enums
+  and structs for fracpack / JSON / schema emission.
+- `PSIO_PACKAGE(name, version)` — registers a package tag.
+- `PSIO_INTERFACE(name, types(...), funcs(...))` — expands (via
+  Boost.PP) into a `psio::detail::interface_info` specialization
+  that captures `decltype(&name::method)`, method names, param
+  names, and synthesizes a proxy template. It does not emit the
+  host-side method declarations or the types.
+So the types, enums, and method signatures in these 12 headers are
+100% hand-written; the macros are reflection plumbing around them.
+
+`libraries/wit-macro/` exists but is a **Rust proc-macro** (pulls
+`wit-parser` / `wit-component`). Its direction is Rust → WIT IDL +
+WASM component metadata — for guest code. It does not emit C++. No
+WIT → C++ generator exists in the tree today.
 
 Two build breaks on 2026-04-20 (GCC 15, Ubuntu glibc) exposed design
 weaknesses in how the bindings map WIT to C++:
@@ -77,10 +93,17 @@ Whether the long-term WASI binding story is:
      `-Wchanges-meaning -Wnarrowing -Wconversion` at least on the
      binding headers.
 
-2. **Adopt or build a WIT → C++ generator** that handles the
-   disambiguation + typed literals automatically. Upstream
-   `wit-bindgen-cpp` is one option; a psiserve-native generator that
-   integrates with `wit-macro` / `PSIO_REFLECT` is another.
+2. **Adopt or build a WIT → C++ generator** — a C++-side analogue
+   of `wit-macro`. Parse `.wit`, emit the enums, the struct +
+   `static inline` method signatures, and the
+   `PSIO_PACKAGE` / `PSIO_INTERFACE` registration calls. Options:
+   a. Upstream `wit-bindgen-cpp` — needs a post-pass to emit
+      PSIO macros alongside the generated types.
+   b. A psiserve-native Rust tool that reuses the `wit-parser`
+      dependency already in `wit-macro`'s Cargo.toml but targets
+      C++ output.
+   c. A C++/Python build-step script that parses WIT and runs at
+      configure time.
    Generator-emitted headers carry a `DO NOT EDIT` banner and
    regenerate from `.wit` source on build.
 
