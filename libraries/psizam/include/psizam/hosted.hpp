@@ -733,7 +733,12 @@ auto invoke_canonical_export_void_erased(instance_be& be, void* host,
                                          std::string_view name, Args&&... args)
 {
    void_host_lower_policy_erased lp{be, host};
-   (canonical_lower_flat(args, lp), ...);
+   // Qualified call: `void_host_lower_policy_erased` is a non-template
+   // struct in psizam::detail, so ADL doesn't reach the main template
+   // in the parent psizam:: namespace. The templated counterpart above
+   // finds it implicitly via the Backend template parameter's
+   // associated namespaces.
+   (::psizam::canonical_lower_flat(args, lp), ...);
 
    auto& fv = lp.flat_values;
    uint64_t slots[16];
