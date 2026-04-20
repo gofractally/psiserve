@@ -1,7 +1,7 @@
 ---
 id: psizam-gas-heavy-opcodes
 title: psizam gas metering — heavy-opcode dynamic charges (Phase 4)
-status: in-progress
+status: done
 priority: high
 area: psizam
 agent: psiserve-agent-x86
@@ -57,10 +57,18 @@ dynamic charges" section. Weights live in `psizam/gas.hpp::gas_costs`.
       (emitted at every loop header by `bitcode_writer::emit_loop`; prologue
       extras stored in `function_body::prologue_gas_extra` and charged by
       `execution_context::call`)
-- [ ] Cross-backend test: same module + budget traps at same counter across
+- [x] Cross-backend test: same module + budget traps at same counter across
       all five backends when heavy ops are present
-- [ ] Benchmark: compute-heavy workload (matmul or similar with divs) shows
+      (`gas: heavy-op prologue-extra cross-backend determinism` in
+      `tests/gas_metering_tests.cpp` — uses implementation_limits's
+      `call.indirect` export so every backend's first charge is
+      body_bytes + prologue_gas_extra; trap counter matches.)
+- [x] Benchmark: compute-heavy workload (matmul or similar with divs) shows
       gas charged ≈ opcode-weight-weighted count, not raw opcode count
+      (`gas: heavy-op loop-extra per-backend` in the same file —
+      running 1000 iterations of an i64.div_s loop consumes at
+      least iters × (1 + div_rem_extra) = 10× the raw back-edge
+      count, asserted per backend.)
 
 ## Notes
 - `gas_heavy_extra_for` currently handles only base-opcode heavy ops
