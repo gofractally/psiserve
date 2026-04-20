@@ -1,7 +1,7 @@
 ---
 id: "0016"
 title: psizam LLVM AOT runtime crash on large WASM modules (clang.wasm, wasm-ld.wasm)
-status: in-progress
+status: done
 priority: high
 area: psizam
 agent: psiserve-agent-psio
@@ -9,6 +9,60 @@ branch: main
 created: 2026-04-19
 depends_on: ["0003"]
 blocks: []
+---
+
+## Resolution (2026-04-19 evening)
+
+**Root cause**: `pzam-run` unconditionally selected `rev_trampoline` for
+every host-function call. That trampoline reads args[0] as the LAST
+WASM parameter (correct for `jit`/`jit2`, which pack args in WASM
+operand-stack order). But the LLVM AOT backend emits normal C-ABI
+calls to `__psizam_call_host` with args[0] = FIRST WASM parameter.
+
+With the wrong trampoline direction, every WASI import read its args
+in reversed order. The first symptom was `environ_sizes_get(count_ptr,
+size_ptr)` being called as `environ_sizes_get(size_ptr, count_ptr)`:
+WASI wrote the total-size (2545) where the count (49) should have
+gone, and vice versa. The WASM allocator then requested
+`malloc(49)` for the string buffer and `calloc(2546, 4)` for the
+pointer array — exactly the opposite of what the WASM expected. The
+two buffers overlapped, string bytes overwrote the pointer array's
+null terminator, and startup eventually dereferenced ASCII bytes
+(`"_TER"`, `"MINA"`, `"/tmp"`, etc.) as WASM memory offsets.
+
+This matched why the crash pattern always looked like "this register
+contains string data as a pointer" — it literally was, because WASI
+had sprayed the strings over the top of the pointer table the WASM
+expected to iterate.
+
+**Fix** (`libraries/psizam/tools/pzam_run.cpp`): read `cs->opt_tier`
+from the .pzam code section; if it is any `llvm_O*` tier, pick the
+forward `trampoline`; otherwise keep `rev_trampoline`.
+
+**Verification**:
+```
+./build/Release/bin/pzam-run /tmp/wasm-ld.pzam -- --version
+  → LLD 22.1.2 (git@github.com:gofractally/psiserve.git ...)
+
+./build/Release/bin/pzam-run /tmp/clang.pzam --version
+  → clang version 22.1.2 (...)
+    Target: wasm32-unknown-wasip1
+    Thread model: posix
+```
+Both match the interpreter output exactly.
+
+**History lesson** (why this bug was so sticky):
+- Commit `604bcb5` added the per-backend trampoline-direction split.
+- Commit `6eed38f` fixed pzam-run to wire `rev_trampoline`, but only
+  considered jit2 at the time; its own commit message notes
+  "clang.wasm → clang.pzam → pzam-run: still crashes... tracked under
+  task #18". That TODO was never picked back up when LLVM AOT was
+  enabled in pzam-run.
+- Every subsequent debugging session chased codegen-level symptoms
+  (register clobbers, optimization passes, relocations) because the
+  crash manifests deep inside LLVM-generated code — but the actual
+  divergence was a one-line loader decision made before _start ran.
+
 ---
 
 ## Description

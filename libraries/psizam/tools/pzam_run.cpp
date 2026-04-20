@@ -350,19 +350,31 @@ int pzam_run_main(int argc, char** argv) {
    ctx.set_host_table(&table);
    ctx.reset();
 
-   // Populate _host_trampoline_ptrs with reverse-order trampolines. jit/jit2
-   // pack args on the WASM operand stack with args[0] = last param, and
-   // call_host_function forwards that buffer verbatim to the trampoline —
-   // so the trampoline must be the rev variant. backend<>::construct() does
-   // this when reverse_host_args=true; pzam-run skips that path, so do it
-   // here by hand. (Falling through to host_function_table::call() would
-   // pick up the forward trampoline and read every arg swapped.)
+   // Populate _host_trampoline_ptrs. The trampoline direction depends on how
+   // the compiled .pzam packs host-call args:
+   //   - jit / jit2 push WASM stack in-place so args[0] = LAST WASM param
+   //     → use the `rev_trampoline` (reverse-order reader).
+   //   - LLVM emits a normal C-ABI call to __psizam_call_host with args[0]
+   //     = FIRST WASM param → use the forward `trampoline`.
+   // Previously this code unconditionally picked rev_trampoline, which caused
+   // every host-call argument to be read in reversed order on LLVM .pzam
+   // files — e.g. `environ_sizes_get(count_ptr, size_ptr)` received
+   // (size_ptr, count_ptr), so WASI wrote count where size was expected
+   // (and vice versa). That corrupted the allocator's view of env size and
+   // produced overlapping malloc regions, which ultimately OOB-crashed
+   // deep in startup (issue #0016).
+   const bool is_llvm_pzam =
+      cs->opt_tier == static_cast<uint8_t>(pzam_opt_tier::llvm_O1) ||
+      cs->opt_tier == static_cast<uint8_t>(pzam_opt_tier::llvm_O2) ||
+      cs->opt_tier == static_cast<uint8_t>(pzam_opt_tier::llvm_O3);
    std::vector<host_trampoline_t> trampoline_ptrs(mod.import_functions.size());
    for (uint32_t i = 0; i < mod.import_functions.size(); i++) {
       uint32_t mapped = mod.import_functions[i];
       if (mapped < table.size()) {
          const auto& e = table.get_entry(mapped);
-         trampoline_ptrs[i] = e.rev_trampoline ? e.rev_trampoline : e.trampoline;
+         trampoline_ptrs[i] = is_llvm_pzam
+            ? (e.trampoline ? e.trampoline : e.rev_trampoline)
+            : (e.rev_trampoline ? e.rev_trampoline : e.trampoline);
       }
    }
    ctx._host_trampoline_ptrs = trampoline_ptrs.data();

@@ -277,11 +277,19 @@ namespace psizam::detail {
 
       // environ_get
       uint32_t environ_get(uint32_t environ_ptr, uint32_t buf_ptr) {
+         if (std::getenv("PSIZAM_TRACE_WASI")) {
+            fprintf(stderr, "[wasi] environ_get(environ=0x%x, buf=0x%x) env.size=%zu\n",
+                    environ_ptr, buf_ptr, env.size());
+         }
          uint32_t buf_offset = buf_ptr;
          for (size_t i = 0; i < env.size(); i++) {
             write_u32(environ_ptr + i * 4, buf_offset);
             memcpy(mem(buf_offset), env[i].c_str(), env[i].size() + 1);
             buf_offset += env[i].size() + 1;
+         }
+         if (std::getenv("PSIZAM_TRACE_WASI")) {
+            fprintf(stderr, "[wasi] environ_get done, wrote %zu ptrs, last buf=0x%x\n",
+                    env.size(), buf_offset);
          }
          return WASI_ESUCCESS;
       }
@@ -290,6 +298,10 @@ namespace psizam::detail {
       uint32_t environ_sizes_get(uint32_t count_ptr, uint32_t size_ptr) {
          uint32_t total = 0;
          for (auto& e : env) total += e.size() + 1;
+         if (std::getenv("PSIZAM_TRACE_WASI")) {
+            fprintf(stderr, "[wasi] environ_sizes_get(count_ptr=0x%x, size_ptr=0x%x) → count=%zu total=%u\n",
+                    count_ptr, size_ptr, env.size(), total);
+         }
          write_u32(count_ptr, static_cast<uint32_t>(env.size()));
          write_u32(size_ptr, total);
          return WASI_ESUCCESS;
