@@ -105,37 +105,94 @@ Phase B.
   - New public `psizam::backend_kind` enum mirroring the internal
     `detail::backend_kind` (parity enforced by `static_assert`s).
   - `instance::kind() const` lets callers pick the right explicit
-    `backend_ptr()` cast for jit/jit2/jit_llvm and guard against the
-    `as<Tag>()` interpreter-only constraint.
-  - Full Step 10 (call-erasure path through `instance_be` so
-    `as<Tag>()` works for any backend) is deferred — it needs
-    either per-backend instantiation of `void_proxy_adapter` at the
-    `as<Tag>()` site or marshalling args through a uniform
-    `native_value*` interface, both of which warrant their own
-    design pass.
+    `backend_ptr()` cast for jit/jit2/jit_llvm.
   — commit `fe581d9`
+- **Step 10 (full) — cross-backend `as<Tag>()` via call-erasure**
+  - Added `call_export_canonical(host, name, u64* args, count)`
+    virtual to `instance_be`; per-backend impl forwards to
+    `be_->call_with_return(host, name, slot(0)..slot(15))`,
+    zero-padding short args lists.
+  - hosted.hpp gained three backend-erased mirrors:
+    `void_host_lower_policy_erased`,
+    `invoke_canonical_export_void_erased<Ret>`,
+    `void_proxy_adapter_erased<Info>`.
+  - `instance::as<Tag>()` now constructs the erased adapter over
+    `*get_instance_be()`. Works for interpreter / jit / jit2 /
+    jit_llvm. The Step-10-partial doc warning is removed.
+  - The original templated `void_proxy_adapter<Backend, Info>`
+    stays for `composition.hpp`'s use until Step 9 retires that
+    header.
+  — commit (local) `b44f0fa`
+- **Step 7 — register_library / cache_stats / evict / clear_cache**
+  - `runtime_impl` gains `module_cache` (wasm-hash → `weak_ptr<module_handle_impl>`)
+    and `libraries` (name → {kind, bytes}).
+  - `register_library(name, archive_bytes)` and
+    `register_library(name, wasm_bytes)` store kind + bytes;
+    archive parsing into member `.o` files is left to the consumer
+    (this layer just owns the data so a later linker can index it).
+  - `prepare(wasm, policy)` consults the cache before building a
+    fresh `module_handle`. Track A keys only on wasm bytes; Track B
+    will extend the key to (wasm + compile_policy + env) once
+    `module_cache_key` lands.
+  - `cache_stats()` walks the live entries and sums
+    `total_code_size` + `compile_ms`. `evict(wasm_bytes)` removes
+    by hash; `clear_cache()` empties both maps.
+  — commit (local) `c0af630`
+- **Step 6 — dynamic WIT-driven `runtime::bind(...)` variant**
+  - New `psizam/detail/wit_section_finder.hpp` — small bounds-checked
+    walker that locates the first `component-wit:NAME` custom
+    section in raw WASM bytes.
+  - `runtime::bind(consumer, provider, iface_name)` reads the
+    consumer's WIT custom section, parses it via
+    `psio::wit_parser::parse_wit()`, locates the named interface in
+    `world.imports` (fallback `exports`), and registers a
+    `slow_dispatch` bridge entry on the consumer's
+    `host_function_table` for each `wit_func`. The bridge routes
+    calls into the provider via the erased
+    `call_export_canonical` from Step 10 — works for any backend
+    pair. Uses the canonical-ABI 16-slot flat call convention,
+    matching the typed `bind<InterfaceTag>()`.
+  - Rejects `load_cached`-path consumer modules (they don't carry
+    WIT custom sections) with a clear error pointing the caller at
+    the typed bind overload.
+  — commit (local) `d7bf3da`
 
 ### In progress
 
-- _(none — handing back; substantive next chunks remain, see below)_
+- _(none — handing back; remaining work captured below)_
 
 ### Remaining Track A
 
-- **Step 6** — dynamic WIT-driven `bind(consumer, provider, name)`.
-  Requires a parser for the `component-wit` custom section and the
-  bridge generator that turns WIT-declared methods into entries on
-  the consumer's `host_function_table`. Largest remaining piece.
-- **Step 7** — `register_library` / `cache_stats` / `evict` /
-  `clear_cache` (real implementations). The module cache key
-  composition (`module_cache_key`) sits naturally here, but its
-  `compile_hash` input depends on Track B's final `compile_policy`
-  shape; a Track-A-only stop-gap can key on raw `instance_policy`
-  bytes until then.
-- **Step 9** — retire `composition.hpp`; move `bridge_executor.hpp`
-  to `detail/` once Steps 1, 3, 5, 6, 7, 8, 10 are all in place.
-- **Step 10 (full)** — `as<Tag>()` cross-backend proxy via
-  `call_with_return_erased` on `instance_be` (or per-backend
-  template instantiation gated on `kind()`).
+- **Step 9 — retire `composition.hpp` + create `runtime_parity_tests.cpp`**
+  Three callers depend on `composition.hpp` today:
+    - `tests/composition_tests.cpp` (36 backend-parametrized tests)
+    - `tests/bench_composition.cpp`
+    - `examples/composition/host.cpp`
+  The natural port path (write `runtime_parity_tests.cpp` against
+  the runtime API, then delete `composition.hpp`) **compiles
+  `runtime.cpp` into the same TU** as the rest of psizam-exec —
+  which hits the pre-existing `gas_handler_t` redefinition between
+  `gas.hpp` and `runtime.hpp`. Track A code itself is structurally
+  ready; Step 9 is **effectively gated on
+  `psizam-gas-state-redesign` Phase B** the same way
+  `hello_runtime` is. Once Phase B lands, the port is mechanical
+  (mostly s/composition</runtime/ + harness adjust).
+- **Independent of Phase B** — `bridge_executor.hpp` could move
+  to `detail/` immediately (only `composition.hpp` includes it),
+  but the move is purely cosmetic without retiring composition
+  itself, so it's bundled with the full Step 9.
+- **`canonical_dispatch.hpp` stays** — also included by
+  `hosted.hpp` and `component_proxy.hpp`, so it's not removable as
+  part of Step 9.
+
+### Track A status
+
+All 8 of Track A's gas-independent steps that can land without
+running into the `gas_handler_t` collision are **done locally**:
+Steps 1, 3, 5, 6, 7, 8, 10 (partial + full). Step 9 needs Track B's
+collision resolution before its test-port piece can compile. Local
+`main` is **8 commits ahead of `origin/main`** (last pushed:
+`b44f0fa`); push deferred to user direction.
 
 ### Blocked / deferred
 
