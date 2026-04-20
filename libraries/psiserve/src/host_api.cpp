@@ -2,6 +2,8 @@
 #include <psiserve/io_engine.hpp>
 #include <psiserve/log.hpp>
 
+#include <pfs/store.hpp>
+
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
@@ -44,6 +46,7 @@ namespace psiserve
          case PsiError::timed_out:    return "operation timed out";
          case PsiError::would_block:  return "operation would block";
          case PsiError::unknown:      return "unknown error";
+         case PsiError::not_found:    return "not found";
          case PsiError::count_:       break;
       }
       return "undefined error";
@@ -89,8 +92,9 @@ namespace psiserve
 
    // ── host function implementations ─────────────────────────────────────────
 
-   HostApi::HostApi(Process& proc, Scheduler& sched, char* wasm_memory)
-      : _proc(&proc), _sched(&sched), _wasm_memory(wasm_memory)
+   HostApi::HostApi(Process& proc, Scheduler& sched, char* wasm_memory,
+                    pfs::store* ipfs)
+      : _proc(&proc), _sched(&sched), _wasm_memory(wasm_memory), _ipfs(ipfs)
    {
    }
 
@@ -1036,6 +1040,92 @@ namespace psiserve
          return PsiResult::fromErrno();
 
       return PsiResult::ok(static_cast<int32_t>(n));
+   }
+
+   // ── IPFS / content-addressed storage ────────────────────────────
+
+   PsiResult HostApi::psiIpfsPut(WasmPtr data, WasmSize data_len,
+                                 WasmPtr cid_out, WasmSize cid_cap)
+   {
+      if (!_ipfs)
+         return PsiResult::err(PsiError::io_failure);
+
+      try
+      {
+         auto span = psio::bytes_view(
+             reinterpret_cast<const uint8_t*>(_wasm_memory + *data), *data_len);
+
+         auto content_cid = _ipfs->put(span);
+         auto cid_str     = content_cid.to_string();
+
+         if (*cid_cap > 0)
+         {
+            uint32_t copy_len = std::min(*cid_cap, static_cast<uint32_t>(cid_str.size()));
+            std::memcpy(_wasm_memory + *cid_out, cid_str.data(), copy_len);
+         }
+         return PsiResult::ok(static_cast<int32_t>(cid_str.size()));
+      }
+      catch (...)
+      {
+         return PsiResult::err(PsiError::io_failure);
+      }
+   }
+
+   PsiResult HostApi::psiIpfsGet(WasmPtr cid_ptr, WasmSize cid_len,
+                                 int64_t offset,
+                                 WasmPtr buf, WasmSize buf_len)
+   {
+      if (!_ipfs)
+         return PsiResult::err(PsiError::io_failure);
+
+      try
+      {
+         std::string_view cid_str(_wasm_memory + *cid_ptr, *cid_len);
+         auto c = pfs::cid::from_string(cid_str);
+         auto fh = _ipfs->open(c);
+
+         uint64_t remaining = (offset < static_cast<int64_t>(fh.size()))
+                                  ? fh.size() - offset
+                                  : 0;
+         uint64_t to_read = std::min(remaining, static_cast<uint64_t>(*buf_len));
+         if (to_read == 0)
+            return PsiResult::ok(0);
+
+         char*    dst      = _wasm_memory + *buf;
+         uint64_t written  = 0;
+         fh.read(offset, to_read, [&](psio::bytes_view chunk)
+         {
+            std::memcpy(dst + written, chunk.data(), chunk.size());
+            written += chunk.size();
+         });
+
+         return PsiResult::ok(static_cast<int32_t>(written));
+      }
+      catch (...)
+      {
+         return PsiResult::err(PsiError::not_found);
+      }
+   }
+
+   PsiResult HostApi::psiIpfsStat(WasmPtr cid_ptr, WasmSize cid_len, WasmPtr size_out)
+   {
+      if (!_ipfs)
+         return PsiResult::err(PsiError::io_failure);
+
+      try
+      {
+         std::string_view cid_str(_wasm_memory + *cid_ptr, *cid_len);
+         auto c  = pfs::cid::from_string(cid_str);
+         auto fh = _ipfs->open(c);
+
+         uint64_t size = fh.size();
+         std::memcpy(_wasm_memory + *size_out, &size, sizeof(size));
+         return PsiResult::ok(0);
+      }
+      catch (...)
+      {
+         return PsiResult::err(PsiError::not_found);
+      }
    }
 
 }  // namespace psiserve

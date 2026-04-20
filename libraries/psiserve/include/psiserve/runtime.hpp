@@ -14,6 +14,8 @@
 #include <string>
 #include <thread>
 
+namespace pfs { class store; }
+
 namespace psiserve
 {
    /// Top-level runtime: loads WASM, creates listener, runs scheduler.
@@ -26,12 +28,14 @@ namespace psiserve
          std::filesystem::path wasm_path;  ///< Path to the .wasm module to load.
          Port                  port{8080}; ///< TCP port to listen on.
          std::filesystem::path webroot;    ///< Directory to serve files from (fd 1).
+         std::filesystem::path datadir;    ///< Directory for pfs content store (empty = no IPFS).
          std::filesystem::path tls_cert;   ///< PEM certificate file (empty = no TLS).
          std::filesystem::path tls_key;    ///< PEM private key file.
          uint32_t threads = std::thread::hardware_concurrency();  ///< Worker threads (0 = auto).
       };
 
       explicit Runtime(Config cfg);
+      ~Runtime();
 
       /// Create the listen socket, load WASM, and run.
       void run();
@@ -40,8 +44,9 @@ namespace psiserve
       void runWorker(int worker_id, RealFd listen_fd, SSL_CTX* ssl_ctx,
                      std::barrier<>& ready_barrier);
 
-      Config      _cfg;
-      std::string _process_name;  ///< Derived from wasm filename, owns the storage.
+      Config                     _cfg;
+      std::string                _process_name;
+      std::unique_ptr<pfs::store> _ipfs;
    };
 
 }  // namespace psiserve

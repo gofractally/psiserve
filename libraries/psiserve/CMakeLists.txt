@@ -13,6 +13,7 @@ target_include_directories(psiserve PUBLIC
 )
 
 target_link_libraries(psiserve PUBLIC
+   pfs
    psiber
    psitri
    psizam
@@ -22,9 +23,9 @@ target_link_libraries(psiserve PUBLIC
    Threads::Threads
 )
 
-# Boost for program_options and Boost.Context (fiber switching)
-find_package(Boost REQUIRED COMPONENTS context)
-target_link_libraries(psiserve PUBLIC Boost::boost Boost::context)
+# Boost for Boost.Context (fiber switching) and Boost.Thread (portable stack sizes)
+find_package(Boost REQUIRED COMPONENTS context thread)
+target_link_libraries(psiserve PUBLIC Boost::boost Boost::context Boost::thread)
 
 # OpenSSL for TLS
 find_package(OpenSSL REQUIRED)

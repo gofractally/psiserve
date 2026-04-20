@@ -2,6 +2,9 @@
 #include <psiserve/runtime.hpp>
 #include <psiserve/tls.hpp>
 
+#include <pfs/store.hpp>
+#include <psitri/database.hpp>
+
 #include <psizam/error_codes.hpp>
 #include <psizam/host_function_table.hpp>
 #include <psizam/psizam.hpp>
@@ -14,6 +17,8 @@
 #include <unistd.h>
 
 #include <signal.h>
+
+#include <boost/thread/thread.hpp>
 
 #include <atomic>
 #include <barrier>
@@ -49,6 +54,8 @@ namespace psiserve
       : _cfg(std::move(cfg))
    {
    }
+
+   Runtime::~Runtime() = default;
 
    static RealFd createListenSocket(Port port, bool reuse_port = false)
    {
@@ -128,28 +135,43 @@ namespace psiserve
       if (!_cfg.webroot.empty())
          PSI_INFO("Webroot: {}", _cfg.webroot.string());
 
+      // IPFS content store (optional)
+      if (!_cfg.datadir.empty())
+      {
+         std::filesystem::create_directories(_cfg.datadir);
+         auto db_path = (_cfg.datadir / "pfs.db").string();
+         auto db = psitri::database::open(db_path);
+         _ipfs = std::make_unique<pfs::store>(std::move(db));
+         PSI_INFO("IPFS store: {}", db_path);
+      }
+
       // Barrier: all workers must finish WASM compilation before any
       // start accepting, so no single worker monopolizes connections.
       std::barrier ready_barrier(num_threads);
 
       // Spawn N-1 worker threads; main thread becomes worker 0.
-      std::vector<std::thread> workers;
+      // LLVM JIT needs deep stacks — 8MB matches the main thread default.
+      boost::thread::attributes thread_attrs;
+      thread_attrs.set_stack_size(8 * 1024 * 1024);
+
+      std::vector<boost::thread> workers;
       workers.reserve(num_threads - 1);
       for (uint32_t i = 1; i < num_threads; ++i)
       {
-         workers.emplace_back([this, i, listen_fd, ssl_ctx, &ready_barrier]()
-         {
-            std::string name = "worker-" + std::to_string(i);
-            log::set_thread_name(name.c_str());
-            try
+         workers.emplace_back(thread_attrs,
+            [this, i, listen_fd, ssl_ctx, &ready_barrier]()
             {
-               runWorker(static_cast<int>(i), listen_fd, ssl_ctx, ready_barrier);
-            }
-            catch (const std::exception& e)
-            {
-               PSI_ERROR("Worker {} fatal: {}", i, e.what());
-            }
-         });
+               std::string name = "worker-" + std::to_string(i);
+               log::set_thread_name(name.c_str());
+               try
+               {
+                  runWorker(static_cast<int>(i), listen_fd, ssl_ctx, ready_barrier);
+               }
+               catch (const std::exception& e)
+               {
+                  PSI_ERROR("Worker {} fatal: {}", i, e.what());
+               }
+            });
       }
 
       // Main thread is worker 0
@@ -195,9 +217,12 @@ namespace psiserve
       table.add<&HostApi::psiUdpBind>("psi", "udp_bind");
       table.add<&HostApi::psiRecvFrom>("psi", "recvfrom");
       table.add<&HostApi::psiSendTo>("psi", "sendto");
+      table.add<&HostApi::psiIpfsPut>("psi", "ipfs_put");
+      table.add<&HostApi::psiIpfsGet>("psi", "ipfs_get");
+      table.add<&HostApi::psiIpfsStat>("psi", "ipfs_stat");
 
       // Each worker gets its own scheduler (engine created internally)
-      auto sched = psiber::scheduler_access::make(static_cast<uint32_t>(worker_id));
+      auto& sched = psiber::Scheduler::current();
 
       // Each worker gets its own process (own fd table, shared listen socket)
       Process proc;
@@ -228,22 +253,23 @@ namespace psiserve
       // Create the main execution instance for this worker
       auto main_inst = mod.create_instance();
 
-      HostApi host(proc, sched, main_inst.linear_memory());
+      HostApi host(proc, sched, main_inst.linear_memory(), _ipfs.get());
       main_inst.set_host(&host);
 
       auto start = main_inst.get_function<void()>("_start");
 
       // Fiber runner for this worker's scheduler.
       // Lives on the worker thread stack; all fibers hold a pointer to it.
+      pfs::store* ipfs_ptr = _ipfs.get();
       FiberRunner fiber_runner =
-         [&mod, &proc, &sched, &fiber_runner](uint32_t func_idx, int32_t arg)
+         [&mod, &proc, &sched, &fiber_runner, ipfs_ptr](uint32_t func_idx, int32_t arg)
          {
             auto inst = std::make_shared<instance>(mod.create_fiber_instance());
 
             sched.spawnFiber(
-               [inst, &proc, &sched, &fiber_runner, func_idx, arg]()
+               [inst, &proc, &sched, &fiber_runner, ipfs_ptr, func_idx, arg]()
                {
-                  HostApi fiber_host(proc, sched, inst->linear_memory());
+                  HostApi fiber_host(proc, sched, inst->linear_memory(), ipfs_ptr);
                   fiber_host.setFiberRunner(&fiber_runner);
                   inst->set_host(&fiber_host);
                   try

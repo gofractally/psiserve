@@ -24,9 +24,7 @@ namespace psiserve
      public:
       void lock()
       {
-         auto* sched = psiber::Scheduler::current();
-         assert(sched && "fiber_mutex::lock called outside a psiber scheduler");
-         _m.lock(*sched);
+         _m.lock(psiber::Scheduler::current());
       }
 
       void unlock() { _m.unlock(); }
@@ -44,9 +42,7 @@ namespace psiserve
      public:
       void lock()
       {
-         auto* sched = psiber::Scheduler::current();
-         assert(sched && "fiber_shared_mutex::lock called outside a psiber scheduler");
-         _m.lock(*sched);
+         _m.lock(psiber::Scheduler::current());
       }
 
       void unlock() { _m.unlock(); }
@@ -55,10 +51,7 @@ namespace psiserve
 
       void lock_shared()
       {
-         auto* sched = psiber::Scheduler::current();
-         assert(sched &&
-                "fiber_shared_mutex::lock_shared called outside a psiber scheduler");
-         _m.lock_shared(*sched);
+         _m.lock_shared(psiber::Scheduler::current());
       }
 
       void unlock_shared() { _m.unlock_shared(); }

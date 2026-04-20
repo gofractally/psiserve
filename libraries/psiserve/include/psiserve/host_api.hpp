@@ -7,6 +7,8 @@
 #include <functional>
 #include <string>
 
+namespace pfs { class store; }
+
 namespace psiserve
 {
    /// Type-erased callback for spawning fibers.
@@ -35,7 +37,8 @@ namespace psiserve
    class HostApi
    {
      public:
-      HostApi(Process& proc, Scheduler& sched, char* wasm_memory);
+      HostApi(Process& proc, Scheduler& sched, char* wasm_memory,
+              pfs::store* ipfs = nullptr);
 
       /// Set the callback used by psiSpawn to create fibers.
       /// The pointed-to FiberRunner must outlive this HostApi.
@@ -129,6 +132,26 @@ namespace psiserve
       /// Returns a new virtual fd on success, or -PsiError on error.
       PsiResult psiConnect(WasmPtr host_ptr, WasmSize host_len, int32_t port);
 
+      // ── IPFS / content-addressed storage ──────────────────────────────
+
+      /// psi.ipfs_put(data: i32, data_len: i32, cid_out: i32, cid_cap: i32) -> i32
+      /// Stores data in the content-addressed store.  Writes the CID string
+      /// (base32-lower multibase) to the output buffer.
+      /// Returns CID string length on success, or -PsiError on error.
+      PsiResult psiIpfsPut(WasmPtr data, WasmSize data_len,
+                           WasmPtr cid_out, WasmSize cid_cap);
+
+      /// psi.ipfs_get(cid: i32, cid_len: i32, offset: i64, buf: i32, buf_len: i32) -> i32
+      /// Reads data by CID string.  Returns bytes written to buf, or -PsiError.
+      PsiResult psiIpfsGet(WasmPtr cid_ptr, WasmSize cid_len,
+                           int64_t offset,
+                           WasmPtr buf, WasmSize buf_len);
+
+      /// psi.ipfs_stat(cid: i32, cid_len: i32, size_out: i32) -> i32
+      /// Gets content size by CID string.  Writes uint64_t to size_out.
+      /// Returns 0 on success, or -PsiError on error.
+      PsiResult psiIpfsStat(WasmPtr cid_ptr, WasmSize cid_len, WasmPtr size_out);
+
       /// Number of connections accepted by this host instance.
       uint64_t acceptCount() const { return _accept_count; }
 
@@ -136,6 +159,7 @@ namespace psiserve
       Process*    _proc;
       Scheduler*  _sched;
       char*       _wasm_memory;
+      pfs::store* _ipfs = nullptr;
       const FiberRunner* _fiberRunner = nullptr;
       uint64_t    _accept_count = 0;
    };

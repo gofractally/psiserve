@@ -19,6 +19,7 @@
  */
 
 #include <psi/host.h>
+#include <psi/ipfs.h>
 
 /* ── Utilities ────────────────────────────────────────────────────── */
 
@@ -99,6 +100,37 @@ static const char* content_type_for(const char* path, int path_len)
    return "application/octet-stream";
 }
 
+/* ── Path prefix matching ─────────────────────────────────────────── */
+
+static int starts_with(const char* s, int s_len, const char* prefix)
+{
+   int plen = str_len(prefix);
+   if (s_len < plen) return 0;
+   return str_eq(s, prefix, plen);
+}
+
+/* Read exactly `len` bytes from the connection into `buf`.
+ * Returns 0 on success, -1 on short read / error. */
+static int read_exact(int conn, char* buf, int len)
+{
+   int total = 0;
+   while (total < len)
+   {
+      int n = psi_read(conn, buf + total, len - total);
+      if (n <= 0) return -1;
+      total += n;
+   }
+   return 0;
+}
+
+/* ── Case-insensitive byte compare for header matching ────────────── */
+
+static int lower(int c)
+{
+   if (c >= 'A' && c <= 'Z') return c + 32;
+   return c;
+}
+
 /* ── Request handling ─────────────────────────────────────────────── */
 
 static void send_error(int conn, const char* status, const char* body)
@@ -115,16 +147,169 @@ static void send_error(int conn, const char* status, const char* body)
    psi_uncork(conn);
 }
 
-/* Returns 1 to keep connection alive, 0 to close */
-static int handle_request(int conn, const char* method, int method_len,
-                          const char* path, int path_len, int keep_alive)
+/* ── IPFS download: GET /ipfs/<cid> ──────────────────────────────── */
+
+static int handle_ipfs_get(int conn, const char* path, int path_len, int keep_alive)
 {
-   if (method_len != 3 || !str_eq(method, "GET", 3))
+   /* Extract CID string: skip "/ipfs/" prefix (6 chars) */
+   const char* cid_str = path + 6;
+   int         cid_len = path_len - 6;
+
+   if (cid_len <= 0)
    {
-      send_error(conn, "405 Method Not Allowed", "Only GET is supported.");
+      send_error(conn, "400 Bad Request", "Missing CID in /ipfs/ path.");
       return 0;
    }
 
+   /* Stat the CID to get content size */
+   unsigned long long file_size = 0;
+   if (psi_ipfs_stat(cid_str, cid_len, &file_size) < 0)
+   {
+      send_error(conn, "404 Not Found", "CID not found.");
+      return 0;
+   }
+
+   /* Send response headers */
+   char size_str[20];
+   int  size_str_len = itoa(file_size, size_str, sizeof(size_str));
+
+   psi_cork(conn);
+   write_str(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: ");
+   psi_write_all(conn, size_str, size_str_len);
+   if (keep_alive)
+      write_str(conn, "\r\nConnection: keep-alive\r\n\r\n");
+   else
+      write_str(conn, "\r\nConnection: close\r\n\r\n");
+   psi_uncork(conn);
+
+   /* Stream content in chunks */
+   char buf[32768];
+   long long offset = 0;
+   while (offset < (long long)file_size)
+   {
+      int chunk = (int)sizeof(buf);
+      if ((long long)chunk > (long long)file_size - offset)
+         chunk = (int)((long long)file_size - offset);
+
+      int n = psi_ipfs_get(cid_str, cid_len, offset, buf, chunk);
+      if (n <= 0) break;
+      psi_write_all(conn, buf, n);
+      offset += n;
+   }
+
+   return keep_alive;
+}
+
+/* ── IPFS upload: POST /upload ───────────────────────────────────── */
+
+#define UPLOAD_MAX (4 * 1024 * 1024)
+
+static char  upload_buf[UPLOAD_MAX];
+static int   upload_busy = 0;
+
+/* Find Content-Length value in raw headers.
+ * Returns the integer value, or -1 if not found. */
+static int find_content_length(const char* headers, int headers_len)
+{
+   const char* target = "content-length:";
+   int tlen = 15;
+
+   for (int i = 0; i + tlen + 2 < headers_len; ++i)
+   {
+      if (headers[i] == '\r' && headers[i+1] == '\n')
+      {
+         int match = 1;
+         for (int j = 0; j < tlen; ++j)
+         {
+            if (lower(headers[i+2+j]) != target[j]) { match = 0; break; }
+         }
+         if (match)
+         {
+            int v = i + 2 + tlen;
+            while (v < headers_len && headers[v] == ' ') ++v;
+            int val = 0;
+            while (v < headers_len && headers[v] >= '0' && headers[v] <= '9')
+               val = val * 10 + (headers[v++] - '0');
+            return val;
+         }
+      }
+   }
+   return -1;
+}
+
+static int handle_upload(int conn, const char* headers, int headers_len,
+                         const char* body_prefix, int body_prefix_len,
+                         int keep_alive)
+{
+   int body_len = find_content_length(headers, headers_len);
+   if (body_len < 0)
+   {
+      send_error(conn, "411 Length Required", "Content-Length header required.");
+      return 0;
+   }
+
+   if (body_len == 0 || body_len > UPLOAD_MAX)
+   {
+      send_error(conn, "413 Payload Too Large", "Max upload size is 4MB.");
+      return 0;
+   }
+
+   /* Cooperative lock — only one upload at a time per WASM instance.
+    * Fibers yield only at psi_* calls, so the flag check is atomic. */
+   if (upload_busy)
+   {
+      send_error(conn, "503 Service Unavailable", "Upload in progress, try again.");
+      return 0;
+   }
+   upload_busy = 1;
+
+   /* Copy any body bytes already read with the headers */
+   int prefix = body_prefix_len;
+   if (prefix > body_len) prefix = body_len;
+   for (int i = 0; i < prefix; ++i)
+      upload_buf[i] = body_prefix[i];
+
+   /* Read remaining body bytes */
+   int remaining = body_len - prefix;
+   if (remaining > 0 && read_exact(conn, upload_buf + prefix, remaining) < 0)
+   {
+      upload_busy = 0;
+      send_error(conn, "400 Bad Request", "Failed to read request body.");
+      return 0;
+   }
+
+   /* Store in IPFS */
+   char cid_buf[128];
+   int cid_len = psi_ipfs_put(upload_buf, body_len, cid_buf, sizeof(cid_buf));
+   upload_busy = 0;
+
+   if (cid_len < 0)
+   {
+      send_error(conn, "500 Internal Server Error", "Failed to store content.");
+      return 0;
+   }
+
+   /* Respond with CID */
+   char resp_size[20];
+   int  resp_size_len = itoa((unsigned long long)cid_len, resp_size, sizeof(resp_size));
+
+   psi_cork(conn);
+   write_str(conn, "HTTP/1.1 201 Created\r\nContent-Type: text/plain\r\nContent-Length: ");
+   psi_write_all(conn, resp_size, resp_size_len);
+   if (keep_alive)
+      write_str(conn, "\r\nConnection: keep-alive\r\n\r\n");
+   else
+      write_str(conn, "\r\nConnection: close\r\n\r\n");
+   psi_uncork(conn);
+
+   psi_write_all(conn, cid_buf, cid_len);
+   return keep_alive;
+}
+
+/* ── Static file: GET /path ──────────────────────────────────────── */
+
+static int handle_static_get(int conn, const char* path, int path_len, int keep_alive)
+{
    const char* file_path = path;
    int         file_path_len = path_len;
    if (path_len == 1 && path[0] == '/')
@@ -148,7 +333,6 @@ static int handle_request(int conn, const char* method, int method_len,
       return 0;
    }
 
-   /* Send response headers — corked so they go in one TCP segment */
    const char* ctype = content_type_for(file_path, file_path_len);
    char size_str[20];
    int  size_str_len = itoa(file_size, size_str, sizeof(size_str));
@@ -164,21 +348,44 @@ static int handle_request(int conn, const char* method, int method_len,
       write_str(conn, "\r\nConnection: close\r\n\r\n");
    psi_uncork(conn);
 
-   /* Send file body — zero-copy via OS sendfile */
    psi_sendfile(conn, file_fd, (long long)file_size);
-
    psi_close(file_fd);
    return keep_alive;
 }
 
-/* ── HTTP request parser ──────────────────────────────────────────── */
+/* ── Request router ──────────────────────────────────────────────── */
 
-/* Case-insensitive byte compare for header matching */
-static int lower(int c)
+/* Returns 1 to keep connection alive, 0 to close */
+static int handle_request(int conn, const char* method, int method_len,
+                          const char* path, int path_len,
+                          const char* headers, int headers_len,
+                          const char* body_prefix, int body_prefix_len,
+                          int keep_alive)
 {
-   if (c >= 'A' && c <= 'Z') return c + 32;
-   return c;
+   /* POST /upload — IPFS file upload */
+   if (method_len == 4 && str_eq(method, "POST", 4) &&
+       starts_with(path, path_len, "/upload"))
+   {
+      return handle_upload(conn, headers, headers_len,
+                           body_prefix, body_prefix_len, keep_alive);
+   }
+
+   /* Only GET from here on */
+   if (method_len != 3 || !str_eq(method, "GET", 3))
+   {
+      send_error(conn, "405 Method Not Allowed", "Method not supported.");
+      return 0;
+   }
+
+   /* GET /ipfs/<cid> — IPFS download */
+   if (starts_with(path, path_len, "/ipfs/"))
+      return handle_ipfs_get(conn, path, path_len, keep_alive);
+
+   /* GET /path — static file */
+   return handle_static_get(conn, path, path_len, keep_alive);
 }
+
+/* ── HTTP request parser ──────────────────────────────────────────── */
 
 /* Check if the request has "Connection: close" header */
 static int wants_close(const char* buf, int len)
@@ -257,9 +464,15 @@ static void process_connection(int conn)
 
       if (method_end > 0 && path_end > path_start)
       {
+         /* Body bytes that arrived with the headers */
+         const char* body_prefix     = req_buf + header_end;
+         int         body_prefix_len = total - header_end;
+
          int alive = handle_request(conn,
                         req_buf, method_end,
                         req_buf + path_start, path_end - path_start,
+                        req_buf, header_end,
+                        body_prefix, body_prefix_len,
                         keep_alive);
          if (!alive)
             return;
@@ -270,14 +483,25 @@ static void process_connection(int conn)
          return;
       }
 
-      /* Shift leftover data (pipelined request bytes) to front of buffer */
-      int leftover = total - header_end;
-      if (leftover > 0)
+      /* Shift leftover data (pipelined request bytes) to front of buffer.
+       * For POST/PUT requests, body bytes after headers were consumed by
+       * the handler — no leftover to preserve. */
+      int has_body = (method_end == 4 && str_eq(req_buf, "POST", 4)) ||
+                     (method_end == 3 && str_eq(req_buf, "PUT", 3));
+      if (has_body)
       {
-         for (int i = 0; i < leftover; ++i)
-            req_buf[i] = req_buf[header_end + i];
+         total = 0;
       }
-      total = leftover;
+      else
+      {
+         int leftover = total - header_end;
+         if (leftover > 0)
+         {
+            for (int i = 0; i < leftover; ++i)
+               req_buf[i] = req_buf[header_end + i];
+         }
+         total = leftover;
+      }
    }
 }
 

@@ -62,6 +62,7 @@ namespace psiserve
       timed_out    = 8,
       would_block  = 9,
       unknown      = 10,
+      not_found    = 11,
       count_               // not an error — marks the array size
    };
 
