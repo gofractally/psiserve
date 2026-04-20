@@ -1,5 +1,5 @@
 ---
-id: "0016"
+id: psizam-llvm-aot-runtime-crash
 title: psizam LLVM AOT runtime crash on large WASM modules (clang.wasm, wasm-ld.wasm)
 status: done
 priority: high
@@ -7,7 +7,7 @@ area: psizam
 agent: psiserve-agent-psio
 branch: main
 created: 2026-04-19
-depends_on: ["0003"]
+depends_on: [psizam-llvm-wasi-toolchain]
 blocks: []
 ---
 

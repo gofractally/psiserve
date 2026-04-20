@@ -1,5 +1,5 @@
 ---
-id: "0017"
+id: psizam-llvm-aot-compile-latency
 title: psizam LLVM AOT compile latency — parallelism, batching, context reuse
 status: in-progress
 priority: high
@@ -7,7 +7,7 @@ area: psizam
 agent: psiserve-agent-psio
 branch: main
 created: 2026-04-19
-depends_on: ["0003"]
+depends_on: [psizam-llvm-wasi-toolchain]
 blocks: []
 ---
 
