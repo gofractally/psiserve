@@ -53,7 +53,10 @@ dynamic charges" section. Weights live in `psizam/gas.hpp::gas_costs`.
       emit_gas_prologue_check reads the final prologue_gas_extra /
       loop_gas_extra directly. No runtime IR patching needed since LLVM
       codegen runs after the full parser pass completes.
-- [ ] interpreter: new `gas_charge_imm` bitcode op + `interpret_visitor` dispatch
+- [x] interpreter: new `gas_charge_t` bitcode op + `interpret_visitor` dispatch
+      (emitted at every loop header by `bitcode_writer::emit_loop`; prologue
+      extras stored in `function_body::prologue_gas_extra` and charged by
+      `execution_context::call`)
 - [ ] Cross-backend test: same module + budget traps at same counter across
       all five backends when heavy ops are present
 - [ ] Benchmark: compute-heavy workload (matmul or similar with divs) shows

@@ -46,6 +46,10 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const return_t& op) { context.apply_pop_call(op.data, op.pc, op.stacksz); }
       [[gnu::always_inline]] inline void operator()(const block_t& op) { context.inc_pc(); }
       [[gnu::always_inline]] inline void operator()(const loop_t& op) { context.inc_pc(); }
+      [[gnu::always_inline]] inline void operator()(const gas_charge_t& op) {
+         context.gas_charge(op.cost);
+         context.inc_pc();
+      }
       [[gnu::always_inline]] inline void operator()(const if_t& op) {
          context.inc_pc();
          const auto& oper = context.pop_operand();

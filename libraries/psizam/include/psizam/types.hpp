@@ -305,6 +305,13 @@ namespace psizam {
       std::uint32_t               stack_size = 0;
       const uint8_t*              body_start = nullptr;  // pointer to local_count byte in WASM binary
       std::vector<branch_hint>    branch_hints;          // sorted by offset
+
+      // Phase 4 gas-metering: sum of heavy-opcode extras the parser
+      // accumulated for opcodes outside any loop in this function
+      // (the "prepay"). Added to wasm_body_bytes by the interpreter's
+      // call-path and by the JIT prologue gas_charge during codegen
+      // (via a parallel field on ir_function). Defaults to 0.
+      int64_t                     prologue_gas_extra = 0;
    };
 
    struct data_segment {

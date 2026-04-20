@@ -35,7 +35,17 @@ namespace psizam::detail {
          return emit_br(depth_change, rt, UINT32_MAX, result_count);
       }
       void emit_block(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {}
-      uint32_t emit_loop(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) { return op_index; }
+      uint32_t emit_loop(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {
+         // Phase 4 gas-metering: emit a gas_charge_t at the loop header
+         // so every back-branch to this label lands on it and each
+         // iteration pays gas. Cost starts at 1; parser patches via
+         // patch_gas_imm_add_extra to 1 + sum(heavy-op extras inside
+         // this loop) when END is reached.
+         uint32_t label = op_index;
+         auto& instr = append_instr(gas_charge_t{1});
+         _last_loop_gas_ptr = &instr.cost;
+         return label;
+      }
       uint32_t* emit_if(uint8_t = 0x40, uint32_t = 0, uint32_t = 0) {
          if_t& instr = append_instr(if_t{});
          return &instr.pc;
@@ -452,6 +462,13 @@ namespace psizam::detail {
          op_index = 0;
          // pre-allocate for the function body code, so we have a big blob of memory to work with during function code parsing
          fb = guarded_vector<opcode>{_allocator, _mod->code[idx].size };
+         // Phase 4 gas-metering: stash a handle on the function body's
+         // prologue_gas_extra so the parser can widen the per-function
+         // prepay via patch_gas_imm_add_extra. The interpreter's
+         // execution_context::call adds this field to the body-bytes
+         // cost when entering the function.
+         _prologue_gas_ptr = &_mod->code[idx].prologue_gas_extra;
+         _last_loop_gas_ptr = nullptr;
       }
       void emit_epilogue(const func_type& ft, const std::vector<local_entry>& locals, uint32_t idx) {
          fb.resize(op_index + 1);
@@ -472,6 +489,21 @@ namespace psizam::detail {
       }
 
       const void* get_addr() const { return fb.raw() + op_index; }
+
+      // Phase 4 gas-metering handles. The parser hooks these via
+      // SFINAE: after emit_prologue it captures prologue_gas_handle,
+      // after emit_loop it captures last_loop_gas_handle, and at
+      // end-of-scope it calls patch_gas_imm_add_extra(handle, extras)
+      // to widen the per-scope heavy-op sum. For the interpreter the
+      // handle points directly at the patchable int64_t — either the
+      // function_body's prologue_gas_extra field or the cost field of
+      // the most recently emitted gas_charge_t loop header.
+      void* prologue_gas_handle() const { return _prologue_gas_ptr; }
+      void* last_loop_gas_handle() const { return _last_loop_gas_ptr; }
+      void patch_gas_imm_add_extra(void* handle, int64_t extra) {
+         if (!handle || extra == 0) return;
+         *static_cast<int64_t*>(handle) += extra;
+      }
       const void* get_base_addr() const { return _code_segment_base; }
 
       void set_stack_usage(std::uint64_t usage)
@@ -504,6 +536,14 @@ namespace psizam::detail {
       module* _mod;
       std::size_t _base_offset = 0;
       std::uint32_t stack_usage = 1;
+
+      // Phase 4 gas-metering patch targets. _prologue_gas_ptr points at
+      // the current function_body's prologue_gas_extra; reset per
+      // emit_prologue. _last_loop_gas_ptr points at the cost field of
+      // the most-recently emitted gas_charge_t loop header; cleared
+      // per emit_prologue so pointers don't leak across functions.
+      int64_t* _prologue_gas_ptr  = nullptr;
+      int64_t* _last_loop_gas_ptr = nullptr;
    };
 
 }

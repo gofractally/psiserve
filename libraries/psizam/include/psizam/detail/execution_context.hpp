@@ -1267,14 +1267,20 @@ namespace psizam::detail {
       std::uint32_t get_remaining_call_depth() const { return _remaining_call_depth; }
 
       inline void call(uint32_t index) {
-         // Gas metering (Phase 2b): body-size proxy for local functions,
-         // fixed small charge for host imports. Matches the JIT's
-         // per-function-entry cost so the interpreter's trap point
-         // tracks identically to every compiled backend.
+         // Gas metering (Phase 4): body-size proxy + prologue_gas_extra
+         // (heavy-op weights accumulated by the parser for opcodes
+         // outside any loop) for local functions, fixed small charge
+         // for host imports. Matches the JIT's per-function-entry cost
+         // so the interpreter's trap point tracks identically to every
+         // compiled backend.
          const uint32_t imported = _mod->get_imported_functions_size();
-         const int64_t cost = (index < imported)
-            ? int64_t{1}
-            : static_cast<int64_t>(_mod->code[index - imported].wasm_body_bytes);
+         int64_t cost;
+         if (index < imported) {
+            cost = 1;
+         } else {
+            const auto& fb = _mod->code[index - imported];
+            cost = static_cast<int64_t>(fb.wasm_body_bytes) + fb.prologue_gas_extra;
+         }
          gas_charge(cost);
          // TODO validate index is valid
          if (index < _mod->get_imported_functions_size()) {
@@ -1791,6 +1797,7 @@ namespace psizam::detail {
             PSIZAM_CONVERSION_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_EXIT_OP(CREATE_TABLE_ENTRY)
             PSIZAM_REF_OPS(CREATE_TABLE_ENTRY)
+            &&ev_label_gas_charge,
             PSIZAM_EMPTY_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_DATA_OPS(CREATE_TABLE_ENTRY)
             PSIZAM_EXT_OPS(CREATE_TABLE_ENTRY)
@@ -1827,6 +1834,10 @@ namespace psizam::detail {
              PSIZAM_CONVERSION_OPS(CREATE_LABEL);
              PSIZAM_EXIT_OP(CREATE_EXIT_LABEL);
              PSIZAM_REF_OPS(CREATE_LABEL);
+             ev_label_gas_charge:
+                std::forward<Visitor>(visitor)(ev_variant->template get<gas_charge_t>());
+                ev_variant = _state.pc;
+                goto* dispatch_table[ev_variant->index()];
              PSIZAM_EMPTY_OPS(CREATE_EMPTY_LABEL);
              PSIZAM_DATA_OPS(CREATE_LABEL);
              PSIZAM_EXT_OPS(CREATE_LABEL);

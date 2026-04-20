@@ -100,6 +100,12 @@ namespace psizam::detail {
    struct ref_is_null_t { static constexpr uint8_t opcode = 0xD1; };
    struct ref_func_t { uint32_t index; static constexpr uint8_t opcode = 0xD2; };
 
+   // Synthetic gas-metering opcode (Phase 4). Emitted at every loop
+   // header by bitcode_writer::emit_loop with a patchable `cost` field
+   // that the parser's heavy-op accumulator widens before execution.
+   // No WASM binary encoding — purely internal to the interpreter.
+   struct gas_charge_t { int64_t cost; };
+
    PSIZAM_EMPTY_OPS(PSIZAM_CREATE_TYPES)
    PSIZAM_ERROR_OPS(PSIZAM_CREATE_TYPES)
    PSIZAM_DATA_OPS(PSIZAM_CREATE_DATA_TYPES)
@@ -218,6 +224,7 @@ namespace psizam::detail {
       PSIZAM_CONVERSION_OPS(PSIZAM_IDENTITY)
       PSIZAM_EXIT_OP(PSIZAM_IDENTITY)
       ref_null_t, ref_is_null_t, ref_func_t,
+      gas_charge_t,
       PSIZAM_EMPTY_OPS(PSIZAM_IDENTITY)
       PSIZAM_DATA_OPS(PSIZAM_IDENTITY)
       PSIZAM_EXT_OPS(PSIZAM_IDENTITY)
