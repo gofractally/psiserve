@@ -27,9 +27,24 @@ namespace psizam {
    }
 
    namespace detail {
+      /// Detects host classes that expose a `char* memory` field assignable
+      /// from a raw `char*`. Trampolines auto-set this field before dispatch
+      /// so handlers like WASI can read/write linear memory without a
+      /// dedicated trampoline shim. Backwards-compatible: hosts without a
+      /// matching `memory` field get no assignment and unchanged behavior.
+      ///
+      /// Step 8 of psizam-runtime-api-maturation. Once this is in place the
+      /// wasi_trampoline / wasi_trampoline_rev specializations in
+      /// detail/wasi_host.hpp become redundant and can be retired by
+      /// psizam-unify-host-registration-under-runtime.
+      template<typename Cls>
+      concept has_memory_field = requires(Cls* h, char* m) { h->memory = m; };
+
       /// Fast trampoline wrapper: casts void* to Cls*, delegates to fast_trampoline_fwd_impl
       template<auto Func, typename Cls, typename R, typename Args>
       native_value fast_void_trampoline(void* host, native_value* args, char* memory) {
+         if constexpr (has_memory_field<Cls>)
+            static_cast<Cls*>(host)->memory = memory;
          return fast_trampoline_fwd_impl<Func, Cls, R, Args>(
             static_cast<Cls*>(host), args, memory,
             std::make_index_sequence<std::tuple_size_v<Args>>{});
@@ -40,6 +55,8 @@ namespace psizam {
       /// WASM stack pointer directly.
       template<auto Func, typename Cls, typename R, typename Args>
       native_value fast_void_trampoline_rev(void* host, native_value* args, char* memory) {
+         if constexpr (has_memory_field<Cls>)
+            static_cast<Cls*>(host)->memory = memory;
          return fast_trampoline_rev_impl<Func, Cls, R, Args>(
             static_cast<Cls*>(host), args, memory,
             std::make_index_sequence<std::tuple_size_v<Args>>{});
