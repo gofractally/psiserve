@@ -1,6 +1,6 @@
 # psiserve Project Backlog
 
-Last updated: 2026-04-19
+Last updated: 2026-04-20
 
 ## Issue Conventions
 
@@ -38,6 +38,7 @@ Last updated: 2026-04-19
 | [psitri-chunked-file-storage](.issues/psitri-chunked-file-storage.md) | ready | high | psitri | — | psiserve-pfs |
 | [psiserve-pfs](.issues/psiserve-pfs.md) | ready | high | psiserve,psio,psitri | agent0 | psiserve-user-filesystem |
 | [psiserve-user-filesystem](.issues/psiserve-user-filesystem.md) | backlog | medium | psiserve,psio,psitri | — | — |
+| [psiserve-scheduler-primitives](.issues/psiserve-scheduler-primitives.md) | ready | high | psiserve,psizam | — | psiserve-wit-host-guest-api |
 
 ## Dependency Graph
 
@@ -67,6 +68,12 @@ psio-wit-resource-drop-specializations
 psitri-chunked-file-storage
   └→ psiserve-pfs
        └→ psiserve-user-filesystem
+
+psizam-gas-metering (in-progress)
+  └→ psizam-gas-state-redesign
+       └→ psizam-gas-yield-handler
+            └→ psiserve-scheduler-primitives
+                 └→ psiserve-wit-host-guest-api
 ```
 
 ## Conflict Map (agents touching overlapping areas)
