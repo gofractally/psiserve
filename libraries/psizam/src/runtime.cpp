@@ -1,15 +1,19 @@
-// runtime.cpp — Phase 2 + Step 1 of psizam-runtime-api-maturation.
+// runtime.cpp — Phase 2 + Steps 1, 5 of psizam-runtime-api-maturation.
 // prepare() parses + compiles WASM; instantiate() creates live instances
 // dispatched on the requested backend kind via the abstract `instance_be`.
-// instance provides gas_state, linear_memory, and typed proxy access.
+// instance provides gas_state, linear_memory, run_start, and typed proxy
+// access.
 
 #include <psizam/runtime.hpp>
 #include <psizam/backend.hpp>
 #include <psizam/detail/instance_be.hpp>
+#include <psizam/detail/wasi_host.hpp>
 #include <psizam/host_function.hpp>
 #include <psizam/host_function_table.hpp>
 
 #include <chrono>
+#include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -57,6 +61,19 @@ public:
    }
    uint32_t current_pages() const noexcept override {
       return be_->get_context().current_linear_memory();
+   }
+
+   int run_start(void* host_ptr) override {
+      try {
+         auto& mod = be_->get_module();
+         if (mod.start != std::numeric_limits<uint32_t>::max()) {
+            be_->call_by_index(host_ptr, mod.start);
+         }
+         be_->call(host_ptr, std::string_view{"_start"});
+      } catch (const wasi_host::wasi_exit_exception& e) {
+         return e.code;
+      }
+      return 0;
    }
 };
 
@@ -195,6 +212,11 @@ std::size_t instance::memory_size() const {
    return impl_ && impl_->be
       ? static_cast<std::size_t>(impl_->be->current_pages()) * 65536
       : 0;
+}
+
+int instance::run_start() {
+   if (!impl_ || !impl_->be) return -1;
+   return impl_->be->run_start(impl_->host_ptr);
 }
 
 // ═════════════════════════════════════════════════════════════════════

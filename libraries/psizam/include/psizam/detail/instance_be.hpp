@@ -59,6 +59,16 @@ public:
    // Linear memory + page count, type-erased. Always valid post-construction.
    virtual char*    linear_memory()       noexcept = 0;
    virtual uint32_t current_pages() const noexcept = 0;
+
+   // Run module.start (if present) then resolve and call `_start`. The host
+   // pointer flows through to host-function trampolines. Returns the WASI
+   // exit code captured from `wasi_host::wasi_exit_exception`; returns 0 if
+   // `_start` returns normally without proc_exit. Other psizam / std
+   // exceptions propagate to the caller.
+   //
+   // Step 5 of psizam-runtime-api-maturation. Lets pzam-run's main shrink
+   // to `return inst.run_start(&host);`.
+   virtual int run_start(void* host_ptr) = 0;
 };
 
 // Factory: pick the impl for `kind`, construct the concrete backend with

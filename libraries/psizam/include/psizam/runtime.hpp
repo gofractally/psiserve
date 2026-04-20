@@ -214,6 +214,13 @@ public:
    char*       linear_memory();
    std::size_t memory_size() const;
 
+   // ── Run start ───────────────────────────────────────────────────
+   // Convenience: run module.start (if present) then resolve and call
+   // `_start`. Returns the WASI exit code captured from
+   // wasi_exit_exception, or 0 if `_start` returns normally without
+   // calling proc_exit. Other psizam exceptions propagate.
+   int run_start();
+
    // Internal accessors for template code
    void* backend_ptr();
    void* host_ptr();
