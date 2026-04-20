@@ -98,29 +98,29 @@ inline ip_socket_address from_sockaddr(const struct sockaddr_storage& ss)
    return result;
 }
 
-inline ::network_error_code errno_to_network_error()
+inline ::error_code errno_to_network_error()
 {
    switch (errno)
    {
       case EACCES:
-      case EPERM:        return ::network_error_code::access_denied;
-      case EADDRINUSE:   return ::network_error_code::address_in_use;
-      case EADDRNOTAVAIL:return ::network_error_code::address_not_bindable;
-      case ECONNREFUSED: return ::network_error_code::connection_refused;
-      case ECONNRESET:   return ::network_error_code::connection_reset;
-      case ECONNABORTED: return ::network_error_code::connection_aborted;
+      case EPERM:        return ::error_code::access_denied;
+      case EADDRINUSE:   return ::error_code::address_in_use;
+      case EADDRNOTAVAIL:return ::error_code::address_not_bindable;
+      case ECONNREFUSED: return ::error_code::connection_refused;
+      case ECONNRESET:   return ::error_code::connection_reset;
+      case ECONNABORTED: return ::error_code::connection_aborted;
       case EHOSTUNREACH:
-      case ENETUNREACH:  return ::network_error_code::remote_unreachable;
-      case ETIMEDOUT:    return ::network_error_code::timeout;
-      case EINVAL:       return ::network_error_code::invalid_argument;
-      case ENOMEM:       return ::network_error_code::out_of_memory;
+      case ENETUNREACH:  return ::error_code::remote_unreachable;
+      case ETIMEDOUT:    return ::error_code::timeout;
+      case EINVAL:       return ::error_code::invalid_argument;
+      case ENOMEM:       return ::error_code::out_of_memory;
       case EAGAIN:
 #if EAGAIN != EWOULDBLOCK
       case EWOULDBLOCK:
 #endif
-                         return ::network_error_code::would_block;
-      case EINPROGRESS:  return ::network_error_code::would_block;
-      default:           return ::network_error_code::unknown;
+                         return ::error_code::would_block;
+      case EINPROGRESS:  return ::error_code::would_block;
+      default:           return ::error_code::unknown;
    }
 }
 
@@ -138,7 +138,7 @@ inline int make_nonblocking_socket(int af, int type)
 
 struct WasiSocketsHost
 {
-   using neterr = ::network_error_code;
+   using neterr = ::error_code;
 
    WasiIoHost& io;
 
@@ -157,7 +157,7 @@ struct WasiSocketsHost
 
    // ── wasi:sockets/network ─────────────────────────────────────────
 
-   std::optional<::network_error_code> network_error_code(
+   std::optional<::error_code> network_error_code(
        psio::borrow<io_error> /*err*/)
    {
       return std::nullopt;
@@ -431,12 +431,12 @@ struct WasiSocketsHost
       int       val = 0;
       socklen_t len = sizeof(val);
       ::getsockopt(*s->fd, IPPROTO_TCP, TCP_KEEPIDLE, &val, &len);
-      return sock_detail::ok(static_cast<wasi_duration>(val) * 1000000000ULL);
+      return sock_detail::ok(static_cast<wasi_duration>(val) * wasi_duration{1'000'000'000});
 #elif defined(TCP_KEEPALIVE)
       int       val = 0;
       socklen_t len = sizeof(val);
       ::getsockopt(*s->fd, IPPROTO_TCP, TCP_KEEPALIVE, &val, &len);
-      return sock_detail::ok(static_cast<wasi_duration>(val) * 1000000000ULL);
+      return sock_detail::ok(static_cast<wasi_duration>(val) * wasi_duration{1'000'000'000});
 #else
       return sock_detail::err(neterr::not_supported);
 #endif
@@ -448,7 +448,7 @@ struct WasiSocketsHost
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
          return sock_detail::err(neterr::invalid_state);
-      int secs = static_cast<int>(value / 1000000000ULL);
+      int secs = static_cast<int>(value / wasi_duration{1'000'000'000});
       if (secs < 1)
          secs = 1;
 #ifdef TCP_KEEPIDLE
@@ -474,7 +474,7 @@ struct WasiSocketsHost
       int       val = 0;
       socklen_t len = sizeof(val);
       ::getsockopt(*s->fd, IPPROTO_TCP, TCP_KEEPINTVL, &val, &len);
-      return sock_detail::ok(static_cast<wasi_duration>(val) * 1000000000ULL);
+      return sock_detail::ok(static_cast<wasi_duration>(val) * wasi_duration{1'000'000'000});
 #else
       return sock_detail::err(neterr::not_supported);
 #endif
@@ -487,7 +487,7 @@ struct WasiSocketsHost
       if (!s)
          return sock_detail::err(neterr::invalid_state);
 #ifdef TCP_KEEPINTVL
-      int secs = static_cast<int>(value / 1000000000ULL);
+      int secs = static_cast<int>(value / wasi_duration{1'000'000'000});
       if (secs < 1)
          secs = 1;
       if (::setsockopt(*s->fd, IPPROTO_TCP, TCP_KEEPINTVL, &secs, sizeof(secs)) < 0)

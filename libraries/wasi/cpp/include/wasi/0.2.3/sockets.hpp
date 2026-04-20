@@ -42,7 +42,7 @@ using wasi_duration = uint64_t;
 
 // ── error-code enum ──────────────────────────────────────────────────
 
-enum class network_error_code : uint8_t
+enum class error_code : uint8_t
 {
    unknown,
    access_denied,
@@ -66,15 +66,15 @@ enum class network_error_code : uint8_t
    temporary_resolver_failure,
    permanent_resolver_failure,
 };
-PSIO_REFLECT(network_error_code)
+PSIO_REFLECT(error_code)
 
 // ── WIT result<T, error-code> as std::variant ───────────────────────
-// index 0 = ok (success payload), index 1 = err (network_error_code)
+// index 0 = ok (success payload), index 1 = err (error_code)
 
 template <typename T>
-using socket_result = std::variant<T, network_error_code>;
+using socket_result = std::variant<T, error_code>;
 
-using socket_result_void = std::variant<std::monostate, network_error_code>;
+using socket_result_void = std::variant<std::monostate, error_code>;
 
 namespace sock_detail {
    template <typename T>
@@ -84,13 +84,13 @@ namespace sock_detail {
 
    struct sock_err_proxy
    {
-      network_error_code ec;
+      error_code ec;
       template <typename T>
       operator socket_result<T>() const { return socket_result<T>{std::in_place_index<1>, ec}; }
       operator socket_result_void() const { return socket_result_void{std::in_place_index<1>, ec}; }
    };
 
-   inline sock_err_proxy err(network_error_code e) { return {e}; }
+   inline sock_err_proxy err(error_code e) { return {e}; }
 }
 
 // ── ip-address-family enum ───────────────────────────────────────────
@@ -209,7 +209,7 @@ PSIO_REFLECT(outgoing_datagram, data, remote_address)
 struct wasi_sockets_network
 {
    // network-error-code: func(err: borrow<error>) -> option<error-code>
-   static inline std::optional<network_error_code> network_error_code(
+   static inline std::optional<error_code> network_error_code(
        psio::borrow<io_error> /*err*/)
    {
       return std::nullopt;
@@ -230,14 +230,14 @@ struct wasi_sockets_tcp
        psio::borrow<network> /*network*/,
        ip_socket_address /*local_address*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.finish-bind: func() -> result<_, error-code>
    static inline socket_result_void tcp_socket_finish_bind(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.start-connect: func(network: borrow<network>, remote-address: ip-socket-address) -> result<_, error-code>
@@ -246,28 +246,28 @@ struct wasi_sockets_tcp
        psio::borrow<network> /*network*/,
        ip_socket_address /*remote_address*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.finish-connect: func() -> result<tuple<input-stream, output-stream>, error-code>
    static inline socket_result<std::tuple<psio::own<input_stream>, psio::own<output_stream>>>
    tcp_socket_finish_connect(psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.start-listen: func() -> result<_, error-code>
    static inline socket_result_void tcp_socket_start_listen(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.finish-listen: func() -> result<_, error-code>
    static inline socket_result_void tcp_socket_finish_listen(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.accept: func() -> result<tuple<tcp-socket, input-stream, output-stream>, error-code>
@@ -275,21 +275,21 @@ struct wasi_sockets_tcp
        std::tuple<psio::own<tcp_socket>, psio::own<input_stream>, psio::own<output_stream>>>
    tcp_socket_accept(psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.local-address: func() -> result<ip-socket-address, error-code>
    static inline socket_result<ip_socket_address> tcp_socket_local_address(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::invalid_state);
+      return sock_detail::err(error_code::invalid_state);
    }
 
    // [method] tcp-socket.remote-address: func() -> result<ip-socket-address, error-code>
    static inline socket_result<ip_socket_address> tcp_socket_remote_address(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::invalid_state);
+      return sock_detail::err(error_code::invalid_state);
    }
 
    // [method] tcp-socket.is-listening: func() -> bool
@@ -311,14 +311,14 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        uint64_t /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.keep-alive-enabled: func() -> result<bool, error-code>
    static inline socket_result<bool> tcp_socket_keep_alive_enabled(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.set-keep-alive-enabled: func(value: bool) -> result<_, error-code>
@@ -326,14 +326,14 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        bool /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.keep-alive-idle-time: func() -> result<duration, error-code>
    static inline socket_result<wasi_duration> tcp_socket_keep_alive_idle_time(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.set-keep-alive-idle-time: func(value: duration) -> result<_, error-code>
@@ -341,14 +341,14 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        wasi_duration /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.keep-alive-interval: func() -> result<duration, error-code>
    static inline socket_result<wasi_duration> tcp_socket_keep_alive_interval(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.set-keep-alive-interval: func(value: duration) -> result<_, error-code>
@@ -356,14 +356,14 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        wasi_duration /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.keep-alive-count: func() -> result<u32, error-code>
    static inline socket_result<uint32_t> tcp_socket_keep_alive_count(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.set-keep-alive-count: func(value: u32) -> result<_, error-code>
@@ -371,14 +371,14 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        uint32_t /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.hop-limit: func() -> result<u8, error-code>
    static inline socket_result<uint8_t> tcp_socket_hop_limit(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.set-hop-limit: func(value: u8) -> result<_, error-code>
@@ -386,14 +386,14 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        uint8_t /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.receive-buffer-size: func() -> result<u64, error-code>
    static inline socket_result<uint64_t> tcp_socket_receive_buffer_size(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.set-receive-buffer-size: func(value: u64) -> result<_, error-code>
@@ -401,14 +401,14 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        uint64_t /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.send-buffer-size: func() -> result<u64, error-code>
    static inline socket_result<uint64_t> tcp_socket_send_buffer_size(
        psio::borrow<tcp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.set-send-buffer-size: func(value: u64) -> result<_, error-code>
@@ -416,7 +416,7 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        uint64_t /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] tcp-socket.subscribe: func() -> pollable
@@ -431,7 +431,7 @@ struct wasi_sockets_tcp
        psio::borrow<tcp_socket> /*self*/,
        shutdown_type /*shutdown_type*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 };
 
@@ -445,7 +445,7 @@ struct wasi_sockets_tcp_create_socket
    static inline socket_result<psio::own<tcp_socket>> create_tcp_socket(
        ip_address_family /*address_family*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 };
 
@@ -463,14 +463,14 @@ struct wasi_sockets_udp
        psio::borrow<network> /*network*/,
        ip_socket_address /*local_address*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.finish-bind: func() -> result<_, error-code>
    static inline socket_result_void udp_socket_finish_bind(
        psio::borrow<udp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.stream: func(remote-address: option<ip-socket-address>) -> result<tuple<incoming-datagram-stream, outgoing-datagram-stream>, error-code>
@@ -480,21 +480,21 @@ struct wasi_sockets_udp
        psio::borrow<udp_socket> /*self*/,
        std::optional<ip_socket_address> /*remote_address*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.local-address: func() -> result<ip-socket-address, error-code>
    static inline socket_result<ip_socket_address> udp_socket_local_address(
        psio::borrow<udp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::invalid_state);
+      return sock_detail::err(error_code::invalid_state);
    }
 
    // [method] udp-socket.remote-address: func() -> result<ip-socket-address, error-code>
    static inline socket_result<ip_socket_address> udp_socket_remote_address(
        psio::borrow<udp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::invalid_state);
+      return sock_detail::err(error_code::invalid_state);
    }
 
    // [method] udp-socket.address-family: func() -> ip-address-family
@@ -508,7 +508,7 @@ struct wasi_sockets_udp
    static inline socket_result<uint8_t> udp_socket_unicast_hop_limit(
        psio::borrow<udp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.set-unicast-hop-limit: func(value: u8) -> result<_, error-code>
@@ -516,14 +516,14 @@ struct wasi_sockets_udp
        psio::borrow<udp_socket> /*self*/,
        uint8_t /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.receive-buffer-size: func() -> result<u64, error-code>
    static inline socket_result<uint64_t> udp_socket_receive_buffer_size(
        psio::borrow<udp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.set-receive-buffer-size: func(value: u64) -> result<_, error-code>
@@ -531,14 +531,14 @@ struct wasi_sockets_udp
        psio::borrow<udp_socket> /*self*/,
        uint64_t /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.send-buffer-size: func() -> result<u64, error-code>
    static inline socket_result<uint64_t> udp_socket_send_buffer_size(
        psio::borrow<udp_socket> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.set-send-buffer-size: func(value: u64) -> result<_, error-code>
@@ -546,7 +546,7 @@ struct wasi_sockets_udp
        psio::borrow<udp_socket> /*self*/,
        uint64_t /*value*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] udp-socket.subscribe: func() -> pollable
@@ -580,7 +580,7 @@ struct wasi_sockets_udp
    static inline socket_result<uint64_t> outgoing_datagram_stream_check_send(
        psio::borrow<outgoing_datagram_stream> /*self*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] outgoing-datagram-stream.send: func(datagrams: list<outgoing-datagram>) -> result<u64, error-code>
@@ -588,7 +588,7 @@ struct wasi_sockets_udp
        psio::borrow<outgoing_datagram_stream> /*self*/,
        std::vector<outgoing_datagram> /*datagrams*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] outgoing-datagram-stream.subscribe: func() -> pollable
@@ -609,7 +609,7 @@ struct wasi_sockets_udp_create_socket
    static inline socket_result<psio::own<udp_socket>> create_udp_socket(
        ip_address_family /*address_family*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 };
 
@@ -624,7 +624,7 @@ struct wasi_sockets_ip_name_lookup
        psio::borrow<network> /*network*/,
        std::string /*name*/)
    {
-      return sock_detail::err(network_error_code::not_supported);
+      return sock_detail::err(error_code::not_supported);
    }
 
    // [method] resolve-address-stream.resolve-next-address: func() -> result<option<ip-address>, error-code>
@@ -665,7 +665,7 @@ PSIO_PACKAGE(wasi_sockets, "0.2.3");
 #define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(wasi_sockets)
 
 PSIO_INTERFACE(wasi_sockets_network,
-               types(network_error_code,
+               types(error_code,
                      ip_address_family,
                      ipv4_address,
                      ipv6_address,

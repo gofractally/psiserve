@@ -1,15 +1,43 @@
 ---
 id: wasi-binding-convention
 title: WASI C++ bindings — convention for type/method name collisions + literal-type portability
-status: open
+status: resolved
 priority: medium
 area: wasi
 agent: ~
 branch: ~
 created: 2026-04-20
+resolved: 2026-04-20
 depends_on: []
 blocks: []
 ---
+
+## Resolution (2026-04-20)
+
+Landed option (1) — hand-written bindings with a codified convention.
+Two rules recorded in `libraries/wasi/cpp/README.md`:
+
+1. **Use the WIT bare name for types when unambiguous in the TU.**
+   Applied to sockets: `enum class network_error_code` renamed to
+   `enum class error_code`. This aligns reflection's WIT emission with
+   the spec (`error-code`) and breaks the collision with the
+   `network_error_code` function since the type and function now have
+   different C++ bare names. No reflection change needed.
+
+2. **Typed literals for WASI numeric constants.** `wasi_duration{N}`
+   replaces raw `ULL`/`UL` suffixes in `sockets_host.hpp` (5 sites).
+   Deducing helpers like `sock_detail::ok<T>` now see the expected
+   `wasi_duration` type on both Linux and macOS.
+
+The other 11 WASI headers are unchanged — no other interface has a
+WIT-type/WIT-function name collision today. If one appears later, the
+README notes per-interface nested namespacing as the next fallback
+(reflection already strips `::` scope qualifiers before kebab-
+lowering, so no macro changes are needed).
+
+A round-trip test extension for `wasi:sockets/network` asserting
+`iface.type_names` contains `"error-code"` is open as follow-up work.
+
 
 ## Background
 

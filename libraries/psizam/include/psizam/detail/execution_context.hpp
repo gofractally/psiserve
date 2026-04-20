@@ -687,6 +687,21 @@ namespace psizam::detail {
       // ABI-identical to a plain 8-byte slot — codegen loads it with
       // a regular mov/ldr and external threads store to it without
       // forcing an atomic RMW on the hot path.
+      //
+      // `-Winvalid-offsetof` fires because this class is not standard-
+      // layout (atomic member, protected access on some fields). The
+      // standard calls this conditionally-supported, but every
+      // mainstream compiler computes the offset correctly. Suppressing
+      // here instead of restructuring the class because:
+      //   - making it standard-layout would force the deadline to a
+      //     plain uint64_t, losing the relaxed-atomic contract with the
+      //     watchdog thread;
+      //   - storing a pointer to `_gas` and dereferencing costs an
+      //     extra load on every gas charge (the hot path);
+      //   - hard-coding offsets is fragile and silently breaks when
+      //     fields are reordered.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
       static std::size_t gas_consumed_offset() {
          return offsetof(jit_execution_context, _gas)
               + offsetof(gas_state, consumed);
@@ -695,6 +710,7 @@ namespace psizam::detail {
          return offsetof(jit_execution_context, _gas)
               + offsetof(gas_state, deadline);
       }
+#pragma GCC diagnostic pop
 
       std::uint32_t get_remaining_call_depth() const { return this->_remaining_call_depth; }
 
