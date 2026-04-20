@@ -34,6 +34,20 @@ if(NOT PSISERVE_WASI)
    endif()
 endif()
 
+# ── macOS: link against Homebrew LLVM's libc++ to match compiler ABI ──────────
+if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+   execute_process(COMMAND brew --prefix llvm
+      OUTPUT_VARIABLE BREW_LLVM_PREFIX
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+   if(EXISTS "${BREW_LLVM_PREFIX}/lib/c++/libc++.dylib")
+      add_compile_options(-stdlib=libc++)
+      add_link_options(-stdlib=libc++
+         -L${BREW_LLVM_PREFIX}/lib/c++
+         -Wl,-rpath,${BREW_LLVM_PREFIX}/lib/c++)
+   endif()
+endif()
+
 # ── Project-wide dependencies ─────────────────────────────────────────────────
 if(NOT PSISERVE_WASI)
    set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
