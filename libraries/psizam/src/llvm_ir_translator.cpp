@@ -12,6 +12,7 @@
 #include <psizam/exceptions.hpp>
 
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/MDBuilder.h>
 #include <cstdlib>
 #include <iostream>
 #include <llvm/IR/Intrinsics.h>
@@ -283,19 +284,49 @@ namespace psizam::detail {
                                       llvm::Value* eff_addr, uint32_t access_size,
                                       llvm::AllocaInst* watermark_alloca) {
          if (!is_checked() || !watermark_alloca) return;
-         llvm::Value* end = builder.CreateAdd(eff_addr,
-            builder.getInt64(static_cast<uint64_t>(access_size)), "read_end");
+         llvm::Value* end = eff_addr;
+         if (access_size != 0) {
+            end = builder.CreateAdd(eff_addr,
+               builder.getInt64(static_cast<uint64_t>(access_size)), "read_end");
+         }
          llvm::Value* cur = builder.CreateLoad(i64_ty, watermark_alloca, "wm_cur");
          if (is_checked_strict()) {
-            // watermark = max(watermark, end)
-            llvm::Value* cmp = builder.CreateICmpUGT(end, cur, "wm_cmp");
-            llvm::Value* new_wm = builder.CreateSelect(cmp, end, cur, "wm_max");
+            auto* umax_fn = llvm::Intrinsic::getOrInsertDeclaration(
+               builder.GetInsertBlock()->getModule(), llvm::Intrinsic::umax, {i64_ty});
+            llvm::Value* new_wm = builder.CreateCall(umax_fn, {cur, end}, "wm_max");
             builder.CreateStore(new_wm, watermark_alloca);
          } else {
-            // watermark |= end  (relaxed mode — monotonic, branchless)
             llvm::Value* new_wm = builder.CreateOr(cur, end, "wm_or");
             builder.CreateStore(new_wm, watermark_alloca);
          }
+      }
+
+      // Direct per-read bounds check (alternative to deferred watermark).
+      // Same pattern as write bounds check but for loads.
+      void emit_read_bounds_check(llvm::IRBuilder<>& builder,
+                                  llvm::Value* ctx_ptr, llvm::Value* mem_ptr_val,
+                                  llvm::Value* eff_addr, uint32_t access_size) {
+         if (!is_checked()) return;
+         auto* fn = builder.GetInsertBlock()->getParent();
+         llvm::Value* end = builder.CreateAdd(eff_addr,
+            builder.getInt64(static_cast<uint64_t>(access_size)), "read_end");
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         llvm::Value* ms_ptr = builder.CreateConstGEP1_64(i8_ty, mem_ptr_val,
+            static_cast<int64_t>(ms_off), "mem_size_ptr");
+         llvm::Value* mem_size = builder.CreateLoad(i64_ty, ms_ptr, "mem_size");
+         llvm::Value* oob = builder.CreateICmpUGT(end, mem_size, "read_oob");
+
+         auto* trap_bb = llvm::BasicBlock::Create(*ctx, "load_oob_trap", fn);
+         auto* ok_bb   = llvm::BasicBlock::Create(*ctx, "load_ok", fn);
+         auto* br = builder.CreateCondBr(oob, trap_bb, ok_bb);
+         br->setMetadata(llvm::LLVMContext::MD_prof,
+            llvm::MDBuilder(*ctx).createBranchWeights(1, 10000));
+
+         builder.SetInsertPoint(trap_bb);
+         builder.CreateCall(rt_trap, {ctx_ptr, builder.getInt32(5)});
+         builder.CreateUnreachable();
+
+         builder.SetInsertPoint(ok_bb);
       }
 
       // Emit immediate bounds check for a write access. eff_addr is the i64
@@ -308,7 +339,6 @@ namespace psizam::detail {
          auto* fn = builder.GetInsertBlock()->getParent();
          llvm::Value* end = builder.CreateAdd(eff_addr,
             builder.getInt64(static_cast<uint64_t>(access_size)), "write_end");
-         // Load mem_size from the prefix page: mem_ptr + mem_size_offset()
          const int32_t ms_off = wasm_allocator::mem_size_offset();
          llvm::Value* ms_ptr = builder.CreateConstGEP1_64(i8_ty, mem_ptr_val,
             static_cast<int64_t>(ms_off), "mem_size_ptr");
@@ -317,7 +347,10 @@ namespace psizam::detail {
 
          auto* trap_bb = llvm::BasicBlock::Create(*ctx, "store_oob_trap", fn);
          auto* ok_bb   = llvm::BasicBlock::Create(*ctx, "store_ok", fn);
-         builder.CreateCondBr(oob, trap_bb, ok_bb);
+         auto* br = builder.CreateCondBr(oob, trap_bb, ok_bb);
+         // Mark OOB as extremely unlikely so LLVM moves trap BBs to cold sections
+         auto* weights = llvm::MDBuilder(*ctx).createBranchWeights(1, 10000);
+         br->setMetadata(llvm::LLVMContext::MD_prof, weights);
 
          builder.SetInsertPoint(trap_bb);
          builder.CreateCall(rt_trap, {ctx_ptr, builder.getInt32(5)});
@@ -340,10 +373,11 @@ namespace psizam::detail {
             builder.getInt64(0), "wm_zero");
          auto* skip_bb = llvm::BasicBlock::Create(*ctx, "wm_skip", fn);
          auto* check_bb = llvm::BasicBlock::Create(*ctx, "wm_check", fn);
-         builder.CreateCondBr(is_zero, skip_bb, check_bb);
+         auto* br1 = builder.CreateCondBr(is_zero, skip_bb, check_bb);
+         br1->setMetadata(llvm::LLVMContext::MD_prof,
+            llvm::MDBuilder(*ctx).createBranchWeights(100, 1));
 
          builder.SetInsertPoint(check_bb);
-         // Load mem_size from prefix page
          const int32_t ms_off = wasm_allocator::mem_size_offset();
          llvm::Value* ms_ptr = builder.CreateConstGEP1_64(i8_ty, mem_ptr_val,
             static_cast<int64_t>(ms_off), "wm_ms_ptr");
@@ -352,7 +386,9 @@ namespace psizam::detail {
 
          auto* trap_bb = llvm::BasicBlock::Create(*ctx, "wm_trap", fn);
          auto* reset_bb = llvm::BasicBlock::Create(*ctx, "wm_reset", fn);
-         builder.CreateCondBr(oob, trap_bb, reset_bb);
+         auto* br2 = builder.CreateCondBr(oob, trap_bb, reset_bb);
+         br2->setMetadata(llvm::LLVMContext::MD_prof,
+            llvm::MDBuilder(*ctx).createBranchWeights(1, 10000));
 
          builder.SetInsertPoint(trap_bb);
          // Reset watermark before trap so the exception handler sees clean state
@@ -1147,13 +1183,10 @@ namespace psizam::detail {
             mem_out_alloca = builder.CreateAlloca(ptr_ty, nullptr, "mem_out");
          }
 
-         // Checked memory mode: allocate watermark accumulator (i64, init 0).
-         // Tracks the maximum read end-address; validated at gas/host-call points.
+         // Checked memory mode: reads use direct per-access bounds checks (like writes),
+         // so no watermark alloca is needed. The watermark_alloca remains nullptr and
+         // emit_watermark_validate() short-circuits via its null guard.
          llvm::AllocaInst* watermark_alloca = nullptr;
-         if (is_checked()) {
-            watermark_alloca = builder.CreateAlloca(i64_ty, nullptr, "watermark");
-            builder.CreateStore(builder.getInt64(0), watermark_alloca);
-         }
 
          // ── Pre-scan: which blocks have block_start instructions? ──
          // Blocks created by emit_block/emit_loop have block_start.
@@ -1317,7 +1350,7 @@ namespace psizam::detail {
                if (is_store)
                   emit_write_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff_addr, access_size);
                else
-                  emit_read_watermark_update(builder, eff_addr, access_size, watermark_alloca);
+                  emit_read_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff_addr, access_size);
             }
             return builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
          };
@@ -2307,16 +2340,18 @@ namespace psizam::detail {
                      default: load_ty = i32_ty; result_ty = i32_ty; access_size = 4; break;
                   }
 
-                  // Checked mode: track read watermark (deferred validation)
-                  emit_read_watermark_update(builder, eff_addr, access_size, watermark_alloca);
+                  // Checked mode: immediate read bounds check
+                  emit_read_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff_addr, access_size);
 
                   llvm::Value* ptr = builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
                   auto* load_inst = builder.CreateLoad(load_ty, ptr);
                   // Volatile: WASM loads can trap via guard pages on OOB access.
-                  // LLVM must not eliminate or reorder them (e.g. DCE when the
-                  // result is dropped).  Volatile prevents this while still
-                  // allowing register allocation and instruction selection.
-                  load_inst->setVolatile(true);
+                  // In page-guarded mode loads must be volatile: SIGSEGV is the
+                  // bounds check, so LLVM must not eliminate or reorder loads.
+                  // In checked mode, explicit bounds checks precede each load,
+                  // so LLVM can safely optimize (CSE, hoist, DCE) the loads.
+                  if (!is_checked())
+                     load_inst->setVolatile(true);
                   llvm::Value* loaded = load_inst;
                   // Extend if needed
                   if (load_ty != result_ty) {
@@ -2385,7 +2420,8 @@ namespace psizam::detail {
                         break;
                   }
                   auto* store_inst = builder.CreateStore(val, ptr);
-                  store_inst->setVolatile(true);
+                  if (!is_checked())
+                     store_inst->setVolatile(true);
                   break;
                }
 
@@ -4961,7 +4997,7 @@ namespace psizam::detail {
                            case atomic_sub::i64_atomic_load: asz = 8; break;
                            default: break;
                         }
-                        emit_read_watermark_update(builder, eff64, asz, watermark_alloca);
+                        emit_read_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff64, asz);
                      }
                      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), load_mem_ptr(), eff64);
                      llvm::Value* val = nullptr;
