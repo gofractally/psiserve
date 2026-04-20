@@ -84,17 +84,8 @@ TEST_CASE("Public API: compiled_module with jit2", "[public_api]") {
 #endif
 
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-#include <psizam/detail/llvm_ir_translator.hpp>
-#include <psizam/detail/llvm_jit_compiler.hpp>
-#include <psizam/detail/jit_ir.hpp>
 
 TEST_CASE("LLVM: standalone IR translate + compile", "[llvm]") {
-   // Parse the const42 module with null_backend (validation only) to get the module
-   wasm_code code = const42_wasm;
-   backend<std::nullptr_t, null_backend> nb(code, nullptr);
-   auto& mod = nb.get_module();
-
-   // Now parse it with jit_llvm backend
    wasm_allocator wa;
    host_function_table table;
 
@@ -106,14 +97,10 @@ TEST_CASE("LLVM: standalone IR translate + compile", "[llvm]") {
    INFO("jit_code_offset = " << llvm_mod.code[0].jit_code_offset);
    CHECK(llvm_mod.code[0].jit_code_offset != 0);
 
-   // Now try to call the entry function directly
-   using entry_fn_t = int64_t(*)(void*, void*, psizam::native_value*);
-   auto entry = reinterpret_cast<entry_fn_t>(llvm_mod.code[0].jit_code_offset);
-   INFO("entry function pointer = " << (void*)entry);
-
-   psizam::native_value args[1] = {};
-   int64_t result = entry(nullptr, nullptr, args);
-   CHECK(result == 42);
+   // Call through the public API (provides proper execution context)
+   auto inst = cm.create_instance();
+   auto fn = inst.get_function<uint32_t()>("const42");
+   CHECK(fn() == 42u);
 }
 
 TEST_CASE("Public API: compiled_module with jit_llvm const42", "[public_api][llvm]") {
