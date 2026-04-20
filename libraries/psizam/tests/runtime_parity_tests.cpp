@@ -88,18 +88,17 @@ struct tier_jit_llvm
 { static constexpr auto value = psizam::instance_policy::compile_tier::jit_llvm; };
 #endif
 
-// NOTE: jit2 is x86_64-only (per backend.hpp gating and
-// composition_tests.cpp). aarch64 builds omit tier_jit2 even though
-// the enum value exists — attempting to construct that backend on
-// aarch64 throws `psizam: jit2 backend requires x86_64 or aarch64`
-// from detail::make_instance_be.
-#if defined(PSIZAM_ENABLE_LLVM_BACKEND) && defined(__x86_64__)
+// jit2 is supported on both x86_64 and aarch64 (per backend.hpp
+// gating — `struct jit2` is defined under `__x86_64__ || __aarch64__`).
+// composition_tests.cpp's aarch64 exclusion predates jit2's aarch64
+// support; runtime tests exercise all four backends.
+#if defined(PSIZAM_ENABLE_LLVM_BACKEND) && (defined(__x86_64__) || defined(__aarch64__))
   #define PARITY_TEST_CASE(name, tags) \
     TEMPLATE_TEST_CASE(name, tags, tier_interpret, tier_jit1, tier_jit2, tier_jit_llvm)
 #elif defined(PSIZAM_ENABLE_LLVM_BACKEND)
   #define PARITY_TEST_CASE(name, tags) \
     TEMPLATE_TEST_CASE(name, tags, tier_interpret, tier_jit1, tier_jit_llvm)
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || defined(__aarch64__)
   #define PARITY_TEST_CASE(name, tags) \
     TEMPLATE_TEST_CASE(name, tags, tier_interpret, tier_jit1, tier_jit2)
 #else

@@ -4530,8 +4530,16 @@ namespace psizam::detail {
                   return;
                }
             }
+            // Fallback to host_function_table. aarch64 JIT stubs pack args
+            // in reverse stack order (args[0] = last WASM param, matching
+            // fast_trampoline_rev_impl). _table->call expects forward order.
             uint32_t mapped_index = context->_mod->import_functions[idx];
-            result = context->_table->call(context->get_host_ptr(), mapped_index, args, context->linear_memory());
+            const auto& ft = context->_mod->get_function_type(idx);
+            uint32_t np = ft.param_types.size();
+            native_value fwd[np > 0 ? np : 1];
+            for (uint32_t i = 0; i < np; ++i)
+               fwd[i] = args[np - 1 - i];
+            result = context->_table->call(context->get_host_ptr(), mapped_index, fwd, context->linear_memory());
          };
 #if defined(__APPLE__) && defined(__aarch64__)
          longjmp_on_exception(do_call);
