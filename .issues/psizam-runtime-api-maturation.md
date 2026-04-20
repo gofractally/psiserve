@@ -94,15 +94,18 @@ Phase B.
 
 ### In progress
 
-- _(none — handing back for review / next-session direction)_
+- **Step 8 — fast-trampoline memory-injection hook** — adding the
+  `requires(Cls* h) { h->memory = m; }` SFINAE branch to
+  `fast_void_trampoline` / `fast_void_trampoline_rev` so any host
+  class with a `char* memory` field gets it auto-set before each
+  dispatch. Eliminates the need for `wasi_trampoline` /
+  `wasi_trampoline_rev` shims (which exist only for that purpose).
 
 ### Remaining Track A
 
 - **Step 6** — dynamic WIT-driven `bind(consumer, provider, name)`.
 - **Step 7** — `register_library` / `cache_stats` / `evict` /
   `clear_cache` (real implementations).
-- **Step 8** — fast-trampoline memory-injection hook in
-  `host_function_table.hpp`.
 - **Step 9** — retire `composition.hpp`; move `bridge_executor.hpp`
   to `detail/` once Steps 1, 3, 5–8 are all in place.
 - **Step 10** — `instance::as<Tag>()` cross-backend proxy via a new
