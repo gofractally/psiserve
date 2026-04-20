@@ -341,6 +341,39 @@ if(TARGET composition_provider_guest AND TARGET composition_consumer_guest)
 endif()
 catch_discover_tests(composition_tests)
 
+# ── Runtime parity tests ─────────────────────────────────────────────────────
+# Reproduces composition_tests's scenarios through psizam::runtime's public
+# API. Acceptance gate for psizam-runtime-api-maturation Track A.
+
+add_executable(runtime_parity_tests main.cpp
+   runtime_parity_tests.cpp
+   ${CMAKE_SOURCE_DIR}/libraries/psizam/src/runtime.cpp
+)
+target_link_libraries(runtime_parity_tests psizam psizam-exec Catch2::Catch2)
+if(PSIZAM_ENABLE_LLVM)
+   target_link_libraries(runtime_parity_tests psizam-llvm)
+endif()
+target_include_directories(runtime_parity_tests PUBLIC
+   ${CMAKE_CURRENT_SOURCE_DIR}
+   ${CMAKE_CURRENT_SOURCE_DIR}/../include
+   ${CMAKE_CURRENT_SOURCE_DIR}/../examples/composition
+)
+target_compile_definitions(runtime_parity_tests PUBLIC
+   CATCH_CONFIG_NO_POSIX_SIGNALS
+   COMPOSITION_WASM_DIR="${CMAKE_BINARY_DIR}/libraries/psizam/examples/composition"
+)
+# NOTE: pre-existing breakage in module.hpp / component_proxy.hpp blocks
+# composition_provider_guest / composition_consumer_guest from building
+# today (guest_import_lower redefinition + incomplete wasm_type_traits
+# specialization). The parity-test binary still builds in isolation; it
+# will fail at runtime when it can't open provider.wasm / consumer.wasm.
+# Re-enable the add_dependencies once the guest toolchain compiles again.
+#
+# if(TARGET composition_provider_guest AND TARGET composition_consumer_guest)
+#    add_dependencies(runtime_parity_tests composition_provider_guest composition_consumer_guest)
+# endif()
+catch_discover_tests(runtime_parity_tests)
+
 add_executable(mem64_debug compliance/mem64_debug.cpp)
 target_link_libraries(mem64_debug psizam psizam-exec)
 target_include_directories(mem64_debug PUBLIC
