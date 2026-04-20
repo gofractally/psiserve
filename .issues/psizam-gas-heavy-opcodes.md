@@ -47,8 +47,8 @@ dynamic charges" section. Weights live in `psizam/gas.hpp::gas_costs`.
 - [x] jit1 aarch64: fixed-size MOVZ/MOVK sequence + patch API wired
       (written on x86_64 host; aarch64-hardware verification tracked in `psizam-gas-aarch64-verify`)
 - [x] jit2 x86_64 (`jit_codegen.hpp`): IR-node annotation, no byte patching
-- [ ] jit2 aarch64 (`jit_codegen_a64.hpp`): IR-node annotation + fill the
-      Phase 2a/3 prologue TODO — **moved to `psizam-gas-aarch64-verify`** for arm64 agent
+- [x] jit2 aarch64 (`jit_codegen_a64.hpp`): IR-node annotation + fill the
+      Phase 2a/3 prologue TODO — landed by arm64 agent in commit `b42d976`
 - [x] jit_llvm: uses the same ir_writer IR-annotation path as jit2, so
       emit_gas_prologue_check reads the final prologue_gas_extra /
       loop_gas_extra directly. No runtime IR patching needed since LLVM
