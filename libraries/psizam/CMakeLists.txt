@@ -77,6 +77,9 @@ add_library(psizam::psizam ALIAS psizam)
 target_include_directories(psizam INTERFACE
    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/softfloat/source/include>
+   # ucc::typed_int header dependency for gas_units in gas.hpp. Pulled
+   # from psitri — header-only, no separate target.
+   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../external/psitri/libraries/ucc/include>
 )
 
 target_compile_options(psizam INTERFACE

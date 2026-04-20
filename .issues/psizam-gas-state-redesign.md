@@ -1,11 +1,11 @@
 ---
 id: psizam-gas-state-redesign
 title: psizam gas metering — gas_state redesign (consumed + deadline, per-mode codegen)
-status: ready
+status: in-progress
 priority: high
 area: psizam
 agent: ~
-branch: ~
+branch: gas-state-redesign
 created: 2026-04-20
 depends_on: [psizam-gas-metering]
 blocks: [psizam-gas-interrupt-handler, psizam-gas-yield-handler, psizam-gas-timeout-handler]
@@ -253,20 +253,26 @@ Phase E — handler wiring:
 
 ## Acceptance Criteria
 
-- [ ] `docs/gas-metering-design.md` updated with the gas_state section,
+- [x] `docs/gas-metering-design.md` updated with the gas_state section,
       encoding table, latency analysis, and prior-art findings.
-- [ ] Only one `gas_handler_t` definition in the codebase (in `gas.hpp`).
-- [ ] `gas_state` drives every charge site; no reference to
+- [x] Only one `gas_handler_t` definition in the codebase (in `gas.hpp`).
+- [x] `gas_state` drives every charge site; no reference to
       `_gas_counter` / `gas_atomic` remains.
-- [ ] `ucc::typed_int` used for public gas-unit types.
-- [ ] All five backends (interpreter, jit, jit2, jit_llvm, null) exercise
+- [x] `ucc::typed_int` used for public gas-unit types.
+- [x] All five backends (interpreter, jit, jit2, jit_llvm, null) exercise
       the new path in `gas_metering_tests.cpp`.
-- [ ] `gas: heavy-op prologue-extra cross-backend determinism` and
+- [x] `gas: heavy-op prologue-extra cross-backend determinism` and
       `gas: heavy-op loop-extra per-backend` still pass under the new model.
-- [ ] External-interrupt test: watcher thread stores a smaller `deadline`
+- [x] External-interrupt test: watcher thread stores a smaller `deadline`
       mid-execution; running backend traps within one loop iteration on
       modes that declare `interrupt=true`.
-- [ ] No regression in unit or spec test counts.
+      (Landed as `gas: cross-thread interrupt via watcher thread` —
+      passes on all four backends; latency well under the 1-second
+      bound.)
+- [x] No regression in unit or spec test counts. (Remaining spec-test
+      "wasm file not found" failures and the full-suite `unit_tests`
+      segfault reproduce on `main` at `f1cc307` — not introduced by
+      this branch.)
 
 ## DX notes for the runtime API
 

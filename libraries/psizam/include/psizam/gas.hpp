@@ -21,8 +21,11 @@
 // See libraries/psizam/docs/gas-metering-design.md for the full design
 // and .issues/psizam-gas-state-redesign.md for the ongoing revision.
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
+
+#include <ucc/typed_int.hpp>
 
 namespace psizam {
 
@@ -34,11 +37,44 @@ enum class gas_insertion_strategy : uint8_t {
    hybrid     = 3,  // prepay up to threshold; per_block above it
 };
 
-// Invoked when an instance's gas counter transitions to negative.
-// The argument is an opaque pointer to the execution context; the
-// handler must know the concrete context type to interpret it.
+// Typed-int for gas amounts (costs, consumed, deadline) at the public
+// API boundary. Under PSITRI_PLATFORM_OPTIMIZATIONS this type is packed
+// (alignment 1) — do NOT put it inside std::atomic<>; the raw uint64_t
+// storage in gas_state's deadline is what the codegen and atomic stores
+// target.
+struct gas_tag {};
+using gas_units = ucc::typed_int<uint64_t, gas_tag>;
+
+// Forward: gas_state is defined below; the handler signature needs it.
+struct gas_state;
+
+// Invoked when an execution context's `consumed` counter reaches its
+// `deadline`. The handler may advance the deadline (yield-style),
+// throw (trap-style), or consult external state (timeout-style).
 // A null handler is treated as "throw wasm_gas_exhausted_exception".
-using gas_handler_t = void(*)(void* ctx);
+using gas_handler_t = void (*)(gas_state* gas, void* user_data);
+
+// ═════════════════════════════════════════════════════════════════════
+// gas_state — monotonic consumed counter + moving deadline
+// ═════════════════════════════════════════════════════════════════════
+//
+// Lives in host memory (not WASM linear memory). `consumed` is only
+// written by the owning execution thread (plain uint64_t). `deadline`
+// is atomic so another thread may store any u64 value — 0 to trap
+// ASAP, consumed+N to extend — without forcing an atomic RMW on the
+// owner's hot path.
+//
+// The raw uint64_t storage (rather than gas_units at rest) is
+// load-bearing: JIT backends read/write `consumed` with plain mov/ldr
+// and do a relaxed atomic load of `deadline` (plain mov/ldr on x86_64
+// and aarch64 when the slot is 8-byte aligned). gas_units appears
+// only at public method boundaries.
+struct gas_state {
+   uint64_t              consumed  = 0;                                    // plain — owner-thread only
+   std::atomic<uint64_t> deadline  = std::numeric_limits<uint64_t>::max(); // any thread may store
+   gas_handler_t         handler   = nullptr;                              // null = throw on exhaustion
+   void*                 user_data = nullptr;                              // handler closure
+};
 
 // ═════════════════════════════════════════════════════════════════════
 // Metering capability bits
@@ -188,8 +224,10 @@ struct gas_costs {
    static constexpr int64_t bulk_memory_fixed = 10;
 };
 
-// Default budgets / slice sizes. Callers override per instance.
-inline constexpr int64_t gas_budget_unlimited = std::numeric_limits<int64_t>::max();
-inline constexpr int64_t gas_slice_default    = 10'000;
+// Default deadline / slice sizes. Callers override per instance.
+// gas_budget_unlimited is the default deadline value — consumed is
+// u64 and monotonic, so UINT64_MAX means "never trips".
+inline constexpr uint64_t gas_budget_unlimited = std::numeric_limits<uint64_t>::max();
+inline constexpr uint64_t gas_slice_default    = 10'000;
 
 } // namespace psizam

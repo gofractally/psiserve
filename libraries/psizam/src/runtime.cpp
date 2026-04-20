@@ -232,13 +232,13 @@ uint64_t instance::gas_consumed() const {
    return impl_ ? impl_->active_gas()->consumed : 0;
 }
 uint64_t instance::gas_deadline() const {
-   return impl_ ? impl_->active_gas()->deadline : 0;
+   return impl_ ? impl_->active_gas()->deadline.load(std::memory_order_relaxed) : 0;
 }
 void instance::set_deadline(uint64_t d) {
-   if (impl_) impl_->active_gas()->deadline = d;
+   if (impl_) impl_->active_gas()->deadline.store(d, std::memory_order_relaxed);
 }
 void instance::interrupt() {
-   if (impl_) impl_->active_gas()->deadline = 0;
+   if (impl_) impl_->active_gas()->deadline.store(0, std::memory_order_relaxed);
 }
 gas_state* instance::gas() {
    return impl_ ? impl_->active_gas() : nullptr;
@@ -427,7 +427,7 @@ instance runtime::instantiate(const module_handle& tmpl,
    inst->host_ptr = mod->host_ptr;
    inst->shared_gas = policy.shared_gas;
    if (!inst->shared_gas) {
-      inst->local_gas.deadline = policy.gas_budget;
+      inst->local_gas.deadline.store(policy.gas_budget, std::memory_order_relaxed);
    }
 
    // Pick the backend impl per `policy.initial`. The factory throws on

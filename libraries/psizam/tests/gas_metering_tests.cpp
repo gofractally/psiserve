@@ -1,5 +1,5 @@
 // Gas metering — BACKEND_TEST_CASE suite covering trap, user-handler,
-// external-interrupt (atomic mode), unlimited, and cross-backend
+// external-interrupt (deadline-store), unlimited, and cross-backend
 // determinism. Exercises the paths that the bench never touches.
 //
 // The WASM module is implementation_limits_wasm's recursive `call`
@@ -11,10 +11,20 @@
 // function: a straight-line loop whose body contains an i64.div_s.
 // Each iteration charges 1 (back-edge baseline) + 9 (div_s heavy
 // extra) = 10 gas units. See `gas: heavy-op ...` tests below.
+//
+// gas_state redesign:
+//   * `consumed` counts up monotonically (plain uint64_t, owner-only).
+//   * `deadline` is an atomic uint64_t; any thread may store it.
+//   * Handler fires when `consumed >= deadline`.
+//   * The handler signature is (gas_state*, void*); to extend the
+//     deadline (yield-style), store `consumed + slice` into it.
+//   * External interrupt = deadline.store(0, relaxed) — the next
+//     charge site observes `consumed >= 0` and fires the handler.
 
 #include "implementation_limits.hpp"
 #include "gas_heavy.wasm.hpp"
 #include <atomic>
+#include <chrono>
 #include <thread>
 
 static void gas_host_call() {}
@@ -30,12 +40,11 @@ BACKEND_TEST_CASE("gas: unlimited budget never traps", "[gas]") {
    backend_t bkend(code, &local_wa);
    rhf_t::resolve(bkend.get_module());
 
-   // Default state: strategy=off, unlimited budget → never traps.
+   // Default state: deadline=UINT64_MAX, handler=null → never traps.
    CHECK_NOTHROW(bkend.call("env", "call", uint32_t{100}));
 
-   // Enabling strategy with unlimited budget still never traps.
-   bkend.get_context().set_gas_strategy(psizam::gas_insertion_strategy::prepay_max);
-   bkend.get_context().set_gas_budget(psizam::gas_budget_unlimited);
+   // Explicitly setting an unlimited budget still never traps.
+   bkend.get_context().set_gas_budget(psizam::gas_units{psizam::gas_budget_unlimited});
    CHECK_NOTHROW(bkend.call("env", "call", uint32_t{100}));
 }
 
@@ -50,9 +59,8 @@ BACKEND_TEST_CASE("gas: trap throws wasm_gas_exhausted_exception", "[gas]") {
    backend_t bkend(code, &local_wa);
    rhf_t::resolve(bkend.get_module());
 
-   bkend.get_context().set_gas_strategy(psizam::gas_insertion_strategy::prepay_max);
-   bkend.get_context().set_gas_handler(nullptr);           // default → throw
-   bkend.get_context().set_gas_budget(5);                   // small budget
+   bkend.get_context().set_gas_handler(nullptr);                    // default → throw
+   bkend.get_context().set_gas_budget(psizam::gas_units{5});        // small budget
    // `call` recurses depth+1 times; depth=50 = 51 charges, well over 5.
    CHECK_THROWS_AS(bkend.call("env", "call", uint32_t{50}),
                    psizam::wasm_gas_exhausted_exception);
@@ -69,53 +77,53 @@ BACKEND_TEST_CASE("gas: user handler invoked on exhaustion (yield-style)", "[gas
    backend_t bkend(code, &local_wa);
    rhf_t::resolve(bkend.get_module());
 
-   // yield-style handler: restocks the counter + counts invocations,
-   // then returns so execution resumes. Tests the non-throwing handler
-   // path cleanly across every backend (JIT exception propagation has
-   // its own machinery exercised in other tests).
+   // yield-style handler: advances the deadline by a slice, counts
+   // invocations, and returns so execution resumes. Tests the
+   // non-throwing handler path cleanly across every backend (JIT
+   // exception propagation has its own machinery in other tests).
    static thread_local int yield_count;
    yield_count = 0;
-   using ctx_t = typename TestType::context;
-   bkend.get_context().set_gas_strategy(psizam::gas_insertion_strategy::prepay_max);
-   bkend.get_context().set_gas_handler(+[](void* ctx) {
+   bkend.get_context().set_gas_handler(+[](psizam::gas_state* gs, void*) {
       yield_count++;
-      static_cast<ctx_t*>(ctx)->restock_gas(1000);
+      // Advance deadline by a generous slice so execution resumes.
+      gs->deadline.store(gs->consumed + 1000, std::memory_order_relaxed);
    });
-   bkend.get_context().set_gas_budget(3);
+   bkend.get_context().set_gas_budget(psizam::gas_units{3});
    // depth=20 recurses 21 times → exhausts budget 3 → handler fires
-   // multiple times (each time it restocks 1000, letting execution resume).
+   // multiple times (each time it advances the deadline by 1000,
+   // letting execution resume).
    CHECK_NOTHROW(bkend.call("env", "call", uint32_t{20}));
    CHECK(yield_count > 0);
 }
 
 // Helper for the determinism test: instantiate a backend, set a fixed
-// budget, call `call(depth)`, and return the counter value observed
-// after the trap (by using a handler that snapshots the counter and
-// restocks). Every backend with the same budget + same call should
-// see the same final gas_counter value.
+// budget, call `call(depth)`, and return `consumed` at the first
+// handler invocation. A yield-style handler advances the deadline so
+// the trap-observation point is clean and execution finishes. Every
+// backend with the same budget + same call sees the same `consumed`.
 template <typename Impl>
-int64_t gas_count_to_trap(psizam::wasm_code& code, int64_t budget,
-                          uint32_t depth) {
+uint64_t gas_consumed_at_first_trap(psizam::wasm_code& code,
+                                    uint64_t budget, uint32_t depth) {
    using rhf_t     = psizam::registered_host_functions<psizam::standalone_function_t>;
    using backend_t = psizam::backend<rhf_t, Impl>;
    psizam::wasm_allocator local_wa;
    backend_t bkend(code, &local_wa);
    rhf_t::resolve(bkend.get_module());
 
-   using ctx_t = typename Impl::context;
-   static thread_local int64_t seen_counter = 0;
-   seen_counter = 0;
-   bkend.get_context().set_gas_strategy(psizam::gas_insertion_strategy::prepay_max);
-   bkend.get_context().set_gas_handler(+[](void* ctx) {
-      auto* c = static_cast<ctx_t*>(ctx);
-      if (seen_counter == 0) {
-         seen_counter = c->gas_counter().load(std::memory_order_relaxed);
+   static thread_local uint64_t seen_consumed;
+   static thread_local bool     seen;
+   seen_consumed = 0;
+   seen = false;
+   bkend.get_context().set_gas_handler(+[](psizam::gas_state* gs, void*) {
+      if (!seen) {
+         seen_consumed = gs->consumed;
+         seen = true;
       }
-      c->restock_gas(psizam::gas_budget_unlimited);
+      gs->deadline.store(psizam::gas_budget_unlimited, std::memory_order_relaxed);
    });
-   bkend.get_context().set_gas_budget(budget);
+   bkend.get_context().set_gas_budget(psizam::gas_units{budget});
    (void)bkend.call("env", "call", depth);
-   return seen_counter;
+   return seen_consumed;
 }
 
 TEST_CASE("gas: cross-backend determinism", "[gas][determinism]") {
@@ -126,28 +134,28 @@ TEST_CASE("gas: cross-backend determinism", "[gas][determinism]") {
 
    // Budget small enough to exhaust mid-recursion but large enough
    // to fire the handler at a well-defined point.
-   constexpr int64_t budget = 5;
-   constexpr uint32_t depth = 50;
+   constexpr uint64_t budget = 5;
+   constexpr uint32_t depth  = 50;
 
-   int64_t interp = gas_count_to_trap<psizam::interpreter>(code, budget, depth);
-   INFO("interpreter trapped with counter=" << interp);
-   REQUIRE(interp < 0);
+   uint64_t interp = gas_consumed_at_first_trap<psizam::interpreter>(code, budget, depth);
+   INFO("interpreter first-trap consumed=" << interp);
+   REQUIRE(interp >= budget);
 #if defined(__x86_64__) || defined(__aarch64__)
-   int64_t j1 = gas_count_to_trap<psizam::jit>(code, budget, depth);
-   int64_t j2 = gas_count_to_trap<psizam::jit2>(code, budget, depth);
-   INFO("jit trapped with counter=" << j1);
-   INFO("jit2 trapped with counter=" << j2);
+   uint64_t j1 = gas_consumed_at_first_trap<psizam::jit>(code, budget, depth);
+   uint64_t j2 = gas_consumed_at_first_trap<psizam::jit2>(code, budget, depth);
+   INFO("jit first-trap consumed=" << j1);
+   INFO("jit2 first-trap consumed=" << j2);
    CHECK(j1 == interp);
    CHECK(j2 == interp);
 #endif
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-   int64_t jl = gas_count_to_trap<psizam::jit_llvm>(code, budget, depth);
-   INFO("jit_llvm trapped with counter=" << jl);
+   uint64_t jl = gas_consumed_at_first_trap<psizam::jit_llvm>(code, budget, depth);
+   INFO("jit_llvm first-trap consumed=" << jl);
    CHECK(jl == interp);
 #endif
 }
 
-BACKEND_TEST_CASE("gas: external interrupt via atomic store(-1)", "[gas][interrupt]") {
+BACKEND_TEST_CASE("gas: external interrupt via deadline store(0)", "[gas][interrupt]") {
    using rhf_t     = psizam::registered_host_functions<psizam::standalone_function_t>;
    using backend_t = psizam::backend<rhf_t, TestType>;
    rhf_t::add<&gas_host_call>("env", "host.call");
@@ -158,17 +166,74 @@ BACKEND_TEST_CASE("gas: external interrupt via atomic store(-1)", "[gas][interru
    backend_t bkend(code, &local_wa);
    rhf_t::resolve(bkend.get_module());
 
-   bkend.get_context().set_gas_strategy(psizam::gas_insertion_strategy::prepay_max);
-   bkend.get_context().set_gas_atomic(true);           // cross-thread visibility
-   bkend.get_context().set_gas_budget(psizam::gas_budget_unlimited);
+   bkend.get_context().set_gas_budget(psizam::gas_units{psizam::gas_budget_unlimited});
    bkend.get_context().set_gas_handler(nullptr);
 
-   // Fire the interrupt immediately; the next function-entry check
-   // observes the -1 counter and throws. No need to race with a live
-   // thread — the counter store happens-before the call.
-   bkend.get_context().gas_counter().store(-1, std::memory_order_relaxed);
+   // Fire the interrupt immediately: deadline=0 means any consumed bump
+   // trips the handler. The next function-entry charge site throws.
+   // No race with a live thread — the deadline store happens-before
+   // the call. (Live-thread variant is `gas: cross-thread interrupt`.)
+   bkend.get_context().gas().deadline.store(0, std::memory_order_relaxed);
    CHECK_THROWS_AS(bkend.call("env", "call", uint32_t{10}),
                    psizam::wasm_gas_exhausted_exception);
+}
+
+// Cross-thread interrupt: a watcher thread shortens the deadline while
+// the backend is mid-execution. Every charge site re-reads the atomic
+// deadline (relaxed load) so the interrupt is observed within one
+// charge-site latency. Acceptance criterion from
+// .issues/psizam-gas-state-redesign.md:
+//   "watcher thread stores a smaller deadline mid-execution; running
+//    backend traps within one loop iteration on modes that declare
+//    interrupt=true."
+BACKEND_TEST_CASE("gas: cross-thread interrupt via watcher thread",
+                  "[gas][interrupt][cross-thread]") {
+   using rhf_t     = psizam::registered_host_functions<psizam::standalone_function_t>;
+   using backend_t = psizam::backend<rhf_t, TestType>;
+   rhf_t::add<&gas_host_call>("env", "host.call");
+
+   psizam::wasm_code code(gas_heavy_wasm, gas_heavy_wasm + gas_heavy_wasm_len);
+   psizam::wasm_allocator local_wa;
+   backend_t bkend(code, &local_wa);
+   rhf_t::resolve(bkend.get_module());
+
+   bkend.get_context().set_gas_budget(psizam::gas_units{psizam::gas_budget_unlimited});
+   bkend.get_context().set_gas_handler(nullptr);
+
+   // A "running" flag so the watcher thread doesn't fire before the
+   // backend has actually started executing — otherwise the interrupt
+   // collapses into the set-before-call case.
+   std::atomic<bool> running{false};
+   auto* gs = &bkend.get_context().gas();
+   std::thread watcher([&]() {
+      while (!running.load(std::memory_order_acquire)) {
+         std::this_thread::yield();
+      }
+      // Give the WASM loop a moment to start making progress, then
+      // interrupt. The store is relaxed — the next charge site will
+      // observe it regardless of memory ordering.
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      gs->deadline.store(0, std::memory_order_relaxed);
+   });
+
+   running.store(true, std::memory_order_release);
+
+   // loop_div runs (a / b) in a tight iters-iteration loop. With iters
+   // large and budget unlimited this would run for a long time if the
+   // watcher never fired. Anything under a second is evidence the
+   // interrupt was observed within a handful of loop iterations.
+   constexpr uint32_t huge_iters = 100'000'000;
+   auto t0 = std::chrono::steady_clock::now();
+   CHECK_THROWS_AS(bkend.call("env", "loop_div",
+                              int64_t{1'000'000}, int64_t{3}, huge_iters),
+                   psizam::wasm_gas_exhausted_exception);
+   auto elapsed = std::chrono::steady_clock::now() - t0;
+   watcher.join();
+
+   // Latency bound: interrupt observed well before the loop would
+   // naturally complete. 1 second is generous — actual latency should
+   // be microseconds. Keeps the test non-flaky on slow CI.
+   CHECK(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() < 1);
 }
 
 // ── Phase-4 heavy-opcode accounting ──────────────────────────────────
@@ -190,44 +255,44 @@ BACKEND_TEST_CASE("gas: external interrupt via atomic store(-1)", "[gas][interru
 //                         iteration on top of the 1-per-back-edge
 //                         baseline).
 
-// Variant of gas_count_to_trap that targets an arbitrary export
-// (keeps the yield-style handler semantics so the trap point is
-// visible as a counter snapshot).
+// Variant of gas_consumed_at_first_trap that targets an arbitrary
+// export. Keeps the yield-style handler semantics so the trap point
+// is visible as a consumed snapshot.
 template <typename Impl>
-int64_t gas_count_to_trap_export(psizam::wasm_code& code,
-                                 const char* export_name,
-                                 int64_t budget,
-                                 uint32_t depth) {
+uint64_t gas_consumed_at_first_trap_export(psizam::wasm_code& code,
+                                           const char* export_name,
+                                           uint64_t budget,
+                                           uint32_t depth) {
    using rhf_t     = psizam::registered_host_functions<psizam::standalone_function_t>;
    using backend_t = psizam::backend<rhf_t, Impl>;
    psizam::wasm_allocator local_wa;
    backend_t bkend(code, &local_wa);
    rhf_t::resolve(bkend.get_module());
 
-   using ctx_t = typename Impl::context;
-   static thread_local int64_t seen_counter = 0;
-   seen_counter = 0;
-   bkend.get_context().set_gas_strategy(psizam::gas_insertion_strategy::prepay_max);
-   bkend.get_context().set_gas_handler(+[](void* ctx) {
-      auto* c = static_cast<ctx_t*>(ctx);
-      if (seen_counter == 0) {
-         seen_counter = c->gas_counter().load(std::memory_order_relaxed);
+   static thread_local uint64_t seen_consumed;
+   static thread_local bool     seen;
+   seen_consumed = 0;
+   seen = false;
+   bkend.get_context().set_gas_handler(+[](psizam::gas_state* gs, void*) {
+      if (!seen) {
+         seen_consumed = gs->consumed;
+         seen = true;
       }
-      c->restock_gas(psizam::gas_budget_unlimited);
+      gs->deadline.store(psizam::gas_budget_unlimited, std::memory_order_relaxed);
    });
-   bkend.get_context().set_gas_budget(budget);
+   bkend.get_context().set_gas_budget(psizam::gas_units{budget});
    (void)bkend.call("env", export_name, depth);
-   return seen_counter;
+   return seen_consumed;
 }
 
 // Prologue-extras cross-backend determinism.
 //
 // call.indirect's body contains one call_indirect outside any loop,
 // so the parser folds +4 (call_indirect weight 5 − regular 1) into
-// prologue_gas_extra. Every function-entry charge decrements the
-// counter by (body_bytes + 4). With a small budget the first such
-// charge traps immediately, and every backend sees the same
-// counter value — that equality is what this test asserts.
+// prologue_gas_extra. Every function-entry charge bumps consumed by
+// (body_bytes + 4). With a small budget the first such charge trips
+// the handler, and every backend sees the same `consumed` value —
+// that equality is what this test asserts.
 //
 // (Why the interpreter matches despite its top-level execute() not
 // going through context.call(): the trap fires on the first
@@ -241,34 +306,34 @@ TEST_CASE("gas: heavy-op prologue-extra cross-backend determinism",
    psizam::wasm_code code(implementation_limits_wasm,
                           implementation_limits_wasm + implementation_limits_wasm_len);
 
-   constexpr int64_t  budget = 5;
+   constexpr uint64_t budget = 5;
    constexpr uint32_t depth  = 50;
 
-   int64_t interp = gas_count_to_trap_export<psizam::interpreter>(
+   uint64_t interp = gas_consumed_at_first_trap_export<psizam::interpreter>(
       code, "call.indirect", budget, depth);
-   INFO("interpreter trapped with counter=" << interp);
-   REQUIRE(interp < 0);
+   INFO("interpreter first-trap consumed=" << interp);
+   REQUIRE(interp >= budget);
 #if defined(__x86_64__) || defined(__aarch64__)
-   int64_t j1 = gas_count_to_trap_export<psizam::jit>(
+   uint64_t j1 = gas_consumed_at_first_trap_export<psizam::jit>(
       code, "call.indirect", budget, depth);
-   int64_t j2 = gas_count_to_trap_export<psizam::jit2>(
+   uint64_t j2 = gas_consumed_at_first_trap_export<psizam::jit2>(
       code, "call.indirect", budget, depth);
-   INFO("jit trapped with counter=" << j1);
-   INFO("jit2 trapped with counter=" << j2);
+   INFO("jit first-trap consumed=" << j1);
+   INFO("jit2 first-trap consumed=" << j2);
    CHECK(j1 == interp);
    CHECK(j2 == interp);
 #endif
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-   int64_t jl = gas_count_to_trap_export<psizam::jit_llvm>(
+   uint64_t jl = gas_consumed_at_first_trap_export<psizam::jit_llvm>(
       code, "call.indirect", budget, depth);
-   INFO("jit_llvm trapped with counter=" << jl);
+   INFO("jit_llvm first-trap consumed=" << jl);
    CHECK(jl == interp);
 #endif
 }
 
 // Per-backend weighted-charge sanity check.
 //
-// Running N iterations of gas_heavy_wasm's loop_div charges
+// Running N iterations of gas_heavy_wasm's loop_div consumes
 // iters × (1 + div_rem_extra) = iters × 10 at the loop header,
 // plus a single body-bytes prepay at function entry. If the
 // heavy-op extra isn't being folded into the loop-header charge,
@@ -287,23 +352,20 @@ BACKEND_TEST_CASE("gas: heavy-op loop-extra per-backend",
    backend_t bkend(code, &local_wa);
    rhf_t::resolve(bkend.get_module());
 
-   constexpr int64_t  budget_start    = psizam::gas_budget_unlimited;
-   constexpr uint32_t iters           = 1000;
-   constexpr int64_t  per_iter_extra  = psizam::gas_costs::div_rem
-                                      - psizam::gas_costs::regular;  // 9
-   constexpr int64_t  per_iter_weighted = 1 + per_iter_extra;         // 10
+   constexpr uint32_t iters             = 1000;
+   constexpr int64_t  per_iter_extra    = psizam::gas_costs::div_rem
+                                        - psizam::gas_costs::regular;  // 9
+   constexpr int64_t  per_iter_weighted = 1 + per_iter_extra;          // 10
 
-   bkend.get_context().set_gas_strategy(psizam::gas_insertion_strategy::prepay_max);
    bkend.get_context().set_gas_handler(nullptr);  // trap if we overrun
-   bkend.get_context().set_gas_budget(budget_start);
+   bkend.get_context().set_gas_budget(psizam::gas_units{psizam::gas_budget_unlimited});
    (void)bkend.call("env", "loop_div",
                     int64_t{1'000'000}, int64_t{3}, iters);
 
-   int64_t consumed = budget_start
-      - bkend.get_context().gas_counter().load(std::memory_order_relaxed);
+   uint64_t consumed = bkend.get_context().gas().consumed;
    INFO("consumed=" << consumed << " iters=" << iters
         << " per_iter_weighted=" << per_iter_weighted);
 
-   CHECK(consumed >= iters * per_iter_weighted);
-   CHECK(consumed <= 3 * iters * per_iter_weighted);
+   CHECK(consumed >= static_cast<uint64_t>(iters * per_iter_weighted));
+   CHECK(consumed <= static_cast<uint64_t>(3 * iters * per_iter_weighted));
 }
