@@ -785,44 +785,49 @@ namespace psizam::detail {
 
       // ──────── Gas metering ────────
 
-      // Three-way gas charge emission mirroring aarch64.hpp::emit_gas_charge.
-      // Unlike jit1, no patching is needed — codegen runs after the parser
-      // accumulates heavy-op extras, so the final cost is known at emit time.
+      // gas_state redesign — universal memory-deadline shape mirroring
+      // aarch64.hpp::emit_gas_charge. Unlike jit1, no patching is needed
+      // — codegen runs after the parser accumulates heavy-op extras, so
+      // the final cost is known at emit time.
+      //
+      //   LDR  X8,  [X19, #consumed_off]
+      //   (SUB/ADD imm12 or via X16 for larger costs)
+      //   STR  X8,  [X19, #consumed_off]
+      //   LDR  X9,  [X19, #deadline_off]
+      //   CMP  X8,  X9
+      //   B.LO done
+      //   call __psizam_gas_exhausted_check(ctx=X0)
+      //   done:
       void emit_gas_charge(int64_t cost) {
          using ctx_t = jit_execution_context<false>;
-         const uint32_t strategy_off = static_cast<uint32_t>(ctx_t::gas_strategy_offset());
-         const uint32_t atomic_off   = static_cast<uint32_t>(ctx_t::gas_atomic_offset());
-         const uint32_t counter_off  = static_cast<uint32_t>(ctx_t::gas_counter_offset());
+         const uint32_t consumed_off = static_cast<uint32_t>(ctx_t::gas_consumed_offset());
+         const uint32_t deadline_off = static_cast<uint32_t>(ctx_t::gas_deadline_offset());
 
-         // LDRB W8, [X19, #strategy_off]
-         emit32(0x39400268u | ((strategy_off & 0xFFF) << 10));
-         auto* cbz_done_pos = reinterpret_cast<uint8_t*>(code);
-         emit32(0x34000008u); // CBZ W8, done (patched)
+         PSIZAM_ASSERT((consumed_off & 7) == 0 && (consumed_off / 8) < 4096,
+                        wasm_interpreter_exception, "consumed offset outside LDR range");
+         PSIZAM_ASSERT((deadline_off & 7) == 0 && (deadline_off / 8) < 4096,
+                        wasm_interpreter_exception, "deadline offset outside LDR range");
 
-         // LDRB W8, [X19, #atomic_off]
-         emit32(0x39400268u | ((atomic_off & 0xFFF) << 10));
-         auto* cbnz_helper_pos = reinterpret_cast<uint8_t*>(code);
-         emit32(0x35000008u); // CBNZ W8, helper_path (patched)
-
-         // Inline non-atomic fast path
-         // LDR X8, [X19, #counter_off]
-         PSIZAM_ASSERT((counter_off & 7) == 0 && (counter_off / 8) < 4096,
-                        wasm_interpreter_exception, "counter offset outside LDR range");
-         emit32(0xF9400268u | (((counter_off / 8) & 0xFFF) << 10));
+         // LDR X8, [X19, #consumed_off]
+         emit32(0xF9400268u | (((consumed_off / 8) & 0xFFF) << 10));
          const uint64_t ucost = static_cast<uint64_t>(cost);
          if (cost > 0 && ucost <= 4095) {
-            // SUBS X8, X8, #imm12
-            emit32(0xF1000108u | (static_cast<uint32_t>(ucost) << 10));
+            // ADD X8, X8, #imm12 — sf=1, op=ADD, sh=0, imm12, Rn=X8, Rd=X8
+            emit32(0x91000108u | (static_cast<uint32_t>(ucost) << 10));
          } else {
             emit_mov_imm64(X16, ucost);
-            // SUBS X8, X8, X16
-            emit32(0xEB100108u);
+            // ADD X8, X8, X16 — sf=1, op=ADD, shift=0, Rm=X16, imm6=0, Rn=X8, Rd=X8
+            emit32(0x8B100108u);
          }
-         // STR X8, [X19, #counter_off]
-         emit32(0xF9000268u | (((counter_off / 8) & 0xFFF) << 10));
-         // B.PL done (cond=0101)
-         auto* bpl_done_pos = reinterpret_cast<uint8_t*>(code);
-         emit32(0x54000005u); // patched
+         // STR X8, [X19, #consumed_off]
+         emit32(0xF9000268u | (((consumed_off / 8) & 0xFFF) << 10));
+         // LDR X9, [X19, #deadline_off]
+         emit32(0xF9400269u | (((deadline_off / 8) & 0xFFF) << 10));
+         // CMP X8, X9 — SUBS XZR, X8, X9 (sf=1, Rm=X9, Rn=X8, Rd=XZR=31)
+         emit32(0xEB09011Fu);
+         // B.LO done (unsigned less-than → skip; cond=0b0011)
+         auto* blo_done_pos = reinterpret_cast<uint8_t*>(code);
+         emit32(0x54000003u); // patched
 
          // Slow path: call __psizam_gas_exhausted_check(ctx)
          emit32(0xAA1303E0u); // MOV X0, X19
@@ -830,34 +835,14 @@ namespace psizam::detail {
          emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_gas_exhausted_check));
          emit32(0xD63F0100u); // BLR X8
          emit_pop(X20); emit_pop(X19);
-         auto* b_done_pos = reinterpret_cast<uint8_t*>(code);
-         emit32(0x14000000u); // B done (patched)
-
-         // helper_path: atomic via __psizam_gas_charge(ctx, cost)
-         auto* helper_path_target = reinterpret_cast<uint8_t*>(code);
-         emit32(0xAA1303E0u); // MOV X0, X19
-         emit_mov_imm64(X1, static_cast<uint64_t>(cost));
-         emit_push(X19); emit_push(X20);
-         emit_mov_imm64(X8, reinterpret_cast<uint64_t>(&__psizam_gas_charge));
-         emit32(0xD63F0100u); // BLR X8
-         emit_pop(X20); emit_pop(X19);
 
          // done:
          auto* done_target = reinterpret_cast<uint8_t*>(code);
-
-         // Patch forward branches
          auto patch_cb = [](uint8_t* pos, ptrdiff_t delta, uint32_t base) {
             uint32_t insn = base | ((delta & 0x7FFFF) << 5);
             std::memcpy(pos, &insn, 4);
          };
-         patch_cb(cbz_done_pos,    (done_target - cbz_done_pos) / 4,            0x34000008u);
-         patch_cb(cbnz_helper_pos, (helper_path_target - cbnz_helper_pos) / 4,  0x35000008u);
-         patch_cb(bpl_done_pos,    (done_target - bpl_done_pos) / 4,            0x54000005u);
-         {
-            ptrdiff_t delta = (done_target - b_done_pos) / 4;
-            uint32_t insn = 0x14000000u | (delta & 0x03FFFFFFu);
-            std::memcpy(b_done_pos, &insn, 4);
-         }
+         patch_cb(blo_done_pos,    (done_target - blo_done_pos) / 4,            0x54000003u);
       }
 
       // ──────── Function prologue/epilogue ────────

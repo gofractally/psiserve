@@ -210,72 +210,54 @@ namespace psizam::detail {
          emit(RET);
       }
 
-      // Prologue max includes the gas_charge three-way fan (~65 bytes).
+      // Prologue max includes the gas_charge universal-memory-deadline
+      // sequence (~40 bytes).
       static constexpr std::size_t max_prologue_size = 128;
       static constexpr std::size_t max_epilogue_size = 16; // single-value epilogue
 
-      // Phase 3 gas_charge: three-way emission.
+      // gas_state redesign — universal memory-deadline shape:
       //
-      //   cmpb $0, strategy_off(%rdi) ; skip entirely when off
-      //   je    done
-      //   cmpb $0, atomic_off(%rdi)   ; atomic path goes through helper
-      //   jne   helper_path
-      //   ── inline non-atomic fast path ──
-      //   subq  $cost, counter_off(%rdi)
-      //   jns   done
+      //   movq  consumed_off(%rdi), %rax     ; load consumed (plain u64)
+      //   addq  $cost, %rax                  ; imm32 (always) so it can be patched
+      //   movq  %rax, consumed_off(%rdi)     ; store back
+      //   cmpq  deadline_off(%rdi), %rax     ; relaxed atomic load + cmp
+      //   jb    done                         ; consumed < deadline → skip
+      //   pushq %rdi / %rsi                  ; preserve caller-saved
       //   movabsq $&__psizam_gas_exhausted_check, %rax
-      //   pushq %rdi / %rsi  (preserve caller-saved)
-      //   call  *%rax
+      //   call   *%rax
       //   popq  %rsi / %rdi
-      //   jmp   done
-      //   helper_path:
-      //   ── atomic path via __psizam_gas_charge ──
-      //   pushq %rdi / %rsi ; movl $cost, %esi ; movabsq helper ; call ; pops
       //   done:
       //
-      // Non-atomic hot path: cmp + je-NT + cmp + jne-NT + subq + jns-T.
-      // Taken branches are predicted; non-taken too after warmup.
+      // Single memory-form add (`addq imm32, m64`) would fuse the load
+      // and the store but then we couldn't read the post-store value
+      // into a register for the compare. Explicit load/add/store keeps
+      // the post-value live in %rax for the subsequent compare.
       //
-      // Returns a pointer to the subq immediate (imm32, 4 bytes) so
-      // the parser can patch the cost once the surrounding scope
-      // (function body or loop body) has finished accumulating heavy-
-      // opcode extras. Use REX.W 0x81 /5 unconditionally — the ~3
-      // wasted bytes per charge when cost fits in imm8 are the price
-      // of being able to patch without relocating the branches below.
+      // Returns a pointer to the addq immediate (imm32, 4 bytes) so the
+      // parser can patch the cost once the surrounding scope (function
+      // body or loop body) has finished accumulating heavy-opcode extras.
       void* emit_gas_charge(int64_t cost) {
          using ctx_t = jit_execution_context<false>;
-         const uint32_t strategy_off = static_cast<uint32_t>(ctx_t::gas_strategy_offset());
-         const uint32_t atomic_off   = static_cast<uint32_t>(ctx_t::gas_atomic_offset());
-         const uint32_t counter_off  = static_cast<uint32_t>(ctx_t::gas_counter_offset());
+         const uint32_t consumed_off = static_cast<uint32_t>(ctx_t::gas_consumed_offset());
+         const uint32_t deadline_off = static_cast<uint32_t>(ctx_t::gas_deadline_offset());
 
-         // cmpb $0, strategy_off(%rdi)     7 bytes
-         emit_bytes(0x80, 0xBF);
-         emit_operand32(strategy_off);
-         emit_bytes(0x00);
-         // je done_rel8 — patched below (jump to the `done:` label)
-         auto* je_done_imm = reinterpret_cast<uint8_t*>(code) + 1;
-         emit_bytes(0x74, 0x00);
-
-         // cmpb $0, atomic_off(%rdi)       7 bytes
-         emit_bytes(0x80, 0xBF);
-         emit_operand32(atomic_off);
-         emit_bytes(0x00);
-         // jne helper_path — patched below
-         auto* jne_helper_imm = reinterpret_cast<uint8_t*>(code) + 1;
-         emit_bytes(0x75, 0x00);
-
-         // ── inline non-atomic fast path ──
-         // subq $cost, counter_off(%rdi) — REX.W 0x81 /5 (imm32, 11 bytes)
-         // Always imm32 so the imm can be patched post-hoc with larger
-         // costs (heavy-op extras accumulated over the scope) without
-         // shifting the downstream jumps.
-         emit_bytes(0x48, 0x81, 0xAF);
-         emit_operand32(counter_off);
+         // movq consumed_off(%rdi), %rax   REX.W 0x8B /r (disp32)
+         emit_bytes(0x48, 0x8B, 0x87);
+         emit_operand32(consumed_off);
+         // addq $imm32, %rax              REX.W 0x81 /0 (imm32, always)
+         emit_bytes(0x48, 0x05);
          uint8_t* gas_imm_ptr = reinterpret_cast<uint8_t*>(code);
          emit_operand32(static_cast<uint32_t>(cost));
-         // jns done_rel8
-         auto* jns_done_imm = reinterpret_cast<uint8_t*>(code) + 1;
-         emit_bytes(0x79, 0x00);
+         // movq %rax, consumed_off(%rdi)  REX.W 0x89 /r (disp32)
+         emit_bytes(0x48, 0x89, 0x87);
+         emit_operand32(consumed_off);
+         // cmpq deadline_off(%rdi), %rax  REX.W 0x3B /r (disp32) — cmp rax, [rdi+off]
+         // (this computes rax - [deadline]; sets CF if rax < [deadline] unsigned)
+         emit_bytes(0x48, 0x3B, 0x87);
+         emit_operand32(deadline_off);
+         // jb done_rel8 — consumed < deadline → skip
+         auto* jb_done_imm = reinterpret_cast<uint8_t*>(code) + 1;
+         emit_bytes(0x72, 0x00);
          // Slow path: call __psizam_gas_exhausted_check(ctx)
          emit_bytes(0x57);                                 // pushq %rdi
          emit_bytes(0x56);                                 // pushq %rsi
@@ -283,29 +265,10 @@ namespace psizam::detail {
          emit(CALL, rax);
          emit_bytes(0x5e);                                 // popq %rsi
          emit_bytes(0x5f);                                 // popq %rdi
-         // jmp done_rel8 — patched below
-         auto* jmp_done_imm = reinterpret_cast<uint8_t*>(code) + 1;
-         emit_bytes(0xeb, 0x00);
-
-         // ── helper_path: atomic via __psizam_gas_charge ──
-         auto* helper_path_target = reinterpret_cast<uint8_t*>(code);
-         emit_bytes(0x57);                                 // pushq %rdi
-         emit_bytes(0x56);                                 // pushq %rsi
-         emit_bytes(0xbe);                                 // mov $cost, %esi
-         emit_operand32(static_cast<uint32_t>(cost));
-         emit_mov(&__psizam_gas_charge, rax);
-         emit(CALL, rax);
-         emit_bytes(0x5e);                                 // popq %rsi
-         emit_bytes(0x5f);                                 // popq %rdi
 
          // done:
          auto* done_target = reinterpret_cast<uint8_t*>(code);
-
-         // Patch the jumps
-         *je_done_imm     = static_cast<uint8_t>(done_target        - (je_done_imm + 1));
-         *jne_helper_imm  = static_cast<uint8_t>(helper_path_target - (jne_helper_imm + 1));
-         *jns_done_imm    = static_cast<uint8_t>(done_target        - (jns_done_imm + 1));
-         *jmp_done_imm    = static_cast<uint8_t>(done_target        - (jmp_done_imm + 1));
+         *jb_done_imm = static_cast<uint8_t>(done_target - (jb_done_imm + 1));
          return gas_imm_ptr;
       }
 

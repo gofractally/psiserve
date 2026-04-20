@@ -225,54 +225,41 @@ namespace psizam::detail {
       llvm::Function* sf_f32_demote_f64 = nullptr;
       llvm::Function* sf_f64_promote_f32 = nullptr;
 
-      // Emit the three-way gas check at the current builder insertion
-      // point. Used at function entry and at every loop header so each
-      // iteration pays gas. Leaves the builder positioned at the
-      // gas_done block so callers resume from a well-defined point.
+      // gas_state redesign — universal memory-deadline shape. Used at
+      // function entry and at every loop header so each iteration pays
+      // gas. Leaves the builder positioned at gas_done so callers
+      // resume from a well-defined point.
+      //
+      //   consumed = *(ctx + consumed_off)     ; plain u64 load
+      //   consumed += cost
+      //   *(ctx + consumed_off) = consumed
+      //   deadline = *(ctx + deadline_off)     ; relaxed atomic load (plain u64 on x86/arm)
+      //   if (consumed < deadline) goto done
+      //   call __psizam_gas_exhausted_check(ctx)
+      //   done:
       void emit_gas_prologue_check(llvm::IRBuilder<>& builder,
                                    llvm::Value* ctx_ptr, int64_t cost) {
          auto* fn = builder.GetInsertBlock()->getParent();
-         const std::size_t strategy_off = detail::jit_execution_context<false>::gas_strategy_offset();
-         const std::size_t atomic_off   = detail::jit_execution_context<false>::gas_atomic_offset();
-         const std::size_t counter_off  = detail::jit_execution_context<false>::gas_counter_offset();
+         const std::size_t consumed_off = detail::jit_execution_context<false>::gas_consumed_offset();
+         const std::size_t deadline_off = detail::jit_execution_context<false>::gas_deadline_offset();
 
-         auto* strategy_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr, strategy_off, "strategy_ptr");
-         auto* strategy_val = builder.CreateLoad(i8_ty, strategy_gep, "strategy");
-         auto* gas_on = builder.CreateICmpNE(strategy_val,
-            llvm::ConstantInt::get(i8_ty, 0), "gas_on");
+         auto* gas_trap_bb = llvm::BasicBlock::Create(*ctx, "gas_trap", fn);
+         auto* gas_done_bb = llvm::BasicBlock::Create(*ctx, "gas_done", fn);
 
-         auto* gas_on_bb     = llvm::BasicBlock::Create(*ctx, "gas_on",     fn);
-         auto* gas_fast_bb   = llvm::BasicBlock::Create(*ctx, "gas_fast",   fn);
-         auto* gas_trap_bb   = llvm::BasicBlock::Create(*ctx, "gas_trap",   fn);
-         auto* gas_helper_bb = llvm::BasicBlock::Create(*ctx, "gas_helper", fn);
-         auto* gas_done_bb   = llvm::BasicBlock::Create(*ctx, "gas_done",   fn);
+         auto* consumed_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr, consumed_off, "consumed_ptr");
+         auto* cur = builder.CreateLoad(i64_ty, consumed_gep, "consumed_cur");
+         auto* next = builder.CreateAdd(cur,
+            llvm::ConstantInt::get(i64_ty, cost, /*signed*/true), "consumed_next");
+         builder.CreateStore(next, consumed_gep);
 
-         builder.CreateCondBr(gas_on, gas_on_bb, gas_done_bb);
-
-         builder.SetInsertPoint(gas_on_bb);
-         auto* atomic_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr, atomic_off, "atomic_ptr");
-         auto* atomic_val = builder.CreateLoad(i8_ty, atomic_gep, "gas_atomic");
-         auto* is_atomic = builder.CreateICmpNE(atomic_val,
-            llvm::ConstantInt::get(i8_ty, 0), "is_atomic");
-         builder.CreateCondBr(is_atomic, gas_helper_bb, gas_fast_bb);
-
-         builder.SetInsertPoint(gas_fast_bb);
-         auto* counter_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr, counter_off, "counter_ptr");
-         auto* cur = builder.CreateLoad(i64_ty, counter_gep, "cur");
-         auto* next = builder.CreateSub(cur,
-            llvm::ConstantInt::get(i64_ty, cost, /*signed*/true), "next");
-         builder.CreateStore(next, counter_gep);
-         auto* negative = builder.CreateICmpSLT(next,
-            llvm::ConstantInt::get(i64_ty, 0), "gas_negative");
-         builder.CreateCondBr(negative, gas_trap_bb, gas_done_bb);
+         auto* deadline_gep = builder.CreateConstGEP1_64(i8_ty, ctx_ptr, deadline_off, "deadline_ptr");
+         auto* deadline_val = builder.CreateLoad(i64_ty, deadline_gep, "deadline");
+         // Unsigned compare: consumed < deadline → skip (both are u64).
+         auto* ok = builder.CreateICmpULT(next, deadline_val, "gas_ok");
+         builder.CreateCondBr(ok, gas_done_bb, gas_trap_bb);
 
          builder.SetInsertPoint(gas_trap_bb);
          builder.CreateCall(rt_gas_exhausted_check, {ctx_ptr});
-         builder.CreateBr(gas_done_bb);
-
-         builder.SetInsertPoint(gas_helper_bb);
-         builder.CreateCall(rt_gas_charge,
-            {ctx_ptr, llvm::ConstantInt::get(i64_ty, cost, /*signed*/true)});
          builder.CreateBr(gas_done_bb);
 
          builder.SetInsertPoint(gas_done_bb);
