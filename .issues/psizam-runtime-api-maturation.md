@@ -30,6 +30,77 @@ split into a **gas-independent** track that can land immediately and a
 **gas-dependent** carve-out that waits on `psizam-gas-state-redesign`
 Phase B.
 
+## Progress
+
+### Completed (2026-04-19 / 2026-04-20)
+
+- **Foundations**
+  - `psizam/runtime_limits.hpp` typed-int aliases (`wasm_pages`,
+    `stack_bytes`, `call_depth`, `table_entries`, `ms_duration`,
+    `us_duration`, `host_bytes`, `host_gb`) + UDLs. Conditional `ucc`
+    link in `libraries/psizam/CMakeLists.txt`. Verified compile +
+    cross-tag rejection. — commit `e9b9a12`
+- **Step 1 — backend-kind dispatch in `instance_impl`**
+  - New header `psizam/detail/instance_be.hpp`: abstract base +
+    `backend_kind` enum + `make_instance_be()` factory declaration.
+  - Per-backend `detail::instance_be_impl<Impl>` defined in
+    `runtime.cpp` for interpreter / jit / jit2 / jit_llvm. Factory
+    gates jit/jit2 on `__x86_64__`/`__aarch64__` and jit_llvm on
+    `PSIZAM_ENABLE_LLVM_BACKEND` with clear runtime-rejected
+    diagnostics for unbuilt backends.
+  - `instance_impl` now owns `unique_ptr<instance_be>`;
+    `linear_memory()`, `memory_size()`, `backend_ptr()` route through
+    the abstract interface.
+  - `runtime::instantiate` maps `instance_policy::compile_tier` →
+    `detail::backend_kind` via `tier_to_backend_kind()` helper.
+  - `examples/runtime_resource` updated to explicitly request
+    `compile_tier::interpret` (its direct `backend_ptr()` cast
+    relies on Step 10 for cross-backend support).
+  — commit `41c7153`
+- **Step 5 — `instance::run_start()` convenience**
+  - Added `int run_start(void*)` virtual to `instance_be`; per-backend
+    impl runs `module.start` (if `!= UINT32_MAX`) then resolves and
+    calls `_start`; catches `wasi_host::wasi_exit_exception` and
+    returns its code; returns 0 on normal exit.
+  - Public `int instance::run_start()` declared in `runtime.hpp`,
+    forwards to the impl with the stored `host_ptr`.
+  — commit `5edf26f`
+
+### In progress
+
+- **Step 3 — `runtime::load_cached` absorbs `pzam_run` loader**
+  (next; ~350 lines from `tools/pzam_run.cpp` 87–344 moves into
+  `runtime::load_cached`).
+
+### Blocked / deferred
+
+- **`hello_runtime` / `psizam_runtime_resource` examples** — fail to
+  build at HEAD due to the pre-existing `gas_handler_t` redefinition
+  between `gas.hpp` (`void(*)(void*)`) and `runtime.hpp`
+  (`void(*)(gas_state*, void*)`). This is the exact collision
+  `psizam-gas-state-redesign` exists to resolve. Verified pre-existing
+  on `origin/main`, not introduced by this work. Track A code is
+  syntactically valid and would build cleanly once Phase B of that
+  issue lands.
+- **Track B** (gas-dependent): Step 2 (prepare with injector),
+  Step 4 (instantiate completes with gas_state population),
+  cache-key / `.pzam` v2 — carve out into follow-up
+  `psizam-runtime-gas-integration` once `psizam-gas-state-redesign`
+  Phase B ships.
+- **Step 10** (`instance::as<Tag>` proxy across backend kinds) —
+  awaits the call-erasure extension to `instance_be`. Until then,
+  `as<Tag>()` keeps the interpreter-hardcoded cast; callers that need
+  jit/jit2/jit_llvm must use `backend_ptr()` directly with knowledge
+  of the kind.
+
+### Verified clean
+
+- `composition_tests` and `pzam-run` build successfully against the
+  Step-1 + Step-5 changes (no regressions).
+- `runtime_limits.hpp` compiles standalone and produces clear
+  diagnostics for cross-tag arithmetic.
+- All commits on `origin/main`.
+
 ## Approved DX spec
 
 ### Three configuration scopes
