@@ -190,12 +190,20 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_19_wasm>", "[simd_const_19_wasm_tes
 
 }
 
+BACKEND_TEST_CASE( "Testing wasm <simd_const_197_wasm>", "[simd_const_197_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "simd_const.197.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922816u,645922816u,645922816u,645922816u));
+}
+
 BACKEND_TEST_CASE( "Testing wasm <simd_const_198_wasm>", "[simd_const_198_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.198.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922816u,645922816u,645922816u,645922816u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406464u,2793406464u,2793406464u,2793406464u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_199_wasm>", "[simd_const_199_wasm_tests]" ) {
@@ -203,7 +211,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_199_wasm>", "[simd_const_199_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.199.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406464u,2793406464u,2793406464u,2793406464u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922819u,645922819u,645922819u,645922819u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_2_wasm>", "[simd_const_2_wasm_tests]" ) {
@@ -225,7 +233,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_200_wasm>", "[simd_const_200_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.200.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922819u,645922819u,645922819u,645922819u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406467u,2793406467u,2793406467u,2793406467u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_201_wasm>", "[simd_const_201_wasm_tests]" ) {
@@ -233,7 +241,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_201_wasm>", "[simd_const_201_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.201.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406467u,2793406467u,2793406467u,2793406467u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922816u,645922816u,645922816u,645922816u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_202_wasm>", "[simd_const_202_wasm_tests]" ) {
@@ -241,7 +249,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_202_wasm>", "[simd_const_202_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.202.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922816u,645922816u,645922816u,645922816u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406464u,2793406464u,2793406464u,2793406464u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_203_wasm>", "[simd_const_203_wasm_tests]" ) {
@@ -249,7 +257,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_203_wasm>", "[simd_const_203_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.203.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406464u,2793406464u,2793406464u,2793406464u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922819u,645922819u,645922819u,645922819u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_204_wasm>", "[simd_const_204_wasm_tests]" ) {
@@ -257,7 +265,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_204_wasm>", "[simd_const_204_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.204.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922819u,645922819u,645922819u,645922819u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406467u,2793406467u,2793406467u,2793406467u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_205_wasm>", "[simd_const_205_wasm_tests]" ) {
@@ -265,7 +273,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_205_wasm>", "[simd_const_205_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.205.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406467u,2793406467u,2793406467u,2793406467u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922816u,645922816u,645922816u,645922816u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_206_wasm>", "[simd_const_206_wasm_tests]" ) {
@@ -273,7 +281,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_206_wasm>", "[simd_const_206_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.206.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922816u,645922816u,645922816u,645922816u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406464u,2793406464u,2793406464u,2793406464u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_207_wasm>", "[simd_const_207_wasm_tests]" ) {
@@ -281,7 +289,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_207_wasm>", "[simd_const_207_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.207.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406464u,2793406464u,2793406464u,2793406464u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922818u,645922818u,645922818u,645922818u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_208_wasm>", "[simd_const_208_wasm_tests]" ) {
@@ -289,7 +297,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_208_wasm>", "[simd_const_208_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.208.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(645922818u,645922818u,645922818u,645922818u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406466u,2793406466u,2793406466u,2793406466u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_209_wasm>", "[simd_const_209_wasm_tests]" ) {
@@ -297,7 +305,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_209_wasm>", "[simd_const_209_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.209.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2793406466u,2793406466u,2793406466u,2793406466u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783616u,1484783616u,1484783616u,1484783616u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_21_wasm>", "[simd_const_21_wasm_tests]" ) {
@@ -312,7 +320,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_210_wasm>", "[simd_const_210_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.210.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783616u,1484783616u,1484783616u,1484783616u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267264u,3632267264u,3632267264u,3632267264u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_211_wasm>", "[simd_const_211_wasm_tests]" ) {
@@ -320,7 +328,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_211_wasm>", "[simd_const_211_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.211.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267264u,3632267264u,3632267264u,3632267264u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783619u,1484783619u,1484783619u,1484783619u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_212_wasm>", "[simd_const_212_wasm_tests]" ) {
@@ -328,7 +336,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_212_wasm>", "[simd_const_212_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.212.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783619u,1484783619u,1484783619u,1484783619u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267267u,3632267267u,3632267267u,3632267267u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_213_wasm>", "[simd_const_213_wasm_tests]" ) {
@@ -336,7 +344,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_213_wasm>", "[simd_const_213_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.213.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267267u,3632267267u,3632267267u,3632267267u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783616u,1484783616u,1484783616u,1484783616u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_214_wasm>", "[simd_const_214_wasm_tests]" ) {
@@ -344,7 +352,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_214_wasm>", "[simd_const_214_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.214.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783616u,1484783616u,1484783616u,1484783616u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267264u,3632267264u,3632267264u,3632267264u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_215_wasm>", "[simd_const_215_wasm_tests]" ) {
@@ -352,7 +360,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_215_wasm>", "[simd_const_215_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.215.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267264u,3632267264u,3632267264u,3632267264u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783618u,1484783618u,1484783618u,1484783618u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_216_wasm>", "[simd_const_216_wasm_tests]" ) {
@@ -360,7 +368,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_216_wasm>", "[simd_const_216_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.216.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783618u,1484783618u,1484783618u,1484783618u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267266u,3632267266u,3632267266u,3632267266u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_217_wasm>", "[simd_const_217_wasm_tests]" ) {
@@ -368,7 +376,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_217_wasm>", "[simd_const_217_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.217.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267266u,3632267266u,3632267266u,3632267266u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783616u,1484783616u,1484783616u,1484783616u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_218_wasm>", "[simd_const_218_wasm_tests]" ) {
@@ -376,7 +384,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_218_wasm>", "[simd_const_218_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.218.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783616u,1484783616u,1484783616u,1484783616u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267264u,3632267264u,3632267264u,3632267264u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_219_wasm>", "[simd_const_219_wasm_tests]" ) {
@@ -384,7 +392,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_219_wasm>", "[simd_const_219_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.219.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267264u,3632267264u,3632267264u,3632267264u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783618u,1484783618u,1484783618u,1484783618u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_22_wasm>", "[simd_const_22_wasm_tests]" ) {
@@ -399,7 +407,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_220_wasm>", "[simd_const_220_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.220.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(1484783618u,1484783618u,1484783618u,1484783618u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267266u,3632267266u,3632267266u,3632267266u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_221_wasm>", "[simd_const_221_wasm_tests]" ) {
@@ -407,7 +415,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_221_wasm>", "[simd_const_221_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.221.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3632267266u,3632267266u,3632267266u,3632267266u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(0u,0u,0u,0u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_222_wasm>", "[simd_const_222_wasm_tests]" ) {
@@ -415,7 +423,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_222_wasm>", "[simd_const_222_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.222.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(0u,0u,0u,0u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2147483648u,2147483648u,2147483648u,2147483648u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_223_wasm>", "[simd_const_223_wasm_tests]" ) {
@@ -423,7 +431,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_223_wasm>", "[simd_const_223_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.223.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2147483648u,2147483648u,2147483648u,2147483648u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3u,3u,3u,3u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_224_wasm>", "[simd_const_224_wasm_tests]" ) {
@@ -431,7 +439,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_224_wasm>", "[simd_const_224_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.224.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(3u,3u,3u,3u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2147483651u,2147483651u,2147483651u,2147483651u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_225_wasm>", "[simd_const_225_wasm_tests]" ) {
@@ -439,7 +447,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_225_wasm>", "[simd_const_225_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.225.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2147483651u,2147483651u,2147483651u,2147483651u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2139095039u,2139095039u,2139095039u,2139095039u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_226_wasm>", "[simd_const_226_wasm_tests]" ) {
@@ -447,7 +455,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_226_wasm>", "[simd_const_226_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.226.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2139095039u,2139095039u,2139095039u,2139095039u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(4286578687u,4286578687u,4286578687u,4286578687u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_227_wasm>", "[simd_const_227_wasm_tests]" ) {
@@ -455,7 +463,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_227_wasm>", "[simd_const_227_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.227.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(4286578687u,4286578687u,4286578687u,4286578687u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2139095039u,2139095039u,2139095039u,2139095039u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_228_wasm>", "[simd_const_228_wasm_tests]" ) {
@@ -463,7 +471,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_228_wasm>", "[simd_const_228_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.228.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(2139095039u,2139095039u,2139095039u,2139095039u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(4286578687u,4286578687u,4286578687u,4286578687u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_229_wasm>", "[simd_const_229_wasm_tests]" ) {
@@ -471,7 +479,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_229_wasm>", "[simd_const_229_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.229.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f32(4286578687u,4286578687u,4286578687u,4286578687u));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719808));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_23_wasm>", "[simd_const_23_wasm_tests]" ) {
@@ -486,7 +494,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_230_wasm>", "[simd_const_230_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.230.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719808));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495616));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_231_wasm>", "[simd_const_231_wasm_tests]" ) {
@@ -494,7 +502,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_231_wasm>", "[simd_const_231_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.231.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495616));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_232_wasm>", "[simd_const_232_wasm_tests]" ) {
@@ -502,7 +510,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_232_wasm>", "[simd_const_232_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.232.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_233_wasm>", "[simd_const_233_wasm_tests]" ) {
@@ -510,7 +518,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_233_wasm>", "[simd_const_233_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.233.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_234_wasm>", "[simd_const_234_wasm_tests]" ) {
@@ -518,7 +526,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_234_wasm>", "[simd_const_234_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.234.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_235_wasm>", "[simd_const_235_wasm_tests]" ) {
@@ -526,7 +534,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_235_wasm>", "[simd_const_235_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.235.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_236_wasm>", "[simd_const_236_wasm_tests]" ) {
@@ -534,7 +542,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_236_wasm>", "[simd_const_236_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.236.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_237_wasm>", "[simd_const_237_wasm_tests]" ) {
@@ -542,7 +550,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_237_wasm>", "[simd_const_237_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.237.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_238_wasm>", "[simd_const_238_wasm_tests]" ) {
@@ -550,7 +558,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_238_wasm>", "[simd_const_238_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.238.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_239_wasm>", "[simd_const_239_wasm_tests]" ) {
@@ -558,7 +566,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_239_wasm>", "[simd_const_239_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.239.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_24_wasm>", "[simd_const_24_wasm_tests]" ) {
@@ -573,7 +581,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_240_wasm>", "[simd_const_240_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.240.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_241_wasm>", "[simd_const_241_wasm_tests]" ) {
@@ -581,7 +589,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_241_wasm>", "[simd_const_241_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.241.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_242_wasm>", "[simd_const_242_wasm_tests]" ) {
@@ -589,7 +597,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_242_wasm>", "[simd_const_242_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.242.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_243_wasm>", "[simd_const_243_wasm_tests]" ) {
@@ -597,7 +605,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_243_wasm>", "[simd_const_243_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.243.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_244_wasm>", "[simd_const_244_wasm_tests]" ) {
@@ -605,7 +613,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_244_wasm>", "[simd_const_244_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.244.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_245_wasm>", "[simd_const_245_wasm_tests]" ) {
@@ -613,7 +621,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_245_wasm>", "[simd_const_245_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.245.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_246_wasm>", "[simd_const_246_wasm_tests]" ) {
@@ -621,7 +629,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_246_wasm>", "[simd_const_246_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.246.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_247_wasm>", "[simd_const_247_wasm_tests]" ) {
@@ -629,7 +637,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_247_wasm>", "[simd_const_247_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.247.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_248_wasm>", "[simd_const_248_wasm_tests]" ) {
@@ -637,7 +645,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_248_wasm>", "[simd_const_248_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.248.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_249_wasm>", "[simd_const_249_wasm_tests]" ) {
@@ -645,7 +653,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_249_wasm>", "[simd_const_249_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.249.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_25_wasm>", "[simd_const_25_wasm_tests]" ) {
@@ -660,7 +668,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_250_wasm>", "[simd_const_250_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.250.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_251_wasm>", "[simd_const_251_wasm_tests]" ) {
@@ -668,7 +676,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_251_wasm>", "[simd_const_251_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.251.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_252_wasm>", "[simd_const_252_wasm_tests]" ) {
@@ -676,7 +684,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_252_wasm>", "[simd_const_252_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.252.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_253_wasm>", "[simd_const_253_wasm_tests]" ) {
@@ -684,7 +692,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_253_wasm>", "[simd_const_253_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.253.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719811));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_254_wasm>", "[simd_const_254_wasm_tests]" ) {
@@ -692,7 +700,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_254_wasm>", "[simd_const_254_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.254.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719811));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495619));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_255_wasm>", "[simd_const_255_wasm_tests]" ) {
@@ -700,7 +708,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_255_wasm>", "[simd_const_255_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.255.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495619));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719808));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_256_wasm>", "[simd_const_256_wasm_tests]" ) {
@@ -708,7 +716,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_256_wasm>", "[simd_const_256_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.256.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719808));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495616));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_257_wasm>", "[simd_const_257_wasm_tests]" ) {
@@ -716,7 +724,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_257_wasm>", "[simd_const_257_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.257.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495616));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_258_wasm>", "[simd_const_258_wasm_tests]" ) {
@@ -724,7 +732,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_258_wasm>", "[simd_const_258_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.258.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_259_wasm>", "[simd_const_259_wasm_tests]" ) {
@@ -732,7 +740,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_259_wasm>", "[simd_const_259_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.259.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_26_wasm>", "[simd_const_26_wasm_tests]" ) {
@@ -747,7 +755,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_260_wasm>", "[simd_const_260_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.260.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_261_wasm>", "[simd_const_261_wasm_tests]" ) {
@@ -755,7 +763,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_261_wasm>", "[simd_const_261_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.261.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_262_wasm>", "[simd_const_262_wasm_tests]" ) {
@@ -763,7 +771,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_262_wasm>", "[simd_const_262_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.262.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_263_wasm>", "[simd_const_263_wasm_tests]" ) {
@@ -771,7 +779,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_263_wasm>", "[simd_const_263_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.263.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_264_wasm>", "[simd_const_264_wasm_tests]" ) {
@@ -779,7 +787,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_264_wasm>", "[simd_const_264_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.264.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_265_wasm>", "[simd_const_265_wasm_tests]" ) {
@@ -787,7 +795,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_265_wasm>", "[simd_const_265_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.265.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_266_wasm>", "[simd_const_266_wasm_tests]" ) {
@@ -795,7 +803,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_266_wasm>", "[simd_const_266_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.266.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719809));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_267_wasm>", "[simd_const_267_wasm_tests]" ) {
@@ -803,7 +811,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_267_wasm>", "[simd_const_267_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.267.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495617));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_268_wasm>", "[simd_const_268_wasm_tests]" ) {
@@ -811,7 +819,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_268_wasm>", "[simd_const_268_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.268.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_269_wasm>", "[simd_const_269_wasm_tests]" ) {
@@ -819,7 +827,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_269_wasm>", "[simd_const_269_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.269.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_27_wasm>", "[simd_const_27_wasm_tests]" ) {
@@ -834,7 +842,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_270_wasm>", "[simd_const_270_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.270.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_271_wasm>", "[simd_const_271_wasm_tests]" ) {
@@ -842,7 +850,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_271_wasm>", "[simd_const_271_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.271.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_272_wasm>", "[simd_const_272_wasm_tests]" ) {
@@ -850,7 +858,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_272_wasm>", "[simd_const_272_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.272.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_273_wasm>", "[simd_const_273_wasm_tests]" ) {
@@ -858,7 +866,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_273_wasm>", "[simd_const_273_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.273.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_274_wasm>", "[simd_const_274_wasm_tests]" ) {
@@ -866,7 +874,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_274_wasm>", "[simd_const_274_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.274.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_275_wasm>", "[simd_const_275_wasm_tests]" ) {
@@ -874,7 +882,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_275_wasm>", "[simd_const_275_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.275.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_276_wasm>", "[simd_const_276_wasm_tests]" ) {
@@ -882,7 +890,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_276_wasm>", "[simd_const_276_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.276.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_277_wasm>", "[simd_const_277_wasm_tests]" ) {
@@ -890,7 +898,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_277_wasm>", "[simd_const_277_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.277.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_278_wasm>", "[simd_const_278_wasm_tests]" ) {
@@ -898,7 +906,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_278_wasm>", "[simd_const_278_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.278.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719810));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_279_wasm>", "[simd_const_279_wasm_tests]" ) {
@@ -906,7 +914,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_279_wasm>", "[simd_const_279_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.279.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495618));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719811));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_28_wasm>", "[simd_const_28_wasm_tests]" ) {
@@ -921,7 +929,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_280_wasm>", "[simd_const_280_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.280.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(1905022642377719811));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495619));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_281_wasm>", "[simd_const_281_wasm_tests]" ) {
@@ -929,7 +937,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_281_wasm>", "[simd_const_281_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.281.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(11128394679232495619));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(9106278446543142912));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_282_wasm>", "[simd_const_282_wasm_tests]" ) {
@@ -937,7 +945,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_282_wasm>", "[simd_const_282_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.282.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(9106278446543142912));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(18329650483397918720));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_283_wasm>", "[simd_const_283_wasm_tests]" ) {
@@ -945,7 +953,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_283_wasm>", "[simd_const_283_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.283.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(18329650483397918720));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(9106278446543142913));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_284_wasm>", "[simd_const_284_wasm_tests]" ) {
@@ -953,7 +961,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_284_wasm>", "[simd_const_284_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.284.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(9106278446543142913));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(18329650483397918721));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_285_wasm>", "[simd_const_285_wasm_tests]" ) {
@@ -961,7 +969,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_285_wasm>", "[simd_const_285_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.285.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(18329650483397918721));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(9106278446543142913));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_286_wasm>", "[simd_const_286_wasm_tests]" ) {
@@ -969,7 +977,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_286_wasm>", "[simd_const_286_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.286.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(9106278446543142913));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(18329650483397918721));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_287_wasm>", "[simd_const_287_wasm_tests]" ) {
@@ -977,7 +985,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_287_wasm>", "[simd_const_287_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.287.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(18329650483397918721));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(9106278446543142914));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_288_wasm>", "[simd_const_288_wasm_tests]" ) {
@@ -985,7 +993,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_288_wasm>", "[simd_const_288_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.288.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(9106278446543142914));
+   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(18329650483397918722));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_289_wasm>", "[simd_const_289_wasm_tests]" ) {
@@ -993,7 +1001,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_289_wasm>", "[simd_const_289_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.289.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "f")->to_f64()) == UINT64_C(18329650483397918722));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315008u,7309342195222315008u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_29_wasm>", "[simd_const_29_wasm_tests]" ) {
@@ -1008,7 +1016,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_290_wasm>", "[simd_const_290_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.290.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315008u,7309342195222315008u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090816u,16532714232077090816u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_291_wasm>", "[simd_const_291_wasm_tests]" ) {
@@ -1016,7 +1024,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_291_wasm>", "[simd_const_291_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.291.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090816u,16532714232077090816u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_292_wasm>", "[simd_const_292_wasm_tests]" ) {
@@ -1024,7 +1032,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_292_wasm>", "[simd_const_292_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.292.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_293_wasm>", "[simd_const_293_wasm_tests]" ) {
@@ -1032,7 +1040,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_293_wasm>", "[simd_const_293_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.293.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_294_wasm>", "[simd_const_294_wasm_tests]" ) {
@@ -1040,7 +1048,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_294_wasm>", "[simd_const_294_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.294.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_295_wasm>", "[simd_const_295_wasm_tests]" ) {
@@ -1048,7 +1056,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_295_wasm>", "[simd_const_295_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.295.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_296_wasm>", "[simd_const_296_wasm_tests]" ) {
@@ -1056,7 +1064,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_296_wasm>", "[simd_const_296_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.296.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_297_wasm>", "[simd_const_297_wasm_tests]" ) {
@@ -1064,7 +1072,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_297_wasm>", "[simd_const_297_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.297.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_298_wasm>", "[simd_const_298_wasm_tests]" ) {
@@ -1072,7 +1080,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_298_wasm>", "[simd_const_298_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.298.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_299_wasm>", "[simd_const_299_wasm_tests]" ) {
@@ -1080,7 +1088,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_299_wasm>", "[simd_const_299_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.299.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_3_wasm>", "[simd_const_3_wasm_tests]" ) {
@@ -1102,7 +1110,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_300_wasm>", "[simd_const_300_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.300.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315009u,7309342195222315009u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_301_wasm>", "[simd_const_301_wasm_tests]" ) {
@@ -1110,7 +1118,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_301_wasm>", "[simd_const_301_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.301.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090817u,16532714232077090817u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_302_wasm>", "[simd_const_302_wasm_tests]" ) {
@@ -1118,7 +1126,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_302_wasm>", "[simd_const_302_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.302.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_303_wasm>", "[simd_const_303_wasm_tests]" ) {
@@ -1126,7 +1134,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_303_wasm>", "[simd_const_303_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.303.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_304_wasm>", "[simd_const_304_wasm_tests]" ) {
@@ -1134,7 +1142,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_304_wasm>", "[simd_const_304_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.304.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_305_wasm>", "[simd_const_305_wasm_tests]" ) {
@@ -1142,7 +1150,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_305_wasm>", "[simd_const_305_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.305.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_306_wasm>", "[simd_const_306_wasm_tests]" ) {
@@ -1150,7 +1158,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_306_wasm>", "[simd_const_306_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.306.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_307_wasm>", "[simd_const_307_wasm_tests]" ) {
@@ -1158,7 +1166,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_307_wasm>", "[simd_const_307_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.307.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_308_wasm>", "[simd_const_308_wasm_tests]" ) {
@@ -1166,7 +1174,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_308_wasm>", "[simd_const_308_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.308.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_309_wasm>", "[simd_const_309_wasm_tests]" ) {
@@ -1174,7 +1182,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_309_wasm>", "[simd_const_309_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.309.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_31_wasm>", "[simd_const_31_wasm_tests]" ) {
@@ -1189,7 +1197,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_310_wasm>", "[simd_const_310_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.310.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_311_wasm>", "[simd_const_311_wasm_tests]" ) {
@@ -1197,7 +1205,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_311_wasm>", "[simd_const_311_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.311.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_312_wasm>", "[simd_const_312_wasm_tests]" ) {
@@ -1205,7 +1213,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_312_wasm>", "[simd_const_312_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.312.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_313_wasm>", "[simd_const_313_wasm_tests]" ) {
@@ -1213,7 +1221,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_313_wasm>", "[simd_const_313_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.313.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_314_wasm>", "[simd_const_314_wasm_tests]" ) {
@@ -1221,7 +1229,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_314_wasm>", "[simd_const_314_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.314.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315010u,7309342195222315010u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_315_wasm>", "[simd_const_315_wasm_tests]" ) {
@@ -1229,7 +1237,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_315_wasm>", "[simd_const_315_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.315.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090818u,16532714232077090818u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315011u,7309342195222315011u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_316_wasm>", "[simd_const_316_wasm_tests]" ) {
@@ -1237,7 +1245,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_316_wasm>", "[simd_const_316_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.316.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(7309342195222315011u,7309342195222315011u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090819u,16532714232077090819u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_317_wasm>", "[simd_const_317_wasm_tests]" ) {
@@ -1245,7 +1253,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_317_wasm>", "[simd_const_317_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.317.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(16532714232077090819u,16532714232077090819u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955520u,5044031582654955520u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_318_wasm>", "[simd_const_318_wasm_tests]" ) {
@@ -1253,7 +1261,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_318_wasm>", "[simd_const_318_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.318.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955520u,5044031582654955520u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731328u,14267403619509731328u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_319_wasm>", "[simd_const_319_wasm_tests]" ) {
@@ -1261,7 +1269,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_319_wasm>", "[simd_const_319_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.319.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731328u,14267403619509731328u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_32_wasm>", "[simd_const_32_wasm_tests]" ) {
@@ -1276,7 +1284,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_320_wasm>", "[simd_const_320_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.320.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_321_wasm>", "[simd_const_321_wasm_tests]" ) {
@@ -1284,7 +1292,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_321_wasm>", "[simd_const_321_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.321.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_322_wasm>", "[simd_const_322_wasm_tests]" ) {
@@ -1292,7 +1300,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_322_wasm>", "[simd_const_322_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.322.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_323_wasm>", "[simd_const_323_wasm_tests]" ) {
@@ -1300,7 +1308,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_323_wasm>", "[simd_const_323_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.323.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_324_wasm>", "[simd_const_324_wasm_tests]" ) {
@@ -1308,7 +1316,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_324_wasm>", "[simd_const_324_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.324.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_325_wasm>", "[simd_const_325_wasm_tests]" ) {
@@ -1316,7 +1324,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_325_wasm>", "[simd_const_325_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.325.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_326_wasm>", "[simd_const_326_wasm_tests]" ) {
@@ -1324,7 +1332,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_326_wasm>", "[simd_const_326_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.326.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_327_wasm>", "[simd_const_327_wasm_tests]" ) {
@@ -1332,7 +1340,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_327_wasm>", "[simd_const_327_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.327.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_328_wasm>", "[simd_const_328_wasm_tests]" ) {
@@ -1340,7 +1348,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_328_wasm>", "[simd_const_328_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.328.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955521u,5044031582654955521u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_329_wasm>", "[simd_const_329_wasm_tests]" ) {
@@ -1348,7 +1356,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_329_wasm>", "[simd_const_329_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.329.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731329u,14267403619509731329u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_33_wasm>", "[simd_const_33_wasm_tests]" ) {
@@ -1363,7 +1371,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_330_wasm>", "[simd_const_330_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.330.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_331_wasm>", "[simd_const_331_wasm_tests]" ) {
@@ -1371,7 +1379,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_331_wasm>", "[simd_const_331_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.331.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_332_wasm>", "[simd_const_332_wasm_tests]" ) {
@@ -1379,7 +1387,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_332_wasm>", "[simd_const_332_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.332.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_333_wasm>", "[simd_const_333_wasm_tests]" ) {
@@ -1387,7 +1395,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_333_wasm>", "[simd_const_333_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.333.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_334_wasm>", "[simd_const_334_wasm_tests]" ) {
@@ -1395,7 +1403,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_334_wasm>", "[simd_const_334_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.334.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_335_wasm>", "[simd_const_335_wasm_tests]" ) {
@@ -1403,7 +1411,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_335_wasm>", "[simd_const_335_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.335.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_336_wasm>", "[simd_const_336_wasm_tests]" ) {
@@ -1411,7 +1419,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_336_wasm>", "[simd_const_336_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.336.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_337_wasm>", "[simd_const_337_wasm_tests]" ) {
@@ -1419,7 +1427,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_337_wasm>", "[simd_const_337_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.337.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_338_wasm>", "[simd_const_338_wasm_tests]" ) {
@@ -1427,7 +1435,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_338_wasm>", "[simd_const_338_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.338.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_339_wasm>", "[simd_const_339_wasm_tests]" ) {
@@ -1435,7 +1443,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_339_wasm>", "[simd_const_339_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.339.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_34_wasm>", "[simd_const_34_wasm_tests]" ) {
@@ -1450,7 +1458,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_340_wasm>", "[simd_const_340_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.340.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_341_wasm>", "[simd_const_341_wasm_tests]" ) {
@@ -1458,7 +1466,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_341_wasm>", "[simd_const_341_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.341.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_342_wasm>", "[simd_const_342_wasm_tests]" ) {
@@ -1466,7 +1474,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_342_wasm>", "[simd_const_342_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.342.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955522u,5044031582654955522u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_343_wasm>", "[simd_const_343_wasm_tests]" ) {
@@ -1474,7 +1482,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_343_wasm>", "[simd_const_343_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.343.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731330u,14267403619509731330u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955523u,5044031582654955523u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_344_wasm>", "[simd_const_344_wasm_tests]" ) {
@@ -1482,7 +1490,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_344_wasm>", "[simd_const_344_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.344.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(5044031582654955523u,5044031582654955523u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731331u,14267403619509731331u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_345_wasm>", "[simd_const_345_wasm_tests]" ) {
@@ -1490,7 +1498,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_345_wasm>", "[simd_const_345_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.345.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14267403619509731331u,14267403619509731331u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4877398396442247168u,4877398396442247168u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_346_wasm>", "[simd_const_346_wasm_tests]" ) {
@@ -1498,7 +1506,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_346_wasm>", "[simd_const_346_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.346.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4877398396442247168u,4877398396442247168u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14100770433297022976u,14100770433297022976u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_347_wasm>", "[simd_const_347_wasm_tests]" ) {
@@ -1506,7 +1514,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_347_wasm>", "[simd_const_347_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.347.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14100770433297022976u,14100770433297022976u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4877398396442247169u,4877398396442247169u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_348_wasm>", "[simd_const_348_wasm_tests]" ) {
@@ -1514,7 +1522,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_348_wasm>", "[simd_const_348_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.348.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4877398396442247169u,4877398396442247169u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14100770433297022977u,14100770433297022977u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_349_wasm>", "[simd_const_349_wasm_tests]" ) {
@@ -1522,7 +1530,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_349_wasm>", "[simd_const_349_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.349.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14100770433297022977u,14100770433297022977u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4877398396442247169u,4877398396442247169u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_35_wasm>", "[simd_const_35_wasm_tests]" ) {
@@ -1537,7 +1545,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_350_wasm>", "[simd_const_350_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.350.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4877398396442247169u,4877398396442247169u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14100770433297022977u,14100770433297022977u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_351_wasm>", "[simd_const_351_wasm_tests]" ) {
@@ -1545,7 +1553,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_351_wasm>", "[simd_const_351_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.351.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14100770433297022977u,14100770433297022977u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4877398396442247170u,4877398396442247170u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_352_wasm>", "[simd_const_352_wasm_tests]" ) {
@@ -1553,7 +1561,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_352_wasm>", "[simd_const_352_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.352.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4877398396442247170u,4877398396442247170u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14100770433297022978u,14100770433297022978u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_353_wasm>", "[simd_const_353_wasm_tests]" ) {
@@ -1561,7 +1569,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_353_wasm>", "[simd_const_353_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.353.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(14100770433297022978u,14100770433297022978u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(0u,0u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_354_wasm>", "[simd_const_354_wasm_tests]" ) {
@@ -1569,7 +1577,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_354_wasm>", "[simd_const_354_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.354.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(0u,0u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775808u,9223372036854775808u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_355_wasm>", "[simd_const_355_wasm_tests]" ) {
@@ -1577,7 +1585,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_355_wasm>", "[simd_const_355_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.355.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775808u,9223372036854775808u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_356_wasm>", "[simd_const_356_wasm_tests]" ) {
@@ -1585,7 +1593,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_356_wasm>", "[simd_const_356_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.356.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_357_wasm>", "[simd_const_357_wasm_tests]" ) {
@@ -1593,7 +1601,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_357_wasm>", "[simd_const_357_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.357.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_358_wasm>", "[simd_const_358_wasm_tests]" ) {
@@ -1601,7 +1609,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_358_wasm>", "[simd_const_358_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.358.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_359_wasm>", "[simd_const_359_wasm_tests]" ) {
@@ -1609,7 +1617,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_359_wasm>", "[simd_const_359_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.359.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_36_wasm>", "[simd_const_36_wasm_tests]" ) {
@@ -1624,7 +1632,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_360_wasm>", "[simd_const_360_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.360.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_361_wasm>", "[simd_const_361_wasm_tests]" ) {
@@ -1632,7 +1640,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_361_wasm>", "[simd_const_361_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.361.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_362_wasm>", "[simd_const_362_wasm_tests]" ) {
@@ -1640,7 +1648,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_362_wasm>", "[simd_const_362_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.362.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_363_wasm>", "[simd_const_363_wasm_tests]" ) {
@@ -1648,7 +1656,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_363_wasm>", "[simd_const_363_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.363.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_364_wasm>", "[simd_const_364_wasm_tests]" ) {
@@ -1656,7 +1664,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_364_wasm>", "[simd_const_364_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.364.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(1u,1u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_365_wasm>", "[simd_const_365_wasm_tests]" ) {
@@ -1664,7 +1672,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_365_wasm>", "[simd_const_365_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.365.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775809u,9223372036854775809u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_366_wasm>", "[simd_const_366_wasm_tests]" ) {
@@ -1672,7 +1680,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_366_wasm>", "[simd_const_366_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.366.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_367_wasm>", "[simd_const_367_wasm_tests]" ) {
@@ -1680,7 +1688,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_367_wasm>", "[simd_const_367_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.367.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_368_wasm>", "[simd_const_368_wasm_tests]" ) {
@@ -1688,7 +1696,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_368_wasm>", "[simd_const_368_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.368.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_369_wasm>", "[simd_const_369_wasm_tests]" ) {
@@ -1696,7 +1704,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_369_wasm>", "[simd_const_369_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.369.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_37_wasm>", "[simd_const_37_wasm_tests]" ) {
@@ -1711,7 +1719,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_370_wasm>", "[simd_const_370_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.370.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_371_wasm>", "[simd_const_371_wasm_tests]" ) {
@@ -1719,7 +1727,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_371_wasm>", "[simd_const_371_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.371.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_372_wasm>", "[simd_const_372_wasm_tests]" ) {
@@ -1727,7 +1735,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_372_wasm>", "[simd_const_372_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.372.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_373_wasm>", "[simd_const_373_wasm_tests]" ) {
@@ -1735,7 +1743,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_373_wasm>", "[simd_const_373_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.373.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_374_wasm>", "[simd_const_374_wasm_tests]" ) {
@@ -1743,7 +1751,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_374_wasm>", "[simd_const_374_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.374.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_375_wasm>", "[simd_const_375_wasm_tests]" ) {
@@ -1751,7 +1759,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_375_wasm>", "[simd_const_375_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.375.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_376_wasm>", "[simd_const_376_wasm_tests]" ) {
@@ -1759,7 +1767,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_376_wasm>", "[simd_const_376_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.376.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_377_wasm>", "[simd_const_377_wasm_tests]" ) {
@@ -1767,7 +1775,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_377_wasm>", "[simd_const_377_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.377.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_378_wasm>", "[simd_const_378_wasm_tests]" ) {
@@ -1775,7 +1783,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_378_wasm>", "[simd_const_378_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.378.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(2u,2u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_379_wasm>", "[simd_const_379_wasm_tests]" ) {
@@ -1783,7 +1791,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_379_wasm>", "[simd_const_379_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.379.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9223372036854775810u,9223372036854775810u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4503599627370499u,4503599627370499u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_38_wasm>", "[simd_const_38_wasm_tests]" ) {
@@ -1798,7 +1806,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_380_wasm>", "[simd_const_380_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.380.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(4503599627370499u,4503599627370499u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9227875636482146307u,9227875636482146307u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_381_wasm>", "[simd_const_381_wasm_tests]" ) {
@@ -1806,7 +1814,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_381_wasm>", "[simd_const_381_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.381.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9227875636482146307u,9227875636482146307u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9218868437227405311u,9218868437227405311u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_382_wasm>", "[simd_const_382_wasm_tests]" ) {
@@ -1814,7 +1822,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_382_wasm>", "[simd_const_382_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.382.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9218868437227405311u,9218868437227405311u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(18442240474082181119u,18442240474082181119u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_383_wasm>", "[simd_const_383_wasm_tests]" ) {
@@ -1822,7 +1830,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_383_wasm>", "[simd_const_383_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.383.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(18442240474082181119u,18442240474082181119u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9218868437227405311u,9218868437227405311u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_384_wasm>", "[simd_const_384_wasm_tests]" ) {
@@ -1830,20 +1838,12 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_384_wasm>", "[simd_const_384_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.384.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(9218868437227405311u,9218868437227405311u));
+   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(18442240474082181119u,18442240474082181119u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_385_wasm>", "[simd_const_385_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.385.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "f")->to_v128() == make_v128_f64(18442240474082181119u,18442240474082181119u));
-}
-
-BACKEND_TEST_CASE( "Testing wasm <simd_const_386_wasm>", "[simd_const_386_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "simd_const.386.wasm");
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "as-br-retval")->to_v128() == make_v128_i32(50462976u,117835012u,185207048u,252579084u));
@@ -1868,9 +1868,9 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_386_wasm>", "[simd_const_386_wasm_t
    CHECK(!bkend.call_with_return("env", "as-drop-operand2"));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <simd_const_387_wasm>", "[simd_const_387_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <simd_const_386_wasm>", "[simd_const_386_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "simd_const.387.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "simd_const.386.wasm");
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "as-local.set/get-value_0_0", make_v128_i32(0u,0u,0u,0u))->to_v128() == make_v128_i32(0u,0u,0u,0u));
@@ -1879,9 +1879,9 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_387_wasm>", "[simd_const_387_wasm_t
    CHECK(bkend.call_with_return("env", "as-local.tee-value")->to_v128() == make_v128_i32(0u,1u,2u,3u));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <simd_const_388_wasm>", "[simd_const_388_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <simd_const_387_wasm>", "[simd_const_387_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "simd_const.388.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "simd_const.387.wasm");
    backend_t bkend( code, &wa );
 
    CHECK(!bkend.call_with_return("env", "as-global.set_value_$g0_$g1_$g2_$g3", make_v128_i32(1u,1u,1u,1u), make_v128_i32(2u,2u,2u,2u), make_v128_i32(3u,3u,3u,3u), make_v128_i32(4u,4u,4u,4u)));
@@ -1891,9 +1891,9 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_388_wasm>", "[simd_const_388_wasm_t
    CHECK(bkend.call_with_return("env", "global.get_g3")->to_v128() == make_v128_i32(4u,4u,4u,4u));
 }
 
-BACKEND_TEST_CASE( "Testing wasm <simd_const_389_wasm>", "[simd_const_389_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <simd_const_388_wasm>", "[simd_const_388_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "simd_const.389.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "simd_const.388.wasm");
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "i32x4.test")->to_v128() == make_v128_i32(195940365u,195940365u,195940365u,195940365u));
@@ -1941,16 +1941,9 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_40_wasm>", "[simd_const_40_wasm_tes
 
 }
 
-BACKEND_TEST_CASE( "Testing wasm <simd_const_41_wasm>", "[simd_const_41_wasm_tests]" ) {
+BACKEND_TEST_CASE( "Testing wasm <simd_const_409_wasm>", "[simd_const_409_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "simd_const.41.wasm");
-   backend_t bkend( code, &wa );
-
-}
-
-BACKEND_TEST_CASE( "Testing wasm <simd_const_410_wasm>", "[simd_const_410_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "simd_const.410.wasm");
+   auto code = read_wasm( std::string(wasm_directory) + "simd_const.409.wasm");
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "f32-dec-sep1")->to_v128() == make_v128_f32(1232348160u,1232348160u,1232348160u,1232348160u));
@@ -1973,6 +1966,13 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_410_wasm>", "[simd_const_410_wasm_t
    CHECK(bkend.call_with_return("env", "f64-hex-sep3")->to_v128() == make_v128_f64(4675897489574114112u,4675897489574114112u));
    CHECK(bkend.call_with_return("env", "f64-hex-sep4")->to_v128() == make_v128_f64(4701195061021376512u,4701195061021376512u));
    CHECK(bkend.call_with_return("env", "f64-hex-sep5")->to_v128() == make_v128_f64(4806880140420149248u,4806880140420149248u));
+}
+
+BACKEND_TEST_CASE( "Testing wasm <simd_const_41_wasm>", "[simd_const_41_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "simd_const.41.wasm");
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_42_wasm>", "[simd_const_42_wasm_tests]" ) {
@@ -2024,12 +2024,20 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_48_wasm>", "[simd_const_48_wasm_tes
 
 }
 
+BACKEND_TEST_CASE( "Testing wasm <simd_const_486_wasm>", "[simd_const_486_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "simd_const.486.wasm");
+   backend_t bkend( code, &wa );
+
+   CHECK(bkend.call_with_return("env", "parse_i8x16")->to_v128() == make_v128_i8(0u,0u,0u,0u,128u,128u,128u,128u,255u,255u,255u,255u,255u,255u,255u,255u));
+}
+
 BACKEND_TEST_CASE( "Testing wasm <simd_const_487_wasm>", "[simd_const_487_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.487.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "parse_i8x16")->to_v128() == make_v128_i8(0u,0u,0u,0u,128u,128u,128u,128u,255u,255u,255u,255u,255u,255u,255u,255u));
+   CHECK(bkend.call_with_return("env", "parse_i16x8")->to_v128() == make_v128_i16(0u,0u,32768u,32768u,65535u,65535u,65535u,65535u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_488_wasm>", "[simd_const_488_wasm_tests]" ) {
@@ -2037,7 +2045,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_488_wasm>", "[simd_const_488_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.488.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "parse_i16x8")->to_v128() == make_v128_i16(0u,0u,32768u,32768u,65535u,65535u,65535u,65535u));
+   CHECK(bkend.call_with_return("env", "parse_i32x4")->to_v128() == make_v128_i32(4294967249u,4294967249u,4294967249u,4294967249u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_489_wasm>", "[simd_const_489_wasm_tests]" ) {
@@ -2045,7 +2053,7 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_489_wasm>", "[simd_const_489_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.489.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "parse_i32x4")->to_v128() == make_v128_i32(4294967249u,4294967249u,4294967249u,4294967249u));
+   CHECK(bkend.call_with_return("env", "parse_i64x2")->to_v128() == make_v128_i64(9223372036854775807u,9223372036854775807u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_49_wasm>", "[simd_const_49_wasm_tests]" ) {
@@ -2060,20 +2068,12 @@ BACKEND_TEST_CASE( "Testing wasm <simd_const_490_wasm>", "[simd_const_490_wasm_t
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.490.wasm");
    backend_t bkend( code, &wa );
 
-   CHECK(bkend.call_with_return("env", "parse_i64x2")->to_v128() == make_v128_i64(9223372036854775807u,9223372036854775807u));
+   CHECK(bkend.call_with_return("env", "parse_f32x4")->to_v128() == make_v128_f32(1333788672u,1333788672u,1333788672u,1333788672u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_const_491_wasm>", "[simd_const_491_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "simd_const.491.wasm");
-   backend_t bkend( code, &wa );
-
-   CHECK(bkend.call_with_return("env", "parse_f32x4")->to_v128() == make_v128_f32(1333788672u,1333788672u,1333788672u,1333788672u));
-}
-
-BACKEND_TEST_CASE( "Testing wasm <simd_const_492_wasm>", "[simd_const_492_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "simd_const.492.wasm");
    backend_t bkend( code, &wa );
 
    CHECK(bkend.call_with_return("env", "parse_f64x2")->to_v128() == make_v128_f64(9218868437227405311u,9218868437227405311u));

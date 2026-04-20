@@ -38,21 +38,20 @@ BACKEND_TEST_CASE( "Testing wasm <binary_10_wasm>", "[binary_10_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_100_wasm>", "[binary_100_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.100.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_101_wasm>", "[binary_101_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.101.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_102_wasm>", "[binary_102_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.102.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_103_wasm>", "[binary_103_wasm_tests]" ) {
@@ -70,7 +69,8 @@ BACKEND_TEST_CASE( "Testing wasm <binary_104_wasm>", "[binary_104_wasm_tests]" )
 BACKEND_TEST_CASE( "Testing wasm <binary_105_wasm>", "[binary_105_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.105.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_106_wasm>", "[binary_106_wasm_tests]" ) {
@@ -106,7 +106,8 @@ BACKEND_TEST_CASE( "Testing wasm <binary_11_wasm>", "[binary_11_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_110_wasm>", "[binary_110_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.110.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_111_wasm>", "[binary_111_wasm_tests]" ) {
@@ -118,7 +119,8 @@ BACKEND_TEST_CASE( "Testing wasm <binary_111_wasm>", "[binary_111_wasm_tests]" )
 BACKEND_TEST_CASE( "Testing wasm <binary_112_wasm>", "[binary_112_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.112.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_113_wasm>", "[binary_113_wasm_tests]" ) {
@@ -211,9 +213,63 @@ BACKEND_TEST_CASE( "Testing wasm <binary_126_wasm>", "[binary_126_wasm_tests]" )
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <binary_127_wasm>", "[binary_127_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.127.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <binary_128_wasm>", "[binary_128_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.128.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <binary_129_wasm>", "[binary_129_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.129.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
 BACKEND_TEST_CASE( "Testing wasm <binary_13_wasm>", "[binary_13_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.13.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <binary_130_wasm>", "[binary_130_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.130.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <binary_131_wasm>", "[binary_131_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.131.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <binary_132_wasm>", "[binary_132_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.132.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <binary_133_wasm>", "[binary_133_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.133.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <binary_134_wasm>", "[binary_134_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.134.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
+BACKEND_TEST_CASE( "Testing wasm <binary_135_wasm>", "[binary_135_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "binary.135.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
@@ -426,8 +482,7 @@ BACKEND_TEST_CASE( "Testing wasm <binary_44_wasm>", "[binary_44_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_45_wasm>", "[binary_45_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.45.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_46_wasm>", "[binary_46_wasm_tests]" ) {
@@ -463,15 +518,13 @@ BACKEND_TEST_CASE( "Testing wasm <binary_5_wasm>", "[binary_5_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_50_wasm>", "[binary_50_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.50.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_51_wasm>", "[binary_51_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.51.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_52_wasm>", "[binary_52_wasm_tests]" ) {
@@ -546,8 +599,7 @@ BACKEND_TEST_CASE( "Testing wasm <binary_61_wasm>", "[binary_61_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_62_wasm>", "[binary_62_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.62.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_63_wasm>", "[binary_63_wasm_tests]" ) {
@@ -602,25 +654,26 @@ BACKEND_TEST_CASE( "Testing wasm <binary_7_wasm>", "[binary_7_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_70_wasm>", "[binary_70_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.70.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_71_wasm>", "[binary_71_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.71.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_72_wasm>", "[binary_72_wasm_tests]" ) {
-   register_spectest_imports();
-   using backend_t = backend<spectest_rhf, TestType>;
+   using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.72.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_73_wasm>", "[binary_73_wasm_tests]" ) {
-   register_spectest_imports();
-   using backend_t = backend<spectest_rhf, TestType>;
+   using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.73.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
@@ -628,14 +681,14 @@ BACKEND_TEST_CASE( "Testing wasm <binary_73_wasm>", "[binary_73_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_74_wasm>", "[binary_74_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.74.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_75_wasm>", "[binary_75_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.75.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_76_wasm>", "[binary_76_wasm_tests]" ) {
@@ -659,8 +712,7 @@ BACKEND_TEST_CASE( "Testing wasm <binary_78_wasm>", "[binary_78_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_79_wasm>", "[binary_79_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.79.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_8_wasm>", "[binary_8_wasm_tests]" ) {
@@ -682,13 +734,15 @@ BACKEND_TEST_CASE( "Testing wasm <binary_81_wasm>", "[binary_81_wasm_tests]" ) {
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_82_wasm>", "[binary_82_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.82.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_83_wasm>", "[binary_83_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
+   register_spectest_imports();
+   using backend_t = backend<spectest_rhf, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.83.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
@@ -696,14 +750,14 @@ BACKEND_TEST_CASE( "Testing wasm <binary_83_wasm>", "[binary_83_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_84_wasm>", "[binary_84_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.84.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_85_wasm>", "[binary_85_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.85.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_86_wasm>", "[binary_86_wasm_tests]" ) {
@@ -721,14 +775,14 @@ BACKEND_TEST_CASE( "Testing wasm <binary_87_wasm>", "[binary_87_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_88_wasm>", "[binary_88_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.88.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_89_wasm>", "[binary_89_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.89.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_9_wasm>", "[binary_9_wasm_tests]" ) {
@@ -746,8 +800,7 @@ BACKEND_TEST_CASE( "Testing wasm <binary_90_wasm>", "[binary_90_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_91_wasm>", "[binary_91_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.91.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_92_wasm>", "[binary_92_wasm_tests]" ) {
@@ -790,7 +843,8 @@ BACKEND_TEST_CASE( "Testing wasm <binary_97_wasm>", "[binary_97_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <binary_98_wasm>", "[binary_98_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "binary.98.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <binary_99_wasm>", "[binary_99_wasm_tests]" ) {

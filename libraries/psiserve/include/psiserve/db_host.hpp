@@ -46,12 +46,32 @@ struct table_impl;
 
 struct transaction_impl
 {
-   uint32_t                          db_handle;
-   bool                              is_write;
-   std::optional<psitri::transaction> write_tx;
-   sal::smart_ptr<sal::alloc_header> read_root;
-   std::vector<uint32_t>             open_table_handles;
-   bool                              ended = false;
+   uint32_t                                        db_handle;
+   bool                                            is_write;
+   std::optional<psitri::transaction>               write_tx;
+   std::optional<psitri::transaction_frame_ref>     frame_ref;
+   uint32_t                                        parent_tx_handle = 0xFFFF;
+   sal::smart_ptr<sal::alloc_header>               read_root;
+   std::vector<uint32_t>                           open_table_handles;
+   bool                                            ended = false;
+
+   bool has_write() const { return write_tx.has_value() || frame_ref.has_value(); }
+
+   template <typename F>
+   decltype(auto) with_write(F&& fn)
+   {
+      if (frame_ref)
+         return fn(*frame_ref);
+      return fn(*write_tx);
+   }
+
+   template <typename F>
+   decltype(auto) with_write(F&& fn) const
+   {
+      if (frame_ref)
+         return fn(*frame_ref);
+      return fn(*write_tx);
+   }
 };
 
 struct table_impl
@@ -88,6 +108,9 @@ struct DbHost
    psizam::handle_table<transaction_impl, 16>  transactions{16};
    psizam::handle_table<table_impl, 64>        tables{64};
    psizam::handle_table<cursor_impl, 128>      cursors{128};
+
+   // WASI stub — wasi-libc links fd_write for abort/panic output
+   uint32_t fd_write(uint32_t, uint32_t, uint32_t, uint32_t) { return 0; }
 
    // ── store ────────────────────────────────────────────────────────
 
@@ -159,11 +182,11 @@ struct DbHost
          auto* t = tables.get(th);
          if (!t || !t->is_write)
             continue;
-         if (t->dirty && t->subtree_wc && tx.write_tx)
+         if (t->dirty && t->subtree_wc && tx.has_write())
          {
             auto root = t->subtree_wc->take_root();
             if (root)
-               tx.write_tx->upsert(t->table_name, std::move(root));
+               tx.with_write([&](auto& w) { w.upsert(t->table_name, std::move(root)); });
             t->dirty = false;
          }
       }
@@ -191,11 +214,11 @@ struct DbHost
       auto* tx = transactions.get(self.handle);
       if (!tx || tx->ended)
          return std::unexpected(psi::db::error::tx_aborted);
-      if (!tx->is_write || !tx->write_tx)
+      if (!tx->is_write || !tx->has_write())
          return std::unexpected(psi::db::error::read_only_tx);
 
       write_back_dirty_tables(*tx);
-      tx->write_tx->commit();
+      tx->with_write([](auto& w) { w.commit(); });
       tx->ended = true;
       destroy_transaction_children(*tx);
       return {};
@@ -207,10 +230,28 @@ struct DbHost
       if (!tx || tx->ended)
          return;
 
-      if (tx->write_tx)
-         tx->write_tx->abort();
+      if (tx->has_write())
+         tx->with_write([](auto& w) { w.abort(); });
       tx->ended = true;
       destroy_transaction_children(*tx);
+   }
+
+   psio::own<psi::db::transaction>
+   start_sub(psio::borrow<psi::db::transaction> self)
+   {
+      auto* tx = transactions.get(self.handle);
+      if (!tx || tx->ended || !tx->is_write || !tx->has_write())
+         return psio::own<psi::db::transaction>{
+             psizam::handle_table<transaction_impl>::invalid_handle};
+
+      auto frame = tx->with_write([](auto& w) { return w.sub_transaction(); });
+      auto h     = transactions.create(transaction_impl{
+              .db_handle        = tx->db_handle,
+              .is_write         = true,
+              .frame_ref        = std::move(frame),
+              .parent_tx_handle = self.handle,
+      });
+      return psio::own<psi::db::transaction>{h};
    }
 
    void transaction_drop(psio::own<psi::db::transaction> self)
@@ -218,8 +259,8 @@ struct DbHost
       auto* tx = transactions.get(self.handle);
       if (tx && !tx->ended)
       {
-         if (tx->write_tx)
-            tx->write_tx->abort();
+         if (tx->has_write())
+            tx->with_write([](auto& w) { w.abort(); });
          destroy_transaction_children(*tx);
       }
       transactions.destroy(self.handle);
@@ -232,12 +273,12 @@ struct DbHost
       if (!tx || tx->ended)
          return std::unexpected(psi::db::error::invalid_handle);
 
-      if (tx->is_write && tx->write_tx)
+      if (tx->is_write && tx->has_write())
       {
-         if (!tx->write_tx->is_subtree(name))
+         if (!tx->with_write([&](auto& w) { return w.is_subtree(name); }))
             return std::unexpected(psi::db::error::not_found);
 
-         auto wc = tx->write_tx->get_subtree_cursor(name);
+         auto wc = tx->with_write([&](auto& w) { return w.get_subtree_cursor(name); });
          auto h  = tables.create(table_impl{
              .tx_handle  = self.handle,
              .table_name = name,
@@ -278,10 +319,10 @@ struct DbHost
       auto* tx = transactions.get(self.handle);
       if (!tx || tx->ended)
          return std::unexpected(psi::db::error::invalid_handle);
-      if (!tx->is_write || !tx->write_tx)
+      if (!tx->is_write || !tx->has_write())
          return std::unexpected(psi::db::error::read_only_tx);
 
-      if (tx->write_tx->is_subtree(name))
+      if (tx->with_write([&](auto& w) { return w.is_subtree(name); }))
          return std::unexpected(psi::db::error::already_exists);
 
       auto wc_ptr = ws->create_write_cursor();
@@ -304,10 +345,10 @@ struct DbHost
       auto* tx = transactions.get(self.handle);
       if (!tx || tx->ended)
          return std::unexpected(psi::db::error::invalid_handle);
-      if (!tx->is_write || !tx->write_tx)
+      if (!tx->is_write || !tx->has_write())
          return std::unexpected(psi::db::error::read_only_tx);
 
-      int r = tx->write_tx->remove(name);
+      int r = tx->with_write([&](auto& w) { return w.remove(name); });
       if (r < 0)
          return std::unexpected(psi::db::error::not_found);
       return {};
@@ -321,8 +362,8 @@ struct DbHost
          return {};
 
       std::vector<std::string> result;
-      psitri::cursor           rc = tx->is_write && tx->write_tx
-                                        ? tx->write_tx->read_cursor()
+      psitri::cursor           rc = tx->is_write && tx->has_write()
+                                        ? tx->with_write([](auto& w) { return w.read_cursor(); })
                                         : psitri::cursor(tx->read_root);
       if (rc.seek_begin())
       {
@@ -342,11 +383,11 @@ struct DbHost
       if (!t.is_write || !(t.dirty || t.created) || !t.subtree_wc)
          return;
       auto* tx = transactions.get(t.tx_handle);
-      if (!tx || !tx->write_tx || tx->ended)
+      if (!tx || !tx->has_write() || tx->ended)
          return;
       auto root = t.subtree_wc->root();
       if (root)
-         tx->write_tx->upsert(t.table_name, std::move(root));
+         tx->with_write([&](auto& w) { w.upsert(t.table_name, std::move(root)); });
       t.dirty = false;
    }
 
@@ -527,7 +568,11 @@ struct DbHost
       auto* c = cursors.get(self.handle);
       if (!c)
          return std::unexpected(psi::db::error::invalid_handle);
-      return c->inner.upper_bound(db_detail::to_kv(key));
+      auto kv = db_detail::to_kv(key);
+      bool at_end = c->inner.lower_bound(kv);
+      if (!at_end && c->inner.key() == kv)
+         at_end = c->inner.next();
+      return at_end;
    }
 
    std::expected<bool, psi::db::error>
@@ -650,7 +695,7 @@ PSIO_HOST_MODULE(psiserve::db_host,
    interface(psi::db::database,
              start_write, start_read, database_drop),
    interface(psi::db::transaction,
-             commit, abort, open_table, create_table,
+             commit, abort, start_sub, open_table, create_table,
              drop_table, list_tables, transaction_drop),
    interface(psi::db::table,
              get, upsert, remove, remove_range,

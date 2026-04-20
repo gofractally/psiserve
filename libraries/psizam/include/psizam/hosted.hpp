@@ -51,13 +51,16 @@ namespace detail
 // ── is_scalar_wasm_type — can this C++ type be passed as a single WASM value?
 template <typename T>
 constexpr bool is_scalar_wasm_type_v = [] {
-   if constexpr (std::is_void_v<T>)
+   using U = std::decay_t<T>;
+   if constexpr (std::is_void_v<U>)
       return true;
-   else if constexpr (std::is_integral_v<T>)
-      return sizeof(T) <= 8;
-   else if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>)
+   else if constexpr (std::is_integral_v<U>)
+      return sizeof(U) <= 8;
+   else if constexpr (std::is_same_v<U, float> || std::is_same_v<U, double>)
       return true;
-   else if constexpr (wasm_type_traits<std::decay_t<T>>::is_wasm_type)
+   else if constexpr (psio::detail::is_own_ct<U>::value || psio::detail::is_borrow_ct<U>::value)
+      return false;
+   else if constexpr (wasm_type_traits<U>::is_wasm_type)
       return true;
    else
       return false;
@@ -82,16 +85,12 @@ struct member_fn_types<R (Host::*)(Args...) const> : member_fn_types<R (Host::*)
 // canonical host handlers to call cabi_realloc in the guest.
 inline thread_local void* tl_active_backend = nullptr;
 inline thread_local void* tl_active_host    = nullptr;
+using cabi_realloc_fn_t = uint32_t(*)(void* be, void* host, uint32_t align, uint32_t size);
+inline thread_local cabi_realloc_fn_t tl_cabi_realloc = nullptr;
 
-// Helper: call cabi_realloc on the active backend
 inline uint32_t host_cabi_realloc(uint32_t align, uint32_t size) {
-   if (!tl_active_backend) return 0;
-   using be_t = backend<std::nullptr_t, interpreter>;
-   auto* be = static_cast<be_t*>(tl_active_backend);
-   auto r = be->call_with_return(tl_active_host,
-      std::string_view{"cabi_realloc"},
-      uint32_t{0}, uint32_t{0}, align, size);
-   return r ? r->to_ui32() : 0u;
+   if (!tl_cabi_realloc) return 0;
+   return tl_cabi_realloc(tl_active_backend, tl_active_host, align, size);
 }
 
 // ── host_lift_policy ─────────────────────────────────────────────────
@@ -166,13 +165,13 @@ auto make_canonical_host_handler()
       if constexpr (std::is_void_v<ReturnType>) {
          std::apply([host](auto&&... a) {
             (host->*MemPtr)(std::forward<decltype(a)>(a)...);
-         }, args);
+         }, std::move(args));
          tc.get_interface().push_operand(
             ::psizam::detail::i64_const_t{uint64_t{0}});
       } else {
          auto result = std::apply([host](auto&&... a) {
             return (host->*MemPtr)(std::forward<decltype(a)>(a)...);
-         }, args);
+         }, std::move(args));
 
          using U = std::remove_cvref_t<ReturnType>;
          uint64_t rv = 0;
@@ -227,17 +226,15 @@ auto make_canonical_host_handler()
                             psio::is_std_variant_v<U> ||
                             psio::detail::is_std_vector_ct<U>::value ||
                             psio::detail::is_std_optional_ct<U>::value ||
+                            psio::detail::is_std_expected_ct<U>::value ||
                             psio::is_std_tuple<U>::value) {
-            // Complex return: lower fields into guest return area.
-            // Handles records, variants (WIT result<T,E>), vectors, optionals.
             uint32_t retptr = static_cast<uint32_t>(slots[lift.idx].i64);
 
-            // Store policy that writes to guest memory, re-reading the
-            // base pointer after each alloc (cabi_realloc may grow memory).
             struct guest_store {
                TC* tc;
                char* mem() { return static_cast<char*>(tc->get_interface().get_memory()); }
                uint32_t alloc(uint32_t align, uint32_t size) {
+                  if (size == 0) return 0;
                   return host_cabi_realloc(align, size);
                }
                void store_u8(uint32_t off, uint8_t v)   { std::memcpy(mem()+off, &v, 1); }
@@ -564,21 +561,28 @@ struct proxy_adapter
       using Ret    = typename Traits::ReturnType;
       std::string_view name = Info::func_names[Index];
 
-      // Set thread-locals so canonical host handlers can call
-      // cabi_realloc re-entrantly for string/record returns
       tl_active_backend = static_cast<void*>(_backend);
       tl_active_host    = static_cast<void*>(_host);
+      tl_cabi_realloc   = [](void* be, void* host, uint32_t align, uint32_t size) -> uint32_t {
+         auto* b = static_cast<Backend*>(be);
+         auto* h = static_cast<Host*>(host);
+         auto r = b->call_with_return(*h, std::string_view{}, std::string_view{"cabi_realloc"},
+            uint32_t{0}, uint32_t{0}, align, size);
+         return r ? r->to_ui32() : 0u;
+      };
 
       if constexpr (std::is_void_v<Ret>) {
          invoke_canonical_export<Ret>(*_backend, *_host, name,
                                      std::forward<Args>(args)...);
          tl_active_backend = nullptr;
          tl_active_host    = nullptr;
+         tl_cabi_realloc   = nullptr;
       } else {
          auto result = invoke_canonical_export<Ret>(*_backend, *_host, name,
                                              std::forward<Args>(args)...);
          tl_active_backend = nullptr;
          tl_active_host    = nullptr;
+         tl_cabi_realloc   = nullptr;
          return result;
       }
    }
@@ -695,17 +699,25 @@ struct void_proxy_adapter
 
       tl_active_backend = static_cast<void*>(_backend);
       tl_active_host    = _host;
+      tl_cabi_realloc   = [](void* be, void* host, uint32_t align, uint32_t size) -> uint32_t {
+         auto* b = static_cast<Backend*>(be);
+         auto r = b->call_with_return(host, std::string_view{"cabi_realloc"},
+            uint32_t{0}, uint32_t{0}, align, size);
+         return r ? r->to_ui32() : 0u;
+      };
 
       if constexpr (std::is_void_v<Ret>) {
          invoke_canonical_export_void<Ret>(*_backend, _host, name,
                                           std::forward<Args>(args)...);
          tl_active_backend = nullptr;
          tl_active_host    = nullptr;
+         tl_cabi_realloc   = nullptr;
       } else {
          auto result = invoke_canonical_export_void<Ret>(*_backend, _host, name,
                                                   std::forward<Args>(args)...);
          tl_active_backend = nullptr;
          tl_active_host    = nullptr;
+         tl_cabi_realloc   = nullptr;
          return result;
       }
    }

@@ -264,6 +264,14 @@ namespace psio {
       explicit borrow(uint32_t h) : handle(h) {}
    };
 
+   namespace detail {
+      template <typename T> struct is_own_ct : std::false_type {};
+      template <typename T> struct is_own_ct<own<T>> : std::true_type {};
+
+      template <typename T> struct is_borrow_ct : std::false_type {};
+      template <typename T> struct is_borrow_ct<borrow<T>> : std::true_type {};
+   }
+
 }  // namespace psio
 
 // ── wasm_type_traits for own<T> and borrow<T> ──────────────────────

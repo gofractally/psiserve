@@ -95,6 +95,30 @@ namespace psizam {
       struct flat_count_impl<psio::owned<std::vector<E>, psio::wit>> {
          static constexpr size_t value = 2;
       };
+
+      template <>
+      struct flat_count_impl<std::string> {
+         static constexpr size_t value = 2;
+      };
+
+      template <typename E>
+      struct flat_count_impl<std::vector<E>> {
+         static constexpr size_t value = 2;
+      };
+
+      template <typename T>
+      struct flat_count_impl<std::optional<T>> {
+         static constexpr size_t value = 1 + psio::canonical_flat_count_v<T>;
+      };
+
+      template <typename T, typename E>
+      struct flat_count_impl<std::expected<T, E>> {
+         static constexpr size_t vc = [] {
+            if constexpr (std::is_void_v<T>) return size_t{0};
+            else return psio::canonical_flat_count_v<T>;
+         }();
+         static constexpr size_t value = 1 + std::max(vc, psio::canonical_flat_count_v<E>);
+      };
    }
 
    template <typename T>
@@ -145,6 +169,8 @@ namespace psizam {
          p.emit_f64(value);
       else if constexpr (std::is_enum_v<U>)
          canonical_lower_flat(static_cast<std::underlying_type_t<U>>(value), p);
+      else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value)
+         p.emit_i32(value.handle);
       else if constexpr (is_std_string_ct<U>::value ||
                          std::is_same_v<U, std::string_view>) {
          uint32_t ptr = p.alloc(1, static_cast<uint32_t>(value.size()));
@@ -228,6 +254,25 @@ namespace psizam {
          for (uint32_t i = 0; i < n; i++)
             canonical_lower_flat(value[i], p);
       }
+      else if constexpr (is_std_expected_ct<U>::value) {
+         using V = typename expected_value_ct<U>::type;
+         using Err = typename expected_error_ct<U>::type;
+         constexpr size_t vc = std::is_void_v<V> ? 0 : psio::canonical_flat_count_v<V>;
+         constexpr size_t ec = psio::canonical_flat_count_v<Err>;
+         constexpr size_t max_payload = std::max(vc, ec);
+         if (value.has_value()) {
+            p.emit_i32(0);
+            if constexpr (!std::is_void_v<V>)
+               canonical_lower_flat(*value, p);
+            for (size_t i = vc; i < max_payload; i++)
+               p.emit_i64(0);
+         } else {
+            p.emit_i32(1);
+            canonical_lower_flat(value.error(), p);
+            for (size_t i = ec; i < max_payload; i++)
+               p.emit_i64(0);
+         }
+      }
       else if constexpr (psio::Reflected<U>) {
          psio::apply_members(
             (typename psio::reflect<U>::data_members*)nullptr,
@@ -279,6 +324,8 @@ namespace psizam {
          return p.next_f64();
       else if constexpr (std::is_enum_v<U>)
          return static_cast<U>(canonical_lift_flat<std::underlying_type_t<U>>(p));
+      else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value)
+         return U{p.next_i32()};
       else if constexpr (is_std_string_ct<U>::value) {
          uint32_t ptr = p.next_i32();
          uint32_t len = p.next_i32();
@@ -392,6 +439,27 @@ namespace psizam {
          for (uint32_t i = 0; i < n; i++)
             arr[i] = canonical_lift_flat<E>(p);
          return arr;
+      }
+      else if constexpr (is_std_expected_ct<U>::value) {
+         using V = typename expected_value_ct<U>::type;
+         using Err = typename expected_error_ct<U>::type;
+         constexpr size_t vc = std::is_void_v<V> ? 0 : psio::canonical_flat_count_v<V>;
+         constexpr size_t ec = psio::canonical_flat_count_v<Err>;
+         constexpr size_t max_payload = std::max(vc, ec);
+         uint32_t disc = p.next_i32();
+         if (disc == 0) {
+            std::expected<V, Err> result;
+            if constexpr (!std::is_void_v<V>)
+               result = canonical_lift_flat<V>(p);
+            for (size_t i = vc; i < max_payload; i++)
+               (void)p.next_i64();
+            return result;
+         } else {
+            auto err = canonical_lift_flat<Err>(p);
+            for (size_t i = ec; i < max_payload; i++)
+               (void)p.next_i64();
+            return std::expected<V, Err>{std::unexpected(err)};
+         }
       }
       else if constexpr (psio::Reflected<U>) {
          U result{};

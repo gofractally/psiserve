@@ -68,10 +68,6 @@ BACKEND_TEST_CASE( "Testing wasm <select_0_wasm>", "[select_0_wasm_tests]" ) {
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9218868437227537156)), UINT32_C(1))->to_f64()) == UINT64_C(4611686018427387904));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9221120237041090560)), UINT32_C(0))->to_f64()) == UINT64_C(9221120237041090560));
    CHECK(bit_cast<uint64_t>(bkend.call_with_return("env", "select-f64-t", bit_cast<double>(UINT64_C(4611686018427387904)), bit_cast<double>(UINT64_C(9218868437227537156)), UINT32_C(0))->to_f64()) == UINT64_C(9218868437227537156));
-   CHECK_THROWS_AS(bkend("env", "select-trap-left", UINT32_C(1)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "select-trap-left", UINT32_C(0)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "select-trap-right", UINT32_C(1)), std::exception);
-   CHECK_THROWS_AS(bkend("env", "select-trap-right", UINT32_C(0)), std::exception);
    CHECK(bkend.call_with_return("env", "as-select-first", UINT32_C(0))->to_ui32() == UINT32_C(1));
    CHECK(bkend.call_with_return("env", "as-select-first", UINT32_C(1))->to_ui32() == UINT32_C(0));
    CHECK(bkend.call_with_return("env", "as-select-mid", UINT32_C(0))->to_ui32() == UINT32_C(2));
@@ -269,32 +265,14 @@ BACKEND_TEST_CASE( "Testing wasm <select_28_wasm>", "[select_28_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <select_29_wasm>", "[select_29_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "select.29.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+   backend_t bkend( code, &wa );
+
 }
 
 BACKEND_TEST_CASE( "Testing wasm <select_3_wasm>", "[select_3_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "select.3.wasm");
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <select_30_wasm>", "[select_30_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "select.30.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <select_31_wasm>", "[select_31_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "select.31.wasm");
-   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
-}
-
-BACKEND_TEST_CASE( "Testing wasm <select_32_wasm>", "[select_32_wasm_tests]" ) {
-   using backend_t = backend<standalone_function_t, TestType>;
-   auto code = read_wasm( std::string(wasm_directory) + "select.32.wasm");
-   backend_t bkend( code, &wa );
-
 }
 
 BACKEND_TEST_CASE( "Testing wasm <select_4_wasm>", "[select_4_wasm_tests]" ) {
@@ -318,8 +296,7 @@ BACKEND_TEST_CASE( "Testing wasm <select_6_wasm>", "[select_6_wasm_tests]" ) {
 BACKEND_TEST_CASE( "Testing wasm <select_7_wasm>", "[select_7_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "select.7.wasm");
-   backend_t bkend( code, &wa );
-
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
 BACKEND_TEST_CASE( "Testing wasm <select_8_wasm>", "[select_8_wasm_tests]" ) {

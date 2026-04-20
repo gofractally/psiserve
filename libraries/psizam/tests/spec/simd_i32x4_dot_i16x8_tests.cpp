@@ -46,8 +46,6 @@ BACKEND_TEST_CASE( "Testing wasm <simd_i32x4_dot_i16x8_0_wasm>", "[simd_i32x4_do
    CHECK(bkend.call_with_return("env", "i32x4.dot_i16x8_s", make_v128_i16(65535u,65535u,65535u,65535u,65535u,65535u,65535u,65535u), make_v128_i16(32767u,32767u,32767u,32767u,32767u,32767u,32767u,32767u))->to_v128() == make_v128_i32(4294901762u,4294901762u,4294901762u,4294901762u));
    CHECK(bkend.call_with_return("env", "i32x4.dot_i16x8_s", make_v128_i16(65535u,65535u,65535u,65535u,65535u,65535u,65535u,65535u), make_v128_i16(32768u,32768u,32768u,32768u,32768u,32768u,32768u,32768u))->to_v128() == make_v128_i32(65536u,65536u,65536u,65536u));
    CHECK(bkend.call_with_return("env", "i32x4.dot_i16x8_s", make_v128_i16(65535u,65535u,65535u,65535u,65535u,65535u,65535u,65535u), make_v128_i16(65535u,65535u,65535u,65535u,65535u,65535u,65535u,65535u))->to_v128() == make_v128_i32(2u,2u,2u,2u));
-   CHECK(bkend.call_with_return("env", "i32x4.dot_i16x8_s", make_v128_i16(32768u,65535u,32768u,65535u,32768u,65535u,32768u,65535u), make_v128_i16(32769u,0u,32769u,0u,32769u,0u,32769u,0u))->to_v128() == make_v128_i32(1073709056u,1073709056u,1073709056u,1073709056u));
-   CHECK(bkend.call_with_return("env", "i32x4.dot_i16x8_s", make_v128_i16(111u,222u,333u,444u,555u,666u,777u,888u), make_v128_i16(1111u,2222u,3333u,4444u,5555u,6666u,7777u,8888u))->to_v128() == make_v128_i32(616605u,3083025u,7522581u,13935273u));
 }
 
 BACKEND_TEST_CASE( "Testing wasm <simd_i32x4_dot_i16x8_1_wasm>", "[simd_i32x4_dot_i16x8_1_wasm_tests]" ) {

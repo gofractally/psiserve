@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <expected>
 #include <optional>
 #include <span>
 #include <string>
@@ -62,6 +63,15 @@ namespace psio {
 
       template <typename T> struct optional_elem_ct;
       template <typename U> struct optional_elem_ct<std::optional<U>> { using type = U; };
+
+      template <typename T> struct is_std_expected_ct : std::false_type {};
+      template <typename T, typename E> struct is_std_expected_ct<std::expected<T, E>> : std::true_type {};
+
+      template <typename T> struct expected_value_ct;
+      template <typename T, typename E> struct expected_value_ct<std::expected<T, E>> { using type = T; };
+
+      template <typename T> struct expected_error_ct;
+      template <typename T, typename E> struct expected_error_ct<std::expected<T, E>> { using type = E; };
 
       // ── is_canonical_simple: no indirections (strings, vectors, optionals) ──
 

@@ -43,4 +43,35 @@ if(PSIZAM_ENABLE_TESTS)
    target_include_directories(db_host_test PRIVATE
       ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
    add_test(NAME db_host_test COMMAND db_host_test)
+
+   # ── E2E WASM guest test ──────────────────────────────────────────────────
+   psi_add_wasm_module(db_guest
+      SOURCES tests/db_guest.cpp
+      OUTPUT  db_guest.wasm
+      DEPS    psio psizam psi-api)
+
+   if(TARGET db_guest)
+      get_target_property(_db_guest_wasm db_guest PSI_WASM_OUTPUT)
+      set(_db_guest_hpp  ${CMAKE_CURRENT_BINARY_DIR}/db_guest_wasm.hpp)
+
+      add_custom_command(
+         OUTPUT  ${_db_guest_hpp}
+         COMMAND ${CMAKE_COMMAND}
+                 -DINPUT=${_db_guest_wasm}
+                 -DOUTPUT=${_db_guest_hpp}
+                 -DNAME=db_guest_wasm_bytes
+                 -P ${CMAKE_SOURCE_DIR}/libraries/psizam/examples/hello_world/bin2hpp.cmake
+         DEPENDS ${_db_guest_wasm} db_guest
+         COMMENT "Embedding db_guest.wasm → db_guest_wasm.hpp"
+         VERBATIM)
+
+      add_executable(db_e2e_test
+         tests/db_e2e_test.cpp
+         ${_db_guest_hpp})
+      target_include_directories(db_e2e_test PRIVATE
+         ${CMAKE_CURRENT_BINARY_DIR}
+         ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
+      target_link_libraries(db_e2e_test PRIVATE psiserve psi-api)
+      add_test(NAME db_e2e_test COMMAND db_e2e_test)
+   endif()
 endif()

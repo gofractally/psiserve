@@ -129,7 +129,7 @@ function(psi_add_wasm_module name)
       --target=wasm32-wasip1
       --sysroot=${_sysroot}
       -mexec-model=reactor     # library-mode: host calls in, no main()
-      -std=c++20
+      -std=c++23
       -fno-exceptions
       -fno-rtti
       -O2
@@ -152,15 +152,19 @@ function(psi_add_wasm_module name)
       VERBATIM)
 
    # Post-link: promote PSIO_WIT blobs from data section to custom sections.
-   # Use the native pzam tool from the build tree.
+   # Use the native pzam tool from the build tree if available.
    set(_pzam ${CMAKE_BINARY_DIR}/bin/pzam)
-   add_custom_command(
-      OUTPUT  ${_out}
-      COMMAND ${_pzam} wit embed ${_raw_out} -o ${_out}
-      DEPENDS ${_raw_out}
-      COMMENT "Embedding WIT custom sections in ${ARG_OUTPUT}"
-      VERBATIM)
-
-   add_custom_target(${name} ALL DEPENDS ${_out})
-   set_target_properties(${name} PROPERTIES PSI_WASM_OUTPUT ${_out})
+   if(TARGET pzam)
+      add_custom_command(
+         OUTPUT  ${_out}
+         COMMAND ${_pzam} wit embed ${_raw_out} -o ${_out}
+         DEPENDS ${_raw_out} pzam
+         COMMENT "Embedding WIT custom sections in ${ARG_OUTPUT}"
+         VERBATIM)
+      add_custom_target(${name} ALL DEPENDS ${_out})
+      set_target_properties(${name} PROPERTIES PSI_WASM_OUTPUT ${_out})
+   else()
+      add_custom_target(${name} ALL DEPENDS ${_raw_out})
+      set_target_properties(${name} PROPERTIES PSI_WASM_OUTPUT ${_raw_out})
+   endif()
 endfunction()

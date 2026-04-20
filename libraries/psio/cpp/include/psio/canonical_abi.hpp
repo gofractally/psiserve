@@ -33,6 +33,7 @@
 #include <concepts>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <span>
 #include <string>
 #include <tuple>
@@ -85,6 +86,8 @@ namespace psio {
             return 8;
          else if constexpr (std::is_enum_v<U>)
             return canonical_align_impl<std::underlying_type_t<U>>();
+         else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value)
+            return 4;
          else if constexpr (is_std_string_ct<U>::value)
             return 4;  // (i32 ptr, i32 len)
          else if constexpr (is_std_vector_ct<U>::value)
@@ -104,6 +107,17 @@ namespace psio {
             using E = typename optional_elem_ct<U>::type;
             constexpr uint32_t ea = canonical_align_impl<E>();
             return ea > 1 ? ea : 1;  // max(1, payload_align)
+         }
+         else if constexpr (is_std_expected_ct<U>::value) {
+            using V = typename expected_value_ct<U>::type;
+            using Err = typename expected_error_ct<U>::type;
+            constexpr uint32_t ea = canonical_align_impl<Err>();
+            if constexpr (std::is_void_v<V>)
+               return ea > 1 ? ea : 1;
+            else {
+               constexpr uint32_t va = canonical_align_impl<V>();
+               return std::max({uint32_t{1}, va, ea});
+            }
          }
          else if constexpr (is_std_variant_v<U>) {
             return [&]<size_t... Is>(std::index_sequence<Is...>) {
@@ -150,6 +164,8 @@ namespace psio {
             return 8;
          else if constexpr (std::is_enum_v<U>)
             return canonical_size_impl<std::underlying_type_t<U>>();
+         else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value)
+            return 4;
          else if constexpr (is_std_string_ct<U>::value)
             return 8;  // (i32 ptr, i32 len)
          else if constexpr (is_std_vector_ct<U>::value)
@@ -180,6 +196,24 @@ namespace psio {
             constexpr uint32_t total = disc_padded + es;
             constexpr uint32_t a = ea > 1 ? ea : 1;
             return (total + a - 1) & ~(a - 1);
+         }
+         else if constexpr (is_std_expected_ct<U>::value) {
+            using V = typename expected_value_ct<U>::type;
+            using Err = typename expected_error_ct<U>::type;
+            constexpr uint32_t era = canonical_align_impl<Err>();
+            constexpr uint32_t ers = canonical_size_impl<Err>();
+            if constexpr (std::is_void_v<V>) {
+               constexpr uint32_t a = era > 1 ? era : 1;
+               constexpr uint32_t dp = (1 + a - 1) & ~(a - 1);
+               return (dp + ers + a - 1) & ~(a - 1);
+            } else {
+               constexpr uint32_t va = canonical_align_impl<V>();
+               constexpr uint32_t vs = canonical_size_impl<V>();
+               constexpr uint32_t a = std::max({uint32_t{1}, va, era});
+               constexpr uint32_t dp = (1 + a - 1) & ~(a - 1);
+               constexpr uint32_t ps = std::max(vs, ers);
+               return (dp + ps + a - 1) & ~(a - 1);
+            }
          }
          else if constexpr (is_std_variant_v<U>) {
             return []<size_t... Is>(std::index_sequence<Is...>) {
@@ -255,6 +289,8 @@ namespace psio {
          using U = std::remove_cvref_t<T>;
          if constexpr (is_scalar_v<U>)
             return 1;
+         else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value)
+            return 1;
          else if constexpr (is_std_string_ct<U>::value)
             return 2;  // ptr + len
          else if constexpr (is_std_vector_ct<U>::value)
@@ -271,6 +307,12 @@ namespace psio {
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             return 1 + canonical_flat_count_impl<E>();
+         }
+         else if constexpr (is_std_expected_ct<U>::value) {
+            using V = typename expected_value_ct<U>::type;
+            using Err = typename expected_error_ct<U>::type;
+            constexpr size_t vc = std::is_void_v<V> ? 0 : canonical_flat_count_impl<V>();
+            return 1 + std::max(vc, canonical_flat_count_impl<Err>());
          }
          else if constexpr (is_std_variant_v<U>) {
             return []<size_t... Is>(std::index_sequence<Is...>) {
@@ -335,6 +377,9 @@ namespace psio {
          if constexpr (is_scalar_v<U>) {
             return 0;  // scalars are inline, no extra allocation
          }
+         else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value) {
+            return 0;
+         }
          else if constexpr (is_std_string_ct<U>::value) {
             bump = (bump + 0) & ~0u;  // align 1
             uint32_t ptr = bump;
@@ -363,6 +408,16 @@ namespace psio {
             using E = typename optional_elem_ct<U>::type;
             if (value.has_value())
                packed_size_field(*value, bump);
+            return 0;
+         }
+         else if constexpr (is_std_expected_ct<U>::value) {
+            using V = typename expected_value_ct<U>::type;
+            if (value.has_value()) {
+               if constexpr (!std::is_void_v<V>)
+                  packed_size_field(*value, bump);
+            } else {
+               packed_size_field(value.error(), bump);
+            }
             return 0;
          }
          else if constexpr (is_std_variant_v<U>) {
@@ -456,6 +511,8 @@ namespace psio {
             p.store_f64(dest, value);
          else if constexpr (std::is_enum_v<U>)
             store_field(static_cast<std::underlying_type_t<U>>(value), p, dest);
+         else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value)
+            p.store_u32(dest, value.handle);
          else if constexpr (is_std_string_ct<U>::value) {
             uint32_t ptr = p.alloc(1, static_cast<uint32_t>(value.size()));
             p.store_bytes(ptr, value.data(), static_cast<uint32_t>(value.size()));
@@ -501,6 +558,20 @@ namespace psio {
                store_field(*value, p, dest + payload_offset);
             } else {
                p.store_u8(dest, 0);
+            }
+         }
+         else if constexpr (is_std_expected_ct<U>::value) {
+            using V = typename expected_value_ct<U>::type;
+            using Err = typename expected_error_ct<U>::type;
+            constexpr uint32_t a = canonical_align_impl<U>();
+            constexpr uint32_t po = (1 + a - 1) & ~(a - 1);
+            if (value.has_value()) {
+               p.store_u8(dest, 0);
+               if constexpr (!std::is_void_v<V>)
+                  store_field(*value, p, dest + po);
+            } else {
+               p.store_u8(dest, 1);
+               store_field(value.error(), p, dest + po);
             }
          }
          else if constexpr (is_std_variant_v<U>) {
@@ -598,6 +669,8 @@ namespace psio {
             return p.load_f64(offset);
          else if constexpr (std::is_enum_v<U>)
             return static_cast<U>(load_field<std::underlying_type_t<U>>(p, offset));
+         else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value)
+            return U{p.load_u32(offset)};
          else if constexpr (is_std_string_ct<U>::value) {
             uint32_t ptr = p.load_u32(offset);
             uint32_t len = p.load_u32(offset + 4);
@@ -644,6 +717,21 @@ namespace psio {
                return std::optional<E>(load_field<E>(p, offset + payload_offset));
             else
                return std::optional<E>(std::nullopt);
+         }
+         else if constexpr (is_std_expected_ct<U>::value) {
+            using V = typename expected_value_ct<U>::type;
+            using Err = typename expected_error_ct<U>::type;
+            constexpr uint32_t a = canonical_align_impl<U>();
+            constexpr uint32_t po = (1 + a - 1) & ~(a - 1);
+            uint8_t disc = p.load_u8(offset);
+            if (disc == 0) {
+               if constexpr (std::is_void_v<V>)
+                  return std::expected<V, Err>{};
+               else
+                  return std::expected<V, Err>{load_field<V>(p, offset + po)};
+            } else {
+               return std::expected<V, Err>{std::unexpected(load_field<Err>(p, offset + po))};
+            }
          }
          else if constexpr (is_std_variant_v<U>) {
             constexpr size_t N = std::variant_size_v<U>;
@@ -747,6 +835,9 @@ namespace psio {
          if constexpr (is_scalar_v<U>) {
             // No pointers — nothing to rebase
          }
+         else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value) {
+            // Handle index — no pointers
+         }
          else if constexpr (is_std_string_ct<U>::value) {
             uint32_t ptr;
             std::memcpy(&ptr, buf + offset, 4);
@@ -777,6 +868,20 @@ namespace psio {
             std::memcpy(&disc, buf + offset, 1);
             if (disc)
                rebase_field<E>(buf, offset + payload_offset, delta);
+         }
+         else if constexpr (is_std_expected_ct<U>::value) {
+            using V = typename expected_value_ct<U>::type;
+            using Err = typename expected_error_ct<U>::type;
+            constexpr uint32_t a = canonical_align_impl<U>();
+            constexpr uint32_t po = (1 + a - 1) & ~(a - 1);
+            uint8_t disc;
+            std::memcpy(&disc, buf + offset, 1);
+            if (disc == 0) {
+               if constexpr (!std::is_void_v<V>)
+                  rebase_field<V>(buf, offset + po, delta);
+            } else {
+               rebase_field<Err>(buf, offset + po, delta);
+            }
          }
          else if constexpr (is_std_variant_v<U>) {
             constexpr size_t N = std::variant_size_v<U>;
@@ -882,6 +987,23 @@ namespace psio {
             if (disc)
                return validate_field<E>(buf, buf_size, offset + payload_offset);
             return true;
+         }
+         else if constexpr (is_std_expected_ct<U>::value) {
+            using V = typename expected_value_ct<U>::type;
+            using Err = typename expected_error_ct<U>::type;
+            constexpr uint32_t total = canonical_size_impl<U>();
+            if (offset + total > buf_size) return false;
+            constexpr uint32_t a = canonical_align_impl<U>();
+            constexpr uint32_t po = (1 + a - 1) & ~(a - 1);
+            uint8_t disc;
+            std::memcpy(&disc, buf + offset, 1);
+            if (disc == 0) {
+               if constexpr (!std::is_void_v<V>)
+                  return validate_field<V>(buf, buf_size, offset + po);
+               return true;
+            } else {
+               return validate_field<Err>(buf, buf_size, offset + po);
+            }
          }
          else if constexpr (is_std_variant_v<U>) {
             constexpr size_t N = std::variant_size_v<U>;

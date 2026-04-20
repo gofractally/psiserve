@@ -309,9 +309,73 @@ namespace psizam {
       };
    }
 
-   // Forward declaration — defined in module.hpp
    template <typename T>
-   void guest_import_lower(flat_val* slots, size_t& idx, const T& v);
+   void guest_import_lower(flat_val* slots, size_t& idx, const T& v) {
+      using U = std::remove_cvref_t<T>;
+      if constexpr (std::is_same_v<U, bool>)
+         slots[idx++] = v ? 1 : 0;
+      else if constexpr (std::is_integral_v<U> && sizeof(U) <= 4)
+         slots[idx++] = static_cast<flat_val>(static_cast<uint32_t>(v));
+      else if constexpr (std::is_integral_v<U> && sizeof(U) == 8)
+         slots[idx++] = static_cast<flat_val>(v);
+      else if constexpr (std::is_same_v<U, float>) {
+         union { float f; int32_t i; } u; u.f = v;
+         slots[idx++] = static_cast<flat_val>(u.i);
+      }
+      else if constexpr (std::is_same_v<U, double>) {
+         union { double f; int64_t i; } u; u.f = v;
+         slots[idx++] = u.i;
+      }
+      else if constexpr (std::is_same_v<U, std::string_view> ||
+                         std::is_same_v<U, psio::owned<std::string, psio::wit>> ||
+                         psio::detail::is_std_string_ct<U>::value) {
+         slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
+         slots[idx++] = static_cast<flat_val>(v.size());
+      }
+      else if constexpr (psio::detail::is_std_optional_ct<U>::value) {
+         using E = typename psio::detail::optional_elem_ct<U>::type;
+         if (v.has_value()) {
+            slots[idx++] = 1;
+            guest_import_lower(slots, idx, *v);
+         } else {
+            slots[idx++] = 0;
+            constexpr size_t n = psio::canonical_flat_count_v<E>;
+            for (size_t j = 0; j < n; ++j)
+               slots[idx++] = 0;
+         }
+      }
+      else if constexpr (psio::detail::is_std_vector_ct<U>::value) {
+         slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
+         slots[idx++] = static_cast<flat_val>(v.size());
+      }
+      else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
+         slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
+         slots[idx++] = static_cast<flat_val>(v.size());
+      }
+      else if constexpr (detail_dispatch::is_std_span<U>::value) {
+         slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
+         slots[idx++] = static_cast<flat_val>(v.size());
+      }
+      else if constexpr (psio::detail::is_own_ct<U>::value ||
+                         psio::detail::is_borrow_ct<U>::value) {
+         slots[idx++] = static_cast<flat_val>(v.handle);
+      }
+      else if constexpr (wasm_type_traits<std::decay_t<U>, void>::is_wasm_type) {
+         slots[idx++] = static_cast<flat_val>(
+            wasm_type_traits<std::decay_t<U>, void>::unwrap(v));
+      }
+      else if constexpr (psio::Reflected<U>) {
+         psio::apply_members(
+            (typename psio::reflect<U>::data_members*)nullptr,
+            [&](auto... ptrs) {
+               (guest_import_lower(slots, idx, v.*ptrs), ...);
+            }
+         );
+      }
+      else {
+         static_assert(sizeof(U) == 0, "guest_import_lower: unsupported type");
+      }
+   }
 
    struct ImportProxy {
 
@@ -438,21 +502,29 @@ namespace psizam {
                             psio::is_std_variant_v<U> ||
                             psio::detail::is_std_optional_ct<U>::value ||
                             psio::detail::is_std_vector_ct<U>::value ||
+                            psio::detail::is_std_expected_ct<U>::value ||
                             psio::is_std_tuple<U>::value) {
-            struct retarea_load_policy {
-               const uint8_t* base;
-               uint8_t  load_u8(uint32_t off)  { return base[off]; }
-               uint16_t load_u16(uint32_t off) { uint16_t v; std::memcpy(&v, base+off, 2); return v; }
-               uint32_t load_u32(uint32_t off) { uint32_t v; std::memcpy(&v, base+off, 4); return v; }
-               uint64_t load_u64(uint32_t off) { uint64_t v; std::memcpy(&v, base+off, 8); return v; }
-               float    load_f32(uint32_t off) { float v;    std::memcpy(&v, base+off, 4); return v; }
-               double   load_f64(uint32_t off) { double v;   std::memcpy(&v, base+off, 8); return v; }
+            // Canonical ABI stores all pointers as absolute linear-memory
+            // offsets, so the load policy must resolve them from address 0.
+            struct abs_load_policy {
+               const uint8_t* resolve(uint32_t off) const {
+                  return reinterpret_cast<const uint8_t*>(
+                     static_cast<uintptr_t>(off));
+               }
+               uint8_t  load_u8(uint32_t off)  { return resolve(off)[0]; }
+               uint16_t load_u16(uint32_t off) { uint16_t v; std::memcpy(&v, resolve(off), 2); return v; }
+               uint32_t load_u32(uint32_t off) { uint32_t v; std::memcpy(&v, resolve(off), 4); return v; }
+               uint64_t load_u64(uint32_t off) { uint64_t v; std::memcpy(&v, resolve(off), 8); return v; }
+               float    load_f32(uint32_t off) { float v;    std::memcpy(&v, resolve(off), 4); return v; }
+               double   load_f64(uint32_t off) { double v;   std::memcpy(&v, resolve(off), 8); return v; }
                const char* load_bytes(uint32_t off, uint32_t) {
-                  return reinterpret_cast<const char*>(base + off);
+                  return reinterpret_cast<const char*>(resolve(off));
                }
             };
-            retarea_load_policy lp{ret_area};
-            return psio::canonical_lift_fields<U>(lp, 0);
+            abs_load_policy lp;
+            uint32_t ra_off = static_cast<uint32_t>(
+               reinterpret_cast<uintptr_t>(ret_area));
+            return psio::canonical_lift_fields<U>(lp, ra_off);
          }
          else {
             static_assert(sizeof(Ret) == 0, "ImportProxy: unsupported multi-slot return type");

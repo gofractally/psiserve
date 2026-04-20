@@ -260,6 +260,137 @@ TEST_CASE("db_host slice reads", "[db_host]")
    f.host.database_drop(psio::own<psi::db::database>{db.handle});
 }
 
+TEST_CASE("db_host sub-transaction commit propagates to parent", "[db_host]")
+{
+   test_fixture f;
+
+   auto db = std::move(f.host.open("testdb")).value();
+   auto tx = f.host.start_write(psio::borrow<psi::db::database>{db.handle});
+   auto tbl = std::move(f.host.create_table(
+       psio::borrow<psi::db::transaction>{tx.handle}, "t")).value();
+   f.host.upsert(psio::borrow<psi::db::table>{tbl.handle},
+                  to_bytes("a"), to_bytes("1"));
+   f.host.table_drop(psio::own<psi::db::table>{tbl.handle});
+
+   auto sub = f.host.start_sub(psio::borrow<psi::db::transaction>{tx.handle});
+   REQUIRE(sub.handle != psizam::handle_table<psiserve::transaction_impl>::invalid_handle);
+
+   auto tbl2 = std::move(f.host.open_table(
+       psio::borrow<psi::db::transaction>{sub.handle}, "t")).value();
+   f.host.upsert(psio::borrow<psi::db::table>{tbl2.handle},
+                  to_bytes("b"), to_bytes("2"));
+   f.host.table_drop(psio::own<psi::db::table>{tbl2.handle});
+
+   auto commit_sub = f.host.commit(psio::borrow<psi::db::transaction>{sub.handle});
+   REQUIRE(commit_sub.has_value());
+   f.host.transaction_drop(psio::own<psi::db::transaction>{sub.handle});
+
+   auto tbl3 = std::move(f.host.open_table(
+       psio::borrow<psi::db::transaction>{tx.handle}, "t")).value();
+   auto b_val = f.host.get(psio::borrow<psi::db::table>{tbl3.handle},
+                           to_bytes("b"), 0, std::nullopt);
+   REQUIRE(b_val.has_value());
+   CHECK(from_bytes(b_val.value()) == "2");
+   f.host.table_drop(psio::own<psi::db::table>{tbl3.handle});
+
+   f.host.commit(psio::borrow<psi::db::transaction>{tx.handle});
+   f.host.transaction_drop(psio::own<psi::db::transaction>{tx.handle});
+   f.host.database_drop(psio::own<psi::db::database>{db.handle});
+}
+
+TEST_CASE("db_host sub-transaction abort discards changes", "[db_host]")
+{
+   test_fixture f;
+
+   auto db = std::move(f.host.open("testdb")).value();
+   auto tx = f.host.start_write(psio::borrow<psi::db::database>{db.handle});
+   auto tbl = std::move(f.host.create_table(
+       psio::borrow<psi::db::transaction>{tx.handle}, "t")).value();
+   f.host.upsert(psio::borrow<psi::db::table>{tbl.handle},
+                  to_bytes("a"), to_bytes("1"));
+   f.host.table_drop(psio::own<psi::db::table>{tbl.handle});
+
+   {
+      auto sub = f.host.start_sub(psio::borrow<psi::db::transaction>{tx.handle});
+      auto tbl2 = std::move(f.host.open_table(
+          psio::borrow<psi::db::transaction>{sub.handle}, "t")).value();
+      f.host.upsert(psio::borrow<psi::db::table>{tbl2.handle},
+                     to_bytes("b"), to_bytes("BAD"));
+      f.host.table_drop(psio::own<psi::db::table>{tbl2.handle});
+      f.host.abort(psio::borrow<psi::db::transaction>{sub.handle});
+      f.host.transaction_drop(psio::own<psi::db::transaction>{sub.handle});
+   }
+
+   auto tbl3 = std::move(f.host.open_table(
+       psio::borrow<psi::db::transaction>{tx.handle}, "t")).value();
+   auto b_val = f.host.get(psio::borrow<psi::db::table>{tbl3.handle},
+                           to_bytes("b"), 0, std::nullopt);
+   CHECK(!b_val.has_value());
+   CHECK(b_val.error() == error::not_found);
+
+   auto a_val = f.host.get(psio::borrow<psi::db::table>{tbl3.handle},
+                           to_bytes("a"), 0, std::nullopt);
+   REQUIRE(a_val.has_value());
+   CHECK(from_bytes(a_val.value()) == "1");
+
+   f.host.table_drop(psio::own<psi::db::table>{tbl3.handle});
+   f.host.commit(psio::borrow<psi::db::transaction>{tx.handle});
+   f.host.transaction_drop(psio::own<psi::db::transaction>{tx.handle});
+   f.host.database_drop(psio::own<psi::db::database>{db.handle});
+}
+
+TEST_CASE("db_host nested sub-transactions", "[db_host]")
+{
+   test_fixture f;
+
+   auto db = std::move(f.host.open("testdb")).value();
+   auto tx = f.host.start_write(psio::borrow<psi::db::database>{db.handle});
+   auto tbl = std::move(f.host.create_table(
+       psio::borrow<psi::db::transaction>{tx.handle}, "t")).value();
+   f.host.upsert(psio::borrow<psi::db::table>{tbl.handle},
+                  to_bytes("a"), to_bytes("1"));
+   f.host.table_drop(psio::own<psi::db::table>{tbl.handle});
+
+   auto sub1 = f.host.start_sub(psio::borrow<psi::db::transaction>{tx.handle});
+   {
+      auto t1 = std::move(f.host.open_table(
+          psio::borrow<psi::db::transaction>{sub1.handle}, "t")).value();
+      f.host.upsert(psio::borrow<psi::db::table>{t1.handle},
+                     to_bytes("b"), to_bytes("2"));
+      f.host.table_drop(psio::own<psi::db::table>{t1.handle});
+   }
+
+   auto sub2 = f.host.start_sub(psio::borrow<psi::db::transaction>{sub1.handle});
+   {
+      auto t2 = std::move(f.host.open_table(
+          psio::borrow<psi::db::transaction>{sub2.handle}, "t")).value();
+      f.host.upsert(psio::borrow<psi::db::table>{t2.handle},
+                     to_bytes("c"), to_bytes("3"));
+      f.host.table_drop(psio::own<psi::db::table>{t2.handle});
+   }
+   f.host.abort(psio::borrow<psi::db::transaction>{sub2.handle});
+   f.host.transaction_drop(psio::own<psi::db::transaction>{sub2.handle});
+
+   f.host.commit(psio::borrow<psi::db::transaction>{sub1.handle});
+   f.host.transaction_drop(psio::own<psi::db::transaction>{sub1.handle});
+
+   auto tbl_chk = std::move(f.host.open_table(
+       psio::borrow<psi::db::transaction>{tx.handle}, "t")).value();
+   auto b_val = f.host.get(psio::borrow<psi::db::table>{tbl_chk.handle},
+                           to_bytes("b"), 0, std::nullopt);
+   REQUIRE(b_val.has_value());
+   CHECK(from_bytes(b_val.value()) == "2");
+
+   auto c_val = f.host.get(psio::borrow<psi::db::table>{tbl_chk.handle},
+                           to_bytes("c"), 0, std::nullopt);
+   CHECK(!c_val.has_value());
+
+   f.host.table_drop(psio::own<psi::db::table>{tbl_chk.handle});
+   f.host.commit(psio::borrow<psi::db::transaction>{tx.handle});
+   f.host.transaction_drop(psio::own<psi::db::transaction>{tx.handle});
+   f.host.database_drop(psio::own<psi::db::database>{db.handle});
+}
+
 TEST_CASE("db_host abort discards writes", "[db_host]")
 {
    test_fixture f;
