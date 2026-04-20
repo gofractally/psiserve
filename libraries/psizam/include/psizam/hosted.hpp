@@ -803,18 +803,36 @@ struct void_proxy_adapter_erased
       using Ret    = typename Traits::ReturnType;
       std::string_view name = Info::func_names[Index];
 
-      tl_active_backend = nullptr;     // not used by the erased path —
-      tl_active_host    = _host;        // host_cabi_realloc routes via
-      tl_cabi_realloc   = nullptr;      // the lower_policy_erased below.
+      // Match composition's tl_* setup so re-entrant cabi_realloc from
+      // within WASM (e.g. when the export returns a string into a host-
+      // allocated return area) finds a working fallback. The lambda
+      // captures `_be` and routes through call_cabi_realloc with a
+      // cached index, same as void_host_lower_policy_erased's alloc().
+      tl_active_backend = static_cast<void*>(_be);
+      tl_active_host    = _host;
+      static thread_local uint32_t cached_realloc_idx =
+         std::numeric_limits<uint32_t>::max();
+      tl_cabi_realloc = [](void* be_void, void* host, uint32_t align, uint32_t size) -> uint32_t {
+         auto* be = static_cast<instance_be*>(be_void);
+         if (cached_realloc_idx == std::numeric_limits<uint32_t>::max())
+            cached_realloc_idx = be->resolve_export("cabi_realloc");
+         return be->call_cabi_realloc(host, cached_realloc_idx, 0u, 0u, align, size);
+      };
+
+      auto cleanup = [&]() noexcept {
+         tl_active_backend = nullptr;
+         tl_active_host    = nullptr;
+         tl_cabi_realloc   = nullptr;
+      };
 
       if constexpr (std::is_void_v<Ret>) {
          invoke_canonical_export_void_erased<Ret>(*_be, _host, name,
                                                   std::forward<Args>(args)...);
-         tl_active_host = nullptr;
+         cleanup();
       } else {
          auto result = invoke_canonical_export_void_erased<Ret>(*_be, _host, name,
                                                   std::forward<Args>(args)...);
-         tl_active_host = nullptr;
+         cleanup();
          return result;
       }
    }
