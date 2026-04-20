@@ -32,9 +32,7 @@ namespace psizam::detail {
       std::unique_ptr<llvm::orc::LLJIT> jit;
 
       impl(const llvm_jit_options& options) : opts(options) {
-         auto builder = llvm::orc::LLJITBuilder();
-
-         auto jit_or_err = builder.create();
+         auto jit_or_err = llvm::orc::LLJITBuilder().create();
          if (!jit_or_err) {
             std::string err;
             llvm::raw_string_ostream os(err);

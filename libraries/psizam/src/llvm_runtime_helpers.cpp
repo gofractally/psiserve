@@ -1,11 +1,9 @@
 // Runtime helper functions for the LLVM JIT backend.
 // These are called from LLVM-generated native code via absolute symbol resolution.
 //
-// Exception safety: These helpers are called FROM LLVM-generated code. When running
-// pre-compiled .pzam code, the LLVM frames lack .eh_frame data, so C++ exceptions
-// cannot unwind through them. Instead, we catch exceptions at this boundary and use
-// longjmp via trap_jmp_buf (set up by invoke_with_signal_handler / setjmp)
-// to bypass the LLVM frames entirely.
+// Exception safety: All helpers that can throw use longjmp via trap_jmp_ptr
+// (set up by invoke_with_signal_handler / setjmp) to bypass JIT frames.
+// This matches the mechanism used by jit/jit2 backends and signal handlers.
 
 #include <psizam/detail/llvm_runtime_helpers.hpp>
 #include <psizam/detail/execution_context.hpp>
@@ -171,11 +169,19 @@ done:
 
 void __psizam_memory_init(void* ctx, uint32_t seg_idx,
                            uint32_t dest, uint32_t src, uint32_t n) {
-   as_ctx(ctx).init_linear_memory(seg_idx, dest, src, n);
+   try {
+      as_ctx(ctx).init_linear_memory(seg_idx, dest, src, n);
+   } catch (...) {
+      escape_exception(std::current_exception());
+   }
 }
 
 void __psizam_data_drop(void* ctx, uint32_t seg_idx) {
-   as_ctx(ctx).drop_data(seg_idx);
+   try {
+      as_ctx(ctx).drop_data(seg_idx);
+   } catch (...) {
+      escape_exception(std::current_exception());
+   }
 }
 
 void __psizam_memory_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n) {
@@ -203,7 +209,11 @@ void __psizam_memory_fill(void* ctx, uint32_t dest, uint32_t val, uint32_t n) {
 }
 
 void __psizam_elem_drop(void* ctx, uint32_t seg_idx) {
-   as_ctx(ctx).drop_elem(seg_idx);
+   try {
+      as_ctx(ctx).drop_elem(seg_idx);
+   } catch (...) {
+      escape_exception(std::current_exception());
+   }
 }
 
 int64_t __psizam_call_indirect(void* ctx, void* mem, uint32_t type_idx,

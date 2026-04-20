@@ -27,6 +27,14 @@ namespace {
       }
       throw E{msg};
    }
+
+   [[noreturn]] void escape_exception(std::exception_ptr eptr) {
+      if (trap_jmp_ptr) {
+         saved_exception = std::move(eptr);
+         longjmp(*trap_jmp_ptr, -1);
+      }
+      std::rethrow_exception(eptr);
+   }
 }
 
 extern "C" {
@@ -62,17 +70,25 @@ const void* __psizam_resolve_indirect(void* ctx, uint32_t type_idx,
 
 void __psizam_table_copy(void* ctx, uint32_t dest, uint32_t src, uint32_t n,
                           uint32_t dst_table, uint32_t src_table) {
-   auto& c = as_ctx(ctx);
-   auto* s = c.get_table_ptr(src, n, src_table);
-   auto* d = c.get_table_ptr(dest, n, dst_table);
-   if (n > 0)
-      std::memmove(d, s, n * sizeof(table_entry));
+   try {
+      auto& c = as_ctx(ctx);
+      auto* s = c.get_table_ptr(src, n, src_table);
+      auto* d = c.get_table_ptr(dest, n, dst_table);
+      if (n > 0)
+         std::memmove(d, s, n * sizeof(table_entry));
+   } catch (...) {
+      escape_exception(std::current_exception());
+   }
 }
 
 void __psizam_table_init(void* ctx, uint32_t elem_idx,
                           uint32_t dest, uint32_t src, uint32_t n,
                           uint32_t table_idx) {
-   as_ctx(ctx).init_table(elem_idx, dest, src, n, table_idx);
+   try {
+      as_ctx(ctx).init_table(elem_idx, dest, src, n, table_idx);
+   } catch (...) {
+      escape_exception(std::current_exception());
+   }
 }
 
 uint32_t __psizam_table_get(void* ctx, uint32_t table_idx, uint32_t elem_idx) {
@@ -106,12 +122,16 @@ uint32_t __psizam_table_size(void* ctx, uint32_t table_idx) {
 }
 
 void __psizam_table_fill(void* ctx, uint32_t table_idx, uint32_t i, uint32_t val, uint32_t n) {
-   auto& c = as_ctx(ctx);
-   table_entry te;
-   te.type = UINT32_MAX;
-   te.index = val;
-   te.code_ptr = nullptr;
-   c.table_fill(table_idx, i, te, n);
+   try {
+      auto& c = as_ctx(ctx);
+      table_entry te;
+      te.type = UINT32_MAX;
+      te.index = val;
+      te.code_ptr = nullptr;
+      c.table_fill(table_idx, i, te, n);
+   } catch (...) {
+      escape_exception(std::current_exception());
+   }
 }
 
 uint64_t __psizam_atomic_rmw(void* ctx, uint8_t sub, uint32_t addr, uint32_t offset,

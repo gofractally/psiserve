@@ -33,7 +33,7 @@ namespace psizam::detail {
          topts.opt_level = std::atoi(lv);
       }
       topts.fp                 = deterministic ? fp_mode::hw_deterministic : fp_mode::fast;
-      topts.nothrow_host_calls = true;  // JIT path has .eh_frame; skip try/catch overhead
+      topts.nothrow_host_calls = false;  // longjmp via trap_jmp_ptr — same as jit/jit2 backends
       topts.mem_mode           = mem_mode;
       topts.checked_kind       = checked_kind;
       llvm_ir_translator translator(mod, topts);
