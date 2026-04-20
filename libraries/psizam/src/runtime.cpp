@@ -7,6 +7,7 @@
 #include <psizam/runtime.hpp>
 #include <psizam/backend.hpp>
 #include <psizam/detail/instance_be.hpp>
+#include <psizam/detail/pzam_loader.hpp>
 #include <psizam/detail/wasi_host.hpp>
 #include <psizam/host_function.hpp>
 #include <psizam/host_function_table.hpp>
@@ -138,13 +139,33 @@ backend_kind tier_to_backend_kind(instance_policy::compile_tier t) noexcept {
 // ═════════════════════════════════════════════════════════════════════
 
 struct module_handle_impl {
-   std::vector<uint8_t>  wasm_copy;
+   // Common
    host_function_table   table;
    instance_policy       policy;
    void*                 host_ptr = nullptr;
    uint32_t              compile_ms = 0;
 
+   // prepare()-path state — raw WASM bytes; backend constructed at
+   // instantiate() time.
+   std::vector<uint8_t>  wasm_copy;
+
+   // load_cached()-path state — fully relocated executable code +
+   // restored module ready for `jit_execution_context<>` construction
+   // at instantiate() time. Track A lands the loader; Track B will
+   // wire instantiate() to consume this state.
+   std::unique_ptr<detail::pzam_load_result> pzam;
+
    module_handle_impl() = default;
+
+   ~module_handle_impl() {
+      // Release the executable code page back to the JIT allocator if we
+      // own one. This is the only owner of the pzam exec_code; instances
+      // hold a non-owning view via the module reference.
+      if (pzam && pzam->exec_code) {
+         jit_allocator::instance().free(pzam->exec_code);
+         pzam->exec_code = nullptr;
+      }
+   }
 };
 
 host_function_table& module_handle::table() { return impl_->table; }
@@ -153,7 +174,11 @@ void module_handle::set_host_ptr(void* p) { impl_->host_ptr = p; }
 uint32_t module_handle::compile_time_ms() const {
    return impl_ ? impl_->compile_ms : 0;
 }
-uint32_t module_handle::native_code_size() const { return 0; }
+uint32_t module_handle::native_code_size() const {
+   if (!impl_) return 0;
+   if (impl_->pzam) return static_cast<uint32_t>(impl_->pzam->total_code_size);
+   return 0;   // prepare()-path: real value lands with Track B's compile.
+}
 uint32_t module_handle::wasm_size() const {
    return impl_ ? static_cast<uint32_t>(impl_->wasm_copy.size()) : 0;
 }
@@ -257,9 +282,35 @@ module_handle runtime::prepare(wasm_bytes wasm, const instance_policy& policy) {
    return module_handle{std::move(mod)};
 }
 
-module_handle runtime::load_cached(pzam_bytes) {
-   // TODO: load pre-compiled .pzam
-   return module_handle{std::make_shared<module_handle_impl>()};
+module_handle runtime::load_cached(pzam_bytes pzam) {
+   const auto t0 = std::chrono::high_resolution_clock::now();
+
+   // Parse the .pzam container envelope.
+   const std::span<const char> raw{
+      reinterpret_cast<const char*>(pzam.data.data()),
+      pzam.data.size()};
+   if (!pzam_validate(raw))
+      throw std::runtime_error{"runtime::load_cached: invalid .pzam"};
+
+   pzam_file file = pzam_load(raw);
+   if (file.magic != PZAM_MAGIC)
+      throw std::runtime_error{"runtime::load_cached: bad .pzam magic"};
+
+   // Run the full loader: pick code section, restore module, build symbol
+   // table, generate aarch64 veneers, allocate exec memory, apply
+   // relocations, flip RX, fix up function entries + element segments,
+   // derive trampoline direction.
+   auto loaded = std::make_unique<detail::pzam_load_result>(
+      detail::load_pzam(file));
+
+   auto mod = std::make_shared<module_handle_impl>();
+   mod->pzam = std::move(loaded);
+
+   const auto t1 = std::chrono::high_resolution_clock::now();
+   mod->compile_ms = static_cast<uint32_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
+
+   return module_handle{std::move(mod)};
 }
 
 std::vector<unresolved_import> runtime::check(wasm_bytes) const {
