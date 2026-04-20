@@ -1727,6 +1727,7 @@ namespace psizam::detail {
                }
 
                case ir_op::return_: {
+                  emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca, mem_size_cache);
                   if (inst.rr.src1 != ir_vreg_none) {
                      llvm::Value* ret_val;
                      // Check if returning a v128 value
@@ -2388,10 +2389,9 @@ namespace psizam::detail {
 
                   llvm::Value* ptr = builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
                   auto* load_inst = builder.CreateLoad(load_ty, ptr);
-                  // Page-guarded mode: loads must be volatile (SIGSEGV is the check).
-                  // Checked mode: watermark tracks reads, so LLVM can optimize loads.
-                  if (!is_checked())
-                     load_inst->setVolatile(true);
+                  // All modes: loads must be volatile to prevent LLVM from
+                  // eliminating OOB accesses that would hit guard pages.
+                  load_inst->setVolatile(true);
                   llvm::Value* loaded = load_inst;
                   // Extend if needed
                   if (load_ty != result_ty) {
@@ -2459,8 +2459,7 @@ namespace psizam::detail {
                         break;
                   }
                   auto* store_inst = builder.CreateStore(val, ptr);
-                  if (!is_checked())
-                     store_inst->setVolatile(true);
+                  store_inst->setVolatile(true);
                   break;
                }
 
@@ -5275,6 +5274,7 @@ namespace psizam::detail {
             if (bb.getTerminator()) continue;
             builder.SetInsertPoint(&bb);
             if (func.block_count > 0 && &bb == block_exits[0]) {
+               emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca, mem_size_cache);
                // Multi-value return slots are already populated by the
                // `multi_return_store` IR ops that ir_writer emits in emit_end
                // and emit_return (see ir_writer.hpp). Do NOT re-store them
