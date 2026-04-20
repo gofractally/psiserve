@@ -150,10 +150,12 @@ static run_result execute_backend(BackendT& bkend) {
    } catch (wasm_link_exception& e) {
       r.outcome = 1;
       r.what = e.what();
-   } catch (wasm_memory_exception&) {
+   } catch (wasm_memory_exception& e) {
       r.outcome = 2;
-   } catch (wasm_exception&) {
+      r.what = e.what();
+   } catch (wasm_exception& e) {
       r.outcome = 3;
+      r.what = e.what();
    } catch (wasm_interpreter_exception& e) {
       r.outcome = 3;
       r.what = e.what();

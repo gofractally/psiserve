@@ -3404,37 +3404,42 @@ namespace psizam::detail {
             }
             return true;
          }
+         // NaN-producing f32 unary: hardware ops (roundss/sqrtss) propagate the
+         // input NaN payload as-is, but psizam's cross-backend determinism
+         // contract (softfloat=ON) canonicalizes to 0x7fc00000. Canonicalize
+         // after the op so jit2 matches the other backends. Always route
+         // through xmm0 so emit_f32_canonicalize_nan() can operate on it.
          case ir_op::f32_ceil:
             load_float_to_xmm(inst.rr.src1, xmm0, false);
             this->emit_bytes(0x66, 0x0f, 0x3a, 0x0a, 0xc0, 0x0a);
+            emit_f32_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, false);
             return true;
          case ir_op::f32_floor:
             load_float_to_xmm(inst.rr.src1, xmm0, false);
             this->emit_bytes(0x66, 0x0f, 0x3a, 0x0a, 0xc0, 0x09);
+            emit_f32_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, false);
             return true;
          case ir_op::f32_trunc:
             load_float_to_xmm(inst.rr.src1, xmm0, false);
             this->emit_bytes(0x66, 0x0f, 0x3a, 0x0a, 0xc0, 0x0b);
+            emit_f32_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, false);
             return true;
          case ir_op::f32_nearest:
             load_float_to_xmm(inst.rr.src1, xmm0, false);
             this->emit_bytes(0x66, 0x0f, 0x3a, 0x0a, 0xc0, 0x08);
+            emit_f32_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, false);
             return true;
          case ir_op::f32_sqrt: {
-            int8_t x1 = get_xmm(inst.rr.src1);
-            int8_t xd = get_xmm(inst.dest);
-            if (x1 >= 0 && xd >= 0) {
-               auto xs = static_cast<typename base::xmm_register>(x1);
-               auto xr = static_cast<typename base::xmm_register>(xd);
-               this->emit(base::VSQRTSS, xs, xs, xr);
-               return true;
-            }
+            // Fast path via xmm registers can't reach emit_f32_canonicalize_nan
+            // (which is xmm0-only). Route through xmm0; sqrtss is ~20 cycles
+            // so the extra mov is negligible.
             load_float_to_xmm(inst.rr.src1, xmm0, false);
-            this->emit_bytes(0xf3, 0x0f, 0x51, 0xc0);
+            this->emit_bytes(0xf3, 0x0f, 0x51, 0xc0);  // sqrtss xmm0, xmm0
+            emit_f32_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, false);
             return true;
          }
@@ -3448,37 +3453,38 @@ namespace psizam::detail {
             this->emit_bytes(0x48, 0x0f, 0xba, 0xf8, 0x3f);      // btc $63, rax
             store_rax_vreg(inst.dest);
             return true;
+         // NaN-producing f64 unary: same deterministic-NaN canonicalization
+         // reasoning as the f32 unary block above.
          case ir_op::f64_ceil:
             load_float_to_xmm(inst.rr.src1, xmm0, true);
             this->emit_bytes(0x66, 0x0f, 0x3a, 0x0b, 0xc0, 0x0a);
+            emit_f64_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, true);
             return true;
          case ir_op::f64_floor:
             load_float_to_xmm(inst.rr.src1, xmm0, true);
             this->emit_bytes(0x66, 0x0f, 0x3a, 0x0b, 0xc0, 0x09);
+            emit_f64_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, true);
             return true;
          case ir_op::f64_trunc:
             load_float_to_xmm(inst.rr.src1, xmm0, true);
             this->emit_bytes(0x66, 0x0f, 0x3a, 0x0b, 0xc0, 0x0b);
+            emit_f64_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, true);
             return true;
          case ir_op::f64_nearest:
             load_float_to_xmm(inst.rr.src1, xmm0, true);
             this->emit_bytes(0x66, 0x0f, 0x3a, 0x0b, 0xc0, 0x08);
+            emit_f64_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, true);
             return true;
          case ir_op::f64_sqrt: {
-            int8_t x1 = get_xmm(inst.rr.src1);
-            int8_t xd = get_xmm(inst.dest);
-            if (x1 >= 0 && xd >= 0) {
-               auto xs = static_cast<typename base::xmm_register>(x1);
-               auto xr = static_cast<typename base::xmm_register>(xd);
-               this->emit(base::VSQRTSD, xs, xs, xr);
-               return true;
-            }
+            // Same reasoning as f32_sqrt: skip fast path to let
+            // emit_f64_canonicalize_nan() act on xmm0.
             load_float_to_xmm(inst.rr.src1, xmm0, true);
-            this->emit_bytes(0xf2, 0x0f, 0x51, 0xc0);
+            this->emit_bytes(0xf2, 0x0f, 0x51, 0xc0);  // sqrtsd xmm0, xmm0
+            emit_f64_canonicalize_nan();
             store_xmm_to_float(xmm0, inst.dest, true);
             return true;
          }
@@ -3592,20 +3598,24 @@ namespace psizam::detail {
          case ir_op::f32_convert_s_i32:
             load_vreg_rax(inst.rr.src1);
             this->emit_bytes(0xf3, 0x0f, 0x2a, 0xc0);         // cvtsi2ss eax, xmm0
-            this->emit_bytes(0x66, 0x48, 0x0f, 0x7e, 0xc0);  // movq xmm0, rax
+            // 32-bit extract zero-extends upper 32 of rax; cvtsi2ss leaves
+            // xmm upper 96 bits unchanged, so a 64-bit movq would drag stale
+            // xmm bits into the vreg slot and poison any later 64-bit-width
+            // consumer (e.g. i32.reinterpret_f32 → call_indirect elem_idx).
+            this->emit_bytes(0x66, 0x0f, 0x7e, 0xc0);         // movd xmm0, eax
             store_rax_vreg(inst.dest);
             return true;
          case ir_op::f32_convert_u_i32:
             load_vreg_rax(inst.rr.src1);
             this->emit_bytes(0x89, 0xc0);                      // mov eax, eax (zero-extend to 64-bit)
             this->emit_bytes(0xf3, 0x48, 0x0f, 0x2a, 0xc0);  // cvtsi2ss rax, xmm0
-            this->emit_bytes(0x66, 0x48, 0x0f, 0x7e, 0xc0);
+            this->emit_bytes(0x66, 0x0f, 0x7e, 0xc0);         // movd xmm0, eax (zero-extends rax)
             store_rax_vreg(inst.dest);
             return true;
          case ir_op::f32_convert_s_i64:
             load_vreg_rax(inst.rr.src1);
             this->emit_bytes(0xf3, 0x48, 0x0f, 0x2a, 0xc0);  // cvtsi2ss rax, xmm0
-            this->emit_bytes(0x66, 0x48, 0x0f, 0x7e, 0xc0);
+            this->emit_bytes(0x66, 0x0f, 0x7e, 0xc0);         // movd xmm0, eax (zero-extends rax)
             store_rax_vreg(inst.dest);
             return true;
          case ir_op::f32_convert_u_i64: {
@@ -3623,7 +3633,7 @@ namespace psizam::detail {
             base::fix_branch(positive, code);
             this->emit_bytes(0xf3, 0x48, 0x0f, 0x2a, 0xc0); // cvtsi2ss rax, xmm0
             base::fix_branch(done, code); }
-            this->emit_bytes(0x66, 0x48, 0x0f, 0x7e, 0xc0);
+            this->emit_bytes(0x66, 0x0f, 0x7e, 0xc0);         // movd xmm0, eax (zero-extends rax)
             store_rax_vreg(inst.dest);
             return true;
          }
@@ -3670,7 +3680,8 @@ namespace psizam::detail {
             load_vreg_rax(inst.rr.src1);
             this->emit_bytes(0x66, 0x48, 0x0f, 0x6e, 0xc0);  // movq rax, xmm0
             this->emit_bytes(0xf2, 0x0f, 0x5a, 0xc0);         // cvtsd2ss xmm0, xmm0
-            this->emit_bytes(0x66, 0x48, 0x0f, 0x7e, 0xc0);  // movq xmm0, rax
+            // f32 result: extract as 32-bit to zero-extend upper 32 of rax.
+            this->emit_bytes(0x66, 0x0f, 0x7e, 0xc0);         // movd xmm0, eax
             store_rax_vreg(inst.dest);
             return true;
          case ir_op::f64_promote_f32:
@@ -4800,7 +4811,7 @@ namespace psizam::detail {
          this->emit_bytes(0xf3, 0x0f, 0x5d, 0xca);        // minss xmm2, xmm1
          this->emit_bytes(0x0f, 0x56, 0xc1);              // orps xmm1, xmm0
          emit_f32_canonicalize_nan();
-         this->emit_bytes(0x66, 0x48, 0x0f, 0x7e, 0xc0);  // movq xmm0, rax
+         this->emit_bytes(0x66, 0x0f, 0x7e, 0xc0);        // movd xmm0, eax (zero-extends rax)
          store_rax_vreg(inst.dest);
       }
 
@@ -4820,7 +4831,7 @@ namespace psizam::detail {
          this->emit_bytes(0x0f, 0x56, 0xc1);                // orps xmm1, xmm0
          this->emit_bytes(0x0f, 0x57, 0xc3);                // xorps xmm3, xmm0
          emit_f32_canonicalize_nan();
-         this->emit_bytes(0x66, 0x48, 0x0f, 0x7e, 0xc0);
+         this->emit_bytes(0x66, 0x0f, 0x7e, 0xc0);         // movd xmm0, eax (zero-extends rax)
          store_rax_vreg(inst.dest);
       }
 
