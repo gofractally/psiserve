@@ -252,6 +252,10 @@ if(PSIZAM_ENABLE_BENCHMARKS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
 endif()
 
 # ── Examples ───────────────────────────────────────────────────────────────────
+# Tests depend on composition example WASM fixtures, so force examples on.
+if(PSIZAM_ENABLE_TESTS AND NOT PSIZAM_ENABLE_EXAMPLES)
+   set(PSIZAM_ENABLE_EXAMPLES ON)
+endif()
 if(PSIZAM_ENABLE_EXAMPLES AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    add_subdirectory(examples)
 endif()
