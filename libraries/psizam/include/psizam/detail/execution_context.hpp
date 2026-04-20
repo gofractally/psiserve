@@ -1204,6 +1204,8 @@ namespace psizam::detail {
          return idx;
       }
 
+      inline uint32_t jit_eh_exn_stack_size() const { return static_cast<uint32_t>(_jit_eh_exn_stack.size()); }
+
       inline const wasm_exception_t& jit_get_caught_exception(uint32_t idx) const {
          PSIZAM_ASSERT(idx < _jit_eh_exn_stack.size(), wasm_interpreter_exception, "invalid exception reference index");
          return _jit_eh_exn_stack[idx];

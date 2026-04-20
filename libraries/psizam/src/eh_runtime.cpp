@@ -115,6 +115,14 @@ void __psizam_eh_leave(void* ctx) {
       throw wasm_interpreter_exception{"null exception reference"};
    }
    auto& c = as_ctx(ctx);
+   if (exnref_idx >= c.jit_eh_exn_stack_size()) {
+      if (trap_jmp_ptr) {
+         saved_exception = std::make_exception_ptr(
+            wasm_interpreter_exception{"invalid exception reference index"});
+         longjmp(*trap_jmp_ptr, -1);
+      }
+      throw wasm_interpreter_exception{"invalid exception reference index"};
+   }
    const auto& exn = c.jit_get_caught_exception(exnref_idx);
    __psizam_eh_throw(ctx, exn.tag_index, exn.values.data(),
                      static_cast<uint32_t>(exn.values.size()));
