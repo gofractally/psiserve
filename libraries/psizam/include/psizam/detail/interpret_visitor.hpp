@@ -3,6 +3,7 @@
 #include <psizam/config.hpp>
 #include <psizam/detail/base_visitor.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/options.hpp>
 #include <psizam/detail/opcodes.hpp>
 #include <psizam/detail/softfloat.hpp>
 #include <psizam/detail/stack_elem.hpp>
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 
 namespace psizam::detail {
 
@@ -45,8 +47,12 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const end_t& op) { context.inc_pc(); }
       [[gnu::always_inline]] inline void operator()(const return_t& op) { context.apply_pop_call(op.data, op.pc, op.stacksz); }
       [[gnu::always_inline]] inline void operator()(const block_t& op) { context.inc_pc(); }
-      [[gnu::always_inline]] inline void operator()(const loop_t& op) { context.inc_pc(); }
+      [[gnu::always_inline]] inline void operator()(const loop_t& op) {
+         context.validate_read_watermark();
+         context.inc_pc();
+      }
       [[gnu::always_inline]] inline void operator()(const gas_charge_t& op) {
+         context.validate_read_watermark();
          context.gas_charge(op.cost);
          context.inc_pc();
       }
@@ -160,140 +166,165 @@ namespace psizam::detail {
          context.set_global(op.index, oper);
       }
       template<typename Op>
-      inline void * pop_memop_addr(const Op& op) {
+      inline uint64_t compute_effective(const Op& op) {
          const auto& ptr = context.pop_operand();
          if (context.is_memory64()) {
             uint64_t addr = ptr.to_ui64();
             uint64_t effective = static_cast<uint64_t>(op.offset) + addr;
-            // Bounds check: ensure address stays within guard page region
-            PSIZAM_ASSERT(effective < max_memory && effective >= addr,
-                          wasm_memory_exception, "memory address out of range");
-            return context.linear_memory() + effective;
+            if (context.mem_mode() == mem_safety::guarded) {
+               PSIZAM_ASSERT(effective < max_memory && effective >= addr,
+                             wasm_memory_exception, "memory address out of range");
+            }
+            return effective;
          }
-         return context.linear_memory() + static_cast<uint64_t>(op.offset) + static_cast<uint64_t>(ptr.to_ui32());
+         return static_cast<uint64_t>(op.offset) + static_cast<uint64_t>(ptr.to_ui32());
+      }
+
+      template<typename Op>
+      inline void* pop_memop_addr_read(const Op& op, uint32_t access_size) {
+         uint64_t effective = compute_effective(op);
+         if (context.mem_mode() == mem_safety::checked) {
+            uint64_t end = effective + access_size;
+            if (context.checked_strict())
+               context.track_read_max(end);
+            else
+               context.track_read_or(end);
+         }
+         return context.linear_memory() + effective;
+      }
+
+      template<typename Op>
+      inline void* pop_memop_addr_write(const Op& op, uint32_t access_size) {
+         uint64_t effective = compute_effective(op);
+         if (context.mem_mode() == mem_safety::checked) {
+            uint64_t end = effective + access_size;
+            PSIZAM_ASSERT(end <= context.memory_size_bytes(),
+                          wasm_memory_exception, "memory write out of bounds");
+         }
+         return context.linear_memory() + effective;
       }
       [[gnu::always_inline]] inline void operator()(const i32_load_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 4);
          context.push_operand(i32_const_t{ read_unaligned<uint32_t>(_ptr) });
       }
       [[gnu::always_inline]] inline void operator()(const i32_load8_s_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 1);
          context.push_operand(i32_const_t{ static_cast<int32_t>(read_unaligned<int8_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i32_load16_s_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 2);
          context.push_operand(i32_const_t{ static_cast<int32_t>( read_unaligned<int16_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i32_load8_u_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 1);
          context.push_operand(i32_const_t{ static_cast<uint32_t>( read_unaligned<uint8_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i32_load16_u_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 2);
          context.push_operand(i32_const_t{ static_cast<uint32_t>( read_unaligned<uint16_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i64_load_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 8);
          context.push_operand(i64_const_t{ static_cast<uint64_t>( read_unaligned<uint64_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i64_load8_s_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 1);
          context.push_operand(i64_const_t{ static_cast<int64_t>( read_unaligned<int8_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i64_load16_s_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 2);
          context.push_operand(i64_const_t{ static_cast<int64_t>( read_unaligned<int16_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i64_load32_s_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 4);
          context.push_operand(i64_const_t{ static_cast<int64_t>( read_unaligned<int32_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i64_load8_u_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 1);
          context.push_operand(i64_const_t{ static_cast<uint64_t>( read_unaligned<uint8_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i64_load16_u_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 2);
          context.push_operand(i64_const_t{ static_cast<uint64_t>( read_unaligned<uint16_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const i64_load32_u_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 4);
          context.push_operand(i64_const_t{ static_cast<uint64_t>( read_unaligned<uint32_t>(_ptr) ) });
       }
       [[gnu::always_inline]] inline void operator()(const f32_load_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 4);
          context.push_operand(f32_const_t{ read_unaligned<uint32_t>(_ptr) });
       }
       [[gnu::always_inline]] inline void operator()(const f64_load_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 8);
          context.push_operand(f64_const_t{ read_unaligned<uint64_t>(_ptr) });
       }
       [[gnu::always_inline]] inline void operator()(const i32_store_t& op) {
          context.inc_pc();
          const auto& val     = context.pop_operand();
-         void* store_loc     = pop_memop_addr(op);
+         void* store_loc     = pop_memop_addr_write(op, 4);
          write_unaligned(store_loc, val.to_ui32());
       }
       [[gnu::always_inline]] inline void operator()(const i32_store8_t& op) {
          context.inc_pc();
          const auto& val = context.pop_operand();
-         void* store_loc = pop_memop_addr(op);
+         void* store_loc = pop_memop_addr_write(op, 1);
          write_unaligned(store_loc, static_cast<uint8_t>(val.to_ui32()));
       }
       [[gnu::always_inline]] inline void operator()(const i32_store16_t& op) {
          context.inc_pc();
          const auto& val     = context.pop_operand();
-         void* store_loc     = pop_memop_addr(op);
+         void* store_loc     = pop_memop_addr_write(op, 2);
          write_unaligned(store_loc, static_cast<uint16_t>(val.to_ui32()));
       }
       [[gnu::always_inline]] inline void operator()(const i64_store_t& op) {
          context.inc_pc();
          const auto& val     = context.pop_operand();
-         void* store_loc     = pop_memop_addr(op);
+         void* store_loc     = pop_memop_addr_write(op, 8);
          write_unaligned(store_loc, static_cast<uint64_t>(val.to_ui64()));
       }
       [[gnu::always_inline]] inline void operator()(const i64_store8_t& op) {
          context.inc_pc();
          const auto& val = context.pop_operand();
-         void* store_loc = pop_memop_addr(op);
+         void* store_loc = pop_memop_addr_write(op, 1);
          write_unaligned(store_loc, static_cast<uint8_t>(val.to_ui64()));
       }
       [[gnu::always_inline]] inline void operator()(const i64_store16_t& op) {
          context.inc_pc();
          const auto& val     = context.pop_operand();
-         void* store_loc     = pop_memop_addr(op);
+         void* store_loc     = pop_memop_addr_write(op, 2);
          write_unaligned(store_loc, static_cast<uint16_t>(val.to_ui64()));
       }
       [[gnu::always_inline]] inline void operator()(const i64_store32_t& op) {
          context.inc_pc();
          const auto& val     = context.pop_operand();
-         void* store_loc     = pop_memop_addr(op);
+         void* store_loc     = pop_memop_addr_write(op, 4);
          write_unaligned(store_loc, static_cast<uint32_t>(val.to_ui64()));
       }
       [[gnu::always_inline]] inline void operator()(const f32_store_t& op) {
          context.inc_pc();
          const auto& val     = context.pop_operand();
-         void* store_loc     = pop_memop_addr(op);
+         void* store_loc     = pop_memop_addr_write(op, 4);
          write_unaligned(store_loc, static_cast<uint32_t>(val.to_fui32()));
       }
       [[gnu::always_inline]] inline void operator()(const f64_store_t& op) {
          context.inc_pc();
          const auto& val     = context.pop_operand();
-         void* store_loc     = pop_memop_addr(op);
+         void* store_loc     = pop_memop_addr_write(op, 8);
          write_unaligned(store_loc, static_cast<uint64_t>(val.to_fui64()));
       }
       [[gnu::always_inline]] inline void operator()(const current_memory_t& op) {
@@ -1352,13 +1383,13 @@ namespace psizam::detail {
       }
       [[gnu::always_inline]] inline void operator()(const v128_load_t& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 16);
          context.push_operand(v128_const_t{ read_unaligned<v128_t>(_ptr) });
       }
       template<typename T, typename U, typename Op>
       [[gnu::always_inline]] inline void v128_load_extend(const Op& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, 8);
          T a;
          static_assert(sizeof(T) == 16);
          for(int i = 0; i < sizeof(a)/sizeof(a[0]); ++i) {
@@ -1389,7 +1420,7 @@ namespace psizam::detail {
       template<typename T, typename Op>
       [[gnu::always_inline]] inline void v128_load_splat(const Op& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, sizeof(std::remove_all_extents_t<T>));
          T a;
          static_assert(sizeof(T) == 16);
          auto val = read_unaligned<std::decay_t<decltype(a[0])>>(_ptr);
@@ -1415,7 +1446,7 @@ namespace psizam::detail {
       template<typename T, typename Op>
       [[gnu::always_inline]] inline void v128_load_zero(const Op& op) {
          context.inc_pc();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, sizeof(std::remove_all_extents_t<T>));
          T a = {};
          static_assert(sizeof(T) == 16);
          a[0] = read_unaligned<std::decay_t<decltype(a[0])>>(_ptr);
@@ -1432,14 +1463,14 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void operator()(const v128_store_t& op) {
          context.inc_pc();
          const auto& val     = context.pop_operand();
-         void* store_loc     = pop_memop_addr(op);
+         void* store_loc     = pop_memop_addr_write(op, 16);
          write_unaligned(store_loc, val.to_v128());
       }
       template<typename T, typename Op>
       [[gnu::always_inline]] inline void v128_load_lane(const Op& op) {
          context.inc_pc();
          v128_t val = context.pop_operand().to_v128();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_read(op, sizeof(std::remove_all_extents_t<T>));
          T a;
          static_assert(sizeof(T) == sizeof(val));
          memcpy(&a, &val, sizeof(val));
@@ -1464,7 +1495,7 @@ namespace psizam::detail {
       [[gnu::always_inline]] inline void v128_store_lane(const Op& op) {
          context.inc_pc();
          v128_t val = context.pop_operand().to_v128();
-         void* _ptr = pop_memop_addr(op);
+         void* _ptr = pop_memop_addr_write(op, sizeof(std::remove_all_extents_t<T>));
          T a;
          static_assert(sizeof(T) == sizeof(val));
          std::memcpy(&a, &val, sizeof(val));
@@ -2630,37 +2661,37 @@ namespace psizam::detail {
 
          // ── Atomic loads (same as regular loads) ──
          case atomic_sub::i32_atomic_load: {
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_read(op, 4);
             context.push_operand(i32_const_t{ read_unaligned<uint32_t>(_ptr) });
             break;
          }
          case atomic_sub::i64_atomic_load: {
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_read(op, 8);
             context.push_operand(i64_const_t{ read_unaligned<uint64_t>(_ptr) });
             break;
          }
          case atomic_sub::i32_atomic_load8_u: {
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_read(op, 1);
             context.push_operand(i32_const_t{ static_cast<uint32_t>(read_unaligned<uint8_t>(_ptr)) });
             break;
          }
          case atomic_sub::i32_atomic_load16_u: {
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_read(op, 2);
             context.push_operand(i32_const_t{ static_cast<uint32_t>(read_unaligned<uint16_t>(_ptr)) });
             break;
          }
          case atomic_sub::i64_atomic_load8_u: {
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_read(op, 1);
             context.push_operand(i64_const_t{ static_cast<uint64_t>(read_unaligned<uint8_t>(_ptr)) });
             break;
          }
          case atomic_sub::i64_atomic_load16_u: {
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_read(op, 2);
             context.push_operand(i64_const_t{ static_cast<uint64_t>(read_unaligned<uint16_t>(_ptr)) });
             break;
          }
          case atomic_sub::i64_atomic_load32_u: {
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_read(op, 4);
             context.push_operand(i64_const_t{ static_cast<uint64_t>(read_unaligned<uint32_t>(_ptr)) });
             break;
          }
@@ -2668,43 +2699,43 @@ namespace psizam::detail {
          // ── Atomic stores (same as regular stores) ──
          case atomic_sub::i32_atomic_store: {
             auto val = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 4);
             write_unaligned<uint32_t>(_ptr, val);
             break;
          }
          case atomic_sub::i64_atomic_store: {
             auto val = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 8);
             write_unaligned<uint64_t>(_ptr, val);
             break;
          }
          case atomic_sub::i32_atomic_store8: {
             auto val = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 1);
             write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(val));
             break;
          }
          case atomic_sub::i32_atomic_store16: {
             auto val = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 2);
             write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(val));
             break;
          }
          case atomic_sub::i64_atomic_store8: {
             auto val = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 1);
             write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(val));
             break;
          }
          case atomic_sub::i64_atomic_store16: {
             auto val = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 2);
             write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(val));
             break;
          }
          case atomic_sub::i64_atomic_store32: {
             auto val = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 4);
             write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(val));
             break;
          }
@@ -2713,7 +2744,7 @@ namespace psizam::detail {
 #define ATOMIC_RMW_I32(sub_name, OP) \
          case atomic_sub::sub_name: { \
             auto val = context.pop_operand().to_ui32(); \
-            void* _ptr = pop_memop_addr(op); \
+            void* _ptr = pop_memop_addr_write(op, 4); \
             auto old = read_unaligned<uint32_t>(_ptr); \
             write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(old OP val)); \
             context.push_operand(i32_const_t{old}); \
@@ -2722,7 +2753,7 @@ namespace psizam::detail {
 #define ATOMIC_RMW_I32_8(sub_name, OP) \
          case atomic_sub::sub_name: { \
             auto val = context.pop_operand().to_ui32(); \
-            void* _ptr = pop_memop_addr(op); \
+            void* _ptr = pop_memop_addr_write(op, 1); \
             auto old = read_unaligned<uint8_t>(_ptr); \
             write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(old OP static_cast<uint8_t>(val))); \
             context.push_operand(i32_const_t{static_cast<uint32_t>(old)}); \
@@ -2731,7 +2762,7 @@ namespace psizam::detail {
 #define ATOMIC_RMW_I32_16(sub_name, OP) \
          case atomic_sub::sub_name: { \
             auto val = context.pop_operand().to_ui32(); \
-            void* _ptr = pop_memop_addr(op); \
+            void* _ptr = pop_memop_addr_write(op, 2); \
             auto old = read_unaligned<uint16_t>(_ptr); \
             write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(old OP static_cast<uint16_t>(val))); \
             context.push_operand(i32_const_t{static_cast<uint32_t>(old)}); \
@@ -2761,7 +2792,7 @@ namespace psizam::detail {
 #define ATOMIC_RMW_I64(sub_name, OP) \
          case atomic_sub::sub_name: { \
             auto val = context.pop_operand().to_ui64(); \
-            void* _ptr = pop_memop_addr(op); \
+            void* _ptr = pop_memop_addr_write(op, 8); \
             auto old = read_unaligned<uint64_t>(_ptr); \
             write_unaligned<uint64_t>(_ptr, static_cast<uint64_t>(old OP val)); \
             context.push_operand(i64_const_t{old}); \
@@ -2770,7 +2801,7 @@ namespace psizam::detail {
 #define ATOMIC_RMW_I64_8(sub_name, OP) \
          case atomic_sub::sub_name: { \
             auto val = context.pop_operand().to_ui64(); \
-            void* _ptr = pop_memop_addr(op); \
+            void* _ptr = pop_memop_addr_write(op, 1); \
             auto old = read_unaligned<uint8_t>(_ptr); \
             write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(old OP static_cast<uint8_t>(val))); \
             context.push_operand(i64_const_t{static_cast<uint64_t>(old)}); \
@@ -2779,7 +2810,7 @@ namespace psizam::detail {
 #define ATOMIC_RMW_I64_16(sub_name, OP) \
          case atomic_sub::sub_name: { \
             auto val = context.pop_operand().to_ui64(); \
-            void* _ptr = pop_memop_addr(op); \
+            void* _ptr = pop_memop_addr_write(op, 2); \
             auto old = read_unaligned<uint16_t>(_ptr); \
             write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(old OP static_cast<uint16_t>(val))); \
             context.push_operand(i64_const_t{static_cast<uint64_t>(old)}); \
@@ -2788,7 +2819,7 @@ namespace psizam::detail {
 #define ATOMIC_RMW_I64_32(sub_name, OP) \
          case atomic_sub::sub_name: { \
             auto val = context.pop_operand().to_ui64(); \
-            void* _ptr = pop_memop_addr(op); \
+            void* _ptr = pop_memop_addr_write(op, 4); \
             auto old = read_unaligned<uint32_t>(_ptr); \
             write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(old OP static_cast<uint32_t>(val))); \
             context.push_operand(i64_const_t{static_cast<uint64_t>(old)}); \
@@ -2823,7 +2854,7 @@ namespace psizam::detail {
          // ── Atomic xchg ──
          case atomic_sub::i32_atomic_rmw_xchg: {
             auto val = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 4);
             auto old = read_unaligned<uint32_t>(_ptr);
             write_unaligned<uint32_t>(_ptr, val);
             context.push_operand(i32_const_t{old});
@@ -2831,7 +2862,7 @@ namespace psizam::detail {
          }
          case atomic_sub::i32_atomic_rmw8_xchg_u: {
             auto val = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 1);
             auto old = read_unaligned<uint8_t>(_ptr);
             write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(val));
             context.push_operand(i32_const_t{static_cast<uint32_t>(old)});
@@ -2839,7 +2870,7 @@ namespace psizam::detail {
          }
          case atomic_sub::i32_atomic_rmw16_xchg_u: {
             auto val = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 2);
             auto old = read_unaligned<uint16_t>(_ptr);
             write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(val));
             context.push_operand(i32_const_t{static_cast<uint32_t>(old)});
@@ -2847,7 +2878,7 @@ namespace psizam::detail {
          }
          case atomic_sub::i64_atomic_rmw_xchg: {
             auto val = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 8);
             auto old = read_unaligned<uint64_t>(_ptr);
             write_unaligned<uint64_t>(_ptr, val);
             context.push_operand(i64_const_t{old});
@@ -2855,7 +2886,7 @@ namespace psizam::detail {
          }
          case atomic_sub::i64_atomic_rmw8_xchg_u: {
             auto val = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 1);
             auto old = read_unaligned<uint8_t>(_ptr);
             write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(val));
             context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
@@ -2863,7 +2894,7 @@ namespace psizam::detail {
          }
          case atomic_sub::i64_atomic_rmw16_xchg_u: {
             auto val = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 2);
             auto old = read_unaligned<uint16_t>(_ptr);
             write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(val));
             context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
@@ -2871,7 +2902,7 @@ namespace psizam::detail {
          }
          case atomic_sub::i64_atomic_rmw32_xchg_u: {
             auto val = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 4);
             auto old = read_unaligned<uint32_t>(_ptr);
             write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(val));
             context.push_operand(i64_const_t{static_cast<uint64_t>(old)});
@@ -2882,7 +2913,7 @@ namespace psizam::detail {
          case atomic_sub::i32_atomic_rmw_cmpxchg: {
             auto replacement = context.pop_operand().to_ui32();
             auto expected = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 4);
             auto old = read_unaligned<uint32_t>(_ptr);
             if (old == expected) write_unaligned<uint32_t>(_ptr, replacement);
             context.push_operand(i32_const_t{old});
@@ -2891,7 +2922,7 @@ namespace psizam::detail {
          case atomic_sub::i64_atomic_rmw_cmpxchg: {
             auto replacement = context.pop_operand().to_ui64();
             auto expected = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 8);
             auto old = read_unaligned<uint64_t>(_ptr);
             if (old == expected) write_unaligned<uint64_t>(_ptr, replacement);
             context.push_operand(i64_const_t{old});
@@ -2900,7 +2931,7 @@ namespace psizam::detail {
          case atomic_sub::i32_atomic_rmw8_cmpxchg_u: {
             auto replacement = context.pop_operand().to_ui32();
             auto expected = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 1);
             auto old = read_unaligned<uint8_t>(_ptr);
             if (old == static_cast<uint8_t>(expected))
                write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(replacement));
@@ -2910,7 +2941,7 @@ namespace psizam::detail {
          case atomic_sub::i32_atomic_rmw16_cmpxchg_u: {
             auto replacement = context.pop_operand().to_ui32();
             auto expected = context.pop_operand().to_ui32();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 2);
             auto old = read_unaligned<uint16_t>(_ptr);
             if (old == static_cast<uint16_t>(expected))
                write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(replacement));
@@ -2920,7 +2951,7 @@ namespace psizam::detail {
          case atomic_sub::i64_atomic_rmw8_cmpxchg_u: {
             auto replacement = context.pop_operand().to_ui64();
             auto expected = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 1);
             auto old = read_unaligned<uint8_t>(_ptr);
             if (old == static_cast<uint8_t>(expected))
                write_unaligned<uint8_t>(_ptr, static_cast<uint8_t>(replacement));
@@ -2930,7 +2961,7 @@ namespace psizam::detail {
          case atomic_sub::i64_atomic_rmw16_cmpxchg_u: {
             auto replacement = context.pop_operand().to_ui64();
             auto expected = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 2);
             auto old = read_unaligned<uint16_t>(_ptr);
             if (old == static_cast<uint16_t>(expected))
                write_unaligned<uint16_t>(_ptr, static_cast<uint16_t>(replacement));
@@ -2940,7 +2971,7 @@ namespace psizam::detail {
          case atomic_sub::i64_atomic_rmw32_cmpxchg_u: {
             auto replacement = context.pop_operand().to_ui64();
             auto expected = context.pop_operand().to_ui64();
-            void* _ptr = pop_memop_addr(op);
+            void* _ptr = pop_memop_addr_write(op, 4);
             auto old = read_unaligned<uint32_t>(_ptr);
             if (old == static_cast<uint32_t>(expected))
                write_unaligned<uint32_t>(_ptr, static_cast<uint32_t>(replacement));

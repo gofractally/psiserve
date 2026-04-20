@@ -3,6 +3,7 @@
 #include <psizam/allocator.hpp>
 #include <psizam/config.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/options.hpp>
 #include <psizam/detail/execution_context.hpp>
 #include <psizam/detail/llvm_runtime_helpers.hpp>
 #include <psizam/detail/signals.hpp>
@@ -120,6 +121,11 @@ namespace psizam::detail {
       void set_fp_mode(fp_mode m) { _fp = m; }
       fp_mode get_fp_mode() const { return _fp; }
 
+      void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
+      void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+      bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
+      bool is_checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
+
       ~machine_code_writer_t() {
          _allocator.end_code<true>(_code_segment_base);
          auto num_functions = _mod.get_functions_total();
@@ -150,7 +156,7 @@ namespace psizam::detail {
          // uint32_t vector_result -> (RBP + 16)
          emit_push(rbp);
          emit_mov(rsp, rbp);
-         emit_sub(24, rsp);
+         emit_sub(32, rsp);
 
          // switch stack
          emit(TEST, r8, r8);
@@ -184,6 +190,9 @@ namespace psizam::detail {
          emit_mov(r12, *(rbp - 24));
          emit_mov(rdi, r12);
 
+         // Save R15 (callee-saved). R15 is used as read watermark in checked mode.
+         emit_mov(r15, *(rbp - 32));
+
          if (_enable_backtrace) {
             emit_mov(rbp, *(rdi + 8));
          }
@@ -193,6 +202,7 @@ namespace psizam::detail {
             emit_mov(rdx, *(rdi + 8));
          }
 
+         emit_mov(*(rbp - 32), r15);
          emit_mov(*(rbp - 24), r12);
          emit_mov(*(rbp - 16), rbx);
 
@@ -237,6 +247,7 @@ namespace psizam::detail {
       // parser can patch the cost once the surrounding scope (function
       // body or loop body) has finished accumulating heavy-opcode extras.
       void* emit_gas_charge(int64_t cost) {
+         emit_validate_watermark();
          using ctx_t = jit_execution_context<false>;
          const uint32_t consumed_off = static_cast<uint32_t>(ctx_t::gas_consumed_offset());
          const uint32_t deadline_off = static_cast<uint32_t>(ctx_t::gas_deadline_offset());
@@ -317,6 +328,8 @@ namespace psizam::detail {
          // movq RSP, RBP
          emit_bytes(0x48, 0x89, 0xe5);
          emit_check_stack_limit();
+         // Initialize R15 = 0 (read watermark for checked mode; harmless in guarded)
+         emit_xor(r15d, r15d);
          // Gas metering (Phase 4): per-function cost = body size in
          // bytes + prepay_extra (heavy-op weights for opcodes outside
          // any loop, accumulated by the parser and patched in at
@@ -926,139 +939,139 @@ namespace psizam::detail {
       void emit_i32_load(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 13);
-         emit_load_impl2(offset, MOV_A, eax);
+         emit_load_impl2(offset, MOV_A, eax, 4);
       }
 
       void emit_i64_load(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOV_A, rax);
+         emit_load_impl2(offset, MOV_A, rax, 8);
       }
 
       void emit_f32_load(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 13);
-         emit_load_impl2(offset, MOV_A, eax);
+         emit_load_impl2(offset, MOV_A, eax, 4);
       }
 
       void emit_f64_load(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOV_A, rax);
+         emit_load_impl2(offset, MOV_A, rax, 8);
       }
 
       void emit_i32_load8_s(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOVSXB, eax);
+         emit_load_impl2(offset, MOVSXB, eax, 1);
       }
 
       void emit_i32_load16_s(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOVSXW, eax);
+         emit_load_impl2(offset, MOVSXW, eax, 2);
       }
 
       void emit_i32_load8_u(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOVZXB, eax);
+         emit_load_impl2(offset, MOVZXB, eax, 1);
       }
 
       void emit_i32_load16_u(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOVZXW, eax);
+         emit_load_impl2(offset, MOVZXW, eax, 2);
       }
 
       void emit_i64_load8_s(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(7, 15);
-         emit_load_impl2(offset, MOVSXB, rax);
+         emit_load_impl2(offset, MOVSXB, rax, 1);
       }
 
       void emit_i64_load16_s(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(7, 15);
-         emit_load_impl2(offset, MOVSXW, rax);
+         emit_load_impl2(offset, MOVSXW, rax, 2);
       }
 
       void emit_i64_load32_s(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOVSXD, rax);
+         emit_load_impl2(offset, MOVSXD, rax, 4);
       }
 
       void emit_i64_load8_u(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOVZXB, eax);
+         emit_load_impl2(offset, MOVZXB, eax, 1);
       }
 
       void emit_i64_load16_u(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_load_impl2(offset, MOVZXW, eax);
+         emit_load_impl2(offset, MOVZXW, eax, 2);
       }
 
      void emit_i64_load32_u(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 13);
-         emit_load_impl2(offset, MOV_A, eax);
+         emit_load_impl2(offset, MOV_A, eax, 4);
       }
 
       void emit_i32_store(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 13);
-         emit_store_impl2(offset, MOV_B, eax);
+         emit_store_impl2(offset, MOV_B, eax, 4);
       }
 
       void emit_i64_store(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_store_impl2(offset, MOV_B, rax);
+         emit_store_impl2(offset, MOV_B, rax, 8);
       }
 
       void emit_f32_store(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 13);
-         emit_store_impl2(offset, MOV_B, eax);
+         emit_store_impl2(offset, MOV_B, eax, 4);
       }
 
       void emit_f64_store(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_store_impl2(offset, MOV_B, rax);
+         emit_store_impl2(offset, MOV_B, rax, 8);
       }
 
       void emit_i32_store8(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 13);
-         emit_store_impl2(offset, MOVB_B, al);
+         emit_store_impl2(offset, MOVB_B, al, 1);
       }
 
       void emit_i32_store16(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_store_impl2(offset, MOVW_B, ax);
+         emit_store_impl2(offset, MOVW_B, ax, 2);
       }
 
       void emit_i64_store8(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 13);
-         emit_store_impl2(offset, MOVB_B, al);
+         emit_store_impl2(offset, MOVB_B, al, 1);
       }
 
       void emit_i64_store16(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(6, 14);
-         emit_store_impl2(offset, MOVW_B, ax);
+         emit_store_impl2(offset, MOVW_B, ax, 2);
       }
 
       void emit_i64_store32(uint32_t /*alignment*/, uint32_t offset) {
          COUNT_INSTR();
          auto icount = variable_size_instr(5, 13);
-         emit_store_impl2(offset, MOV_B, eax);
+         emit_store_impl2(offset, MOV_B, eax, 4);
       }
 
       void emit_current_memory() {
@@ -3438,67 +3451,67 @@ namespace psizam::detail {
 
       void emit_v128_load(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VMOVDQU_A, align, offset);
+         emit_v128_loadop(VMOVDQU_A, align, offset, 16);
       }
 
       void emit_v128_load8x8_s(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPMOVSXBW, align, offset);
+         emit_v128_loadop(VPMOVSXBW, align, offset, 8);
       }
 
       void emit_v128_load8x8_u(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPMOVZXBW, align, offset);
+         emit_v128_loadop(VPMOVZXBW, align, offset, 8);
       }
 
       void emit_v128_load16x4_s(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPMOVSXWD, align, offset);
+         emit_v128_loadop(VPMOVSXWD, align, offset, 8);
       }
 
       void emit_v128_load16x4_u(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPMOVZXWD, align, offset);
+         emit_v128_loadop(VPMOVZXWD, align, offset, 8);
       }
 
       void emit_v128_load32x2_s(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPMOVSXDQ, align, offset);
+         emit_v128_loadop(VPMOVSXDQ, align, offset, 8);
       }
 
       void emit_v128_load32x2_u(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPMOVZXDQ, align, offset);
+         emit_v128_loadop(VPMOVZXDQ, align, offset, 8);
       }
 
       void emit_v128_load8_splat(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPBROADCASTB, align, offset);
+         emit_v128_loadop(VPBROADCASTB, align, offset, 1);
       }
 
       void emit_v128_load16_splat(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPBROADCASTW, align, offset);
+         emit_v128_loadop(VPBROADCASTW, align, offset, 2);
       }
 
       void emit_v128_load32_splat(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPBROADCASTD, align, offset);
+         emit_v128_loadop(VPBROADCASTD, align, offset, 4);
       }
 
       void emit_v128_load64_splat(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VPBROADCASTQ, align, offset);
+         emit_v128_loadop(VPBROADCASTQ, align, offset, 8);
       }
 
       void emit_v128_load32_zero(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VMOVD_A, align, offset);
+         emit_v128_loadop(VMOVD_A, align, offset, 4);
       }
 
       void emit_v128_load64_zero(uint32_t align, uint32_t offset) {
          COUNT_INSTR();
-         emit_v128_loadop(VMOVQ_A, align, offset);
+         emit_v128_loadop(VMOVQ_A, align, offset, 8);
       }
 
       void emit_v128_store(uint32_t /*align*/, uint32_t offset) {
@@ -3507,47 +3520,48 @@ namespace psizam::detail {
          emit_vmovups(*rsp, xmm0);
          emit_add(16, rsp);
          emit_pop_address(offset);
+         emit_write_bounds_check_native(rax, 16, rcx);
          emit_vmovups(xmm0, *rax);
       }
 
       void emit_v128_load8_lane(uint32_t align, uint32_t offset, uint8_t lane) {
          COUNT_INSTR();
-         emit_v128_load_laneop(VPINSRB, align, offset, lane);
+         emit_v128_load_laneop(VPINSRB, align, offset, lane, 1);
       }
 
       void emit_v128_load16_lane(uint32_t align, uint32_t offset, uint8_t lane) {
          COUNT_INSTR();
-         emit_v128_load_laneop(VPINSRW, align, offset, lane);
+         emit_v128_load_laneop(VPINSRW, align, offset, lane, 2);
       }
 
       void emit_v128_load32_lane(uint32_t align, uint32_t offset, uint8_t lane) {
          COUNT_INSTR();
-         emit_v128_load_laneop(VPINSRD, align, offset, lane);
+         emit_v128_load_laneop(VPINSRD, align, offset, lane, 4);
       }
 
       void emit_v128_load64_lane(uint32_t align, uint32_t offset, uint8_t lane) {
          COUNT_INSTR();
-         emit_v128_load_laneop(VPINSRQ, align, offset, lane);
+         emit_v128_load_laneop(VPINSRQ, align, offset, lane, 8);
       }
 
       void emit_v128_store8_lane(uint32_t align, uint32_t offset, uint8_t lane) {
          COUNT_INSTR();
-         emit_v128_store_laneop(VPEXTRB, align, offset, lane);
+         emit_v128_store_laneop(VPEXTRB, align, offset, lane, 1);
       }
 
       void emit_v128_store16_lane(uint32_t align, uint32_t offset, uint8_t lane) {
          COUNT_INSTR();
-         emit_v128_store_laneop(VPEXTRW, align, offset, lane);
+         emit_v128_store_laneop(VPEXTRW, align, offset, lane, 2);
       }
 
       void emit_v128_store32_lane(uint32_t align, uint32_t offset, uint8_t lane) {
          COUNT_INSTR();
-         emit_v128_store_laneop(VPEXTRD, align, offset, lane);
+         emit_v128_store_laneop(VPEXTRD, align, offset, lane, 4);
       }
 
       void emit_v128_store64_lane(uint32_t align, uint32_t offset, uint8_t lane) {
          COUNT_INSTR();
-         emit_v128_store_laneop(VPEXTRQ, align, offset, lane);
+         emit_v128_store_laneop(VPEXTRQ, align, offset, lane, 8);
       }
 
       void emit_v128_const(v128_t value) {
@@ -5674,6 +5688,7 @@ namespace psizam::detail {
       static constexpr auto CDQ = IA32(0x99);
       static constexpr auto CQO = IA32_REX_W(0x99);
       static constexpr auto CLD = IA32(0xFC);
+      static constexpr auto CMOVA  = IA32_WX(0x0f, 0x47);
       static constexpr auto CMOVNZ = IA32_WX(0x0f, 0x45);
       static constexpr auto CMOVZ = IA32_WX(0x0f, 0x44);
       static constexpr auto CMP = IA32_WX(0x3b);
@@ -6259,6 +6274,8 @@ namespace psizam::detail {
       // module is JIT-compiled, the emitted code is baked — changing _fp
       // afterward has no effect on already-emitted machine code.
       fp_mode _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
+      mem_safety    _mem_mode     = mem_safety::guarded;
+      checked_mode  _checked_kind = checked_mode::strict;
       const func_type* _ft;
       function_parameters _params;
       function_locals _locals;
@@ -6599,19 +6616,140 @@ namespace psizam::detail {
          }
       }
 
+      // ─── Checked-mode memory instrumentation helpers ───────────────
+      //
+      // Deferred read watermark: track max WASM-relative end address in R15.
+      // addr_reg = register holding the WASM address (after emit_pop_address
+      // overload 1 — offset may already be folded in).
+      // sib_disp = the displacement baked into the sib_memory_ref.
+      // access_size = bytes being accessed.
+      // scratch = a 64-bit register safe to clobber (must not be addr_reg or r15).
+      void emit_read_watermark(general_register64 addr_reg, int32_t sib_disp,
+                               uint32_t access_size, general_register64 scratch) {
+         if (!is_checked()) return;
+         // WASM-relative end = addr_reg + sib_disp + access_size
+         uint64_t total = static_cast<uint64_t>(static_cast<uint32_t>(sib_disp)) + access_size;
+         if (total == 0) {
+            // scratch = addr_reg
+            emit_mov(addr_reg, scratch);
+         } else if (total <= 0x7FFFFFFF) {
+            // lea scratch, [addr_reg + total]
+            emit(LEA, *(addr_reg + static_cast<int32_t>(total)), scratch);
+         } else {
+            // total > 0x7FFFFFFF: use mov + add to avoid int32 overflow
+            emit_mov(static_cast<uint32_t>(total), static_cast<general_register32>(scratch));
+            emit_add(addr_reg, scratch);
+         }
+         if (is_checked_strict()) {
+            // cmp scratch, r15 — sets flags for unsigned comparison
+            emit(CMP, r15, scratch);
+            // cmova r15, scratch — r15 = max(r15, scratch) (update if scratch > r15)
+            emit(CMOVA, scratch, r15);
+         } else {
+            // or r15, scratch — relaxed: power-of-2 page approximation
+            emit(OR_A, scratch, r15);
+         }
+      }
+
+      // Read watermark for native-address path (emit_pop_address overload 2).
+      // After overload 2, RAX = native address = wasm_addr + offset + rsi.
+      // We track WASM-relative, so subtract RSI first.
+      void emit_read_watermark_native(uint32_t access_size, general_register64 scratch) {
+         if (!is_checked()) return;
+         // scratch = rax - rsi + access_size = wasm_addr + offset + access_size
+         // But subtracting RSI is messy. Instead, compute native end = rax + access_size
+         // and compare at validation against rsi + mem_size (also native).
+         // To stay WASM-relative: lea scratch, [rax - rsi + access_size] doesn't work
+         // easily. Let's compute: mov rax, scratch; sub rsi, scratch; add access_size, scratch.
+         // That's 3 instructions. Simpler: switch to native-pointer tracking for this path.
+         //
+         // Actually, let's just track WASM-relative uniformly:
+         // scratch = rax - rsi
+         emit_mov(rax, scratch);
+         emit_sub(rsi, scratch);
+         if (access_size != 0) {
+            emit_add(static_cast<int32_t>(access_size), scratch);
+         }
+         if (is_checked_strict()) {
+            emit(CMP, r15, scratch);
+            emit(CMOVA, scratch, r15);
+         } else {
+            emit(OR_A, scratch, r15);
+         }
+      }
+
+      // Immediate write bounds check (WASM-relative).
+      // addr_reg = register with WASM address, sib_disp = displacement from SIB,
+      // access_size = bytes, scratch = clobberable register.
+      void emit_write_bounds_check(general_register64 addr_reg, int32_t sib_disp,
+                                   uint32_t access_size, general_register64 scratch) {
+         if (!is_checked()) return;
+         // Compute WASM-relative end in scratch
+         uint64_t total = static_cast<uint64_t>(static_cast<uint32_t>(sib_disp)) + access_size;
+         if (total == 0) {
+            emit_mov(addr_reg, scratch);
+         } else if (total <= 0x7FFFFFFF) {
+            emit(LEA, *(addr_reg + static_cast<int32_t>(total)), scratch);
+         } else {
+            emit_mov(static_cast<uint32_t>(total), static_cast<general_register32>(scratch));
+            emit_add(addr_reg, scratch);
+         }
+         // cmp *(rsi + mem_size_offset()), scratch
+         // This computes scratch - mem_size and sets flags.
+         // JA: jump if scratch > mem_size (unsigned above)
+         emit(CMP, *(rsi + wasm_allocator::mem_size_offset()), scratch);
+         fix_branch(emit_branchcc32(JA), memory_handler);
+      }
+
+      // Write bounds check for native-address path (emit_pop_address overload 2).
+      // native_addr_reg = register holding native address (rax after overload 2).
+      void emit_write_bounds_check_native(general_register64 native_addr_reg,
+                                          uint32_t access_size,
+                                          general_register64 scratch) {
+         if (!is_checked()) return;
+         // Convert to WASM-relative: scratch = native_addr - rsi + access_size
+         emit_mov(native_addr_reg, scratch);
+         emit_sub(rsi, scratch);
+         if (access_size != 0) {
+            emit_add(static_cast<int32_t>(access_size), scratch);
+         }
+         emit(CMP, *(rsi + wasm_allocator::mem_size_offset()), scratch);
+         fix_branch(emit_branchcc32(JA), memory_handler);
+      }
+
+      // Validate read watermark at check points (gas charge, host call).
+      // Compares R15 (max WASM-relative end) against mem_size, traps if OOB,
+      // resets R15 to zero.
+      void emit_validate_watermark() {
+         if (!is_checked()) return;
+         // test r15, r15 ; jz skip (no reads tracked)
+         emit(TEST, r15, r15);
+         void* skip = emit_branchcc32(JZ);
+         // cmp *(rsi + mem_size_offset()), r15
+         emit(CMP, *(rsi + wasm_allocator::mem_size_offset()), r15);
+         fix_branch(emit_branchcc32(JA), memory_handler);
+         // xor r15d, r15d (reset watermark — 32-bit xor zero-extends to 64)
+         emit_xor(r15d, r15d);
+         // skip:
+         fix_branch(skip, code);
+      }
+      // ─── End checked-mode helpers ──────────────────────────────────
+
       // reg should be rax, eax, ax, or al
       template<class I, class R>
-      void emit_load_impl2(uint32_t offset, I instr, R reg) {
+      void emit_load_impl2(uint32_t offset, I instr, R reg, uint32_t access_size) {
          auto addr = emit_pop_address(offset, rax, ecx);
+         emit_read_watermark(rax, addr.offset, access_size, rcx);
          emit(instr, addr, reg);
          emit_push(rax);
       }
 
       // rax holds the value to be stored
       template<class I, class R>
-      void emit_store_impl2(uint32_t offset, I instr, R reg) {
+      void emit_store_impl2(uint32_t offset, I instr, R reg, uint32_t access_size) {
          emit_pop(rax);
          auto addr = emit_pop_address(offset, rcx, edx);
+         emit_write_bounds_check(rcx, addr.offset, access_size, rdx);
          emit(instr, addr, reg);
       }
 
@@ -6711,29 +6849,34 @@ namespace psizam::detail {
       }
 
       template<typename Op>
-      void emit_v128_loadop(Op op, uint32_t /*align*/, uint32_t offset) {
+      void emit_v128_loadop(Op op, uint32_t /*align*/, uint32_t offset, uint32_t access_size) {
          auto icount = simd_instr();
          auto expr = emit_pop_address(offset, rax, ecx);
+         emit_read_watermark(rax, expr.offset, access_size, rcx);
          emit(op, expr, xmm0);
          emit_push_v128(xmm0);
       }
 
       template<typename Op>
-      void emit_v128_load_laneop(Op op, uint32_t /*align*/, uint32_t offset, uint8_t lane) {
+      void emit_v128_load_laneop(Op op, uint32_t /*align*/, uint32_t offset, uint8_t lane,
+                                 uint32_t access_size) {
          auto icount = simd_instr();
          emit_pop_v128(xmm0);
          emit_pop_address(offset);
+         emit_read_watermark_native(access_size, rcx);
          emit(op, imm8{lane}, *rax, xmm0, xmm0);
          emit_sub(16, rsp);
          emit_vmovdqu(xmm0, *rsp);
       }
 
       template<typename Op>
-      void emit_v128_store_laneop(Op op, uint32_t /*align*/, uint32_t offset, uint8_t lane) {
+      void emit_v128_store_laneop(Op op, uint32_t /*align*/, uint32_t offset, uint8_t lane,
+                                  uint32_t access_size) {
          auto icount = simd_instr();
          emit_vmovdqu(*rsp, xmm0);
          emit_add(16, rsp);
          emit_pop_address(offset);
+         emit_write_bounds_check_native(rax, access_size, rcx);
          emit(op, imm8{lane}, *rax, xmm0);
       }
 
@@ -7273,6 +7416,7 @@ namespace psizam::detail {
       }
 
       void emit_host_call(uint32_t funcnum) {
+         emit_validate_watermark();
          uint32_t extra = 0;
          if (_enable_backtrace) {
             emit_bytes(0x55);             // pushq %rbp

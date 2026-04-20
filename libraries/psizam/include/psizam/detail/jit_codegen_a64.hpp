@@ -10,13 +10,16 @@
 //   X19       = context pointer (callee-saved)
 //   X20       = linear memory base (callee-saved)
 //   X21       = call depth counter (callee-saved)
-//   X22-X28   = callee-saved, available for register allocation (7 regs)
+//   X22-X25   = callee-saved, available for register allocation (4 regs)
+//   X26       = read watermark for checked mode (callee-saved)
+//   X27-X28   = callee-saved, available for register allocation (2 regs)
 //   X29       = frame pointer (FP)
 //   X30       = link register (LR)
 //   SP        = stack pointer (must be 16-byte aligned at calls)
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/options.hpp>
 #include <psizam/detail/execution_context.hpp>
 #include <psizam/detail/jit_ir.hpp>
 #include <psizam/detail/jit_regalloc.hpp>
@@ -45,7 +48,7 @@ namespace psizam::detail {
       static constexpr uint32_t X12 = 12, X13 = 13, X14 = 14, X15 = 15;
       static constexpr uint32_t X16 = 16, X17 = 17;
       static constexpr uint32_t X19 = 19, X20 = 20, X21 = 21, X22 = 22;
-      static constexpr uint32_t X23 = 23, X24 = 24, X25 = 25;
+      static constexpr uint32_t X23 = 23, X24 = 24, X25 = 25, X26 = 26;
       static constexpr uint32_t X29 = 29, X30 = 30;
       static constexpr uint32_t XZR = 31, SP = 31, FP = 29;
 
@@ -83,6 +86,11 @@ namespace psizam::detail {
       // regardless of _fp.
       void set_fp_mode(fp_mode m) noexcept { _fp = m; }
       fp_mode get_fp_mode() const noexcept { return _fp; }
+
+      void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
+      void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+      bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
+      bool is_checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
 
       // Offset of _remaining_call_depth in unified frame_info_holder layout
       // (always at offset 16, after _bottom_frame and _top_frame pointers)
@@ -593,6 +601,9 @@ namespace psizam::detail {
          // _remaining_call_depth is always at offset 16 in unified frame_info_holder
          emit32(0xB9401275); // LDR W21, [X19, #16]
 
+         // Initialize X26 = 0 (read watermark for checked mode; harmless in guarded)
+         emit32(0xAA1F03FA); // MOV X26, XZR
+
          if (_enable_backtrace) {
             emit32(0xF9000673); // STR X19, [X19, #8]
          }
@@ -692,6 +703,7 @@ namespace psizam::detail {
       // ──────── Host call stubs ────────
 
       void emit_host_call(uint32_t funcnum) {
+         emit_validate_watermark();
          // Save FP/LR
          emit32(0xA9BF7BFD); // STP X29, X30, [SP, #-16]!
          emit32(0x910003FD); // MOV X29, SP
@@ -799,6 +811,7 @@ namespace psizam::detail {
       //   call __psizam_gas_exhausted_check(ctx=X0)
       //   done:
       void emit_gas_charge(int64_t cost) {
+         emit_validate_watermark();
          using ctx_t = jit_execution_context<false>;
          const uint32_t consumed_off = static_cast<uint32_t>(ctx_t::gas_consumed_offset());
          const uint32_t deadline_off = static_cast<uint32_t>(ctx_t::gas_deadline_offset());
@@ -1101,6 +1114,64 @@ namespace psizam::detail {
          }
       }
 
+      // ──────── Memory safety: checked mode helpers ────────
+
+      // Checked mode: track max read address via watermark register X26 (deferred).
+      // rd = native address of access start, access_size = bytes being read.
+      void emit_read_watermark(uint32_t rd, uint32_t access_size) {
+         if (!is_checked()) return;
+         if (is_checked_strict()) {
+            // ADD X8, Xrd, #access_size  (native end of read)
+            emit_add_imm(X8, rd, access_size);
+            // CMP X8, X26
+            emit32(0xEB1A011F); // SUBS XZR, X8, X26
+            // CSEL X26, X8, X26, HI  (X26 = max(X26, end))
+            emit32(0x9A9A811A);
+         } else {
+            // ORR X26, X26, Xrd  (relaxed: bitwise OR for power-of-2 pages)
+            emit32(0xAA000000 | (rd << 16) | (X26 << 5) | X26);
+         }
+      }
+
+      // Checked mode: immediate bounds check before write.
+      // rd = native address, access_size = bytes being written.
+      void emit_write_bounds_check(uint32_t rd, uint32_t access_size) {
+         if (!is_checked()) return;
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         // ADD X8, Xrd, #access_size  (native end of write)
+         emit_add_imm(X8, rd, access_size);
+         // LDR X17, [X20, #mem_size_offset]  (load mem_size_bytes from prefix page)
+         emit_ldr_offset(X17, X20, ms_off);
+         // ADD X17, X20, X17  (native end of valid memory)
+         emit32(0x8B110000 | (X20 << 5) | X17);
+         // CMP X8, X17
+         emit32(0xEB11011F);
+         // B.HI memory_handler
+         emit_branch_to_handler(COND_HI, memory_handler);
+      }
+
+      // Checked mode: validate watermark at check points (gas charge, host call).
+      // Compares X26 against X20 + mem_size. Traps if OOB, resets X26 to 0.
+      void emit_validate_watermark() {
+         if (!is_checked()) return;
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         // CBZ X26, skip  (no reads tracked → nothing to validate)
+         void* skip_pos = code;
+         emit32(0xB400001A); // CBZ X26, +0 (patched)
+         // LDR X8, [X20, #mem_size_offset]
+         emit_ldr_offset(X8, X20, ms_off);
+         // ADD X8, X20, X8  (native end of valid memory)
+         emit32(0x8B080000 | (X20 << 5) | X8);
+         // CMP X26, X8
+         emit32(0xEB08035F);
+         // B.HI memory_handler
+         emit_branch_to_handler(COND_HI, memory_handler);
+         // MOV X26, XZR  (reset watermark)
+         emit32(0xAA1F03FA);
+         // skip:
+         fix_branch(skip_pos, code);
+      }
+
       // ──────── Memory access helpers ────────
 
       // Compute native address: X0 = X20 + wasm_addr + offset
@@ -1135,6 +1206,10 @@ namespace psizam::detail {
       }
 
       // Memory load: various sizes and sign extensions
+      // NOTE: emit_mem_load/emit_mem_store compute address into X16 which
+      // conflicts with checked-mode helpers that use X16 as scratch.
+      // These methods are currently unused; if activated, refactor to use
+      // a different address register (e.g., X0) for checked-mode compatibility.
       void emit_mem_load(uint32_t rd, uint32_t addr_reg, uint32_t uoffset, uint32_t load_op) {
          emit_effective_addr(X16, addr_reg, uoffset);
          emit32(load_op | (X16 << 5) | rd);
@@ -1476,6 +1551,7 @@ namespace psizam::detail {
       void simd_v128_load(uint32_t offset, uint32_t addr_vreg) {
          load_vreg_x0(addr_vreg);
          emit_effective_addr(X0, X0, offset);
+         emit_read_watermark(X0, 16);
          // LDR Q0, [X0]
          emit32(0x3DC00000 | (X0 << 5) | V0n);
          emit_v128_push(V0n);
@@ -1485,6 +1561,7 @@ namespace psizam::detail {
       void simd_v128_load_extend(uint32_t offset, uint32_t addr_vreg, uint32_t extend_op) {
          load_vreg_x0(addr_vreg);
          emit_effective_addr(X0, X0, offset);
+         emit_read_watermark(X0, 8);
          // Load 64 bits into D0
          emit32(0xFD400000 | (X0 << 5) | V0n);  // LDR D0, [X0]
          // Extend: e.g., SSHLL V0.8H, V0.8B, #0 (sign extend bytes to halfwords)
@@ -1496,6 +1573,9 @@ namespace psizam::detail {
       void simd_v128_load_splat(uint32_t offset, uint32_t addr_vreg, uint32_t ld1r_op) {
          load_vreg_x0(addr_vreg);
          emit_effective_addr(X0, X0, offset);
+         // Access size from LD1R opcode bits 11:10: 00=1, 01=2, 10=4, 11=8
+         uint32_t splat_size = 1u << ((ld1r_op >> 10) & 3);
+         emit_read_watermark(X0, splat_size);
          // LD1R {V0.xT}, [X0]
          emit32(ld1r_op | (X0 << 5) | V0n);
          emit_v128_push(V0n);
@@ -1505,6 +1585,7 @@ namespace psizam::detail {
       void simd_v128_load_zero(uint32_t offset, uint32_t addr_vreg, bool is64) {
          load_vreg_x0(addr_vreg);
          emit_effective_addr(X0, X0, offset);
+         emit_read_watermark(X0, is64 ? 8 : 4);
          // Zero the full register first
          emit32(0x6F00E400 | V0n);  // MOVI V0.2D, #0
          if (is64) {
@@ -1520,6 +1601,7 @@ namespace psizam::detail {
          emit_v128_pop(V0n);
          load_vreg_x0(addr_vreg);
          emit_effective_addr(X0, X0, offset);
+         emit_write_bounds_check(X0, 16);
          // STR Q0, [X0]
          emit32(0x3D800000 | (X0 << 5) | V0n);
       }
@@ -1529,6 +1611,9 @@ namespace psizam::detail {
          emit_v128_pop(V0n);
          load_vreg_x0(addr_vreg);
          emit_effective_addr(X0, X0, offset);
+         // Access size from ldr_op bits 31:30
+         uint32_t lane_access_size = 1u << ((ldr_op >> 30) & 3);
+         emit_read_watermark(X0, lane_access_size);
          // Load scalar value
          emit32(ldr_op | (X0 << 5) | X0);
          // Insert into lane
@@ -1541,6 +1626,9 @@ namespace psizam::detail {
          emit_v128_pop(V0n);
          load_vreg_x0(addr_vreg);
          emit_effective_addr(X0, X0, offset);
+         // Access size from str_op bits 31:30
+         uint32_t lane_store_size = 1u << ((str_op >> 30) & 3);
+         emit_write_bounds_check(X0, lane_store_size);
          // Extract lane to X1/W1
          emit32(extract_op | (imm5 << 16) | (V0n << 5) | X1);
          // Store
@@ -2904,6 +2992,13 @@ namespace psizam::detail {
                emit_pop(X0); // addr
                emit32(0x8B000000 | (X0 << 16) | (X20 << 5) | X0); // ADD X0, X20, X0 (membase+addr)
                if (inst.simd.offset) emit_add_imm(X0, X0, inst.simd.offset);
+               // Checked mode: track read watermark for atomic loads
+               {
+                  // atomic access size: 0x10/0x16=4, 0x11=8, 0x12/0x14=1, 0x13/0x15=2
+                  static constexpr uint32_t atomic_load_sizes[] = {4,8,1,2,1,2,4};
+                  uint32_t asz = atomic_load_sizes[asub - 0x10];
+                  emit_read_watermark(X0, asz);
+               }
                switch(sub) {
                case atomic_sub::i32_atomic_load:    emit32(0xB9400000); break; // LDR W0, [X0]
                case atomic_sub::i64_atomic_load:    emit32(0xF9400000); break; // LDR X0, [X0]
@@ -2923,6 +3018,13 @@ namespace psizam::detail {
                emit_pop(X0); // addr
                emit32(0x8B000000 | (X0 << 16) | (X20 << 5) | X0); // ADD X0, X20, X0 (membase+addr)
                if (inst.simd.offset) emit_add_imm(X0, X0, inst.simd.offset);
+               // Checked mode: immediate bounds check for atomic stores
+               {
+                  // atomic access size: 0x17/0x1D=4, 0x18=8, 0x19/0x1B=1, 0x1A/0x1C=2
+                  static constexpr uint32_t atomic_store_sizes[] = {4,8,1,2,1,2,4};
+                  uint32_t asz = atomic_store_sizes[asub - 0x17];
+                  emit_write_bounds_check(X0, asz);
+               }
                switch(sub) {
                case atomic_sub::i32_atomic_store:   emit32(0xB9000001); break; // STR W1, [X0]
                case atomic_sub::i64_atomic_store:   emit32(0xF9000001); break; // STR X1, [X0]
@@ -4060,6 +4162,9 @@ namespace psizam::detail {
          uint32_t uoffset = static_cast<uint32_t>(inst.ri.imm);
          load_vreg_x0(inst.ri.src1);
          emit_effective_addr(X0, X0, uoffset);
+         // Checked mode: track read watermark (access size from bits 31:30)
+         uint32_t access_size = 1u << ((load_op >> 30) & 3);
+         emit_read_watermark(X0, access_size);
          emit32(load_op | (X0 << 5) | X0);
          store_x0_vreg(inst.dest);
       }
@@ -4069,6 +4174,9 @@ namespace psizam::detail {
          load_vreg_x0(inst.dest);  // value
          load_vreg_x1(inst.ri.src1); // addr
          emit_effective_addr(X1, X1, uoffset);
+         // Checked mode: immediate bounds check (access size from bits 31:30)
+         uint32_t access_size = 1u << ((store_op >> 30) & 3);
+         emit_write_bounds_check(X1, access_size);
          emit32(store_op | (X1 << 5) | X0);
       }
 
@@ -4699,6 +4807,8 @@ namespace psizam::detail {
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;
       fp_mode _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
+      mem_safety    _mem_mode     = mem_safety::guarded;
+      checked_mode  _checked_kind = checked_mode::strict;
       void* _code_segment_base = nullptr;
       void* fpe_handler = nullptr;
       void* call_indirect_handler = nullptr;

@@ -8,6 +8,7 @@
 // and this class's destructor calls the LLVM pipeline via llvm_compile_functions().
 
 #include <psizam/detail/ir_writer.hpp>
+#include <psizam/options.hpp>
 
 #include <cstdint>
 #include <exception>
@@ -18,7 +19,9 @@ namespace psizam::detail {
    // Takes IR functions from ir_writer and compiles them to native code via LLVM.
    void llvm_compile_functions(ir_function* funcs, uint32_t num_functions,
                                module& mod, growable_allocator& alloc,
-                               bool deterministic = false);
+                               bool deterministic = false,
+                               mem_safety mem_mode = mem_safety::guarded,
+                               checked_mode checked_kind = checked_mode::strict);
 
    // Set/get LLVM optimization level (0-3). Default is 2.
    void     set_llvm_opt_level(int level);
@@ -40,6 +43,10 @@ namespace psizam::detail {
          llvm_deferred_exception = nullptr;
       }
 
+      // Parser calls these via `requires` to propagate memory safety options.
+      void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
+      void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+
       ~ir_writer_llvm() {
          if (std::uncaught_exceptions() > 0) return;
 
@@ -49,7 +56,7 @@ namespace psizam::detail {
          try {
             llvm_compile_functions(get_functions(), get_num_functions(),
                                    get_ir_module(), get_ir_allocator(),
-                                   _deterministic);
+                                   _deterministic, _mem_mode, _checked_kind);
          } catch (...) {
             // Cannot throw from destructor; defer for rethrow after parser destructs
             llvm_deferred_exception = std::current_exception();
@@ -57,7 +64,9 @@ namespace psizam::detail {
       }
 
     private:
-      bool _deterministic = false;
+      bool         _deterministic = false;
+      mem_safety   _mem_mode      = mem_safety::guarded;
+      checked_mode _checked_kind  = checked_mode::strict;
    };
 
 } // namespace psizam::detail

@@ -2,6 +2,7 @@
 
 #include <psizam/allocator.hpp>
 #include <psizam/config.hpp>
+#include <psizam/options.hpp>
 #include <psizam/constants.hpp>
 #include <psizam/exceptions.hpp>
 #include <psizam/gas.hpp>
@@ -196,6 +197,34 @@ namespace psizam::detail {
       void               set_max_pages(std::uint32_t max_pages) { _max_pages = std::min(max_pages, static_cast<std::uint32_t>(psizam::max_pages)); }
 
       inline std::error_code get_error_code() const { return _error_code; }
+
+      // ── Memory safety mode (per-instance) ──
+      inline mem_safety    mem_mode() const noexcept { return _mem_mode; }
+      inline checked_mode  checked_kind() const noexcept { return _checked_kind; }
+      inline bool          checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
+      inline void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
+      inline void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+
+      inline uint64_t memory_size_bytes() const {
+         uint64_t sz;
+         std::memcpy(&sz, _linear_memory + wasm_allocator::mem_size_offset(), sizeof(sz));
+         return sz;
+      }
+
+      inline void track_read_max(uint64_t end) {
+         if (end > _read_watermark) _read_watermark = end;
+      }
+      inline void track_read_or(uint64_t end) {
+         _read_watermark |= end;
+      }
+      inline void validate_read_watermark() {
+         if (_mem_mode != mem_safety::checked) return;
+         if (_read_watermark > memory_size_bytes()) [[unlikely]] {
+            _read_watermark = 0;
+            PSIZAM_THROW(wasm_memory_exception, "deferred memory read out-of-bounds");
+         }
+         _read_watermark = 0;
+      }
 
       // ── Floating-point execution mode (per-instance) ──
       inline fp_mode fp() const noexcept { return _fp; }
@@ -585,6 +614,11 @@ namespace psizam::detail {
       // any u64 into gas().deadline at any time (including 0 for
       // immediate interrupt at the next back-edge charge site).
       gas_state                       _gas{};
+
+      // Memory safety mode — controls bounds checking strategy.
+      mem_safety                      _mem_mode     = mem_safety::guarded;
+      checked_mode                    _checked_kind = checked_mode::strict;
+      uint64_t                        _read_watermark = 0;
    };
 
    struct jit_visitor { template<typename T> jit_visitor(T&&) {} };
@@ -1313,6 +1347,7 @@ namespace psizam::detail {
                    default: break;
                   }
                }
+               validate_read_watermark();
                native_value result = _table->call(_state.host, mapped_index, args, linear_memory());
                if (!hf.signature.ret.empty()) {
                   switch(hf.signature.ret[0]) {

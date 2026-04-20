@@ -319,6 +319,8 @@ void __psizam_trap(void* ctx, uint32_t trap_code) {
       case 2:  msg = "integer overflow"; break;
       case 3:  msg = "integer overflow"; break;
       case 4:  msg = "undefined element"; break;
+      case 5:  // memory OOB — use wasm_memory_exception
+         escape_or_throw<wasm_memory_exception>("out of bounds memory access");
       default: msg = "unknown trap"; break;
    }
    escape_or_throw<wasm_interpreter_exception>(msg);

@@ -210,6 +210,8 @@ namespace psizam::detail {
    PARSER_OPTION(enable_exception_handling, true, bool)
 #endif
    PARSER_OPTION(compile_threads, static_cast<std::uint32_t>(0), std::uint32_t)
+   PARSER_OPTION(memory_mode, mem_safety::guarded, mem_safety)
+   PARSER_OPTION(checked_kind, checked_mode::strict, checked_mode)
 
 #undef MAX_ELEMENTS
 #undef PARSER_OPTION
@@ -3361,6 +3363,10 @@ namespace psizam::detail {
                             _enable_backtrace, _stack_limit_is_bytes, _compile_threads);
          if constexpr (requires { code_writer.set_compile_result(_compile_result); }) {
             code_writer.set_compile_result(_compile_result);
+         }
+         if constexpr (requires { code_writer.set_mem_mode(mem_safety{}); }) {
+            code_writer.set_mem_mode(get_memory_mode(_options));
+            code_writer.set_checked_kind(get_checked_kind(_options));
          }
 #if !defined(__wasi__)
          if constexpr (requires { code_writer.set_parse_callback(std::declval<typename Writer::parse_callback_t>()); }) {

@@ -731,6 +731,12 @@ namespace psizam {
     private:
       char*   raw       = nullptr;
       int32_t page      = 0;
+      void update_stored_mem_size() {
+         if (page >= 0) {
+            uint64_t size_bytes = static_cast<uint64_t>(page) * page_size;
+            std::memcpy(raw + mem_size_offset(), &size_bytes, sizeof(size_bytes));
+         }
+      }
       static std::size_t syspagesize() {
          static const std::size_t result = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
          return result;
@@ -761,6 +767,12 @@ namespace psizam {
       static std::int32_t table0_size_offset() {
          return globals_end() - 12;
       }
+      // Current linear memory size in bytes, stored in prefix page.
+      // Used by checked mode for deferred read + immediate write bounds validation.
+      // 8-byte uint64_t at offset globals_end() - 20.
+      static std::int32_t mem_size_offset() {
+         return globals_end() - 20;
+      }
       template <typename T>
       void alloc(size_t size = 1 /*in pages*/) {
          if (size == 0) return;
@@ -771,6 +783,7 @@ namespace psizam {
          T* ptr    = (T*)(raw + (page_size * page));
          memset(ptr, 0, page_size * size);
          page += size;
+         update_stored_mem_size();
       }
       template <typename T>
       void free(std::size_t size) {
@@ -780,6 +793,7 @@ namespace psizam {
          page -= size;
          int err = mprotect(raw + (page_size * page), (page_size * size), PROT_NONE);
          PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
+         update_stored_mem_size();
       }
       void free() {
          ::munmap(raw - prefix_size(), max_memory + prefix_size() + suffix_size());
@@ -809,6 +823,7 @@ namespace psizam {
          } else if(new_pages < static_cast<uint32_t>(page)) {
             free<char>(page - new_pages);
          }
+         update_stored_mem_size();
       }
 
       // Signal no memory defined
@@ -819,6 +834,8 @@ namespace psizam {
             PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
          }
          page = -1;
+         uint64_t zero = 0;
+         std::memcpy(raw + mem_size_offset(), &zero, sizeof(zero));
       }
 
       template <typename T>

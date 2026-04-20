@@ -3,6 +3,7 @@
 #include <psizam/allocator.hpp>
 #include <psizam/config.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/options.hpp>
 #include <psizam/detail/execution_context.hpp>
 #include <psizam/detail/llvm_runtime_helpers.hpp>
 #include <psizam/detail/signals.hpp>
@@ -84,6 +85,7 @@ namespace psizam::detail {
       static constexpr uint32_t X20 = 20;
       static constexpr uint32_t X21 = 21;
       static constexpr uint32_t X22 = 22;
+      static constexpr uint32_t X26 = 26;
       static constexpr uint32_t X29 = 29;
       static constexpr uint32_t X30 = 30;
       static constexpr uint32_t XZR = 31;
@@ -169,6 +171,11 @@ namespace psizam::detail {
       // has been emitted, changing the mode has no effect on baked code.
       void set_fp_mode(fp_mode m) { _fp = m; }
       fp_mode get_fp_mode() const { return _fp; }
+
+      void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
+      void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+      bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
+      bool is_checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
 
       ~machine_code_writer_a64() {
          _allocator.end_code<true>(_code_segment_base);
@@ -265,6 +272,9 @@ namespace psizam::detail {
          // Load call depth counter into X21
          // _remaining_call_depth is always at offset 16 in unified frame_info_holder
          emit32(0xB9401275); // LDR W21, [X19, #16]
+
+         // Initialize X26 = 0 (read watermark for checked mode; harmless in guarded)
+         emit32(0xAA1F03FA); // MOV X26, XZR
 
          if (_enable_backtrace) {
             emit32(0xF9000673); // STR X19, [X19, #8] (store FP for backtrace)
@@ -1078,96 +1088,99 @@ namespace psizam::detail {
 
       void emit_i32_load(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDR W0, [X9]
-         emit32(0xB9400120);
+         emit_read_watermark(X9, 4);
+         emit32(0xB9400120); // LDR W0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i64_load(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0xF9400120); // LDR X0, [X9]
          emit_push_x(X0);
       }
 
       void emit_f32_load(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 4);
          emit32(0xB9400120); // LDR W0, [X9]
          emit_push_x(X0);
       }
 
       void emit_f64_load(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0xF9400120); // LDR X0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i32_load8_s(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRSB W0, [X9]
-         emit32(0x39C00120);
+         emit_read_watermark(X9, 1);
+         emit32(0x39C00120); // LDRSB W0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i32_load16_s(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRSH W0, [X9]
-         emit32(0x79C00120);
+         emit_read_watermark(X9, 2);
+         emit32(0x79C00120); // LDRSH W0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i32_load8_u(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRB W0, [X9]
-         emit32(0x39400120);
+         emit_read_watermark(X9, 1);
+         emit32(0x39400120); // LDRB W0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i32_load16_u(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRH W0, [X9]
-         emit32(0x79400120);
+         emit_read_watermark(X9, 2);
+         emit32(0x79400120); // LDRH W0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i64_load8_s(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRSB X0, [X9]
-         emit32(0x39800120);
+         emit_read_watermark(X9, 1);
+         emit32(0x39800120); // LDRSB X0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i64_load16_s(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRSH X0, [X9]
-         emit32(0x79800120);
+         emit_read_watermark(X9, 2);
+         emit32(0x79800120); // LDRSH X0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i64_load32_s(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRSW X0, [X9]
-         emit32(0xB9800120);
+         emit_read_watermark(X9, 4);
+         emit32(0xB9800120); // LDRSW X0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i64_load8_u(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRB W0, [X9]
-         emit32(0x39400120);
+         emit_read_watermark(X9, 1);
+         emit32(0x39400120); // LDRB W0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i64_load16_u(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDRH W0, [X9]
-         emit32(0x79400120);
+         emit_read_watermark(X9, 2);
+         emit32(0x79400120); // LDRH W0, [X9]
          emit_push_x(X0);
       }
 
       void emit_i64_load32_u(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
-         // LDR W0, [X9]
-         emit32(0xB9400120);
+         emit_read_watermark(X9, 4);
+         emit32(0xB9400120); // LDR W0, [X9]
          emit_push_x(X0);
       }
 
@@ -1176,59 +1189,65 @@ namespace psizam::detail {
       // ===================================================================
 
       void emit_i32_store(uint32_t /*alignment*/, uint32_t offset) {
-         emit_pop_x(X1); // value (must use X1; emit_pop_address clobbers X0)
+         emit_pop_x(X1);
          emit_pop_address(X9, offset);
-         // STR W1, [X9]
-         emit32(0xB9000121);
+         emit_write_bounds_check(X9, 4);
+         emit32(0xB9000121); // STR W1, [X9]
       }
 
       void emit_i64_store(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_x(X1);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 8);
          emit32(0xF9000121); // STR X1, [X9]
       }
 
       void emit_f32_store(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_x(X1);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 4);
          emit32(0xB9000121); // STR W1, [X9]
       }
 
       void emit_f64_store(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_x(X1);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 8);
          emit32(0xF9000121); // STR X1, [X9]
       }
 
       void emit_i32_store8(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_x(X1);
          emit_pop_address(X9, offset);
-         // STRB W1, [X9]
-         emit32(0x39000121);
+         emit_write_bounds_check(X9, 1);
+         emit32(0x39000121); // STRB W1, [X9]
       }
 
       void emit_i32_store16(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_x(X1);
          emit_pop_address(X9, offset);
-         // STRH W1, [X9]
-         emit32(0x79000121);
+         emit_write_bounds_check(X9, 2);
+         emit32(0x79000121); // STRH W1, [X9]
       }
 
       void emit_i64_store8(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_x(X1);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 1);
          emit32(0x39000121); // STRB W1, [X9]
       }
 
       void emit_i64_store16(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_x(X1);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 2);
          emit32(0x79000121); // STRH W1, [X9]
       }
 
       void emit_i64_store32(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_x(X1);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 4);
          emit32(0xB9000121); // STR W1, [X9]
       }
 
@@ -3152,6 +3171,7 @@ namespace psizam::detail {
 
       void emit_v128_load(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 16);
          // LDR Q0, [X9]
          emit32(0x3DC00120);
          emit_push_v128();
@@ -3159,6 +3179,7 @@ namespace psizam::detail {
 
       void emit_v128_load8x8_s(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          // LD1 {V0.8B}, [X9] then SXTL
          emit32(0x3DC00120); // LDR D0 via LDR Q0 then use lower 64 bits
          // Actually: LDR D0, [X9]
@@ -3170,6 +3191,7 @@ namespace psizam::detail {
 
       void emit_v128_load8x8_u(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0xFC400120); // LDR D0, [X9]
          // USHLL V0.8H, V0.8B, #0
          emit32(0x2F08A400);
@@ -3178,6 +3200,7 @@ namespace psizam::detail {
 
       void emit_v128_load16x4_s(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0xFC400120);
          // SSHLL V0.4S, V0.4H, #0
          emit32(0x0F10A400);
@@ -3186,6 +3209,7 @@ namespace psizam::detail {
 
       void emit_v128_load16x4_u(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0xFC400120);
          // USHLL V0.4S, V0.4H, #0
          emit32(0x2F10A400);
@@ -3194,6 +3218,7 @@ namespace psizam::detail {
 
       void emit_v128_load32x2_s(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0xFC400120);
          // SSHLL V0.2D, V0.2S, #0
          emit32(0x0F20A400);
@@ -3202,6 +3227,7 @@ namespace psizam::detail {
 
       void emit_v128_load32x2_u(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0xFC400120);
          // USHLL V0.2D, V0.2S, #0
          emit32(0x2F20A400);
@@ -3210,6 +3236,7 @@ namespace psizam::detail {
 
       void emit_v128_load8_splat(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 1);
          // LD1R {V0.16B}, [X9]
          emit32(0x4D40C120);
          emit_push_v128();
@@ -3217,6 +3244,7 @@ namespace psizam::detail {
 
       void emit_v128_load16_splat(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 2);
          // LD1R {V0.8H}, [X9]
          emit32(0x4D40C520);
          emit_push_v128();
@@ -3224,6 +3252,7 @@ namespace psizam::detail {
 
       void emit_v128_load32_splat(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 4);
          // LD1R {V0.4S}, [X9]
          emit32(0x4D40C920);
          emit_push_v128();
@@ -3231,6 +3260,7 @@ namespace psizam::detail {
 
       void emit_v128_load64_splat(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          // LD1R {V0.2D}, [X9]
          emit32(0x4D40CD20);
          emit_push_v128();
@@ -3238,6 +3268,7 @@ namespace psizam::detail {
 
       void emit_v128_load32_zero(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 4);
          // MOVI V0.2D, #0
          emit32(0x6F00E400);
          // LDR S0, [X9] -- loads into low 32 bits, rest is zero
@@ -3247,6 +3278,7 @@ namespace psizam::detail {
 
       void emit_v128_load64_zero(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0x6F00E400); // MOVI V0.2D, #0
          // LDR D0, [X9]
          emit32(0xFC400120);
@@ -3256,6 +3288,7 @@ namespace psizam::detail {
       void emit_v128_store(uint32_t /*alignment*/, uint32_t offset) {
          emit_pop_v128();
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 16);
          // STR Q0, [X9]
          emit32(0x3D800120);
       }
@@ -3263,6 +3296,7 @@ namespace psizam::detail {
       void emit_v128_load8_lane(uint32_t /*alignment*/, uint32_t offset, uint8_t laneidx) {
          emit_pop_v128(0);
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 1);
          emit32(0x39400128); // LDRB W8, [X9]
          // INS V0.B[laneidx], W8
          uint32_t imm5 = (laneidx << 1) | 1;
@@ -3273,6 +3307,7 @@ namespace psizam::detail {
       void emit_v128_load16_lane(uint32_t /*alignment*/, uint32_t offset, uint8_t laneidx) {
          emit_pop_v128(0);
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 2);
          emit32(0x79400128); // LDRH W8, [X9]
          // INS V0.H[laneidx], W8
          uint32_t imm5 = (laneidx << 2) | 2;
@@ -3283,6 +3318,7 @@ namespace psizam::detail {
       void emit_v128_load32_lane(uint32_t /*alignment*/, uint32_t offset, uint8_t laneidx) {
          emit_pop_v128(0);
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 4);
          emit32(0xB9400128); // LDR W8, [X9]
          // INS V0.S[laneidx], W8
          uint32_t imm5 = (laneidx << 3) | 4;
@@ -3293,6 +3329,7 @@ namespace psizam::detail {
       void emit_v128_load64_lane(uint32_t /*alignment*/, uint32_t offset, uint8_t laneidx) {
          emit_pop_v128(0);
          emit_pop_address(X9, offset);
+         emit_read_watermark(X9, 8);
          emit32(0xF9400128); // LDR X8, [X9]
          // INS V0.D[laneidx], X8
          uint32_t imm5 = (laneidx << 4) | 8;
@@ -3303,6 +3340,7 @@ namespace psizam::detail {
       void emit_v128_store8_lane(uint32_t /*alignment*/, uint32_t offset, uint8_t laneidx) {
          emit_pop_v128(0);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 1);
          // UMOV W8, V0.B[laneidx]
          uint32_t imm5 = (laneidx << 1) | 1;
          emit32(0x0E003C00 | (imm5 << 16) | (0 << 5) | X8);
@@ -3312,6 +3350,7 @@ namespace psizam::detail {
       void emit_v128_store16_lane(uint32_t /*alignment*/, uint32_t offset, uint8_t laneidx) {
          emit_pop_v128(0);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 2);
          // UMOV W8, V0.H[laneidx]
          uint32_t imm5 = (laneidx << 2) | 2;
          emit32(0x0E003C00 | (imm5 << 16) | (0 << 5) | X8);
@@ -3321,6 +3360,7 @@ namespace psizam::detail {
       void emit_v128_store32_lane(uint32_t /*alignment*/, uint32_t offset, uint8_t laneidx) {
          emit_pop_v128(0);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 4);
          // UMOV W8, V0.S[laneidx]
          uint32_t imm5 = (laneidx << 3) | 4;
          emit32(0x0E003C00 | (imm5 << 16) | (0 << 5) | X8);
@@ -3330,6 +3370,7 @@ namespace psizam::detail {
       void emit_v128_store64_lane(uint32_t /*alignment*/, uint32_t offset, uint8_t laneidx) {
          emit_pop_v128(0);
          emit_pop_address(X9, offset);
+         emit_write_bounds_check(X9, 8);
          // UMOV X8, V0.D[laneidx]
          uint32_t imm5 = (laneidx << 4) | 8;
          emit32(0x4E003C00 | (imm5 << 16) | (0 << 5) | X8);
@@ -4719,6 +4760,66 @@ namespace psizam::detail {
          }
       }
 
+      // Checked mode: track read watermark after computing native address in rd.
+      // Strict: CMP/CSEL to track max end address.
+      // Relaxed: ORR to accumulate address bits.
+      // X26 = watermark register. X8 = scratch.
+      void emit_read_watermark(uint32_t rd, uint32_t access_size) {
+         if (!is_checked()) return;
+         if (is_checked_strict()) {
+            // ADD X8, Xrd, #access_size
+            emit_add_imm(X8, rd, access_size);
+            // CMP X8, X26
+            emit32(0xEB1A011F); // CMP X8, X26 → SUBS XZR, X8, X26
+            // CSEL X26, X8, X26, HI  (X26 = max(X26, X8))
+            emit32(0x9A9A811A); // CSEL X26, X8, X26, HI (cond=8)
+         } else {
+            // ORR X26, X26, Xrd
+            emit32(0xAA000000 | (rd << 16) | (X26 << 5) | X26);
+         }
+      }
+
+      // Checked mode: immediate bounds check before write.
+      // rd = native address, access_size = bytes being written.
+      // Loads mem_size from prefix page, computes native end of valid memory,
+      // and traps if write goes past it.
+      void emit_write_bounds_check(uint32_t rd, uint32_t access_size) {
+         if (!is_checked()) return;
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         // ADD X8, Xrd, #access_size  (native end of write)
+         emit_add_imm(X8, rd, access_size);
+         // LDR X17, [X20, #mem_size_offset]  (load mem_size_bytes from prefix page)
+         emit_ldr_signed_offset(X17, X20, ms_off);
+         // ADD X17, X20, X17  (native end of valid memory)
+         emit32(0x8B110000 | (X20 << 5) | X17); // ADD X17, X20, X17
+         // CMP X8, X17
+         emit32(0xEB11011F); // CMP X8, X17 → SUBS XZR, X8, X17
+         // B.HI memory_handler
+         emit_branch_to_handler(COND_HI, memory_handler);
+      }
+
+      // Checked mode: validate watermark at check points (gas charge, loop, host call).
+      // Compares X26 against X20 + mem_size. Traps if OOB, resets X26 to 0.
+      void emit_validate_watermark() {
+         if (!is_checked()) return;
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         // CBZ X26, skip  (no reads tracked → nothing to validate)
+         void* skip_pos = code;
+         emit32(0xB400001A); // CBZ X26, +0 (patched)
+         // LDR X8, [X20, #mem_size_offset]
+         emit_ldr_signed_offset(X8, X20, ms_off);
+         // ADD X8, X20, X8  (native end of valid memory)
+         emit32(0x8B080000 | (X20 << 5) | X8); // ADD X8, X20, X8
+         // CMP X26, X8
+         emit32(0xEB08035F); // CMP X26, X8 → SUBS XZR, X26, X8
+         // B.HI memory_handler
+         emit_branch_to_handler(COND_HI, memory_handler);
+         // MOV X26, XZR  (reset watermark)
+         emit32(0xAA1F03FA);
+         // skip:
+         fix_branch(skip_pos, code);
+      }
+
       // Load global address into register
       void emit_load_global_addr(uint32_t rd, uint32_t globalidx) {
          auto offset = _mod.get_global_offset(globalidx);
@@ -4846,6 +4947,7 @@ namespace psizam::detail {
       // ===================================================================
 
       void emit_host_call(uint32_t funcnum) {
+         emit_validate_watermark();
          // Save FP/LR (BLR will clobber LR)
          emit32(0xA9BF7BFD); // STP X29, X30, [SP, #-16]!
          emit32(0x910003FD); // MOV X29, SP
@@ -4944,6 +5046,7 @@ namespace psizam::detail {
       // Returns a pointer to the first MOVZ (X10) instruction so the parser
       // can later widen the imm via patch_gas_imm_add_extra.
       void* emit_gas_charge(int64_t cost) {
+         emit_validate_watermark();
          using ctx_t = jit_execution_context<false>;
          const uint32_t consumed_off = static_cast<uint32_t>(ctx_t::gas_consumed_offset());
          const uint32_t deadline_off = static_cast<uint32_t>(ctx_t::gas_deadline_offset());
@@ -5795,6 +5898,8 @@ namespace psizam::detail {
       // module is JIT-compiled, the emitted code is baked — changing _fp
       // afterward has no effect on already-emitted machine code.
       fp_mode _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
+      mem_safety    _mem_mode     = mem_safety::guarded;
+      checked_mode  _checked_kind = checked_mode::strict;
       const func_type* _ft = nullptr;
       function_parameters _params;
       function_locals _locals;

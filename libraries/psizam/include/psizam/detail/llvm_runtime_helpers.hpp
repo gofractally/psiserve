@@ -96,7 +96,8 @@ extern "C" {
    // Trap — throws a WASM trap exception. Does not return.
    [[noreturn]] void __psizam_trap(void* ctx, uint32_t trap_code);
    // trap codes: 0=unreachable, 1=div_by_zero, 2=int_overflow,
-   //             3=invalid_conversion, 4=undefined_element
+   //             3=invalid_conversion, 4=undefined_element,
+   //             5=memory_oob (throws wasm_memory_exception)
 
    // ── WASM Exception Handling (try_table / throw / throw_ref) ──
 

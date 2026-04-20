@@ -100,28 +100,12 @@ struct run_result {
    std::vector<std::string> export_names;  // names of exported functions (in order called)
 };
 
-template <typename Impl>
-static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
-                              fp_mode fp = fp_mode::softfloat) {
+template <typename BackendT>
+static run_result execute_backend(BackendT& bkend) {
    run_result r{};
    try {
-      using backend_t = backend<std::nullptr_t, Impl>;
-      wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
-      wasm_allocator wa;
-      backend_t bkend(code, &wa);
-
-      // Interpreter honors post-construction mode changes. For JIT backends
-      // this is a no-op when the requested mode matches the baked mode, and
-      // throws if it would require re-emission — so callers passing a
-      // non-default mode to a JIT backend must reconstruct with mode wired in.
-      if constexpr (!Impl::is_jit) {
-         bkend.set_fp_mode(fp);
-      }
-
-      // Check if module has a start function
       r.has_start = (bkend.get_module().start != std::numeric_limits<uint32_t>::max());
 
-      // Execute all exported functions, capturing return values
       bkend.timed_run(watchdog(std::chrono::milliseconds(500)), [&]() {
          auto& mod = bkend.get_module();
          auto& ctx = bkend.get_context();
@@ -182,6 +166,55 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
       r.outcome = 6;
    }
    return r;
+}
+
+template <typename Impl>
+static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
+                              fp_mode fp = fp_mode::softfloat) {
+   using backend_t = backend<std::nullptr_t, Impl>;
+   wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+   wasm_allocator wa;
+   try {
+      backend_t bkend(code, &wa);
+      if constexpr (!Impl::is_jit) {
+         bkend.set_fp_mode(fp);
+      }
+      return execute_backend(bkend);
+   } catch (wasm_parse_exception& e) {
+      return {1, false, e.what(), {}, {}};
+   } catch (wasm_bad_alloc& e) {
+      return {1, false, e.what(), {}, {}};
+   } catch (std::exception& e) {
+      return {5, false, e.what(), {}, {}};
+   } catch (...) {
+      return {6, false, {}, {}, {}};
+   }
+}
+
+struct checked_options {
+   mem_safety   memory_mode;
+   checked_mode checked_kind;
+};
+
+template <typename Impl>
+static run_result run_backend_checked(const std::vector<uint8_t>& wasm_bytes,
+                                      checked_mode kind = checked_mode::strict) {
+   checked_options opts{ mem_safety::checked, kind };
+   using backend_t = backend<std::nullptr_t, Impl, checked_options>;
+   wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+   wasm_allocator wa;
+   try {
+      backend_t bkend(code, &wa, opts);
+      return execute_backend(bkend);
+   } catch (wasm_parse_exception& e) {
+      return {1, false, e.what(), {}, {}};
+   } catch (wasm_bad_alloc& e) {
+      return {1, false, e.what(), {}, {}};
+   } catch (std::exception& e) {
+      return {5, false, e.what(), {}, {}};
+   } catch (...) {
+      return {6, false, {}, {}, {}};
+   }
 }
 
 #ifdef PSIZAM_ENABLE_WASM3
@@ -379,9 +412,12 @@ static bool compare_returns(const char* source, const char* b1_name, const run_r
    return true;
 }
 
-// Returns interpreter outcome (0-6), or -1 on mismatch
-// Result codes from test_module_impl: 0-6 = interpreter outcome, -1 = mismatch, -2 = crash
-static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
+struct test_result {
+   int  outcome;        // 0-6 = interpreter outcome, -1 = mismatch
+   bool checked_trap;   // true if both page-guarded and instr-guarded agreed on memory trap
+};
+
+static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
    bool trace = getenv("PSIZAM_FUZZ_TRACE") != nullptr;
    if (trace) fprintf(stderr, "[trace] interp/softfloat\n");
    auto r_interp = run_backend<interpreter>(wasm, fp_mode::softfloat);
@@ -435,6 +471,55 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
       has_mismatch = true;
 #endif
 
+   // Instruction-guarded (checked/strict) vs page-guarded differential.
+   // Must produce identical outcomes and return values.
+   bool checked_trap = false;
+   if (!getenv("PSIZAM_FUZZ_SKIP_CHECKED")) {
+      if (trace) fprintf(stderr, "[trace] interp/checked_strict\n");
+      auto r_interp_cs = run_backend_checked<interpreter>(wasm, checked_mode::strict);
+      if (r_interp.outcome != r_interp_cs.outcome) {
+         print_mismatch(source, "interp/page-guarded", r_interp, "interp/instr-guarded", r_interp_cs);
+         has_mismatch = true;
+      }
+      if (!compare_returns(source, "interp/page-guarded", r_interp, "interp/instr-guarded", r_interp_cs))
+         has_mismatch = true;
+      if (r_interp.outcome == 2 && r_interp_cs.outcome == 2)
+         checked_trap = true;
+
+#if defined(__x86_64__) || defined(__aarch64__)
+      if (trace) fprintf(stderr, "[trace] jit/checked_strict\n");
+      auto r_jit_cs = run_backend_checked<jit>(wasm, checked_mode::strict);
+      if (r_interp.outcome != r_jit_cs.outcome) {
+         print_mismatch(source, "interp/page-guarded", r_interp, "jit/instr-guarded", r_jit_cs);
+         has_mismatch = true;
+      }
+      if (!compare_returns(source, "interp/page-guarded", r_interp, "jit/instr-guarded", r_jit_cs))
+         has_mismatch = true;
+
+      if (trace) fprintf(stderr, "[trace] jit2/checked_strict\n");
+      auto r_jit2_cs = run_backend_checked<jit2>(wasm, checked_mode::strict);
+      if (r_interp.outcome != r_jit2_cs.outcome) {
+         print_mismatch(source, "interp/page-guarded", r_interp, "jit2/instr-guarded", r_jit2_cs);
+         has_mismatch = true;
+      }
+      if (!compare_returns(source, "interp/page-guarded", r_interp, "jit2/instr-guarded", r_jit2_cs))
+         has_mismatch = true;
+#endif
+
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+      if (!getenv("PSIZAM_FUZZ_SKIP_LLVM")) {
+         if (trace) fprintf(stderr, "[trace] jit_llvm/checked_strict\n");
+         auto r_llvm_cs = run_backend_checked<jit_llvm>(wasm, checked_mode::strict);
+         if (r_interp.outcome != r_llvm_cs.outcome) {
+            print_mismatch(source, "interp/page-guarded", r_interp, "jit_llvm/instr-guarded", r_llvm_cs);
+            has_mismatch = true;
+         }
+         if (!compare_returns(source, "interp/page-guarded", r_interp, "jit_llvm/instr-guarded", r_llvm_cs))
+            has_mismatch = true;
+      }
+#endif
+   }
+
 #ifdef PSIZAM_ENABLE_WASM3
    // Compare against wasm3 reference interpreter.
    // wasm3 doesn't support EH or v128 — skip if psizam rejected the module
@@ -460,18 +545,17 @@ static int test_module_impl(const std::vector<uint8_t>& wasm, const char* source
    }
 #endif
 
-   if (has_mismatch) return -1;
+   if (has_mismatch) return {-1, false};
 
    if (verbose) {
       fprintf(stderr, "  OK [%s]: %s (%zu bytes)\n",
               source, outcome_name(r_interp.outcome), wasm.size());
    }
-   return r_interp.outcome;
+   return {r_interp.outcome, checked_trap};
 }
 
 // Run test_module_impl in a forked child process for crash isolation.
-// Returns 0-6 (outcome), -1 (mismatch), or -2 (child crashed).
-static int test_module(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
+static test_result test_module(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
    if (getenv("PSIZAM_FUZZ_NO_FORK")) return test_module_impl(wasm, source, verbose);
    int pipefd[2];
    if (pipe(pipefd) != 0) return test_module_impl(wasm, source, verbose); // fallback
@@ -484,26 +568,26 @@ static int test_module(const std::vector<uint8_t>& wasm, const char* source, boo
    if (pid == 0) {
       // Child: run the test and write result to pipe
       close(pipefd[0]);
-      int result = test_module_impl(wasm, source, verbose);
-      auto written = write(pipefd[1], &result, sizeof(result));
+      test_result tr = test_module_impl(wasm, source, verbose);
+      auto written = write(pipefd[1], &tr, sizeof(tr));
       (void)written;
       close(pipefd[1]);
-      _exit(result >= 0 ? 0 : 1);
+      _exit(tr.outcome >= 0 ? 0 : 1);
    }
    // Parent: read result from child
    close(pipefd[1]);
-   int result;
-   ssize_t n = read(pipefd[0], &result, sizeof(result));
+   test_result tr;
+   ssize_t n = read(pipefd[0], &tr, sizeof(tr));
    close(pipefd[0]);
    int status;
    waitpid(pid, &status, 0);
-   if (n == sizeof(result)) return result;
+   if (n == sizeof(tr)) return tr;
    // Child crashed before writing result
    if (WIFSIGNALED(status)) {
       fprintf(stderr, "CRASH [%s]: child killed by signal %d (%zu bytes)\n",
               source, WTERMSIG(status), wasm.size());
    }
-   return -2;
+   return {-2, false};
 }
 
 static std::vector<uint8_t> read_file(const char* path) {
@@ -527,8 +611,8 @@ int main(int argc, char* argv[]) {
    if (argc >= 3 && strcmp(argv[1], "--file") == 0) {
       auto wasm = read_file(argv[2]);
       if (wasm.empty()) { fprintf(stderr, "Cannot read %s\n", argv[2]); return 1; }
-      int ok = test_module(wasm, argv[2], true);
-      return ok >= 0 ? 0 : 1;
+      auto tr = test_module(wasm, argv[2], true);
+      return tr.outcome >= 0 ? 0 : 1;
    }
    // --file-backend mode: test one backend at a time (no fork, for debugger)
    if (argc >= 4 && strcmp(argv[1], "--file-backend") == 0) {
@@ -537,12 +621,16 @@ int main(int argc, char* argv[]) {
       const char* which = argv[3];
       run_result r{};
       if (strcmp(which, "interp") == 0) r = run_backend<interpreter>(wasm);
+      else if (strcmp(which, "interp_checked") == 0) r = run_backend_checked<interpreter>(wasm);
 #if defined(__x86_64__) || defined(__aarch64__)
       else if (strcmp(which, "jit") == 0) r = run_backend<jit>(wasm);
+      else if (strcmp(which, "jit_checked") == 0) r = run_backend_checked<jit>(wasm);
       else if (strcmp(which, "jit2") == 0) r = run_backend<jit2>(wasm);
+      else if (strcmp(which, "jit2_checked") == 0) r = run_backend_checked<jit2>(wasm);
 #endif
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
       else if (strcmp(which, "jit_llvm") == 0) r = run_backend<jit_llvm>(wasm);
+      else if (strcmp(which, "jit_llvm_checked") == 0) r = run_backend_checked<jit_llvm>(wasm);
 #endif
       else { fprintf(stderr, "Unknown backend: %s\n", which); return 1; }
       fprintf(stderr, "%s: %s", which, outcome_name(r.outcome));
@@ -577,6 +665,13 @@ int main(int argc, char* argv[]) {
 #ifdef PSIZAM_ENABLE_WASM3
    fprintf(stderr, ", wasm3");
 #endif
+   if (!getenv("PSIZAM_FUZZ_SKIP_CHECKED")) {
+      fprintf(stderr, " | instr-guarded: interp, jit, jit2");
+#ifdef PSIZAM_ENABLE_LLVM_BACKEND
+      if (!getenv("PSIZAM_FUZZ_SKIP_LLVM"))
+         fprintf(stderr, ", jit_llvm");
+#endif
+   }
    fprintf(stderr, "\n\n");
 
    // Launch wasm-gen as a pipe — it writes length-prefixed WASM modules to stdout
@@ -589,6 +684,7 @@ int main(int argc, char* argv[]) {
    }
 
    uint32_t tested = 0, passed = 0, mismatches = 0, crashes = 0;
+   uint32_t checked_traps = 0;
    uint32_t outcomes[7] = {};
    auto t_start = std::chrono::steady_clock::now();
 
@@ -607,11 +703,12 @@ int main(int argc, char* argv[]) {
       char label[64];
       snprintf(label, sizeof(label), "module#%u", i);
 
-      int result = test_module(wasm, label, false);
-      if (result >= 0) {
+      auto tr = test_module(wasm, label, false);
+      if (tr.outcome >= 0) {
          passed++;
-         if (result < 7) outcomes[result]++;
-      } else if (result == -2) {
+         if (tr.outcome < 7) outcomes[tr.outcome]++;
+         if (tr.checked_trap) checked_traps++;
+      } else if (tr.outcome == -2) {
          crashes++;
          char crash_path[256];
          snprintf(crash_path, sizeof(crash_path), "crash_%u_seed%llu.wasm", i, (unsigned long long)seed);
@@ -641,6 +738,8 @@ int main(int argc, char* argv[]) {
            tested, passed, mismatches, crashes, elapsed, tested / elapsed);
    fprintf(stderr, "Outcomes: %u ok, %u rejected, %u memory_trap, %u interp_trap, %u timeout\n",
            outcomes[0], outcomes[1], outcomes[2], outcomes[3], outcomes[4]);
+   fprintf(stderr, "Checked: %u/%u memory traps caught by instr-guarded (of %u total traps)\n",
+           checked_traps, outcomes[2], outcomes[2]);
 
    return (mismatches == 0 && crashes == 0) ? 0 : 1;
 }

@@ -16,7 +16,13 @@ constexpr max_func_local_bytes_flags_t operator&(max_func_local_bytes_flags_t lh
    return static_cast<max_func_local_bytes_flags_t>(static_cast<int>(lhs) & static_cast<int>(rhs));
 }
 
+enum class mem_safety : unsigned char { guarded, checked, unchecked };
+enum class checked_mode : unsigned char { strict, relaxed };
+
 struct options {
+   mem_safety    memory_mode   = mem_safety::guarded;
+   checked_mode  checked_kind  = checked_mode::strict;
+
    std::uint64_t max_mutable_global_bytes;
    std::uint32_t max_table_elements;
    std::uint32_t max_section_elements;

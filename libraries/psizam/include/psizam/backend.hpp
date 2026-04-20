@@ -244,6 +244,18 @@ namespace psizam {
       bool owns;
    };
 
+   namespace detail {
+      template <typename Context, typename Options>
+      void apply_mem_safety_options(Context& ctx, const Options& options) {
+         if constexpr (requires { options.memory_mode; }) {
+            ctx.set_mem_mode(options.memory_mode);
+         }
+         if constexpr (requires { options.checked_kind; }) {
+            ctx.set_checked_kind(options.checked_kind);
+         }
+      }
+   }
+
    template <typename HostFunctions = std::nullptr_t, typename Impl = interpreter, typename Options = default_options, typename DebugInfo = detail::null_debug_info>
    class backend {
       using host_t     = detail::host_type_t<HostFunctions>;
@@ -405,21 +417,25 @@ namespace psizam {
       backend(wasm_code&& code, host_t& host, wasm_allocator* alloc, const Options& options = Options{})
          : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{parse_module(code, options), detail::choose_stack_limit(options)}), mod_sharable{true} {
          ctx->set_max_pages(detail::get_max_pages(options));
+         detail::apply_mem_safety_options(*ctx, options);
          construct(&host);
       }
       backend(wasm_code&& code, wasm_allocator* alloc, const Options& options = Options{})
          : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{parse_module(code, options), detail::choose_stack_limit(options)}), mod_sharable{true} {
          ctx->set_max_pages(detail::get_max_pages(options));
+         detail::apply_mem_safety_options(*ctx, options);
          construct();
       }
       backend(wasm_code& code, host_t& host, wasm_allocator* alloc, const Options& options = Options{})
          : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{parse_module(code, options), detail::choose_stack_limit(options)}), mod_sharable{true} {
          ctx->set_max_pages(detail::get_max_pages(options));
+         detail::apply_mem_safety_options(*ctx, options);
          construct(&host);
       }
       backend(wasm_code& code, wasm_allocator* alloc, const Options& options = Options{})
          : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{(parse_module(code, options)), detail::choose_stack_limit(options)}), mod_sharable{true} {
          ctx->set_max_pages(detail::get_max_pages(options));
+         detail::apply_mem_safety_options(*ctx, options);
          construct();
       }
       /// Construct with a pre-built host_function_table.
@@ -428,6 +444,7 @@ namespace psizam {
       backend(wasm_code& code, host_function_table table, void* host, wasm_allocator* alloc, const Options& options = Options{})
          : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{parse_module(code, options), detail::choose_stack_limit(options)}), mod_sharable{true}, _host_table(std::move(table)) {
          ctx->set_max_pages(detail::get_max_pages(options));
+         detail::apply_mem_safety_options(*ctx, options);
          mod->finalize();
          if (ctx.owns) {
             ctx->set_wasm_allocator(memory_alloc);
@@ -487,11 +504,13 @@ namespace psizam {
       backend(wasm_code& code, wasm_allocator* alloc, const Options& options, XDebugInfo& debug)
          : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{(parse_module(code, options, debug)), detail::choose_stack_limit(options)}), mod_sharable{true} {
          ctx->set_max_pages(detail::get_max_pages(options));
+         detail::apply_mem_safety_options(*ctx, options);
          construct();
       }
       backend(wasm_code_ptr& ptr, size_t sz, host_t& host, wasm_allocator* alloc, const Options& options = Options{})
          : memory_alloc(alloc), mod(std::make_shared<module>()), ctx(new context_t{parse_module2(ptr, sz, options, true), detail::choose_stack_limit(options)}), mod_sharable{true} { // single parsing. original behavior {
          ctx->set_max_pages(detail::get_max_pages(options));
+         detail::apply_mem_safety_options(*ctx, options);
          construct(&host);
       }
       // Leap:
@@ -505,6 +524,7 @@ namespace psizam {
          if (ctx.owns) {
             ctx.reset(new context_t{parse_module2(ptr, sz, options, single_parsing), initial_max_call_depth});
             ctx->set_max_pages(initial_max_pages);
+            detail::apply_mem_safety_options(*ctx, options);
          } else {
             parse_module2(ptr, sz, options, single_parsing);
          }
@@ -637,6 +657,7 @@ namespace psizam {
       inline backend& initialize(host_t* host, const Options& new_options) {
          ctx->set_max_call_depth(detail::choose_stack_limit(new_options));
          ctx->set_max_pages(detail::get_max_pages(new_options));
+         detail::apply_mem_safety_options(*ctx, new_options);
          initialize(host);
          return *this;
       }

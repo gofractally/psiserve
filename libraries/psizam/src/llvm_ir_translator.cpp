@@ -271,6 +271,102 @@ namespace psizam::detail {
          builder.SetInsertPoint(gas_done_bb);
       }
 
+      // ── Checked memory mode helpers ──
+
+      bool is_checked() const { return opts.mem_mode == mem_safety::checked; }
+      bool is_checked_strict() const { return opts.checked_kind == checked_mode::strict; }
+
+      // Emit watermark update for a read access. eff_addr is the i64 effective
+      // address (already zext'd), access_size is the number of bytes read.
+      // watermark_alloca must be a valid i64 alloca.
+      void emit_read_watermark_update(llvm::IRBuilder<>& builder,
+                                      llvm::Value* eff_addr, uint32_t access_size,
+                                      llvm::AllocaInst* watermark_alloca) {
+         if (!is_checked() || !watermark_alloca) return;
+         llvm::Value* end = builder.CreateAdd(eff_addr,
+            builder.getInt64(static_cast<uint64_t>(access_size)), "read_end");
+         llvm::Value* cur = builder.CreateLoad(i64_ty, watermark_alloca, "wm_cur");
+         if (is_checked_strict()) {
+            // watermark = max(watermark, end)
+            llvm::Value* cmp = builder.CreateICmpUGT(end, cur, "wm_cmp");
+            llvm::Value* new_wm = builder.CreateSelect(cmp, end, cur, "wm_max");
+            builder.CreateStore(new_wm, watermark_alloca);
+         } else {
+            // watermark |= end  (relaxed mode — monotonic, branchless)
+            llvm::Value* new_wm = builder.CreateOr(cur, end, "wm_or");
+            builder.CreateStore(new_wm, watermark_alloca);
+         }
+      }
+
+      // Emit immediate bounds check for a write access. eff_addr is the i64
+      // effective address, access_size is the number of bytes written.
+      // Traps with trap_code 5 (memory OOB) if out of bounds.
+      void emit_write_bounds_check(llvm::IRBuilder<>& builder,
+                                   llvm::Value* ctx_ptr, llvm::Value* mem_ptr_val,
+                                   llvm::Value* eff_addr, uint32_t access_size) {
+         if (!is_checked()) return;
+         auto* fn = builder.GetInsertBlock()->getParent();
+         llvm::Value* end = builder.CreateAdd(eff_addr,
+            builder.getInt64(static_cast<uint64_t>(access_size)), "write_end");
+         // Load mem_size from the prefix page: mem_ptr + mem_size_offset()
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         llvm::Value* ms_ptr = builder.CreateConstGEP1_64(i8_ty, mem_ptr_val,
+            static_cast<int64_t>(ms_off), "mem_size_ptr");
+         llvm::Value* mem_size = builder.CreateLoad(i64_ty, ms_ptr, "mem_size");
+         llvm::Value* oob = builder.CreateICmpUGT(end, mem_size, "write_oob");
+
+         auto* trap_bb = llvm::BasicBlock::Create(*ctx, "store_oob_trap", fn);
+         auto* ok_bb   = llvm::BasicBlock::Create(*ctx, "store_ok", fn);
+         builder.CreateCondBr(oob, trap_bb, ok_bb);
+
+         builder.SetInsertPoint(trap_bb);
+         builder.CreateCall(rt_trap, {ctx_ptr, builder.getInt32(5)});
+         builder.CreateUnreachable();
+
+         builder.SetInsertPoint(ok_bb);
+      }
+
+      // Emit watermark validation at a check point (gas charge, host call).
+      // If watermark > mem_size, traps. Resets watermark to 0 afterwards.
+      void emit_watermark_validate(llvm::IRBuilder<>& builder,
+                                   llvm::Value* ctx_ptr, llvm::Value* mem_ptr_val,
+                                   llvm::AllocaInst* watermark_alloca) {
+         if (!is_checked() || !watermark_alloca) return;
+         auto* fn = builder.GetInsertBlock()->getParent();
+         llvm::Value* wm = builder.CreateLoad(i64_ty, watermark_alloca, "wm_val");
+
+         // Fast path: if watermark == 0, skip validation (no reads tracked)
+         llvm::Value* is_zero = builder.CreateICmpEQ(wm,
+            builder.getInt64(0), "wm_zero");
+         auto* skip_bb = llvm::BasicBlock::Create(*ctx, "wm_skip", fn);
+         auto* check_bb = llvm::BasicBlock::Create(*ctx, "wm_check", fn);
+         builder.CreateCondBr(is_zero, skip_bb, check_bb);
+
+         builder.SetInsertPoint(check_bb);
+         // Load mem_size from prefix page
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         llvm::Value* ms_ptr = builder.CreateConstGEP1_64(i8_ty, mem_ptr_val,
+            static_cast<int64_t>(ms_off), "wm_ms_ptr");
+         llvm::Value* mem_size = builder.CreateLoad(i64_ty, ms_ptr, "wm_ms");
+         llvm::Value* oob = builder.CreateICmpUGT(wm, mem_size, "wm_oob");
+
+         auto* trap_bb = llvm::BasicBlock::Create(*ctx, "wm_trap", fn);
+         auto* reset_bb = llvm::BasicBlock::Create(*ctx, "wm_reset", fn);
+         builder.CreateCondBr(oob, trap_bb, reset_bb);
+
+         builder.SetInsertPoint(trap_bb);
+         // Reset watermark before trap so the exception handler sees clean state
+         builder.CreateStore(builder.getInt64(0), watermark_alloca);
+         builder.CreateCall(rt_trap, {ctx_ptr, builder.getInt32(5)});
+         builder.CreateUnreachable();
+
+         builder.SetInsertPoint(reset_bb);
+         builder.CreateStore(builder.getInt64(0), watermark_alloca);
+         builder.CreateBr(skip_bb);
+
+         builder.SetInsertPoint(skip_bb);
+      }
+
       void declare_runtime_helpers() {
          auto decl = [&](const char* name, llvm::FunctionType* ty) -> llvm::Function* {
             return llvm::Function::Create(ty, llvm::Function::ExternalLinkage,
@@ -1051,6 +1147,14 @@ namespace psizam::detail {
             mem_out_alloca = builder.CreateAlloca(ptr_ty, nullptr, "mem_out");
          }
 
+         // Checked memory mode: allocate watermark accumulator (i64, init 0).
+         // Tracks the maximum read end-address; validated at gas/host-call points.
+         llvm::AllocaInst* watermark_alloca = nullptr;
+         if (is_checked()) {
+            watermark_alloca = builder.CreateAlloca(i64_ty, nullptr, "watermark");
+            builder.CreateStore(builder.getInt64(0), watermark_alloca);
+         }
+
          // ── Pre-scan: which blocks have block_start instructions? ──
          // Blocks created by emit_block/emit_loop have block_start.
          // Blocks created by emit_if do NOT (only block_end).
@@ -1199,12 +1303,22 @@ namespace psizam::detail {
          };
          // Compute effective memory address: mem_ptr + zext(addr, i64) + offset
          // Uses i64 arithmetic to avoid i32 wrap-around (WASM requires i33 effective address)
-         auto simd_mem_addr = [&](uint32_t addr_vreg, uint32_t offset) -> llvm::Value* {
+         // access_size > 0 with is_store=false: track read watermark (checked mode)
+         // access_size > 0 with is_store=true:  immediate bounds check (checked mode)
+         auto simd_mem_addr = [&](uint32_t addr_vreg, uint32_t offset,
+                                  uint32_t access_size = 0, bool is_store = false) -> llvm::Value* {
             auto* addr = load_vreg(addr_vreg);
             if (!addr) addr = builder.getInt64(0);
             auto* eff_addr = builder.CreateZExt(builder.CreateTrunc(addr, i32_ty), i64_ty);
             if (offset != 0)
                eff_addr = builder.CreateAdd(eff_addr, builder.getInt64(static_cast<uint64_t>(offset)));
+            // Checked mode instrumentation for SIMD memory ops
+            if (access_size > 0) {
+               if (is_store)
+                  emit_write_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff_addr, access_size);
+               else
+                  emit_read_watermark_update(builder, eff_addr, access_size, watermark_alloca);
+            }
             return builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
          };
 
@@ -1288,6 +1402,8 @@ namespace psizam::detail {
                      // extras the parser accumulated inside this loop
                      // (Phase 4).
                      if (func.blocks && func.blocks[block_idx].is_loop) {
+                        // Validate watermark before gas charge (checked mode)
+                        emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca);
                         emit_gas_prologue_check(builder, ctx_ptr,
                            1 + func.blocks[block_idx].loop_gas_extra);
                      }
@@ -1825,6 +1941,9 @@ namespace psizam::detail {
                      }
                      call_args.clear();
 
+                     // Checked mode: validate read watermark before host call
+                     emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca);
+
                      emit_backtrace_set_top(builder, ctx_ptr);
                      emit_backtrace_set_bottom(builder, ctx_ptr);
 
@@ -1852,6 +1971,8 @@ namespace psizam::detail {
                      builder.CreateStore(builder.CreateLoad(ptr_ty, mem_out_alloca), mem_ptr_alloca);
                   } else {
                      // Standard path: separate call_depth tracking
+                     // Checked mode: validate read watermark before call
+                     emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca);
                      builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
 
                      if (funcnum < num_imports) {
@@ -1979,6 +2100,8 @@ namespace psizam::detail {
                         table_elem = builder.CreateTrunc(table_elem, i32_ty);
                   }
 
+                  // Checked mode: validate read watermark before indirect call
+                  emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca);
                   builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
                   emit_backtrace_set_top(builder, ctx_ptr);
                   emit_backtrace_set_bottom(builder, ctx_ptr);
@@ -2017,6 +2140,8 @@ namespace psizam::detail {
                   uint32_t funcnum = inst.call.index;
                   uint32_t num_imports = wasm_mod.get_imported_functions_size();
 
+                  // Checked mode: validate read watermark before tail call
+                  emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca);
                   builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
 
                   if (funcnum < num_imports) {
@@ -2114,6 +2239,8 @@ namespace psizam::detail {
                      if (table_elem->getType()->isIntegerTy())
                         table_elem = builder.CreateTrunc(table_elem, i32_ty);
                   }
+                  // Checked mode: validate read watermark before tail call indirect
+                  emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca);
                   builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
                   emit_backtrace_set_top(builder, ctx_ptr);
                   emit_backtrace_set_bottom(builder, ctx_ptr);
@@ -2156,30 +2283,34 @@ namespace psizam::detail {
                   if (offset != 0) {
                      eff_addr = builder.CreateAdd(eff_addr, builder.getInt64(static_cast<uint64_t>(offset)));
                   }
-                  llvm::Value* ptr = builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
 
-                  // Determine load type
+                  // Determine load type and access size
                   llvm::Type* load_ty;
                   bool sign_extend = false;
                   llvm::Type* result_ty;
+                  uint32_t access_size;
                   switch (inst.opcode) {
-                     case ir_op::i32_load:    load_ty = i32_ty; result_ty = i32_ty; break;
-                     case ir_op::i64_load:    load_ty = i64_ty; result_ty = i64_ty; break;
-                     case ir_op::f32_load:    load_ty = f32_ty; result_ty = f32_ty; break;
-                     case ir_op::f64_load:    load_ty = f64_ty; result_ty = f64_ty; break;
-                     case ir_op::i32_load8_s: load_ty = i8_ty;  result_ty = i32_ty; sign_extend = true; break;
-                     case ir_op::i32_load8_u: load_ty = i8_ty;  result_ty = i32_ty; break;
-                     case ir_op::i32_load16_s:load_ty = i16_ty; result_ty = i32_ty; sign_extend = true; break;
-                     case ir_op::i32_load16_u:load_ty = i16_ty; result_ty = i32_ty; break;
-                     case ir_op::i64_load8_s: load_ty = i8_ty;  result_ty = i64_ty; sign_extend = true; break;
-                     case ir_op::i64_load8_u: load_ty = i8_ty;  result_ty = i64_ty; break;
-                     case ir_op::i64_load16_s:load_ty = i16_ty; result_ty = i64_ty; sign_extend = true; break;
-                     case ir_op::i64_load16_u:load_ty = i16_ty; result_ty = i64_ty; break;
-                     case ir_op::i64_load32_s:load_ty = i32_ty; result_ty = i64_ty; sign_extend = true; break;
-                     case ir_op::i64_load32_u:load_ty = i32_ty; result_ty = i64_ty; break;
-                     default: load_ty = i32_ty; result_ty = i32_ty; break;
+                     case ir_op::i32_load:    load_ty = i32_ty; result_ty = i32_ty; access_size = 4; break;
+                     case ir_op::i64_load:    load_ty = i64_ty; result_ty = i64_ty; access_size = 8; break;
+                     case ir_op::f32_load:    load_ty = f32_ty; result_ty = f32_ty; access_size = 4; break;
+                     case ir_op::f64_load:    load_ty = f64_ty; result_ty = f64_ty; access_size = 8; break;
+                     case ir_op::i32_load8_s: load_ty = i8_ty;  result_ty = i32_ty; access_size = 1; sign_extend = true; break;
+                     case ir_op::i32_load8_u: load_ty = i8_ty;  result_ty = i32_ty; access_size = 1; break;
+                     case ir_op::i32_load16_s:load_ty = i16_ty; result_ty = i32_ty; access_size = 2; sign_extend = true; break;
+                     case ir_op::i32_load16_u:load_ty = i16_ty; result_ty = i32_ty; access_size = 2; break;
+                     case ir_op::i64_load8_s: load_ty = i8_ty;  result_ty = i64_ty; access_size = 1; sign_extend = true; break;
+                     case ir_op::i64_load8_u: load_ty = i8_ty;  result_ty = i64_ty; access_size = 1; break;
+                     case ir_op::i64_load16_s:load_ty = i16_ty; result_ty = i64_ty; access_size = 2; sign_extend = true; break;
+                     case ir_op::i64_load16_u:load_ty = i16_ty; result_ty = i64_ty; access_size = 2; break;
+                     case ir_op::i64_load32_s:load_ty = i32_ty; result_ty = i64_ty; access_size = 4; sign_extend = true; break;
+                     case ir_op::i64_load32_u:load_ty = i32_ty; result_ty = i64_ty; access_size = 4; break;
+                     default: load_ty = i32_ty; result_ty = i32_ty; access_size = 4; break;
                   }
 
+                  // Checked mode: track read watermark (deferred validation)
+                  emit_read_watermark_update(builder, eff_addr, access_size, watermark_alloca);
+
+                  llvm::Value* ptr = builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
                   auto* load_inst = builder.CreateLoad(load_ty, ptr);
                   // Volatile: WASM loads can trap via guard pages on OOB access.
                   // LLVM must not eliminate or reorder them (e.g. DCE when the
@@ -2215,6 +2346,26 @@ namespace psizam::detail {
                   if (offset != 0) {
                      eff_addr = builder.CreateAdd(eff_addr, builder.getInt64(static_cast<uint64_t>(offset)));
                   }
+
+                  // Determine store access size for bounds check
+                  uint32_t store_access_size;
+                  switch (inst.opcode) {
+                     case ir_op::i32_store8:
+                     case ir_op::i64_store8:  store_access_size = 1; break;
+                     case ir_op::i32_store16:
+                     case ir_op::i64_store16: store_access_size = 2; break;
+                     case ir_op::i32_store:
+                     case ir_op::f32_store:   store_access_size = 4; break;
+                     case ir_op::i64_store32: store_access_size = 4; break;
+                     case ir_op::i64_store:
+                     case ir_op::f64_store:   store_access_size = 8; break;
+                     default:                 store_access_size = 4; break;
+                  }
+
+                  // Checked mode: immediate bounds check before write
+                  emit_write_bounds_check(builder, ctx_ptr, load_mem_ptr(),
+                                          eff_addr, store_access_size);
+
                   llvm::Value* ptr = builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
 
                   // Truncate value if needed
@@ -3480,21 +3631,21 @@ namespace psizam::detail {
                   // ── Memory loads ──
                   switch (sub) {
                   case simd_sub::v128_load: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 16, false);
                      auto* ld = builder.CreateAlignedLoad(v128_ty, ptr, llvm::Align(1));
                      ld->setVolatile(true);
                      store_v128(inst.simd.v_dest, ld);
                      break;
                   }
                   case simd_sub::v128_store: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 16, true);
                      auto* val = load_v128(inst.simd.v_src1, v128_ty);
                      auto* st = builder.CreateAlignedStore(val, ptr, llvm::Align(1));
                      st->setVolatile(true);
                      break;
                   }
                   case simd_sub::v128_load8x8_s: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* v8 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i8_ty, 8), ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(v8)->setVolatile(true);
                      auto* ext = builder.CreateSExt(v8, v8xi16_ty);
@@ -3502,7 +3653,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load8x8_u: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* v8 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i8_ty, 8), ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(v8)->setVolatile(true);
                      auto* ext = builder.CreateZExt(v8, v8xi16_ty);
@@ -3510,7 +3661,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load16x4_s: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* v4 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i16_ty, 4), ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(v4)->setVolatile(true);
                      auto* ext = builder.CreateSExt(v4, v4xi32_ty);
@@ -3518,7 +3669,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load16x4_u: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* v4 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i16_ty, 4), ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(v4)->setVolatile(true);
                      auto* ext = builder.CreateZExt(v4, v4xi32_ty);
@@ -3526,7 +3677,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load32x2_s: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* v2 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i32_ty, 2), ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(v2)->setVolatile(true);
                      auto* ext = builder.CreateSExt(v2, v2xi64_ty);
@@ -3534,7 +3685,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load32x2_u: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* v2 = builder.CreateAlignedLoad(llvm::FixedVectorType::get(i32_ty, 2), ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(v2)->setVolatile(true);
                      auto* ext = builder.CreateZExt(v2, v2xi64_ty);
@@ -3542,7 +3693,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load8_splat: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 1, false);
                      auto* scalar = builder.CreateLoad(i8_ty, ptr);
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      llvm::Value* vec = builder.CreateVectorSplat(16, scalar);
@@ -3550,7 +3701,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load16_splat: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 2, false);
                      auto* scalar = builder.CreateAlignedLoad(i16_ty, ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      llvm::Value* vec = builder.CreateVectorSplat(8, scalar);
@@ -3558,7 +3709,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load32_splat: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 4, false);
                      auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      llvm::Value* vec = builder.CreateVectorSplat(4, scalar);
@@ -3566,7 +3717,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load64_splat: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      llvm::Value* vec = builder.CreateVectorSplat(2, scalar);
@@ -3574,7 +3725,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load32_zero: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 4, false);
                      auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* zero = llvm::Constant::getNullValue(v4xi32_ty);
@@ -3583,7 +3734,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load64_zero: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* zero = llvm::Constant::getNullValue(v2xi64_ty);
@@ -3592,7 +3743,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load8_lane: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 1, false);
                      auto* scalar = builder.CreateLoad(i8_ty, ptr);
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
@@ -3601,7 +3752,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load16_lane: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 2, false);
                      auto* scalar = builder.CreateAlignedLoad(i16_ty, ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
@@ -3610,7 +3761,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load32_lane: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 4, false);
                      auto* scalar = builder.CreateAlignedLoad(i32_ty, ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* vec = load_v128(inst.simd.v_src1, v4xi32_ty);
@@ -3619,7 +3770,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_load64_lane: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, false);
                      auto* scalar = builder.CreateAlignedLoad(i64_ty, ptr, llvm::Align(1));
                      cast<llvm::LoadInst>(scalar)->setVolatile(true);
                      auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
@@ -3628,7 +3779,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_store8_lane: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 1, true);
                      auto* vec = load_v128(inst.simd.v_src1, v16xi8_ty);
                      auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
                      auto* st = builder.CreateStore(scalar, ptr);
@@ -3636,7 +3787,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_store16_lane: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 2, true);
                      auto* vec = load_v128(inst.simd.v_src1, v8xi16_ty);
                      auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
                      auto* st = builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
@@ -3644,7 +3795,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_store32_lane: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 4, true);
                      auto* vec = load_v128(inst.simd.v_src1, v4xi32_ty);
                      auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
                      auto* st = builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
@@ -3652,7 +3803,7 @@ namespace psizam::detail {
                      break;
                   }
                   case simd_sub::v128_store64_lane: {
-                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset);
+                     auto* ptr = simd_mem_addr(inst.simd.addr, inst.simd.offset, 8, true);
                      auto* vec = load_v128(inst.simd.v_src1, v2xi64_ty);
                      auto* scalar = builder.CreateExtractElement(vec, builder.getInt32(inst.simd.lane));
                      auto* st = builder.CreateAlignedStore(scalar, ptr, llvm::Align(1));
@@ -4797,6 +4948,21 @@ namespace psizam::detail {
                      auto* offset = builder.getInt32(inst.simd.offset);
                      auto* eff = builder.CreateAdd(addr32, offset);
                      auto* eff64 = builder.CreateZExt(eff, builder.getInt64Ty());
+                     // Checked mode: watermark for atomic loads
+                     {
+                        uint32_t asz = 4;
+                        switch (sub) {
+                           case atomic_sub::i32_atomic_load8_u:
+                           case atomic_sub::i64_atomic_load8_u: asz = 1; break;
+                           case atomic_sub::i32_atomic_load16_u:
+                           case atomic_sub::i64_atomic_load16_u: asz = 2; break;
+                           case atomic_sub::i32_atomic_load: asz = 4; break;
+                           case atomic_sub::i64_atomic_load32_u: asz = 4; break;
+                           case atomic_sub::i64_atomic_load: asz = 8; break;
+                           default: break;
+                        }
+                        emit_read_watermark_update(builder, eff64, asz, watermark_alloca);
+                     }
                      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), load_mem_ptr(), eff64);
                      llvm::Value* val = nullptr;
                      switch(sub) {
@@ -4838,6 +5004,21 @@ namespace psizam::detail {
                      auto* offset = builder.getInt32(inst.simd.offset);
                      auto* eff = builder.CreateAdd(addr32, offset);
                      auto* eff64 = builder.CreateZExt(eff, builder.getInt64Ty());
+                     // Checked mode: immediate bounds check for atomic stores
+                     {
+                        uint32_t asz = 4;
+                        switch (sub) {
+                           case atomic_sub::i32_atomic_store8:
+                           case atomic_sub::i64_atomic_store8: asz = 1; break;
+                           case atomic_sub::i32_atomic_store16:
+                           case atomic_sub::i64_atomic_store16: asz = 2; break;
+                           case atomic_sub::i32_atomic_store: asz = 4; break;
+                           case atomic_sub::i64_atomic_store32: asz = 4; break;
+                           case atomic_sub::i64_atomic_store: asz = 8; break;
+                           default: break;
+                        }
+                        emit_write_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff64, asz);
+                     }
                      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), load_mem_ptr(), eff64);
                      switch(sub) {
                      case atomic_sub::i32_atomic_store: {

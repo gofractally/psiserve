@@ -23,7 +23,9 @@ namespace psizam::detail {
 
    void llvm_compile_functions(ir_function* funcs, uint32_t num_functions,
                                module& mod, growable_allocator& alloc,
-                               bool deterministic) {
+                               bool deterministic,
+                               mem_safety mem_mode,
+                               checked_mode checked_kind) {
       // Step 1: Translate all IR functions to LLVM IR
       llvm_translate_options topts;
       topts.opt_level          = g_llvm_opt_level;
@@ -32,6 +34,8 @@ namespace psizam::detail {
       }
       topts.fp                 = deterministic ? fp_mode::hw_deterministic : fp_mode::fast;
       topts.nothrow_host_calls = true;  // JIT path has .eh_frame; skip try/catch overhead
+      topts.mem_mode           = mem_mode;
+      topts.checked_kind       = checked_kind;
       llvm_ir_translator translator(mod, topts);
 
       for (uint32_t i = 0; i < num_functions; ++i) {

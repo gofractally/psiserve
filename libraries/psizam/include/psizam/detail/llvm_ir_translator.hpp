@@ -17,6 +17,7 @@
 
 #include <psizam/config.hpp>
 #include <psizam/detail/jit_ir.hpp>
+#include <psizam/options.hpp>
 #include <psizam/types.hpp>
 
 #include <cstdint>
@@ -52,6 +53,13 @@ namespace psizam::detail {
       int  opt_level         = 2;     // LLVM optimization level (0-3)
       bool per_function      = false; // Per-function compilation: external linkage for all decls
       bool nothrow_host_calls = false; // Use nothrow host call helpers (JIT path with .eh_frame)
+
+      // Memory safety mode: guarded (OS guard pages), checked (IR-level bounds
+      // checks with deferred read watermark + immediate write check), or
+      // unchecked (no protection).
+      mem_safety   mem_mode      = mem_safety::guarded;
+      // Checked sub-mode: strict uses max(watermark, end), relaxed uses OR.
+      checked_mode checked_kind  = checked_mode::strict;
    };
 
    /// Translates psizam IR functions to LLVM IR.

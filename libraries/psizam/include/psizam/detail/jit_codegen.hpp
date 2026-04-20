@@ -96,6 +96,7 @@
 
 #include <psizam/allocator.hpp>
 #include <psizam/exceptions.hpp>
+#include <psizam/options.hpp>
 #include <psizam/detail/execution_context.hpp>
 #include <psizam/detail/jit_ir.hpp>
 #include <psizam/detail/jit_reloc.hpp>
@@ -170,6 +171,11 @@ namespace psizam::detail {
       // of _fp. Scalar FP paths inherit from x86_64_base patterns.
       void set_fp_mode(fp_mode m) noexcept { _fp = m; }
       fp_mode get_fp_mode() const noexcept { return _fp; }
+
+      void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
+      void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+      bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
+      bool is_checked_strict() const noexcept { return is_checked() && _checked_kind == checked_mode::strict; }
 
       /// Get the call_indirect error handler address (for element table patching).
       void* get_call_indirect_handler() const { return call_indirect_handler; }
@@ -307,6 +313,32 @@ namespace psizam::detail {
             }
             _num_spill_slots = func.num_spill_slots;
             _use_regalloc = true;
+
+            // Checked mode: R15 is reserved as watermark register (x86_64 only).
+            // Evict any vreg assigned to phys_reg 8 (R15) to a spill slot.
+#ifdef __x86_64__
+            if (is_checked()) {
+               constexpr int8_t R15_PHYS = static_cast<int8_t>(phys_reg::r15);
+               for (uint32_t v = 0; v < _num_vregs; ++v) {
+                  if (_vreg_map[v] == R15_PHYS) {
+                     _vreg_map[v] = -1;
+                     if (_spill_map[v] < 0)
+                        _spill_map[v] = static_cast<int16_t>(_num_spill_slots++);
+                  }
+               }
+               // Also evict from the interval data so future queries are consistent
+               for (uint32_t iv = 0; iv < func.interval_count; ++iv) {
+                  if (func.intervals[iv].phys_reg == R15_PHYS) {
+                     func.intervals[iv].phys_reg = -1;
+                     if (func.intervals[iv].spill_slot < 0)
+                        func.intervals[iv].spill_slot = static_cast<int16_t>(_num_spill_slots - 1);
+                  }
+               }
+               // Ensure R15 is saved/restored as callee-saved (bit 4 = R15)
+               // even if regalloc didn't assign it to any vreg.
+               func.callee_saved_used |= (1u << (R15_PHYS - static_cast<int8_t>(phys_reg::caller_saved_count)));
+            }
+#endif // __x86_64__
          } else {
             _use_regalloc = false;
          }
@@ -472,6 +504,7 @@ namespace psizam::detail {
       }
 
       void emit_host_call(uint32_t funcnum) {
+         emit_validate_watermark();
          uint32_t extra = 0;
          if (_enable_backtrace) {
             this->emit_bytes(0x55);             // pushq %rbp
@@ -551,6 +584,7 @@ namespace psizam::detail {
       //   popq  %rsi / %rdi
       //   done:
       void emit_gas_charge(int64_t cost) {
+         emit_validate_watermark();
          using ctx_t = jit_execution_context<false>;
          const uint32_t consumed_off = static_cast<uint32_t>(ctx_t::gas_consumed_offset());
          const uint32_t deadline_off = static_cast<uint32_t>(ctx_t::gas_deadline_offset());
@@ -623,8 +657,12 @@ namespace psizam::detail {
          // slots are above the lowest rsp we'll ever reach, so they're safe.
          _eh_save_slots = (func.eh_data_count > 0) ? 3 : 0;
 
-         // Allocate and zero-initialize: body locals + spill slots + callee-saved + EH saves
-         uint32_t total_slots = body_local_slots + _num_spill_slots + _callee_saved_count + _eh_save_slots;
+         // Checked mode reserves an extra frame slot for the R15 watermark save.
+         _checked_r15_save = is_checked() ? 1u : 0u;
+
+         // Allocate and zero-initialize: body locals + spill slots + callee-saved + EH saves + checked R15
+         uint32_t total_slots = body_local_slots + _num_spill_slots + _callee_saved_count
+                              + _eh_save_slots + _checked_r15_save;
          if (total_slots > 0) {
             this->emit_xor(eax, eax);
             for (uint32_t i = 0; i < total_slots; ++i) {
@@ -644,6 +682,17 @@ namespace psizam::detail {
             if (_callee_saved_used & 8)  { this->emit_mov(r14, *(rbp + save_offset)); save_offset -= 8; }
             if (_callee_saved_used & 16) { this->emit_mov(r15, *(rbp + save_offset)); save_offset -= 8; }
          }
+
+         // Checked mode: save R15 and initialize watermark to 0.
+         // In Phase 4 (regalloc), R15 is already saved above via callee_saved_used bit 16.
+         // In Phase 3 (no regalloc), we save R15 to a dedicated frame slot.
+         if (is_checked()) {
+            if (!_use_regalloc) {
+               this->emit_mov(r15, *(rbp + checked_r15_save_offset()));
+            }
+            // xor r15d, r15d → zero R15 (zero-extends to 64-bit)
+            this->emit_xor(general_register32(15), general_register32(15));
+         }
       }
 
       // EH save-slot offsets from rbp. Valid only when _eh_save_slots > 0.
@@ -655,6 +704,12 @@ namespace psizam::detail {
       int32_t eh_ctx_save_offset() const { return eh_save_slot_offset(0); }
       int32_t eh_mem_save_offset() const { return eh_save_slot_offset(1); }
       int32_t eh_rsp_save_offset() const { return eh_save_slot_offset(2); }
+
+      // Checked-mode R15 save slot offset from rbp (Phase 3 only, placed after EH slots).
+      int32_t checked_r15_save_offset() const {
+         return -static_cast<int32_t>(
+            (_body_locals + _num_spill_slots + _callee_saved_count + _eh_save_slots + 1) * 8);
+      }
 
       // ──────── IR instruction emission (naive: everything via stack) ────────
       // For Phase 3, this emits the same push/pop stack-machine code as the
@@ -773,6 +828,8 @@ namespace psizam::detail {
 
          // ── Return ──
          case ir_op::return_:
+            // Checked mode: validate watermark before early return
+            emit_validate_watermark();
             if (inst.rr.src1 != ir_vreg_none) {
                if (inst.type == types::v128) {
                   // v128 return: load into xmm0 for caller
@@ -1097,31 +1154,31 @@ namespace psizam::detail {
          }
 
          // ── Memory loads ──
-         case ir_op::i32_load:     emit_load(inst.ri.imm, base::MOV_A, eax); break;
-         case ir_op::i64_load:     emit_load(inst.ri.imm, base::MOV_A, rax); break;
-         case ir_op::f32_load:     emit_load(inst.ri.imm, base::MOV_A, eax); break;
-         case ir_op::f64_load:     emit_load(inst.ri.imm, base::MOV_A, rax); break;
-         case ir_op::i32_load8_s:  emit_load(inst.ri.imm, base::MOVSXB, eax); break;
-         case ir_op::i32_load16_s: emit_load(inst.ri.imm, base::MOVSXW, eax); break;
-         case ir_op::i32_load8_u:  emit_load(inst.ri.imm, base::MOVZXB, eax); break;
-         case ir_op::i32_load16_u: emit_load(inst.ri.imm, base::MOVZXW, eax); break;
-         case ir_op::i64_load8_s:  emit_load(inst.ri.imm, base::MOVSXB, rax); break;
-         case ir_op::i64_load16_s: emit_load(inst.ri.imm, base::MOVSXW, rax); break;
-         case ir_op::i64_load32_s: emit_load(inst.ri.imm, base::MOVSXD, rax); break;
-         case ir_op::i64_load8_u:  emit_load(inst.ri.imm, base::MOVZXB, eax); break;
-         case ir_op::i64_load16_u: emit_load(inst.ri.imm, base::MOVZXW, eax); break;
-         case ir_op::i64_load32_u: emit_load(inst.ri.imm, base::MOV_A, eax); break;
+         case ir_op::i32_load:     emit_load(inst.ri.imm, base::MOV_A, eax, 4); break;
+         case ir_op::i64_load:     emit_load(inst.ri.imm, base::MOV_A, rax, 8); break;
+         case ir_op::f32_load:     emit_load(inst.ri.imm, base::MOV_A, eax, 4); break;
+         case ir_op::f64_load:     emit_load(inst.ri.imm, base::MOV_A, rax, 8); break;
+         case ir_op::i32_load8_s:  emit_load(inst.ri.imm, base::MOVSXB, eax, 1); break;
+         case ir_op::i32_load16_s: emit_load(inst.ri.imm, base::MOVSXW, eax, 2); break;
+         case ir_op::i32_load8_u:  emit_load(inst.ri.imm, base::MOVZXB, eax, 1); break;
+         case ir_op::i32_load16_u: emit_load(inst.ri.imm, base::MOVZXW, eax, 2); break;
+         case ir_op::i64_load8_s:  emit_load(inst.ri.imm, base::MOVSXB, rax, 1); break;
+         case ir_op::i64_load16_s: emit_load(inst.ri.imm, base::MOVSXW, rax, 2); break;
+         case ir_op::i64_load32_s: emit_load(inst.ri.imm, base::MOVSXD, rax, 4); break;
+         case ir_op::i64_load8_u:  emit_load(inst.ri.imm, base::MOVZXB, eax, 1); break;
+         case ir_op::i64_load16_u: emit_load(inst.ri.imm, base::MOVZXW, eax, 2); break;
+         case ir_op::i64_load32_u: emit_load(inst.ri.imm, base::MOV_A, eax, 4); break;
 
          // ── Memory stores ──
-         case ir_op::i32_store:   emit_store(inst.ri.imm, base::MOV_B, eax); break;
-         case ir_op::i64_store:   emit_store(inst.ri.imm, base::MOV_B, rax); break;
-         case ir_op::f32_store:   emit_store(inst.ri.imm, base::MOV_B, eax); break;
-         case ir_op::f64_store:   emit_store(inst.ri.imm, base::MOV_B, rax); break;
-         case ir_op::i32_store8:  emit_store(inst.ri.imm, base::MOVB_B, al); break;
-         case ir_op::i32_store16: emit_store(inst.ri.imm, base::MOVW_B, this->ax); break;
-         case ir_op::i64_store8:  emit_store(inst.ri.imm, base::MOVB_B, al); break;
-         case ir_op::i64_store16: emit_store(inst.ri.imm, base::MOVW_B, this->ax); break;
-         case ir_op::i64_store32: emit_store(inst.ri.imm, base::MOV_B, eax); break;
+         case ir_op::i32_store:   emit_store(inst.ri.imm, base::MOV_B, eax, 4); break;
+         case ir_op::i64_store:   emit_store(inst.ri.imm, base::MOV_B, rax, 8); break;
+         case ir_op::f32_store:   emit_store(inst.ri.imm, base::MOV_B, eax, 4); break;
+         case ir_op::f64_store:   emit_store(inst.ri.imm, base::MOV_B, rax, 8); break;
+         case ir_op::i32_store8:  emit_store(inst.ri.imm, base::MOVB_B, al, 1); break;
+         case ir_op::i32_store16: emit_store(inst.ri.imm, base::MOVW_B, this->ax, 2); break;
+         case ir_op::i64_store8:  emit_store(inst.ri.imm, base::MOVB_B, al, 1); break;
+         case ir_op::i64_store16: emit_store(inst.ri.imm, base::MOVW_B, this->ax, 2); break;
+         case ir_op::i64_store32: emit_store(inst.ri.imm, base::MOV_B, eax, 4); break;
 
          // ── Memory management ──
          case ir_op::memory_size:
@@ -2067,6 +2124,10 @@ namespace psizam::detail {
       }
 
       void emit_function_epilogue(ir_function& func) {
+         // Checked mode: validate watermark before return, catching any
+         // deferred reads since the last gas charge point.
+         emit_validate_watermark();
+
          if (func.type->return_count > 1) {
             // Multi-value return: values already stored to _multi_return by
             // multi_return_store IR ops (emitted in emit_end/emit_return).
@@ -2099,6 +2160,10 @@ namespace psizam::detail {
             if (_callee_saved_used & 4)  { this->emit_mov(*(rbp + save_offset), r13); save_offset -= 8; }
             if (_callee_saved_used & 8)  { this->emit_mov(*(rbp + save_offset), r14); save_offset -= 8; }
             if (_callee_saved_used & 16) { this->emit_mov(*(rbp + save_offset), r15); save_offset -= 8; }
+         }
+         // Phase 3 checked mode: restore R15 from dedicated frame slot
+         if (is_checked() && !_use_regalloc) {
+            this->emit_mov(*(rbp + checked_r15_save_offset()), r15);
          }
          // Restore frame
          this->emit_mov(rbp, rsp);
@@ -2825,17 +2890,17 @@ namespace psizam::detail {
          }
 
          // Memory loads
-         case ir_op::i32_load: return emit_load_reg(inst, base::MOV_A, eax);
-         case ir_op::i64_load: return emit_load_reg(inst, base::MOV_A, rax);
-         case ir_op::i32_load8_u: return emit_load_reg(inst, base::MOVZXB, eax);
-         case ir_op::i32_load16_u: return emit_load_reg(inst, base::MOVZXW, eax);
-         case ir_op::i32_load8_s: return emit_load_reg(inst, base::MOVSXB, eax);
-         case ir_op::i32_load16_s: return emit_load_reg(inst, base::MOVSXW, eax);
+         case ir_op::i32_load: return emit_load_reg(inst, base::MOV_A, eax, 4);
+         case ir_op::i64_load: return emit_load_reg(inst, base::MOV_A, rax, 8);
+         case ir_op::i32_load8_u: return emit_load_reg(inst, base::MOVZXB, eax, 1);
+         case ir_op::i32_load16_u: return emit_load_reg(inst, base::MOVZXW, eax, 2);
+         case ir_op::i32_load8_s: return emit_load_reg(inst, base::MOVSXB, eax, 1);
+         case ir_op::i32_load16_s: return emit_load_reg(inst, base::MOVSXW, eax, 2);
          // Memory stores
-         case ir_op::i32_store: return emit_store_reg(inst, base::MOV_B, eax);
-         case ir_op::i64_store: return emit_store_reg(inst, base::MOV_B, rax);
-         case ir_op::i32_store8: return emit_store_reg(inst, base::MOVB_B, al);
-         case ir_op::i32_store16: return emit_store_reg(inst, base::MOVW_B, ax);
+         case ir_op::i32_store: return emit_store_reg(inst, base::MOV_B, eax, 4);
+         case ir_op::i64_store: return emit_store_reg(inst, base::MOV_B, rax, 8);
+         case ir_op::i32_store8: return emit_store_reg(inst, base::MOVB_B, al, 1);
+         case ir_op::i32_store16: return emit_store_reg(inst, base::MOVW_B, ax, 2);
 
          // Multi-value return store (register mode)
          case ir_op::multi_return_store: {
@@ -2865,6 +2930,8 @@ namespace psizam::detail {
 
          // Return
          case ir_op::return_: {
+            // Checked mode: validate watermark before early return
+            emit_validate_watermark();
             if (inst.rr.src1 != ir_vreg_none) {
                if (inst.type == types::v128) {
                   load_v128_to_xmm(inst.rr.src1, xmm0);
@@ -3072,21 +3139,21 @@ namespace psizam::detail {
             return true;
 
          // Additional loads
-         case ir_op::f32_load: return emit_load_reg(inst, base::MOV_A, eax);
-         case ir_op::f64_load: return emit_load_reg(inst, base::MOV_A, rax);
-         case ir_op::i64_load8_s: return emit_load_reg(inst, base::MOVSXB, rax);
-         case ir_op::i64_load16_s: return emit_load_reg(inst, base::MOVSXW, rax);
-         case ir_op::i64_load32_s: return emit_load_reg(inst, base::MOVSXD, rax);
-         case ir_op::i64_load8_u: return emit_load_reg(inst, base::MOVZXB, eax);
-         case ir_op::i64_load16_u: return emit_load_reg(inst, base::MOVZXW, eax);
-         case ir_op::i64_load32_u: return emit_load_reg(inst, base::MOV_A, eax);
+         case ir_op::f32_load: return emit_load_reg(inst, base::MOV_A, eax, 4);
+         case ir_op::f64_load: return emit_load_reg(inst, base::MOV_A, rax, 8);
+         case ir_op::i64_load8_s: return emit_load_reg(inst, base::MOVSXB, rax, 1);
+         case ir_op::i64_load16_s: return emit_load_reg(inst, base::MOVSXW, rax, 2);
+         case ir_op::i64_load32_s: return emit_load_reg(inst, base::MOVSXD, rax, 4);
+         case ir_op::i64_load8_u: return emit_load_reg(inst, base::MOVZXB, eax, 1);
+         case ir_op::i64_load16_u: return emit_load_reg(inst, base::MOVZXW, eax, 2);
+         case ir_op::i64_load32_u: return emit_load_reg(inst, base::MOV_A, eax, 4);
 
          // Additional stores
-         case ir_op::f32_store: return emit_store_reg(inst, base::MOV_B, eax);
-         case ir_op::f64_store: return emit_store_reg(inst, base::MOV_B, rax);
-         case ir_op::i64_store8: return emit_store_reg(inst, base::MOVB_B, al);
-         case ir_op::i64_store16: return emit_store_reg(inst, base::MOVW_B, ax);
-         case ir_op::i64_store32: return emit_store_reg(inst, base::MOV_B, eax);
+         case ir_op::f32_store: return emit_store_reg(inst, base::MOV_B, eax, 4);
+         case ir_op::f64_store: return emit_store_reg(inst, base::MOV_B, rax, 8);
+         case ir_op::i64_store8: return emit_store_reg(inst, base::MOVB_B, al, 1);
+         case ir_op::i64_store16: return emit_store_reg(inst, base::MOVW_B, ax, 2);
+         case ir_op::i64_store32: return emit_store_reg(inst, base::MOV_B, eax, 4);
 
          // Const float (just store bits)
          case ir_op::const_f32: {
@@ -4008,7 +4075,7 @@ namespace psizam::detail {
 
       // Register-based memory load
       template<class I, class R>
-      bool emit_load_reg(const ir_inst& inst, I instr, R reg) {
+      bool emit_load_reg(const ir_inst& inst, I instr, R reg, uint32_t access_size = 0) {
          uint32_t uoffset = static_cast<uint32_t>(inst.ri.imm);
          uint32_t addr_vreg = try_fold_addr(inst.ri.src1, uoffset);
          int8_t pr_addr = get_phys(addr_vreg);
@@ -4030,6 +4097,9 @@ namespace psizam::detail {
          if (uoffset != 0) {
             emit_addr_offset_add(rcx, uoffset);
          }
+         // Checked mode: update R15 watermark (deferred read check). Clobbers RDX.
+         if (access_size > 0)
+            emit_checked_read_watermark(rcx, access_size);
          this->emit(instr, *(rcx + rsi + 0), reg);
 
          // Move result from reg (eax/rax) to dest physical register if different
@@ -4044,7 +4114,7 @@ namespace psizam::detail {
       // Register-based memory store
       // inst.dest = value vreg, inst.ri.src1 = addr vreg, inst.ri.imm = offset
       template<class I, class R>
-      bool emit_store_reg(const ir_inst& inst, I instr, R reg) {
+      bool emit_store_reg(const ir_inst& inst, I instr, R reg, uint32_t access_size = 0) {
          uint32_t uoffset = static_cast<uint32_t>(inst.ri.imm);
          uint32_t addr_vreg = inst.ri.src1;
          int8_t pr_addr = get_phys(addr_vreg);
@@ -4072,6 +4142,10 @@ namespace psizam::detail {
          if (uoffset != 0) {
             emit_addr_offset_add(rdx, uoffset);
          }
+         // Checked mode: immediate bounds check for writes.
+         // Address is in RDX, use RCX as temp (clobbers RCX, preserves RDX and RAX).
+         if (access_size > 0)
+            emit_checked_write_bounds(rdx, access_size, rcx);
          this->emit(instr, *(rdx + rsi + 0), reg);
          return true;
       }
@@ -5593,9 +5667,76 @@ namespace psizam::detail {
          fix_branch(this->emit_branchcc32(base::JNZ), memory_handler);
       }
 
+      // ──────── Checked-mode memory safety instrumentation ────────
+      //
+      // Reads: deferred check via watermark register R15.
+      //   R15 tracks max(effective_addr + access_size) across all loads.
+      //   Validation happens at gas charge points and before host calls.
+      //   Strict mode: CMP + CMOVB (exact max, 2 instructions).
+      //   Relaxed mode: OR (approximate upper bound, 1 instruction).
+      //
+      // Writes: immediate per-access bounds check against mem_size.
+
+      // Update R15 watermark for a read access. addr_reg holds the effective
+      // WASM address (after offset addition). Clobbers RDX only.
+      void emit_checked_read_watermark(general_register64 addr_reg, uint32_t access_size) {
+         if (!is_checked()) return;
+         if (access_size == 0) return;
+         // Compute end = addr + access_size in rdx
+         this->emit(LEA, *(addr_reg + static_cast<int32_t>(access_size)), rdx);
+         if (is_checked_strict()) {
+            // Strict: R15 = max(R15, rdx)
+            // CMP rdx, r15 → flags = r15 - rdx
+            this->emit_cmp(rdx, r15);
+            // CMOVB r15, rdx → if r15 < rdx (below), r15 = rdx
+            // Encoding: REX.WR(4C) 0F 42 FA (CMOVB r15, rdx)
+            this->emit_bytes(0x4C, 0x0F, 0x42, 0xFA);
+         } else {
+            // Relaxed: R15 |= rdx (approximate watermark, only grows)
+            this->emit(base::OR_A, rdx, r15);
+         }
+      }
+
+      // Immediate bounds check for a write access. addr_reg holds the effective
+      // WASM address (after offset addition). temp_reg is a scratch register
+      // (must differ from addr_reg). Only temp_reg is clobbered.
+      void emit_checked_write_bounds(general_register64 addr_reg, uint32_t access_size,
+                                     general_register64 temp_reg = rdx) {
+         if (!is_checked()) return;
+         if (access_size == 0) return;
+         // Compute end = addr + access_size in temp_reg
+         this->emit(LEA, *(addr_reg + static_cast<int32_t>(access_size)), temp_reg);
+         // CMP *(rsi + ms_off), temp_reg → flags = temp_reg - mem_size = end - mem_size
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         this->emit(base::CMP, *(rsi + ms_off), temp_reg);
+         fix_branch(this->emit_branchcc32(base::JA), memory_handler);  // trap if end > mem_size
+      }
+
+      // Validate watermark: check R15 <= mem_size, trap if OOB, reset R15 to 0.
+      // Called at gas charge points and before host calls to flush deferred read checks.
+      void emit_validate_watermark() {
+         if (!is_checked()) return;
+         // Skip validation if R15 == 0 (no reads since last validation)
+         this->emit(base::TEST, r15, r15);
+         // je skip (short jump, 2 bytes: 74 XX)
+         auto* je_skip_imm = reinterpret_cast<uint8_t*>(this->code) + 1;
+         this->emit_bytes(0x74, 0x00);
+         // Load mem_size
+         const int32_t ms_off = wasm_allocator::mem_size_offset();
+         this->emit_mov(*(rsi + ms_off), rcx);  // rcx = mem_size
+         // if R15 > mem_size → trap
+         this->emit_cmp(rcx, r15);  // flags = r15 - rcx (watermark - mem_size)
+         fix_branch(this->emit_branchcc32(base::JA), memory_handler);  // trap if above
+         // Reset watermark
+         this->emit_xor(general_register32(15), general_register32(15));
+         // skip:
+         *je_skip_imm = static_cast<uint8_t>(
+            reinterpret_cast<uint8_t*>(this->code) - (je_skip_imm + 1));
+      }
+
       // ──────── Memory access helpers ────────
       template<class I, class R>
-      void emit_load(int32_t offset, I instr, R reg) {
+      void emit_load(int32_t offset, I instr, R reg, uint32_t access_size = 0) {
          uint32_t uoffset = static_cast<uint32_t>(offset);
          this->emit_pop_raw(rax);  // WASM address (i32/i64)
          if (is_memory64()) emit_mem64_check(rax, ecx);
@@ -5603,12 +5744,15 @@ namespace psizam::detail {
          if (uoffset != 0) {
             emit_addr_offset_add(rax, uoffset);
          }
+         // Checked mode: update R15 watermark (deferred read check)
+         if (access_size > 0)
+            emit_checked_read_watermark(rax, access_size);
          this->emit(instr, *(rax + rsi + 0), reg);
          this->emit_push_raw(rax);
       }
 
       template<class I, class R>
-      void emit_store(int32_t offset, I instr, R reg) {
+      void emit_store(int32_t offset, I instr, R reg, uint32_t access_size = 0) {
          uint32_t uoffset = static_cast<uint32_t>(offset);
          this->emit_pop_raw(rax);  // value
          this->emit_pop_raw(rcx);  // WASM address (i32/i64)
@@ -5617,6 +5761,9 @@ namespace psizam::detail {
          if (uoffset != 0) {
             emit_addr_offset_add(rcx, uoffset);
          }
+         // Checked mode: immediate bounds check for writes (clobbers rdx only)
+         if (access_size > 0)
+            emit_checked_write_bounds(rcx, access_size);
          this->emit(instr, *(rcx + rsi + 0), reg);
       }
 
@@ -5640,8 +5787,11 @@ namespace psizam::detail {
 
       // v128 load: load address from vreg, load 16 bytes into xmm0, push 16 bytes
       template<typename Op>
-      void simd_loadop(Op op, uint32_t offset, uint32_t addr_vreg = ir_vreg_none) {
+      void simd_loadop(Op op, uint32_t offset, uint32_t addr_vreg = ir_vreg_none,
+                       uint32_t access_size = 16) {
          simd_load_address(offset, addr_vreg);
+         // Checked mode: watermark tracking for SIMD read (clobbers RDX only)
+         emit_checked_read_watermark(rax, access_size);
          this->emit(op, *(rax + rsi + 0), xmm0);
          this->emit_sub(16, rsp);
          this->emit_vmovdqu(xmm0, *rsp);
@@ -5654,6 +5804,15 @@ namespace psizam::detail {
          this->emit_pop_raw(rdx);   // high qword (was pushed first)
          // Load address
          simd_load_address(offset, addr_vreg);
+         // Checked mode: immediate bounds check for v128 write (16 bytes).
+         // RCX and RDX hold store values — save them around bounds check.
+         if (is_checked()) {
+            this->emit_push_raw(rcx);
+            this->emit_push_raw(rdx);
+            emit_checked_write_bounds(rax, 16);
+            this->emit_pop_raw(rdx);
+            this->emit_pop_raw(rcx);
+         }
          this->emit_add(rsi, rax);  // native address
          // Store via two MOV64
          this->emit_mov(rcx, *(rax + 0));  // low at addr
@@ -5662,10 +5821,14 @@ namespace psizam::detail {
 
       // v128 load lane: pop v128 into xmm0, pop address, insert lane
       template<typename Op>
-      void simd_load_laneop(Op op, uint32_t offset, uint8_t lane, uint32_t addr_vreg = ir_vreg_none) {
+      void simd_load_laneop(Op op, uint32_t offset, uint8_t lane, uint32_t addr_vreg = ir_vreg_none,
+                            uint32_t access_size = 0) {
          this->emit_vmovdqu(*rsp, xmm0);
          this->emit_add(16, rsp);
          simd_load_address(offset, addr_vreg);
+         // Checked mode: watermark tracking for lane load (clobbers RDX)
+         if (access_size > 0)
+            emit_checked_read_watermark(rax, access_size);
          this->emit_add(rsi, rax);
          this->emit(op, typename base::imm8{lane}, *rax, xmm0, xmm0);
          this->emit_sub(16, rsp);
@@ -5674,10 +5837,14 @@ namespace psizam::detail {
 
       // v128 store lane: pop v128, load addr from vreg, extract lane to memory
       template<typename Op>
-      void simd_store_laneop(Op op, uint32_t offset, uint8_t lane, uint32_t addr_vreg = ir_vreg_none) {
+      void simd_store_laneop(Op op, uint32_t offset, uint8_t lane, uint32_t addr_vreg = ir_vreg_none,
+                             uint32_t access_size = 0) {
          this->emit_vmovdqu(*rsp, xmm0);
          this->emit_add(16, rsp);
          simd_load_address(offset, addr_vreg);
+         // Checked mode: immediate bounds check for lane store
+         if (access_size > 0)
+            emit_checked_write_bounds(rax, access_size);
          this->emit_add(rsi, rax);
          this->emit(op, typename base::imm8{lane}, *rax, xmm0);
       }
@@ -6746,6 +6913,10 @@ namespace psizam::detail {
             if (_callee_saved_used & 8)  { this->emit_mov(*(rbp + save_offset), r14); save_offset -= 8; }
             if (_callee_saved_used & 16) { this->emit_mov(*(rbp + save_offset), r15); save_offset -= 8; }
          }
+         // Phase 3 checked mode: restore R15 from dedicated frame slot
+         if (is_checked() && !_use_regalloc) {
+            this->emit_mov(*(rbp + checked_r15_save_offset()), r15);
+         }
       }
 
       void emit_tail_call(ir_function& func, const ir_inst& inst) {
@@ -6773,10 +6944,14 @@ namespace psizam::detail {
             }
             emit_ref_local_init(func);
             // Reset RSP to frame bottom (rbp - total_slots*8)
-            uint32_t total_slots = _body_locals + _num_spill_slots + _callee_saved_count;
+            uint32_t total_slots = _body_locals + _num_spill_slots + _callee_saved_count
+                                 + _checked_r15_save;
             this->emit_mov(rbp, rsp);
             if (total_slots > 0)
                this->emit_sub(static_cast<uint32_t>(total_slots * 8), rsp);
+            // Checked mode: re-zero R15 watermark for the next iteration
+            if (is_checked())
+               this->emit_xor(general_register32(15), general_register32(15));
             // JMP to body_start (after prologue)
             this->emit_bytes(0xe9); // jmp rel32
             int32_t rel = static_cast<int32_t>(static_cast<char*>(_body_start) - (reinterpret_cast<char*>(code) + 4));
@@ -7255,6 +7430,8 @@ namespace psizam::detail {
       bool _enable_backtrace;
       bool _stack_limit_is_bytes;
       fp_mode _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
+      mem_safety _mem_mode = mem_safety::guarded;
+      checked_mode _checked_kind = checked_mode::strict;
       relocation_recorder _reloc_recorder;   // tracks absolute address embeddings for PIC
       void* _code_segment_base;
       void* fpe_handler = nullptr;
@@ -7294,6 +7471,8 @@ namespace psizam::detail {
       // the setjmp-saved rsp slot — which is the bug the old push-rax pattern
       // suffered from. Non-zero only when the function contains try_table.
       uint32_t _eh_save_slots = 0;
+      // Checked mode: 1 extra frame slot for R15 watermark save (Phase 3)
+      uint32_t _checked_r15_save = 0;
       // SSA info from optimizer (for const-operand fusion)
       uint32_t* _func_def_inst = nullptr;
       uint16_t* _func_use_count = nullptr;
