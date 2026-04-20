@@ -690,6 +690,8 @@ namespace psizam {
       static std::int32_t globals_end() { return -static_cast<std::int32_t>(page_size_val); }
       // Runtime table 0 size, stored at end of table page (before globals pointer)
       static std::int32_t table0_size_offset() { return globals_end() - 12; }
+      // Current linear memory size in bytes (8-byte uint64_t), used by checked mode
+      static std::int32_t mem_size_offset() { return globals_end() - 20; }
       template <typename T>
       void alloc(size_t = 1) {}
       template <typename T>

@@ -550,11 +550,20 @@ namespace psizam::detail {
                      }
                   }
                   _func->vstack_resize(entry.stack_depth);
-                  for (uint32_t i = 0; i < entry.result_count; ++i) {
-                     _func->vpush(entry.merge_vregs[i]);
-                     if (entry.result_types[i] == types::v128) {
-                        uint32_t ghost = _func->alloc_vreg(types::v128);
-                        _func->vpush(ghost);
+                  if (!_unreachable) {
+                     for (uint32_t i = 0; i < entry.result_count; ++i) {
+                        _func->vpush(entry.merge_vregs[i]);
+                        if (entry.result_types[i] == types::v128) {
+                           uint32_t ghost = _func->alloc_vreg(types::v128);
+                           _func->vpush(ghost);
+                        }
+                     }
+                  } else {
+                     // Dead-code: push placeholder vregs; merge_vregs may not be allocated
+                     for (uint32_t i = 0; i < entry.result_count; ++i) {
+                        uint8_t rt = entry.result_types[i];
+                        _func->vpush(_func->alloc_vreg(rt));
+                        if (rt == types::v128) _func->vpush(_func->alloc_vreg(types::v128));
                      }
                   }
                }
@@ -754,20 +763,21 @@ namespace psizam::detail {
          std::memset(entry.result_types, 0, sizeof(entry.result_types));
          std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs)); // ir_vreg_none
          if (result_count > 1) {
-            // Multi-value: one merge vreg per result; use real types so emit_end
-            // can pop the extra vstack slot reserved for v128 ghosts.
+            // Consume side-channel even in dead code: populates entry.result_types
+            // (needed for emit_end's placeholder allocation) and clears the channel.
             consume_pending_result_types(entry, result_count);
-            for (uint32_t i = 0; i < result_count && i < 16; ++i) {
-               entry.merge_vregs[i] = _func->alloc_vreg(entry.result_types[i]);
+            if (!_unreachable) {
+               for (uint32_t i = 0; i < result_count && i < 16; ++i)
+                  entry.merge_vregs[i] = _func->alloc_vreg(entry.result_types[i]);
+               entry.merge_vreg = entry.merge_vregs[0];
             }
-            entry.merge_vreg = entry.merge_vregs[0];
          } else if (result_type != types::pseudo) {
-            // Single-value: backwards-compatible path
-            entry.merge_vreg = _func->alloc_vreg(result_type);
-            entry.merge_vregs[0] = entry.merge_vreg;
             entry.result_types[0] = result_type;
+            if (!_unreachable) {
+               entry.merge_vreg = _func->alloc_vreg(result_type);
+               entry.merge_vregs[0] = entry.merge_vreg;
+            }
          } else {
-            entry.merge_vreg = ir_vreg_none;
             // Clear any stale side-channel data so it doesn't leak to the next call.
             _pending_result_types = nullptr;
             _pending_result_types_count = 0;
@@ -800,17 +810,16 @@ namespace psizam::detail {
          // Loops use param_vregs for back-branches (br to loop = re-entry), but
          // end-of-loop fall-through still produces result values that the
          // enclosing scope consumes. Allocate merge_vregs for multi-value loops
-         // so emit_end's generic pop/mov/push path works; without them,
-         // emit_end pushes ir_vreg_none and corrupts the outer stack (LLVM
-         // return then loads undef from v0).
+         // so emit_end's live-code pop/mov/push path works. In dead code, skip
+         // allocation — emit_end's dead-code path allocates placeholders itself.
          if (result_count > 1) {
             consume_pending_result_types(entry, result_count);
-            for (uint32_t i = 0; i < result_count && i < 16; ++i) {
-               entry.merge_vregs[i] = _func->alloc_vreg(entry.result_types[i]);
+            if (!_unreachable) {
+               for (uint32_t i = 0; i < result_count && i < 16; ++i)
+                  entry.merge_vregs[i] = _func->alloc_vreg(entry.result_types[i]);
+               entry.merge_vreg = entry.merge_vregs[0];
             }
-            entry.merge_vreg = entry.merge_vregs[0];
          } else {
-            entry.merge_vreg = ir_vreg_none;
             _pending_result_types = nullptr;
             _pending_result_types_count = 0;
          }
@@ -835,16 +844,18 @@ namespace psizam::detail {
          std::memset(entry.param_vregs, 0xFF, sizeof(entry.param_vregs));
          if (result_count > 1) {
             consume_pending_result_types(entry, result_count);
-            for (uint32_t i = 0; i < result_count && i < 16; ++i) {
-               entry.merge_vregs[i] = _func->alloc_vreg(entry.result_types[i]);
+            if (!_unreachable) {
+               for (uint32_t i = 0; i < result_count && i < 16; ++i)
+                  entry.merge_vregs[i] = _func->alloc_vreg(entry.result_types[i]);
+               entry.merge_vreg = entry.merge_vregs[0];
             }
-            entry.merge_vreg = entry.merge_vregs[0];
          } else if (result_type != types::pseudo) {
-            entry.merge_vreg = _func->alloc_vreg(result_type);
-            entry.merge_vregs[0] = entry.merge_vreg;
             entry.result_types[0] = result_type;
+            if (!_unreachable) {
+               entry.merge_vreg = _func->alloc_vreg(result_type);
+               entry.merge_vregs[0] = entry.merge_vreg;
+            }
          } else {
-            entry.merge_vreg = ir_vreg_none;
             _pending_result_types = nullptr;
             _pending_result_types_count = 0;
          }
