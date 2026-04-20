@@ -134,9 +134,8 @@ namespace psiber
          slot->consumed.store(false, std::memory_order_relaxed);
 
          slot->run = [](void* p) {
-            auto*      entry = static_cast<Decay*>(p);
-            Scheduler* s     = Scheduler::current();
-            s->spawnFiber(std::move(*entry));
+            auto* entry = static_cast<Decay*>(p);
+            Scheduler::current().spawnFiber(std::move(*entry));
          };
          slot->destroy = [](void* p) {
             static_cast<Decay*>(p)->~Decay();
@@ -169,22 +168,12 @@ namespace psiber
    {
       using R = std::invoke_result_t<F>;
 
-      Scheduler* caller_sched = Scheduler::current();
-      assert(caller_sched && "thread::invoke() must be called from a psiber fiber");
-      Fiber* caller_fiber = caller_sched->currentFiber();
+      auto& caller_sched = Scheduler::current();
+      Fiber* caller_fiber = caller_sched.currentFiber();
       assert(caller_fiber && "thread::invoke() must be called from a psiber fiber");
 
-      // Promise lives on caller's fiber stack (stable while parked).
       fiber_promise<R> promise;
 
-      // Capture pointers to stack-locals and post via the WorkItem pool.
-      // Each work item gets its own fiber, so the callable can yield.
-      //
-      // Stack safety: the captured pointers (func_ptr, promise_ptr)
-      // reference the caller's fiber stack, which is stable while parked.
-      // After set_value()/set_exception() wakes the caller, the work
-      // fiber only touches WorkItem fields (freelist push) afterward,
-      // not the captured pointers.
       F* func_ptr = &func;
       fiber_promise<R>* promise_ptr = &promise;
 
@@ -208,7 +197,7 @@ namespace psiber
       }, policy, timeout);
 
       if (promise.try_register_waiter(caller_fiber))
-         caller_sched->parkCurrentFiber();
+         caller_sched.parkCurrentFiber();
 
       if constexpr (std::is_void_v<R>)
          promise.get();
@@ -257,9 +246,8 @@ namespace psiber
    {
       using R = std::invoke_result_t<F>;
 
-      Scheduler* caller_sched = Scheduler::current();
-      assert(caller_sched && "thread::call() must be called from a psiber fiber");
-      Fiber* caller_fiber = caller_sched->currentFiber();
+      auto& caller_sched = Scheduler::current();
+      Fiber* caller_fiber = caller_sched.currentFiber();
       assert(caller_fiber && "thread::call() must be called from a psiber fiber");
 
       // Zero-allocation cross-thread dispatch: TaskSlotHeader + lambda payload
@@ -321,7 +309,7 @@ namespace psiber
       // Register waiter + park.  CAS ensures we only park if the
       // producer hasn't fulfilled yet.
       if (promise.try_register_waiter(caller_fiber))
-         caller_sched->parkCurrentFiber();
+         caller_sched.parkCurrentFiber();
 
       if constexpr (std::is_void_v<R>)
          promise.get();

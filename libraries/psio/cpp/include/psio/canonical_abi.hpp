@@ -26,6 +26,7 @@
 //   buffer_store_policy  — bump allocator into vector<uint8_t>
 //   buffer_load_policy   — read from span of bytes
 
+#include <psio/wit_resource.hpp>
 #include <psio/wview.hpp>
 
 #include <algorithm>
@@ -34,10 +35,18 @@
 #include <cstring>
 #include <span>
 #include <string>
+#include <tuple>
 #include <variant>
 #include <vector>
 
 namespace psio {
+
+   namespace detail {
+      template <typename T> struct is_psio_own : std::false_type {};
+      template <typename T> struct is_psio_own<psio::own<T>> : std::true_type {};
+      template <typename T> struct is_psio_borrow : std::false_type {};
+      template <typename T> struct is_psio_borrow<psio::borrow<T>> : std::true_type {};
+   }
 
    // ---- Limits ----
 
@@ -80,6 +89,15 @@ namespace psio {
             return 4;  // (i32 ptr, i32 len)
          else if constexpr (is_std_vector_ct<U>::value)
             return 4;  // (i32 ptr, i32 len)
+         else if constexpr (is_psio_own<U>::value || is_psio_borrow<U>::value)
+            return 4;
+         else if constexpr (is_std_tuple<U>::value) {
+            return []<size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t m = 1;
+               ((m = std::max(m, canonical_align_impl<std::tuple_element_t<Is, U>>())), ...);
+               return m;
+            }(std::make_index_sequence<std::tuple_size_v<U>>{});
+         }
          else if constexpr (std::is_same_v<U, std::monostate>)
             return 1;
          else if constexpr (is_std_optional_ct<U>::value) {
@@ -96,6 +114,8 @@ namespace psio {
                return max_a;
             }(std::make_index_sequence<std::variant_size_v<U>>{});
          }
+         else if constexpr (std::is_array_v<U>)
+            return canonical_align_impl<std::remove_extent_t<U>>();
          else if constexpr (Reflected<U>) {
             uint32_t max_align = 1;
             apply_members(
@@ -134,17 +154,32 @@ namespace psio {
             return 8;  // (i32 ptr, i32 len)
          else if constexpr (is_std_vector_ct<U>::value)
             return 8;  // (i32 ptr, i32 len)
+         else if constexpr (is_psio_own<U>::value || is_psio_borrow<U>::value)
+            return 4;
+         else if constexpr (is_std_tuple<U>::value) {
+            return []<size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t offset = 0;
+               auto add_field = [&]<size_t I>() {
+                  constexpr uint32_t fa = canonical_align_impl<std::tuple_element_t<I, U>>();
+                  constexpr uint32_t fs = canonical_size_impl<std::tuple_element_t<I, U>>();
+                  offset = (offset + fa - 1) & ~(fa - 1);
+                  offset += fs;
+               };
+               (add_field.template operator()<Is>(), ...);
+               constexpr uint32_t a = canonical_align_impl<U>();
+               return (offset + a - 1) & ~(a - 1);
+            }(std::make_index_sequence<std::tuple_size_v<U>>{});
+         }
          else if constexpr (std::is_same_v<U, std::monostate>)
             return 0;
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
             constexpr uint32_t ea = canonical_align_impl<E>();
             constexpr uint32_t es = canonical_size_impl<E>();
-            // discriminant (1 byte) + alignment padding + payload
             constexpr uint32_t disc_padded = (1 + ea - 1) & ~(ea - 1);
             constexpr uint32_t total = disc_padded + es;
             constexpr uint32_t a = ea > 1 ? ea : 1;
-            return (total + a - 1) & ~(a - 1);  // trailing pad
+            return (total + a - 1) & ~(a - 1);
          }
          else if constexpr (is_std_variant_v<U>) {
             return []<size_t... Is>(std::index_sequence<Is...>) {
@@ -159,6 +194,11 @@ namespace psio {
                uint32_t payload_off = (disc_size + max_pa - 1) & ~(max_pa - 1);
                return (payload_off + max_ps + va - 1) & ~(va - 1);
             }(std::make_index_sequence<std::variant_size_v<U>>{});
+         }
+         else if constexpr (std::is_array_v<U>) {
+            using E = std::remove_extent_t<U>;
+            constexpr uint32_t n = std::extent_v<U>;
+            return n * canonical_size_impl<E>();
          }
          else if constexpr (Reflected<U>) {
             uint32_t size = 0;
@@ -219,11 +259,18 @@ namespace psio {
             return 2;  // ptr + len
          else if constexpr (is_std_vector_ct<U>::value)
             return 2;  // ptr + len
+         else if constexpr (is_psio_own<U>::value || is_psio_borrow<U>::value)
+            return 1;
+         else if constexpr (is_std_tuple<U>::value) {
+            return []<size_t... Is>(std::index_sequence<Is...>) {
+               return (canonical_flat_count_impl<std::tuple_element_t<Is, U>>() + ...);
+            }(std::make_index_sequence<std::tuple_size_v<U>>{});
+         }
          else if constexpr (std::is_same_v<U, std::monostate>)
             return 0;
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
-            return 1 + canonical_flat_count_impl<E>();  // discriminant + payload
+            return 1 + canonical_flat_count_impl<E>();
          }
          else if constexpr (is_std_variant_v<U>) {
             return []<size_t... Is>(std::index_sequence<Is...>) {
@@ -232,6 +279,10 @@ namespace psio {
                   canonical_flat_count_impl<std::variant_alternative_t<Is, U>>())), ...);
                return 1 + max_count;  // discriminant + max payload
             }(std::make_index_sequence<std::variant_size_v<U>>{});
+         }
+         else if constexpr (std::is_array_v<U>) {
+            using E = std::remove_extent_t<U>;
+            return std::extent_v<U> * canonical_flat_count_impl<E>();
          }
          else if constexpr (Reflected<U>) {
             size_t n = 0;
@@ -422,8 +473,24 @@ namespace psio {
             p.store_u32(dest, arr);
             p.store_u32(dest + 4, count);
          }
+         else if constexpr (is_psio_own<U>::value)
+            p.store_u32(dest, value.handle);
+         else if constexpr (is_psio_borrow<U>::value)
+            p.store_u32(dest, value.handle);
+         else if constexpr (is_std_tuple<U>::value) {
+            [&]<size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t offset = 0;
+               auto store_elem = [&]<size_t I>() {
+                  using E = std::tuple_element_t<I, U>;
+                  constexpr uint32_t fa = canonical_align_impl<E>();
+                  offset = (offset + fa - 1) & ~(fa - 1);
+                  store_field(std::get<I>(value), p, dest + offset);
+                  offset += canonical_size_impl<E>();
+               };
+               (store_elem.template operator()<Is>(), ...);
+            }(std::make_index_sequence<std::tuple_size_v<U>>{});
+         }
          else if constexpr (std::is_same_v<U, std::monostate>) {
-            // Nothing to store
          }
          else if constexpr (is_std_optional_ct<U>::value) {
             using E = typename optional_elem_ct<U>::type;
@@ -460,6 +527,13 @@ namespace psio {
                if constexpr (!std::is_same_v<A, std::monostate>)
                   store_field(v, p, dest + payload_off);
             }, value);
+         }
+         else if constexpr (std::is_array_v<U>) {
+            using E = std::remove_extent_t<U>;
+            constexpr uint32_t n = std::extent_v<U>;
+            constexpr uint32_t es = canonical_size_impl<E>();
+            for (uint32_t i = 0; i < n; i++)
+               store_field(value[i], p, dest + i * es);
          }
          else if constexpr (Reflected<U>) {
             canonical_lower_fields(value, p, dest);
@@ -541,6 +615,24 @@ namespace psio {
                result.push_back(load_field<E>(p, ptr + i * es));
             return result;
          }
+         else if constexpr (is_psio_own<U>::value)
+            return U{p.load_u32(offset)};
+         else if constexpr (is_psio_borrow<U>::value)
+            return U{p.load_u32(offset)};
+         else if constexpr (is_std_tuple<U>::value) {
+            return [&]<size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t off = 0;
+               auto load_elem = [&]<size_t I>() {
+                  using E = std::tuple_element_t<I, U>;
+                  constexpr uint32_t fa = canonical_align_impl<E>();
+                  off = (off + fa - 1) & ~(fa - 1);
+                  E val = load_field<E>(p, offset + off);
+                  off += canonical_size_impl<E>();
+                  return val;
+               };
+               return U{load_elem.template operator()<Is>()...};
+            }(std::make_index_sequence<std::tuple_size_v<U>>{});
+         }
          else if constexpr (std::is_same_v<U, std::monostate>)
             return std::monostate{};
          else if constexpr (is_std_optional_ct<U>::value) {
@@ -571,22 +663,31 @@ namespace psio {
             else
                disc = p.load_u32(offset);
 
-            // Index-dispatch: try each alternative
-            U result;
+            // Index-dispatch: load the active alternative without default-constructing U
+            std::optional<U> result;
             [&]<size_t... Is>(std::index_sequence<Is...>) {
                auto try_alt = [&]<size_t I>() {
                   if (disc == I) {
                      using Alt = std::variant_alternative_t<I, U>;
                      if constexpr (std::is_same_v<Alt, std::monostate>)
-                        result = U(std::in_place_index<I>);
+                        result.emplace(std::in_place_index<I>);
                      else
-                        result = U(std::in_place_index<I>,
+                        result.emplace(std::in_place_index<I>,
                            load_field<Alt>(p, offset + payload_off));
                   }
                };
                (try_alt.template operator()<Is>(), ...);
             }(std::make_index_sequence<N>{});
-            return result;
+            return std::move(*result);
+         }
+         else if constexpr (std::is_array_v<U>) {
+            using E = std::remove_extent_t<U>;
+            constexpr uint32_t n = std::extent_v<U>;
+            constexpr uint32_t es = canonical_size_impl<E>();
+            U arr;
+            for (uint32_t i = 0; i < n; i++)
+               arr[i] = load_field<E>(p, offset + i * es);
+            return arr;
          }
          else if constexpr (Reflected<U>) {
             return canonical_lift_fields<U>(p, offset);
@@ -607,9 +708,21 @@ namespace psio {
             (typename reflect<T>::data_members*)nullptr,
             [&](auto... ptrs) {
                [&]<size_t... Is>(std::index_sequence<Is...>) {
-                  ((result.*ptrs = detail_canonical::load_field<
-                     std::remove_cvref_t<typename MemberPtrType<decltype(ptrs)>::ValueType>
-                  >(p, base + canonical_field_offset_v<T, Is>)), ...);
+                  auto load_member = [&]<size_t I>(auto ptr, std::integral_constant<size_t, I>) {
+                     using VT = std::remove_cvref_t<typename MemberPtrType<decltype(ptr)>::ValueType>;
+                     if constexpr (std::is_array_v<VT>) {
+                        using E = std::remove_extent_t<VT>;
+                        constexpr uint32_t n = std::extent_v<VT>;
+                        constexpr uint32_t es = detail_canonical::canonical_size_impl<E>();
+                        for (uint32_t j = 0; j < n; j++)
+                           (result.*ptr)[j] = detail_canonical::load_field<E>(
+                              p, base + canonical_field_offset_v<T, I> + j * es);
+                     } else {
+                        result.*ptr = detail_canonical::load_field<VT>(
+                           p, base + canonical_field_offset_v<T, I>);
+                     }
+                  };
+                  (load_member(ptrs, std::integral_constant<size_t, Is>{}), ...);
                }(std::index_sequence_for<decltype(ptrs)...>{});
             }
          );

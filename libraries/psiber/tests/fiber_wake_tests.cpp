@@ -10,7 +10,7 @@ using namespace psiber;
 
 TEST_CASE("Same-thread park and wake", "[wake]")
 {
-   auto sched = scheduler_access::make(1);
+   auto& sched = Scheduler::current();
 
    std::atomic<int> step{0};
 
@@ -37,7 +37,7 @@ TEST_CASE("Same-thread park and wake", "[wake]")
 
    // Reset
    step.store(0);
-   auto sched2 = scheduler_access::make(2);
+   auto& sched2 = Scheduler::current();
 
    Fiber* fiber_a = nullptr;
 
@@ -62,7 +62,7 @@ TEST_CASE("Same-thread park and wake", "[wake]")
 
 TEST_CASE("Cross-thread park and wake", "[wake]")
 {
-   auto sched = scheduler_access::make(3);
+   auto& sched = Scheduler::current();
 
    std::atomic<int>  step{0};
    Fiber*            target_fiber = nullptr;
@@ -91,7 +91,7 @@ TEST_CASE("Cross-thread park and wake", "[wake]")
 
 TEST_CASE("Multiple cross-thread wakes batch correctly", "[wake]")
 {
-   auto sched = scheduler_access::make(4);
+   auto& sched = Scheduler::current();
 
    constexpr int    num_fibers = 8;
    std::atomic<int> woken_count{0};
@@ -131,7 +131,7 @@ TEST_CASE("Wake preserves FIFO order", "[wake]")
    // is guaranteed.  Cross-thread wakes can be drained mid-push
    // (the scheduler wakes from poll after the first kevent trigger),
    // making strict FIFO inherently racy.
-   auto sched = scheduler_access::make(5);
+   auto& sched = Scheduler::current();
 
    constexpr int    num_fibers = 4;
    std::vector<int> wake_order;

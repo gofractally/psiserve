@@ -18,10 +18,10 @@ using namespace psiber;
 TEST_CASE("integration: cross-thread task dispatch with promise return", "[integration]")
 {
    // Scheduler A: sender (main scheduler)
-   auto sched_a = scheduler_access::make(400);
+   auto& sched_a = Scheduler::current();
 
    // Scheduler B: receiver (runs on another thread)
-   auto sched_b = scheduler_access::make(401);
+   auto& sched_b = Scheduler::current();
 
    SendQueue sq(4096);
 
@@ -73,8 +73,8 @@ TEST_CASE("integration: cross-thread task dispatch with promise return", "[integ
 
 TEST_CASE("integration: sequential cross-thread dispatches", "[integration]")
 {
-   auto sched_a = scheduler_access::make(410);
-   auto sched_b = scheduler_access::make(411);
+   auto& sched_a = Scheduler::current();
+   auto& sched_b = Scheduler::current();
 
    SendQueue sq(4096);
 
@@ -123,8 +123,8 @@ TEST_CASE("integration: sequential cross-thread dispatches", "[integration]")
 
 TEST_CASE("integration: multiple fibers dispatch to same remote scheduler", "[integration]")
 {
-   auto sched_a = scheduler_access::make(420);
-   auto sched_b = scheduler_access::make(421);
+   auto& sched_a = Scheduler::current();
+   auto& sched_b = Scheduler::current();
 
    constexpr int num_fibers = 4;
 
@@ -264,7 +264,7 @@ TEST_CASE("integration: thread::call works after exception", "[integration][exce
 
 TEST_CASE("integration: fiber_promise propagates exception", "[integration][exception]")
 {
-   auto sched = scheduler_access::make(440);
+   auto& sched = Scheduler::current();
 
    bool caught = false;
    std::string msg;
@@ -302,7 +302,7 @@ TEST_CASE("integration: fiber_promise propagates exception", "[integration][exce
 
 TEST_CASE("integration: fiber_mutex protects cross-fiber state", "[integration]")
 {
-   auto sched = scheduler_access::make(430);
+   auto& sched = Scheduler::current();
 
    fiber_mutex mtx;
    int shared_state = 0;

@@ -31,9 +31,9 @@ TEST_CASE("reactor integration: clean shutdown with active fibers", "[reactor-in
    // Use post() for thread-safe cross-thread fiber spawning.
    // spawnFiber() is not thread-safe — must be called from the scheduler's own thread.
    pool.scheduler(0).post([&]() noexcept {
-      Scheduler::current()->spawnFiber([&]() {
+      Scheduler::current().spawnFiber([&]() {
          started.store(true, std::memory_order_relaxed);
-         Scheduler::current()->sleep(std::chrono::milliseconds{60000});
+         Scheduler::current().sleep(std::chrono::milliseconds{60000});
       });
    });
 
@@ -55,7 +55,7 @@ TEST_CASE("reactor integration: fibers run on pool workers", "[reactor-integrati
    {
       auto& sched = pool.scheduler(i % pool.num_threads());
       sched.post([&]() noexcept {
-         Scheduler::current()->spawnFiber([&]() {
+         Scheduler::current().spawnFiber([&]() {
             completed.fetch_add(1, std::memory_order_relaxed);
          });
       });
@@ -91,9 +91,9 @@ TEST_CASE("reactor integration: fiber migrates between threads", "[reactor-integ
    // Spawn a fiber on worker 0 that records its thread, parks, then
    // records its thread again after waking.
    pool.scheduler(0).post([&]() noexcept {
-      Scheduler::current()->spawnFiber([&]() {
-         auto* sched = Scheduler::current();
-         auto* me    = sched->currentFiber();
+      Scheduler::current().spawnFiber([&]() {
+         auto& sched = Scheduler::current();
+         auto* me    = sched.currentFiber();
          me->home_strand = &s;
          s.enqueue(me);  // become active in the strand
 
@@ -160,7 +160,7 @@ TEST_CASE("reactor integration: strand::post serializes execution", "[reactor-in
                ;
 
             // Yield to give other strand fibers a chance to violate serialization
-            Scheduler::current()->yieldCurrentFiber();
+            Scheduler::current().yieldCurrentFiber();
 
             concurrent.fetch_sub(1, std::memory_order_relaxed);
             completed.fetch_add(1, std::memory_order_relaxed);
@@ -305,7 +305,7 @@ TEST_CASE("reactor stress: many strands many fibers", "[reactor-stress]")
                   ;
 
                // Yield mid-task to give other fibers a chance to violate serialization
-               Scheduler::current()->yieldCurrentFiber();
+               Scheduler::current().yieldCurrentFiber();
 
                st.concurrent.fetch_sub(1, std::memory_order_relaxed);
                st.completed.fetch_add(1, std::memory_order_relaxed);
@@ -355,7 +355,7 @@ TEST_CASE("reactor stress: single worker with strand", "[reactor-stress]")
             while (cur > old_max && !max_concurrent.compare_exchange_weak(old_max, cur))
                ;
 
-            Scheduler::current()->yieldCurrentFiber();
+            Scheduler::current().yieldCurrentFiber();
 
             concurrent.fetch_sub(1);
             completed.fetch_add(1);
@@ -389,7 +389,7 @@ TEST_CASE("reactor stress: strand fibers sleep without releasing strand", "[reac
    pool.scheduler(0).post([&]() noexcept {
       s.post([&]() {
          // First fiber: sleep briefly, then record order
-         Scheduler::current()->sleep(std::chrono::milliseconds{50});
+         Scheduler::current().sleep(std::chrono::milliseconds{50});
          first_order = order_counter.fetch_add(1);
       });
       s.post([&]() {
@@ -426,7 +426,7 @@ TEST_CASE("reactor stress: pooled fiber reuse clears strand affinity", "[reactor
    // Phase 1: spawn a strand fiber, let it complete
    pool.scheduler(0).post([&]() noexcept {
       s.post([&]() {
-         strand_fiber_ptr = Scheduler::current()->currentFiber();
+         strand_fiber_ptr = Scheduler::current().currentFiber();
          // This fiber has home_strand set
       });
    });
@@ -441,8 +441,8 @@ TEST_CASE("reactor stress: pooled fiber reuse clears strand affinity", "[reactor
 
    // Phase 2: spawn a plain fiber (no strand) — it might reuse the pooled fiber
    pool.scheduler(0).post([&]() noexcept {
-      Scheduler::current()->spawnFiber([&]() {
-         auto* me = Scheduler::current()->currentFiber();
+      Scheduler::current().spawnFiber([&]() {
+         auto* me = Scheduler::current().currentFiber();
          reused_fiber_ptr = me;
          // If this is the same fiber as strand_fiber_ptr,
          // home_strand MUST be nullptr (cleared on reuse)
@@ -476,7 +476,7 @@ TEST_CASE("reactor stress: shutdown with active strand fibers", "[reactor-stress
       {
          s.post([&]() {
             started.fetch_add(1);
-            Scheduler::current()->sleep(std::chrono::milliseconds{60000});
+            Scheduler::current().sleep(std::chrono::milliseconds{60000});
          });
       }
    });
@@ -559,7 +559,7 @@ TEST_CASE("reactor stress: multiple independent strands run in parallel", "[reac
                ;
 
             // Sleep to keep multiple strands running concurrently
-            Scheduler::current()->sleep(std::chrono::milliseconds{50});
+            Scheduler::current().sleep(std::chrono::milliseconds{50});
 
             running.fetch_sub(1);
             completed.fetch_add(1);
@@ -644,7 +644,7 @@ TEST_CASE("reactor stress: fiber yield inside strand preserves serialization", "
                int cur = concurrent.fetch_add(1) + 1;
                if (cur > 1)
                   violation = true;
-               Scheduler::current()->yieldCurrentFiber();
+               Scheduler::current().yieldCurrentFiber();
                concurrent.fetch_sub(1);
             }
             completed.fetch_add(1);

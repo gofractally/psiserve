@@ -69,8 +69,7 @@ namespace psiber
 
    bool fiber_mutex::try_lock()
    {
-      Scheduler* sched = Scheduler::current();
-      Fiber*     self  = sched ? sched->currentFiber() : nullptr;
+      Fiber*     self  = Scheduler::current().currentFiber();
       Fiber*     expected = nullptr;
       return _owner.compare_exchange_strong(expected, self, std::memory_order_acquire);
    }
@@ -154,8 +153,7 @@ namespace psiber
       _queue_lock.lock();
       if (!_owner)
       {
-         Scheduler* sched = Scheduler::current();
-         _owner           = sched ? sched->currentFiber() : nullptr;
+         _owner           = Scheduler::current().currentFiber();
          _owner_timestamp = tx_timestamp;
          _queue_lock.unlock();
          return true;

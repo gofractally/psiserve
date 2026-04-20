@@ -326,7 +326,8 @@ namespace detail_runtime {
 
    template <typename IfaceImpl, std::size_t I, typename HostImpl>
    void register_one_host_method(host_function_table& table,
-                                  std::string_view iface_name)
+                                  std::string_view iface_name,
+                                  HostImpl* host_ptr)
    {
       constexpr auto method_ptr = std::get<I>(IfaceImpl::methods);
       using MTypes = detail::member_fn_types<
@@ -336,12 +337,14 @@ namespace detail_runtime {
 
       if constexpr (MTypes::all_scalar) {
          table.template add<method_ptr>(mod_name, fn_name);
+         table.entries_mutable().back().host_override = host_ptr;
       } else {
          // Canonical path: 16-wide (i64×16) → i64 with type-specialized
          // lift/lower compiled at this template instantiation.
          host_function_table::entry e;
-         e.module_name = mod_name;
-         e.func_name   = fn_name;
+         e.module_name    = mod_name;
+         e.func_name      = fn_name;
+         e.host_override  = host_ptr;
          e.signature.params.assign(16, types::i64);
          e.signature.ret = {types::i64};
 
@@ -395,17 +398,17 @@ namespace detail_runtime {
       }
    }
 
-   template <typename IfaceImpl, std::size_t... Is>
+   template <typename IfaceImpl, typename HostImpl, std::size_t... Is>
    void register_iface_methods(host_function_table& table,
                                 std::string_view iface_name,
+                                HostImpl* host_ptr,
                                 std::index_sequence<Is...>)
    {
-      using HostImpl = typename IfaceImpl::host;
-      (register_one_host_method<IfaceImpl, Is, HostImpl>(table, iface_name), ...);
+      (register_one_host_method<IfaceImpl, Is, HostImpl>(table, iface_name, host_ptr), ...);
    }
 
-   template <typename IfaceImpl>
-   void register_one_interface(host_function_table& table)
+   template <typename IfaceImpl, typename HostImpl>
+   void register_one_interface(host_function_table& table, HostImpl* host_ptr)
    {
       using iface_tag  = typename IfaceImpl::tag;
       using iface_info = ::psio::detail::interface_info<iface_tag>;
@@ -413,6 +416,7 @@ namespace detail_runtime {
          std::tuple_size_v<std::remove_cvref_t<decltype(IfaceImpl::methods)>>;
       register_iface_methods<IfaceImpl>(
          table, std::string_view{iface_info::name},
+         host_ptr,
          std::make_index_sequence<n>{});
    }
 }
@@ -524,13 +528,12 @@ void runtime::bind(module_handle& consumer_mod, instance& provider) {
 template <typename HostImpl>
 void runtime::provide(module_handle& mod, HostImpl& host) {
    if (!mod) return;
-   mod.set_host_ptr(&host);
 
    if constexpr (requires { typename ::psio::detail::impl_info<HostImpl>::interfaces; })
    {
       using interfaces = typename ::psio::detail::impl_info<HostImpl>::interfaces;
       [&]<typename... IfaceImpls>(std::tuple<IfaceImpls...>*) {
-         (detail_runtime::register_one_interface<IfaceImpls>(mod.table()), ...);
+         (detail_runtime::register_one_interface<IfaceImpls>(mod.table(), &host), ...);
       }(static_cast<interfaces*>(nullptr));
    }
 }

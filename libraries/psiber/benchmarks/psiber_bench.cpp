@@ -98,7 +98,7 @@ static void bench_raw_context_switch()
 static void bench_fiber_create_join()
 {
    constexpr int N = 10'000;
-   auto sched = scheduler_access::make(1002);
+   auto& sched = Scheduler::current();
 
    int count = 0;
 
@@ -132,7 +132,7 @@ static void bench_fiber_create_join()
 static void bench_context_switch()
 {
    constexpr int N = 100'000;
-   auto sched = scheduler_access::make(1001);
+   auto& sched = Scheduler::current();
 
    int count = 0;
 
@@ -164,7 +164,7 @@ static void bench_context_switch()
 static void bench_fiber_mutex()
 {
    constexpr int N = 500'000;
-   auto sched = scheduler_access::make(1003);
+   auto& sched = Scheduler::current();
 
    fiber_mutex mtx;
    int count = 0;
@@ -191,7 +191,7 @@ static void bench_fiber_mutex_contended()
 {
    constexpr int N           = 100'000;
    constexpr int num_fibers  = 10;
-   auto sched = scheduler_access::make(1011);
+   auto& sched = Scheduler::current();
 
    fiber_mutex mtx;
    int count = 0;
@@ -241,7 +241,7 @@ static void bench_fiber_mutex_contended()
 static void bench_async_future()
 {
    constexpr int N = 10'000;
-   auto sched = scheduler_access::make(1006);
+   auto& sched = Scheduler::current();
 
    int count = 0;
 
@@ -329,7 +329,7 @@ static void bench_tcp_echo_throughput()
 {
    constexpr int    iterations  = 50'000;
    constexpr size_t msg_size    = 64;
-   auto sched = scheduler_access::make(1004);
+   auto& sched = Scheduler::current();
 
    fiber_promise<uint16_t> port_promise;
    ssize_t                 total_bytes = 0;
@@ -388,7 +388,7 @@ static void bench_tcp_throughput_bulk()
    constexpr size_t chunk_size  = 64 * 1024;
    constexpr size_t total_size  = 64 * 1024 * 1024;  // 64 MB
    constexpr int    num_chunks  = total_size / chunk_size;
-   auto sched = scheduler_access::make(1005);
+   auto& sched = Scheduler::current();
 
    fiber_promise<uint16_t> port_promise;
    ssize_t                 total_received = 0;
@@ -459,7 +459,7 @@ static void bench_post_saturation()
                   receiver.post([&received]() noexcept {
                      received.fetch_add(1, std::memory_order_relaxed);
                   });
-                  Scheduler::current()->sleep(std::chrono::milliseconds{5});
+                  Scheduler::current().sleep(std::chrono::milliseconds{5});
                }
             }, "producer"));
       }

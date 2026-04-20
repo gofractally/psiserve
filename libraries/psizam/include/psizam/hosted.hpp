@@ -223,26 +223,34 @@ auto make_canonical_host_handler()
 
             rv = static_cast<uint64_t>(retptr);
          }
-         else if constexpr (psio::Reflected<U>) {
-            // Record return: lower fields into guest return area
-            char* guest_mem = static_cast<char*>(tc.get_interface().get_memory());
+         else if constexpr (psio::Reflected<U> ||
+                            psio::is_std_variant_v<U> ||
+                            psio::detail::is_std_vector_ct<U>::value ||
+                            psio::detail::is_std_optional_ct<U>::value ||
+                            psio::is_std_tuple<U>::value) {
+            // Complex return: lower fields into guest return area.
+            // Handles records, variants (WIT result<T,E>), vectors, optionals.
             uint32_t retptr = static_cast<uint32_t>(slots[lift.idx].i64);
 
-            // Use a store policy that writes to guest memory
+            // Store policy that writes to guest memory, re-reading the
+            // base pointer after each alloc (cabi_realloc may grow memory).
             struct guest_store {
-               char* mem;
-               uint32_t alloc(uint32_t, uint32_t) { return 0; }
-               void store_u8(uint32_t off, uint8_t v)   { std::memcpy(mem+off, &v, 1); }
-               void store_u16(uint32_t off, uint16_t v) { std::memcpy(mem+off, &v, 2); }
-               void store_u32(uint32_t off, uint32_t v) { std::memcpy(mem+off, &v, 4); }
-               void store_u64(uint32_t off, uint64_t v) { std::memcpy(mem+off, &v, 8); }
-               void store_f32(uint32_t off, float v)    { std::memcpy(mem+off, &v, 4); }
-               void store_f64(uint32_t off, double v)   { std::memcpy(mem+off, &v, 8); }
+               TC* tc;
+               char* mem() { return static_cast<char*>(tc->get_interface().get_memory()); }
+               uint32_t alloc(uint32_t align, uint32_t size) {
+                  return host_cabi_realloc(align, size);
+               }
+               void store_u8(uint32_t off, uint8_t v)   { std::memcpy(mem()+off, &v, 1); }
+               void store_u16(uint32_t off, uint16_t v) { std::memcpy(mem()+off, &v, 2); }
+               void store_u32(uint32_t off, uint32_t v) { std::memcpy(mem()+off, &v, 4); }
+               void store_u64(uint32_t off, uint64_t v) { std::memcpy(mem()+off, &v, 8); }
+               void store_f32(uint32_t off, float v)    { std::memcpy(mem()+off, &v, 4); }
+               void store_f64(uint32_t off, double v)   { std::memcpy(mem()+off, &v, 8); }
                void store_bytes(uint32_t off, const char* data, uint32_t len) {
-                  if (len > 0) std::memcpy(mem+off, data, len);
+                  if (len > 0) std::memcpy(mem()+off, data, len);
                }
             };
-            guest_store sp{guest_mem};
+            guest_store sp{&tc};
             psio::canonical_lower_fields(result, sp, retptr);
             rv = static_cast<uint64_t>(retptr);
          }

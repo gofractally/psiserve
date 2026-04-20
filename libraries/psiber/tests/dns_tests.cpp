@@ -12,7 +12,7 @@ using namespace psiber;
 
 TEST_CASE("dns: resolve localhost", "[dns]")
 {
-   auto sched = scheduler_access::make(800);
+   auto& sched = Scheduler::current();
 
    bool resolved = false;
 
@@ -57,7 +57,7 @@ TEST_CASE("dns: resolve localhost", "[dns]")
 
 TEST_CASE("dns: resolve dns.google", "[dns][network]")
 {
-   auto sched = scheduler_access::make(801);
+   auto& sched = Scheduler::current();
 
    bool resolved = false;
 
@@ -92,7 +92,7 @@ TEST_CASE("dns: resolve dns.google", "[dns][network]")
 
 TEST_CASE("dns: non-existent domain throws", "[dns]")
 {
-   auto sched = scheduler_access::make(802);
+   auto& sched = Scheduler::current();
 
    bool threw = false;
 
@@ -118,7 +118,7 @@ TEST_CASE("dns: non-existent domain throws", "[dns]")
 
 TEST_CASE("dns: multiple sequential resolutions", "[dns][network]")
 {
-   auto sched = scheduler_access::make(803);
+   auto& sched = Scheduler::current();
 
    int count = 0;
 

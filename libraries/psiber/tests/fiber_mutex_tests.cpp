@@ -14,7 +14,7 @@ using namespace psiber;
 
 TEST_CASE("fiber_mutex basic lock/unlock", "[mutex]")
 {
-   auto sched = scheduler_access::make(30);
+   auto& sched = Scheduler::current();
 
    fiber_mutex mtx;
    int         counter = 0;
@@ -37,7 +37,7 @@ TEST_CASE("fiber_mutex basic lock/unlock", "[mutex]")
 
 TEST_CASE("fiber_mutex FIFO ordering under contention", "[mutex]")
 {
-   auto sched = scheduler_access::make(31);
+   auto& sched = Scheduler::current();
 
    fiber_mutex      mtx;
    std::vector<int> order;
@@ -72,7 +72,7 @@ TEST_CASE("fiber_mutex FIFO ordering under contention", "[mutex]")
 
 TEST_CASE("fiber_mutex try_lock", "[mutex]")
 {
-   auto sched = scheduler_access::make(32);
+   auto& sched = Scheduler::current();
 
    fiber_mutex mtx;
    bool        try_result = false;
@@ -94,7 +94,7 @@ TEST_CASE("fiber_mutex try_lock", "[mutex]")
 
 TEST_CASE("fiber_shared_mutex concurrent readers", "[mutex]")
 {
-   auto sched = scheduler_access::make(33);
+   auto& sched = Scheduler::current();
 
    fiber_shared_mutex mtx;
    std::atomic<int>   concurrent{0};
@@ -119,7 +119,7 @@ TEST_CASE("fiber_shared_mutex concurrent readers", "[mutex]")
 
 TEST_CASE("fiber_shared_mutex writer excludes readers", "[mutex]")
 {
-   auto sched = scheduler_access::make(34);
+   auto& sched = Scheduler::current();
 
    fiber_shared_mutex mtx;
    std::vector<int>   order;
@@ -145,7 +145,7 @@ TEST_CASE("fiber_shared_mutex writer excludes readers", "[mutex]")
 
 TEST_CASE("fiber_promise same-thread", "[promise]")
 {
-   auto sched = scheduler_access::make(35);
+   auto& sched = Scheduler::current();
 
    fiber_promise<int> promise;
    int                result = 0;
@@ -167,7 +167,7 @@ TEST_CASE("fiber_promise same-thread", "[promise]")
 
 TEST_CASE("fiber_promise<void>", "[promise]")
 {
-   auto sched = scheduler_access::make(36);
+   auto& sched = Scheduler::current();
 
    fiber_promise<void> promise;
    bool                signaled = false;
@@ -189,7 +189,7 @@ TEST_CASE("fiber_promise<void>", "[promise]")
 
 TEST_CASE("fiber_promise cross-thread", "[promise]")
 {
-   auto sched = scheduler_access::make(37);
+   auto& sched = Scheduler::current();
 
    fiber_promise<int> promise;
    int                result = 0;
@@ -211,7 +211,7 @@ TEST_CASE("fiber_promise cross-thread", "[promise]")
 
 TEST_CASE("fiber_tx_mutex wound-wait: older wounds younger", "[wound-wait]")
 {
-   auto sched = scheduler_access::make(38);
+   auto& sched = Scheduler::current();
 
    fiber_tx_mutex mtx;
    bool           younger_wounded = false;
@@ -246,7 +246,7 @@ TEST_CASE("fiber_tx_mutex wound-wait: older wounds younger", "[wound-wait]")
 
 TEST_CASE("fiber_tx_mutex younger waits for older", "[wound-wait]")
 {
-   auto sched = scheduler_access::make(39);
+   auto& sched = Scheduler::current();
 
    fiber_tx_mutex   mtx;
    std::vector<int> order;

@@ -120,6 +120,32 @@ struct package_of
 
 // ── PSIO_PACKAGE(name, version) ──────────────────────────────────────────
 
+// PSIO_CURRENT_PACKAGE_ is a preprocessor macro that expands to the
+// package_info type for the active package. PSIO_INTERFACE and
+// PSIO_WORLD reference it to record which package owns an interface.
+//
+// Because C preprocessor directives (#define/#undef) cannot appear
+// inside macro expansions, PSIO_PACKAGE cannot automatically update
+// PSIO_CURRENT_PACKAGE_. After each PSIO_PACKAGE call, the caller
+// must immediately follow with #undef/#define:
+//
+//   PSIO_PACKAGE(wasi_io, "0.2.3");
+//   #undef  PSIO_CURRENT_PACKAGE_
+//   #define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(wasi_io)
+//   ... PSIO_INTERFACE calls for wasi_io ...
+//
+//   PSIO_PACKAGE(wasi_http, "0.2.3");
+//   #undef  PSIO_CURRENT_PACKAGE_
+//   #define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(wasi_http)
+//   ... PSIO_INTERFACE calls for wasi_http ...
+//
+// Initial (sentinel) definition — overwritten by the first caller.
+#define PSIO_CURRENT_PACKAGE_ void
+
+// Helper: expands to the package_info type for a given package NAME.
+#define PSIO_PACKAGE_TYPE_(NAME) \
+   ::psio::detail::package_info<::psio::FixedString{#NAME}>
+
 #define PSIO_PACKAGE(NAME, VERSION)                                             \
    namespace psio::detail                                                       \
    {                                                                            \
@@ -129,10 +155,13 @@ struct package_of
          static constexpr ::psio::FixedString name    = #NAME;                  \
          static constexpr ::psio::FixedString version = VERSION;                \
       };                                                                        \
-      inline constexpr package_marker<::psio::FixedString{#NAME}> _psio_pkg{};  \
-   }                                                                            \
-   using psio_current_package =                                                 \
-       ::psio::detail::package_info<::psio::FixedString{#NAME}>
+      inline constexpr package_marker<::psio::FixedString{#NAME}>               \
+          _psio_pkg_##NAME{};                                                   \
+   }
+// !! After PSIO_PACKAGE, you must also write:
+//   #undef  PSIO_CURRENT_PACKAGE_
+//   #define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(NAME)
+// to make PSIO_INTERFACE calls bind to this package.
 
 // ── PSIO_INTERFACE(name, types(…), funcs(…)) ─────────────────────────────
 //
@@ -231,7 +260,7 @@ struct package_of
       struct interface_info<::NAME>                                                  \
       {                                                                              \
          static constexpr ::psio::FixedString name = #NAME;                          \
-         using package                             = ::psio_current_package;         \
+         using package                             = PSIO_CURRENT_PACKAGE_;         \
          using types                               = TYPES_TUPLE;                    \
          using func_types = ::std::tuple<PSIO_SEQ_TO_VA_ARGS(                       \
              BOOST_PP_SEQ_TRANSFORM(PSIO_IFACE_FN_TYPE, ::NAME, FUNCS_SEQ))>;        \
@@ -316,7 +345,7 @@ struct package_of
       struct world_info<BOOST_PP_CAT(NAME, _world_tag)>                        \
       {                                                                        \
          static constexpr ::psio::FixedString name = #NAME;                    \
-         using package                             = ::psio_current_package;   \
+         using package                             = PSIO_CURRENT_PACKAGE_;   \
          using imports                             = ::std::tuple<IMPORTS_VA>; \
          using exports                             = ::std::tuple<EXPORTS_VA>; \
       };                                                                       \

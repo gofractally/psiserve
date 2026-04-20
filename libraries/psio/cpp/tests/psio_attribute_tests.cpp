@@ -284,7 +284,7 @@ TEST_CASE("schema: variant type carries attributes slot",
 // ────────────────────────────────────────────────────────────────────────
 //  FracPack round-trip: aggregate-type attributes survive pack/unpack
 //
-//  Before dropping clio_unwrap_packable on Object/Struct/Variant, these
+//  Before dropping psio_unwrap_packable on Object/Struct/Variant, these
 //  types serialized as bare vector<Member> — their attributes field was
 //  in-memory only. Now they pack as proper extensible structs and the
 //  attributes tail rides the wire.

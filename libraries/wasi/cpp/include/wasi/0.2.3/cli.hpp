@@ -45,6 +45,8 @@ struct environment
 };
 
 PSIO_PACKAGE(wasi_cli, "0.2.3");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(wasi_cli)
 
 PSIO_INTERFACE(environment,
                types(),

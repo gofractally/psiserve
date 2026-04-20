@@ -36,6 +36,8 @@
 #include <psio/wit_owned.hpp>
 
 PSIO_PACKAGE(hello, "0.1.0");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(hello)
 
 // point — record type shared across the host/guest boundary. PSIO_REFLECT
 // gives psio's canonical_* machinery the member list it needs to compute

@@ -39,8 +39,8 @@ namespace psiber
    /// fiber to yield rather than busy-waiting — letting other fibers
    /// make progress while the lock holder completes its critical section.
    ///
-   /// Falls back to pure spin if Scheduler::current() is nullptr
-   /// (called from a non-scheduler thread, e.g. main thread).
+   /// Falls back to pure spin if no fiber is currently running
+   /// (called outside a fiber context).
    class spin_yield_lock
    {
      public:

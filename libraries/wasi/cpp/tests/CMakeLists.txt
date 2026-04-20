@@ -24,3 +24,24 @@ target_compile_definitions(wasi_cpp_tests PRIVATE
 )
 
 add_test(NAME wasi_cpp_tests COMMAND wasi_cpp_tests)
+
+# ── wasi-host compile test ────────────────────────────────────────────────────
+# Verifies that the host implementation headers compile correctly.
+
+add_executable(wasi_host_tests
+   main.cpp
+   io_host_tests.cpp
+   clocks_random_host_tests.cpp
+   sockets_host_tests.cpp
+   filesystem_host_tests.cpp
+)
+
+target_link_libraries(wasi_host_tests PRIVATE wasi-host psio)
+
+target_include_directories(wasi_host_tests PRIVATE
+   ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include
+)
+
+target_compile_features(wasi_host_tests PRIVATE cxx_std_23)
+
+add_test(NAME wasi_host_tests COMMAND wasi_host_tests)

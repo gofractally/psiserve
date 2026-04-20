@@ -15,7 +15,7 @@ using namespace psiber;
 
 TEST_CASE("fiber_tx_mutex: holder checks wounded and aborts", "[wound-wait][deadlock]")
 {
-   auto sched = scheduler_access::make(200);
+   auto& sched = Scheduler::current();
 
    fiber_tx_mutex mtx;
    bool           younger_threw = false;
@@ -61,7 +61,7 @@ TEST_CASE("fiber_tx_mutex: holder checks wounded and aborts", "[wound-wait][dead
 
 TEST_CASE("fiber_tx_mutex: three transactions, no deadlock", "[wound-wait][deadlock]")
 {
-   auto sched = scheduler_access::make(201);
+   auto& sched = Scheduler::current();
 
    // Three mutexes, three transactions
    fiber_tx_mutex mtx_a, mtx_b, mtx_c;
@@ -138,7 +138,7 @@ TEST_CASE("fiber_tx_mutex: three transactions, no deadlock", "[wound-wait][deadl
 
 TEST_CASE("fiber_shared_mutex: writer eventually acquires despite readers", "[deadlock][mutex]")
 {
-   auto sched = scheduler_access::make(202);
+   auto& sched = Scheduler::current();
 
    fiber_shared_mutex mtx;
    bool               writer_done = false;
@@ -174,7 +174,7 @@ TEST_CASE("fiber_shared_mutex: writer eventually acquires despite readers", "[de
 
 TEST_CASE("fiber_shared_mutex: new readers queue behind pending writer", "[deadlock][mutex]")
 {
-   auto sched = scheduler_access::make(203);
+   auto& sched = Scheduler::current();
 
    fiber_shared_mutex mtx;
    std::vector<int>   order;
@@ -223,7 +223,7 @@ TEST_CASE("fiber_shared_mutex: new readers queue behind pending writer", "[deadl
 
 TEST_CASE("fiber_mutex: opposite order doesn't deadlock with cooperative scheduling", "[deadlock][mutex]")
 {
-   auto sched = scheduler_access::make(204);
+   auto& sched = Scheduler::current();
 
    fiber_mutex mtx_a, mtx_b;
    int         result = 0;
@@ -257,7 +257,7 @@ TEST_CASE("fiber_mutex: opposite order doesn't deadlock with cooperative schedul
 
 TEST_CASE("fiber_tx_mutex: opposite order resolved by wound-wait", "[wound-wait][deadlock]")
 {
-   auto sched = scheduler_access::make(205);
+   auto& sched = Scheduler::current();
 
    fiber_tx_mutex mtx_a, mtx_b;
    std::atomic<int> completed{0};

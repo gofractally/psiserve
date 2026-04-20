@@ -93,6 +93,7 @@ namespace psizam {
          std::string        module_name;
          std::string        func_name;
          void*              raw_func_ptr = nullptr; ///< Raw C function address for direct JIT calls
+         void*              host_override = nullptr; ///< Per-entry host pointer; when set, overrides module-level host
       };
 
       host_function_table() = default;
@@ -145,11 +146,12 @@ namespace psizam {
          PSIZAM_ASSERT(mapped_idx < _entries.size(), wasm_link_exception,
                        "unresolved imported function");
          auto& e = _entries[mapped_idx];
+         void* h = e.host_override ? e.host_override : host;
          if (e.trampoline)
-            return e.trampoline(host, args, memory);
+            return e.trampoline(h, args, memory);
          PSIZAM_ASSERT(e.slow_dispatch, wasm_link_exception,
                        "unresolved imported function");
-         return e.slow_dispatch(host, args, memory);
+         return e.slow_dispatch(h, args, memory);
       }
 
       const entry& get_entry(uint32_t idx) const {
@@ -159,6 +161,7 @@ namespace psizam {
       }
       uint32_t size() const { return static_cast<uint32_t>(_entries.size()); }
       const std::vector<entry>& entries() const { return _entries; }
+      std::vector<entry>& entries_mutable() { return _entries; }
 
       /// Add a pre-built entry (for custom trampolines, e.g. WASI host).
       void add_entry(entry e) {

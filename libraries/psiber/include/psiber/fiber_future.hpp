@@ -31,12 +31,10 @@ namespace psiber
          assert(_promise && "fiber_future::get() called on empty future");
          if (!_promise->is_ready())
          {
-            Scheduler* sched = Scheduler::current();
-            assert(sched && sched->currentFiber());
-            // CAS(nullptr → fiber): if we win, park and wait for wake.
-            // If CAS fails (kFulfilled), producer already completed — skip park.
-            if (_promise->try_register_waiter(sched->currentFiber()))
-               sched->parkCurrentFiber();
+            auto& sched = Scheduler::current();
+            assert(sched.currentFiber());
+            if (_promise->try_register_waiter(sched.currentFiber()))
+               sched.parkCurrentFiber();
          }
          if constexpr (std::is_void_v<T>)
             _promise->get();

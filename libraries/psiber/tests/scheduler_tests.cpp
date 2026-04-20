@@ -10,24 +10,22 @@
 
 using namespace psiber;
 
-TEST_CASE("Scheduler::current() is thread-local", "[scheduler]")
+TEST_CASE("Scheduler::current() returns same instance per thread", "[scheduler]")
 {
-   REQUIRE(Scheduler::current() == nullptr);
-   auto sched = scheduler_access::make(20);
+   auto& sched = Scheduler::current();
 
    Scheduler* captured = nullptr;
    sched.spawnFiber([&]() {
-      captured = Scheduler::current();
+      captured = &Scheduler::current();
    });
    sched.run();
 
    REQUIRE(captured == &sched);
-   REQUIRE(Scheduler::current() == nullptr);  // cleared after run()
 }
 
 TEST_CASE("Basic fiber execution", "[scheduler]")
 {
-   auto sched = scheduler_access::make(21);
+   auto& sched = Scheduler::current();
 
    int result = 0;
    sched.spawnFiber([&]() { result = 42; });
@@ -38,7 +36,7 @@ TEST_CASE("Basic fiber execution", "[scheduler]")
 
 TEST_CASE("Multiple fibers execute in order", "[scheduler]")
 {
-   auto sched = scheduler_access::make(22);
+   auto& sched = Scheduler::current();
 
    std::vector<int> order;
 
@@ -53,7 +51,7 @@ TEST_CASE("Multiple fibers execute in order", "[scheduler]")
 
 TEST_CASE("Fiber sleep and resume", "[scheduler]")
 {
-   auto sched = scheduler_access::make(23);
+   auto& sched = Scheduler::current();
 
    std::vector<int> order;
 
@@ -75,7 +73,7 @@ TEST_CASE("Fiber sleep and resume", "[scheduler]")
 
 TEST_CASE("Priority queues: high before normal before low", "[scheduler]")
 {
-   auto sched = scheduler_access::make(24);
+   auto& sched = Scheduler::current();
 
    std::vector<int> order;
    Fiber* fiber_ptrs[3] = {};
@@ -117,7 +115,7 @@ TEST_CASE("Priority queues: high before normal before low", "[scheduler]")
 
 TEST_CASE("Scheduler interrupt for clean shutdown", "[scheduler]")
 {
-   auto sched = scheduler_access::make(25);
+   auto& sched = Scheduler::current();
 
    std::atomic<bool> fiber_started{false};
 
@@ -138,7 +136,7 @@ TEST_CASE("Scheduler interrupt for clean shutdown", "[scheduler]")
 
 TEST_CASE("Cross-thread postTask executes on scheduler thread", "[scheduler]")
 {
-   auto sched = scheduler_access::make(26);
+   auto& sched = Scheduler::current();
 
    std::atomic<int>     result{0};
    std::atomic<bool>    task_done{false};

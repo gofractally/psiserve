@@ -66,6 +66,10 @@ if(NOT PSISERVE_WASI)
    add_subdirectory(external/quill)
 endif()
 add_subdirectory(libraries/wasi)
+if(NOT PSISERVE_WASI)
+   add_subdirectory(libraries/pcrypt)
+   add_subdirectory(libraries/pfs)
+endif()
 
 add_subdirectory(libraries/psizam)
 

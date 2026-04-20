@@ -21,6 +21,8 @@
 // ── Shared interface declarations (same as hello_world/shared.hpp) ──
 
 PSIO_PACKAGE(hello, "0.1.0");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(hello)
 
 struct point {
    uint32_t x{};

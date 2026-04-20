@@ -121,7 +121,7 @@ TEST_CASE("SendQueue wrap-around", "[send_queue]")
 
 TEST_CASE("SendQueue cross-thread task dispatch", "[send_queue]")
 {
-   auto sched = scheduler_access::make(10);
+   auto& sched = Scheduler::current();
 
    std::atomic<int> result{0};
    SendQueue        sq(4096);

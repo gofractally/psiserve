@@ -147,7 +147,6 @@ namespace psiber
    // Forward declarations for friend access
    class thread;
    class reactor;
-   struct scheduler_access;  // test/benchmark helper
 
    template <typename Engine>
    class basic_scheduler
@@ -158,14 +157,13 @@ namespace psiber
 
       friend class thread;
       friend class reactor;
-      friend struct scheduler_access;
 
      public:
       ~basic_scheduler();
 
-      /// Thread-local access.  Returns the Scheduler running on this
-      /// OS thread, or nullptr if none.
-      static basic_scheduler* current();
+      /// Thread-local access.  Returns the Scheduler for this OS thread.
+      /// Creates one on first access if none exists (lazy init).
+      static basic_scheduler& current();
 
       // ── Fiber lifecycle ─────────────────────────────────────────────
 
@@ -379,14 +377,6 @@ namespace psiber
 
    /// Default scheduler type — uses the platform I/O engine.
    using Scheduler = basic_scheduler<>;
-
-   /// Test/benchmark helper — grants access to the private constructor.
-   /// Not part of the public API.  Library consumers should use
-   /// psiber::thread, which owns a Scheduler internally.
-   struct scheduler_access
-   {
-      static Scheduler make(uint32_t index = 0) { return Scheduler(index); }
-   };
 
    // Re-export detail types used in the public API
    using detail::Fiber;

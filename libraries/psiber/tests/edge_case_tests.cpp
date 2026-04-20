@@ -15,7 +15,7 @@ using namespace psiber;
 
 TEST_CASE("scheduler: multiple park/wake cycles on same fiber", "[edge][wake]")
 {
-   auto sched = scheduler_access::make(300);
+   auto& sched = Scheduler::current();
 
    constexpr int cycles = 50;
    int           count  = 0;
@@ -49,7 +49,7 @@ TEST_CASE("scheduler: multiple park/wake cycles on same fiber", "[edge][wake]")
 
 TEST_CASE("fiber_promise: value set before get (no parking needed)", "[edge][promise]")
 {
-   auto sched = scheduler_access::make(301);
+   auto& sched = Scheduler::current();
 
    int result = 0;
 
@@ -124,7 +124,7 @@ TEST_CASE("SendQueue: multiple reclaim cycles reuse ring space", "[edge][send_qu
 
 TEST_CASE("scheduler: interrupt wakes all blocked/parked fibers", "[edge][scheduler]")
 {
-   auto sched = scheduler_access::make(302);
+   auto& sched = Scheduler::current();
 
    bool fiber1_resumed = false;
    bool fiber2_resumed = false;
@@ -170,7 +170,7 @@ TEST_CASE("scheduler: interrupt wakes all blocked/parked fibers", "[edge][schedu
 
 TEST_CASE("fiber_mutex: try_lock fails when another fiber holds lock", "[edge][mutex]")
 {
-   auto sched = scheduler_access::make(303);
+   auto& sched = Scheduler::current();
 
    fiber_mutex mtx;
    bool        try_result = true;
@@ -195,7 +195,7 @@ TEST_CASE("fiber_mutex: try_lock fails when another fiber holds lock", "[edge][m
 
 TEST_CASE("fiber_promise: cross-thread with string value", "[edge][promise]")
 {
-   auto sched = scheduler_access::make(304);
+   auto& sched = Scheduler::current();
 
    std::string result;
 
@@ -219,7 +219,7 @@ TEST_CASE("fiber_promise: cross-thread with string value", "[edge][promise]")
 
 TEST_CASE("scheduler: fiber spawning child fibers", "[edge][scheduler]")
 {
-   auto sched = scheduler_access::make(305);
+   auto& sched = Scheduler::current();
 
    std::vector<int> order;
 
@@ -249,7 +249,7 @@ TEST_CASE("scheduler: fiber spawning child fibers", "[edge][scheduler]")
 
 TEST_CASE("scheduler: 100 fibers complete cleanly", "[edge][scheduler]")
 {
-   auto sched = scheduler_access::make(306);
+   auto& sched = Scheduler::current();
 
    std::atomic<int> completed{0};
 

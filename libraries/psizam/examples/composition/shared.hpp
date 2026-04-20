@@ -14,6 +14,8 @@
 #include <psio/wit_owned.hpp>
 
 PSIO_PACKAGE(composition, "0.1.0");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(composition)
 
 // ── Host-provided interface ─────────────────────────────────────────
 struct env

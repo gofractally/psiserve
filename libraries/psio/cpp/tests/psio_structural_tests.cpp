@@ -19,6 +19,8 @@
 // Declare the package at global (file) scope — the macro expansion
 // re-opens psio::detail, which is only reachable from the global scope.
 PSIO_PACKAGE(psibase, "0.3.0");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(psibase)
 
 TEST_CASE("PSIO_PACKAGE: package_info specialization carries name and version",
           "[psio][structural][package]")
@@ -28,20 +30,20 @@ TEST_CASE("PSIO_PACKAGE: package_info specialization carries name and version",
    REQUIRE(std::string_view{info::version} == "0.3.0");
 }
 
-TEST_CASE("PSIO_PACKAGE: psio_current_package alias resolves to the specialization",
+TEST_CASE("PSIO_PACKAGE: PSIO_CURRENT_PACKAGE_ macro resolves to the specialization",
           "[psio][structural][package]")
 {
    STATIC_REQUIRE(
-       std::is_same_v<psio_current_package,
+       std::is_same_v<PSIO_CURRENT_PACKAGE_,
                       psio::detail::package_info<psio::FixedString{"psibase"}>>);
-   REQUIRE(std::string_view{psio_current_package::name} == "psibase");
-   REQUIRE(std::string_view{psio_current_package::version} == "0.3.0");
+   REQUIRE(std::string_view{PSIO_CURRENT_PACKAGE_::name} == "psibase");
+   REQUIRE(std::string_view{PSIO_CURRENT_PACKAGE_::version} == "0.3.0");
 }
 
 TEST_CASE("PSIO_PACKAGE: marker variable has matching FixedString tag",
           "[psio][structural][package]")
 {
-   STATIC_REQUIRE(std::string_view{psio::detail::_psio_pkg.name} == "psibase");
+   STATIC_REQUIRE(std::string_view{psio::detail::_psio_pkg_psibase.name} == "psibase");
 }
 
 // ── PSIO_INTERFACE(...) ──────────────────────────────────────────────────

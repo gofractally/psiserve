@@ -11,7 +11,7 @@ using namespace psiber;
 
 TEST_CASE("signal: fiber wakes on SIGUSR1", "[signal]")
 {
-   auto sched = scheduler_access::make(700);
+   auto& sched = Scheduler::current();
 
    sched.registerSignal(SIGUSR1);
 
@@ -36,7 +36,7 @@ TEST_CASE("signal: fiber wakes on SIGUSR1", "[signal]")
 
 TEST_CASE("signal: cross-thread signal delivery", "[signal]")
 {
-   auto sched = scheduler_access::make(701);
+   auto& sched = Scheduler::current();
 
    sched.registerSignal(SIGUSR2);
 
@@ -63,7 +63,7 @@ TEST_CASE("signal: cross-thread signal delivery", "[signal]")
 
 TEST_CASE("signal: multiple SIGUSR1 in sequence", "[signal]")
 {
-   auto sched = scheduler_access::make(702);
+   auto& sched = Scheduler::current();
 
    sched.registerSignal(SIGUSR1);
 

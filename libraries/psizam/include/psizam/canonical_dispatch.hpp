@@ -67,6 +67,16 @@ namespace psizam {
       };
 
       template <>
+      struct flat_count_impl<std::monostate> {
+         static constexpr size_t value = 0;
+      };
+
+      template <typename... Ts>
+      struct flat_count_impl<std::tuple<Ts...>> {
+         static constexpr size_t value = (flat_count_impl<Ts>::value + ...);
+      };
+
+      template <>
       struct flat_count_impl<psio::owned<std::string, psio::wit>> {
          static constexpr size_t value = 2;
       };
@@ -169,6 +179,17 @@ namespace psizam {
          p.emit_i32(arr);
          p.emit_i32(count);
       }
+      else if constexpr (psio::detail::is_psio_own<U>::value)
+         p.emit_i32(value.handle);
+      else if constexpr (psio::detail::is_psio_borrow<U>::value)
+         p.emit_i32(value.handle);
+      else if constexpr (std::is_same_v<U, std::monostate>) {
+      }
+      else if constexpr (psio::is_std_tuple<U>::value) {
+         [&]<size_t... Is>(std::index_sequence<Is...>) {
+            (canonical_lower_flat(std::get<Is>(value), p), ...);
+         }(std::make_index_sequence<std::tuple_size_v<U>>{});
+      }
       else if constexpr (is_std_optional_ct<U>::value) {
          using E = typename optional_elem_ct<U>::type;
          if (value.has_value()) {
@@ -180,6 +201,32 @@ namespace psizam {
             for (size_t i = 0; i < payload_count; i++)
                p.emit_i64(0);
          }
+      }
+      else if constexpr (psio::is_std_variant_v<U>) {
+         constexpr size_t N = std::variant_size_v<U>;
+         constexpr size_t max_payload = []<size_t... Is>(std::index_sequence<Is...>) {
+            size_t m = 0;
+            ((m = std::max(m, psio::detail_canonical::canonical_flat_count_impl<
+               std::variant_alternative_t<Is, U>>())), ...);
+            return m;
+         }(std::make_index_sequence<N>{});
+         p.emit_i32(static_cast<uint32_t>(value.index()));
+         size_t emitted = 0;
+         std::visit([&](const auto& v) {
+            using A = std::remove_cvref_t<decltype(v)>;
+            if constexpr (!std::is_same_v<A, std::monostate>) {
+               constexpr size_t fc = psio::detail_canonical::canonical_flat_count_impl<A>();
+               canonical_lower_flat(v, p);
+               emitted = fc;
+            }
+         }, value);
+         for (size_t i = emitted; i < max_payload; i++)
+            p.emit_i64(0);
+      }
+      else if constexpr (std::is_array_v<U>) {
+         constexpr uint32_t n = std::extent_v<U>;
+         for (uint32_t i = 0; i < n; i++)
+            canonical_lower_flat(value[i], p);
       }
       else if constexpr (psio::Reflected<U>) {
          psio::apply_members(
@@ -286,6 +333,17 @@ namespace psizam {
             result.push_back(psio::detail_canonical::load_field<E>(p, ptr + i * es));
          return result;
       }
+      else if constexpr (psio::detail::is_psio_own<U>::value)
+         return U{p.next_i32()};
+      else if constexpr (psio::detail::is_psio_borrow<U>::value)
+         return U{p.next_i32()};
+      else if constexpr (std::is_same_v<U, std::monostate>)
+         return std::monostate{};
+      else if constexpr (psio::is_std_tuple<U>::value) {
+         return [&]<size_t... Is>(std::index_sequence<Is...>) {
+            return U{canonical_lift_flat<std::tuple_element_t<Is, U>>(p)...};
+         }(std::make_index_sequence<std::tuple_size_v<U>>{});
+      }
       else if constexpr (is_std_optional_ct<U>::value) {
          using E = typename optional_elem_ct<U>::type;
          uint32_t disc = p.next_i32();
@@ -298,14 +356,60 @@ namespace psizam {
             return std::optional<E>(std::nullopt);
          }
       }
+      else if constexpr (psio::is_std_variant_v<U>) {
+         constexpr size_t N = std::variant_size_v<U>;
+         constexpr size_t max_payload = []<size_t... Is>(std::index_sequence<Is...>) {
+            size_t m = 0;
+            ((m = std::max(m, psio::detail_canonical::canonical_flat_count_impl<
+               std::variant_alternative_t<Is, U>>())), ...);
+            return m;
+         }(std::make_index_sequence<N>{});
+         uint32_t disc = p.next_i32();
+         std::optional<U> result;
+         size_t consumed = 0;
+         [&]<size_t... Is>(std::index_sequence<Is...>) {
+            auto try_alt = [&]<size_t I>() {
+               if (disc == I) {
+                  using Alt = std::variant_alternative_t<I, U>;
+                  if constexpr (std::is_same_v<Alt, std::monostate>)
+                     result.emplace(std::in_place_index<I>);
+                  else {
+                     result.emplace(std::in_place_index<I>, canonical_lift_flat<Alt>(p));
+                     consumed = psio::detail_canonical::canonical_flat_count_impl<Alt>();
+                  }
+               }
+            };
+            (try_alt.template operator()<Is>(), ...);
+         }(std::make_index_sequence<N>{});
+         for (size_t i = consumed; i < max_payload; i++)
+            (void)p.next_i64();
+         return std::move(*result);
+      }
+      else if constexpr (std::is_array_v<U>) {
+         constexpr uint32_t n = std::extent_v<U>;
+         using E = std::remove_extent_t<U>;
+         U arr;
+         for (uint32_t i = 0; i < n; i++)
+            arr[i] = canonical_lift_flat<E>(p);
+         return arr;
+      }
       else if constexpr (psio::Reflected<U>) {
          U result{};
          psio::apply_members(
             (typename psio::reflect<U>::data_members*)nullptr,
             [&](auto... ptrs) {
-               ((result.*ptrs = canonical_lift_flat<
-                  std::remove_cvref_t<typename psio::MemberPtrType<decltype(ptrs)>::ValueType>
-               >(p)), ...);
+               auto lift_member = [&]<typename Ptr>(Ptr ptr) {
+                  using VT = std::remove_cvref_t<typename psio::MemberPtrType<Ptr>::ValueType>;
+                  if constexpr (std::is_array_v<VT>) {
+                     using E = std::remove_extent_t<VT>;
+                     constexpr uint32_t n = std::extent_v<VT>;
+                     for (uint32_t j = 0; j < n; j++)
+                        (result.*ptr)[j] = canonical_lift_flat<E>(p);
+                  } else {
+                     result.*ptr = canonical_lift_flat<VT>(p);
+                  }
+               };
+               (lift_member(ptrs), ...);
             }
          );
          return result;

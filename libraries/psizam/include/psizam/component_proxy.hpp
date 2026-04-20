@@ -434,11 +434,11 @@ namespace psizam {
             return std::string(
                reinterpret_cast<const char*>(static_cast<uintptr_t>(ptr)), len);
          }
-         else if constexpr (psio::Reflected<U>) {
-            // Record return — lift from canonical layout in return area
-            export_lift_policy lift(nullptr, ret_area);
-            // The return area IS the base; fields are at canonical offsets
-            // relative to ret_area. Use psio::canonical_lift_fields.
+         else if constexpr (psio::Reflected<U> ||
+                            psio::is_std_variant_v<U> ||
+                            psio::detail::is_std_optional_ct<U>::value ||
+                            psio::detail::is_std_vector_ct<U>::value ||
+                            psio::is_std_tuple<U>::value) {
             struct retarea_load_policy {
                const uint8_t* base;
                uint8_t  load_u8(uint32_t off)  { return base[off]; }

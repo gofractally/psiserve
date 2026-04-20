@@ -164,12 +164,11 @@ namespace psiber
 
       auto* obj = new (mem) Decay(std::forward<F>(fn));
 
-      auto* sched = Scheduler::current();
-      assert(sched && "strand::post() requires a Scheduler context");
+      auto& sched = Scheduler::current();
 
-      sched->spawnFiber([this, obj]() {
-         auto* s  = Scheduler::current();
-         auto* me = s->currentFiber();
+      sched.spawnFiber([this, obj]() {
+         auto& s  = Scheduler::current();
+         auto* me = s.currentFiber();
 
          // Enter strand serialization.  enter() sets us as active
          // or queues us behind the current active fiber.  Unlike
@@ -180,7 +179,7 @@ namespace psiber
             // Queued behind another fiber — park until our turn.
             // home_strand is still nullptr so the run loop won't
             // call strand::release() when we park.
-            s->parkCurrentFiber();
+            s.parkCurrentFiber();
          }
 
          // Now we're the active fiber in this strand

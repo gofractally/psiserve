@@ -12,6 +12,8 @@
 #include <psio/wit_resource.hpp>
 
 PSIO_PACKAGE(runtime_resource, "0.1.0");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(runtime_resource)
 
 // ── Resource types (inherit wit_resource for own<T>/borrow<T>) ─────
 

@@ -61,7 +61,7 @@ TEST_CASE("fiber_mutex stress: multiple schedulers contending on same mutex", "[
    for (int t = 0; t < num_threads; ++t)
    {
       threads.emplace_back([&, t]() {
-         auto sched = scheduler_access::make(100 + t);
+         auto& sched = Scheduler::current();
 
          for (int f = 0; f < fibers_per_thread; ++f)
          {
@@ -99,7 +99,7 @@ TEST_CASE("fiber_shared_mutex stress: readers and writers across threads", "[str
    for (int t = 0; t < num_threads; ++t)
    {
       threads.emplace_back([&, t]() {
-         auto sched = scheduler_access::make(110 + t);
+         auto& sched = Scheduler::current();
 
          // 2 writers
          for (int w = 0; w < 2; ++w)
@@ -145,7 +145,7 @@ TEST_CASE("spin_yield_lock stress: fibers yield on contention", "[stress][spin_l
 {
    spin_yield_lock lock;
    int             counter = 0;
-   auto sched = scheduler_access::make(120);
+   auto& sched = Scheduler::current();
 
    constexpr int num_fibers  = 8;
    constexpr int iterations  = 1000;
@@ -170,7 +170,7 @@ TEST_CASE("spin_yield_lock stress: fibers yield on contention", "[stress][spin_l
 
 TEST_CASE("SendQueue stress: multiple threads sending to same scheduler", "[stress][send_queue]")
 {
-   auto sched = scheduler_access::make(130);
+   auto& sched = Scheduler::current();
 
    std::atomic<int>  task_count{0};
    constexpr int     num_senders    = 4;
@@ -224,7 +224,7 @@ TEST_CASE("SendQueue stress: multiple threads sending to same scheduler", "[stre
 
 TEST_CASE("Cross-thread wake stress: rapid park/wake cycles", "[stress][wake]")
 {
-   auto sched = scheduler_access::make(140);
+   auto& sched = Scheduler::current();
 
    constexpr int      cycles = 100;
    std::atomic<int>   completed{0};
@@ -261,7 +261,7 @@ TEST_CASE("Cross-thread wake stress: rapid park/wake cycles", "[stress][wake]")
 
 static void run_post_stress(int num_producers, int posts_per_producer)
 {
-   auto sched = scheduler_access::make(150);
+   auto& sched = Scheduler::current();
    sched.setWorkHeapLimit(num_producers * posts_per_producer);  // unlimited for stress
 
    std::atomic<int> received{0};
@@ -374,7 +374,7 @@ TEST_CASE("post-to-self: fiber posts to its own scheduler", "[stress][post][path
    // Verifies that a fiber can post() to its own scheduler without deadlock.
    // Each posted callable gets its own fiber, so even if the posting fiber
    // parks, the posted callable still executes.
-   auto sched = scheduler_access::make(200);
+   auto& sched = Scheduler::current();
 
    std::atomic<int> received{0};
    constexpr int    N = 100;
@@ -401,7 +401,7 @@ TEST_CASE("re-entrant post: work fiber calls post()", "[stress][post][pathologic
    // This exercises the re-entrant path: the callable acquires a WorkItem
    // from the freelist, fills it, and CAS-pushes it onto _work_head.
    // The scheduler will pick it up and spawn another fiber for it.
-   auto sched = scheduler_access::make(201);
+   auto& sched = Scheduler::current();
 
    std::atomic<int> depth0{0};
    std::atomic<int> depth1{0};
@@ -440,7 +440,7 @@ TEST_CASE("post chaining: callable spawns fiber then posts follow-up", "[stress]
    // Tests the pattern: post() → do work → post() follow-up.
    // Each callable gets its own fiber with full context, so it can
    // spawn fibers and yield between posts.
-   auto sched = scheduler_access::make(202);
+   auto& sched = Scheduler::current();
 
    std::atomic<int> spawned{0};
    std::atomic<int> followed_up{0};
@@ -481,7 +481,7 @@ TEST_CASE("pool exhaustion: heap overflow under pressure", "[stress][post][patho
    constexpr int    posts_per_fiber = 200;  // 8 * 200 = 1600 > pool size (256)
    constexpr int    total = fibers_count * posts_per_fiber;
 
-   auto sched = scheduler_access::make(203);
+   auto& sched = Scheduler::current();
    sched.setWorkHeapLimit(total);
 
    std::atomic<int> received{0};
@@ -516,7 +516,7 @@ TEST_CASE("cross-thread pool exhaustion: multiple threads saturate one receiver"
    constexpr int    posts_per_thread = 500;
    constexpr int    total = num_threads * posts_per_thread;
 
-   auto sched = scheduler_access::make(204);
+   auto& sched = Scheduler::current();
    sched.setWorkHeapLimit(total);
 
    std::atomic<int> received{0};
@@ -554,7 +554,7 @@ TEST_CASE("shutdown with pending work: work fibers exit cleanly on scheduler sto
    // No crash, no hang, no assertion failure.
    for (int trial = 0; trial < 10; ++trial)
    {
-      auto sched = scheduler_access::make(210 + trial);
+      auto& sched = Scheduler::current();
 
       std::atomic<int> count{0};
 
@@ -642,7 +642,7 @@ TEST_CASE("thread::spawn(): from fiber context across threads", "[stress][spawn]
       }
 
       while (completed.load(std::memory_order_acquire) < N)
-         Scheduler::current()->sleep(std::chrono::milliseconds{1});
+         Scheduler::current().sleep(std::chrono::milliseconds{1});
    }, "spawn-source");
 
    source.quit();
@@ -803,7 +803,7 @@ TEST_CASE("thread::async(): callable can yield", "[async]")
    psiber::thread caller([&]() {
       auto fut = worker.async([&]() {
          // This runs on its own fiber — yielding is fine
-         Scheduler::current()->sleep(std::chrono::milliseconds{5});
+         Scheduler::current().sleep(std::chrono::milliseconds{5});
          return 123;
       });
 
@@ -865,7 +865,7 @@ TEST_CASE("invoke() callable can yield without error", "[invoke][yield]")
    psiber::thread caller([&]() {
       // invoke() callables run on their own fiber and can yield
       int result = worker.invoke([&]() -> int {
-         Scheduler::current()->sleep(std::chrono::milliseconds{1});
+         Scheduler::current().sleep(std::chrono::milliseconds{1});
          return 42;
       });
       REQUIRE(result == 42);
@@ -894,19 +894,19 @@ TEST_CASE("post() oversized callable: between 49-128 bytes", "[post][multi-slot]
    std::atomic<int> count{0};
 
    thread worker([&]() {
-      auto* sched = Scheduler::current();
+      auto& sched = Scheduler::current();
       constexpr int N = 100;
       for (int i = 0; i < N; ++i)
       {
          sized_callable<80> big;
          big.data[0] = static_cast<char>(i);
-         sched->post([big, &count]() noexcept {
+         sched.post([big, &count]() noexcept {
             (void)big;
             count.fetch_add(1, std::memory_order_relaxed);
          });
       }
       // Let work fibers complete
-      sched->sleep(std::chrono::milliseconds(50));
+      sched.sleep(std::chrono::milliseconds(50));
    });
 
    worker.quit();
@@ -921,18 +921,18 @@ TEST_CASE("post() heap callable: callable > 128 bytes", "[post][multi-slot]")
    std::atomic<int> count{0};
 
    thread worker([&]() {
-      auto* sched = Scheduler::current();
+      auto& sched = Scheduler::current();
       constexpr int N = 50;
       for (int i = 0; i < N; ++i)
       {
          sized_callable<200> huge;
          huge.data[0] = static_cast<char>(i);
-         sched->post([huge, &count]() noexcept {
+         sched.post([huge, &count]() noexcept {
             (void)huge;
             count.fetch_add(1, std::memory_order_relaxed);
          });
       }
-      sched->sleep(std::chrono::milliseconds(50));
+      sched.sleep(std::chrono::milliseconds(50));
    });
 
    worker.quit();
@@ -946,32 +946,32 @@ TEST_CASE("post() mixed sizes: single and heap-callable interleaved", "[post][mu
    std::atomic<int> large_count{0};
 
    thread worker([&]() {
-      auto* sched = Scheduler::current();
+      auto& sched = Scheduler::current();
 
       for (int i = 0; i < 20; ++i)
       {
          // Single slot — callable fits in 48-byte payload
-         sched->post([&small_count, &sched]() noexcept {
+         sched.post([&small_count, &sched]() noexcept {
             (void)sched;
             small_count.fetch_add(1, std::memory_order_relaxed);
          });
 
          // Single slot + heap-allocated callable (80 > 48 bytes)
          sized_callable<80> med;
-         sched->post([med, &medium_count]() noexcept {
+         sched.post([med, &medium_count]() noexcept {
             (void)med;
             medium_count.fetch_add(1, std::memory_order_relaxed);
          });
 
          // Single slot + heap-allocated callable (200 > 48 bytes)
          sized_callable<200> big;
-         sched->post([big, &large_count]() noexcept {
+         sched.post([big, &large_count]() noexcept {
             (void)big;
             large_count.fetch_add(1, std::memory_order_relaxed);
          });
       }
 
-      sched->sleep(std::chrono::milliseconds(50));
+      sched.sleep(std::chrono::milliseconds(50));
    });
 
    worker.quit();
@@ -985,7 +985,7 @@ TEST_CASE("post() mixed sizes: single and heap-callable interleaved", "[post][mu
 TEST_CASE("post_overflow::fail throws pool_exhausted", "[post][overflow]")
 {
    // Exhaust the pool, then verify that fail policy throws.
-   auto sched = scheduler_access::make(300);
+   auto& sched = Scheduler::current();
 
    std::atomic<int> received{0};
    bool caught = false;
@@ -1024,7 +1024,7 @@ TEST_CASE("post_overflow::fail throws pool_exhausted", "[post][overflow]")
 TEST_CASE("post_overflow::heap succeeds past pool capacity", "[post][overflow]")
 {
    // Exhaust the pool, then verify heap policy keeps working.
-   auto sched = scheduler_access::make(301);
+   auto& sched = Scheduler::current();
 
    std::atomic<int> received{0};
    constexpr int N = 300;  // > 256 pool slots
@@ -1050,7 +1050,7 @@ TEST_CASE("post_overflow::block parks until slot available", "[post][overflow]")
    // Fill both pool (256) and heap (set to 0 so block can't overflow),
    // then post with block policy.  The fiber parks until work fibers
    // complete and free pool slots.
-   auto sched = scheduler_access::make(302);
+   auto& sched = Scheduler::current();
    sched.setWorkHeapLimit(0);  // no heap overflow — forces parking
 
    std::atomic<int> received{0};
@@ -1084,7 +1084,7 @@ TEST_CASE("post_overflow::block throws on timeout", "[post][overflow]")
 {
    // Fill the pool with long-sleeping fibers that won't free slots
    // before the timeout.  Heap limit 0 forces the block path to park.
-   auto sched = scheduler_access::make(303);
+   auto& sched = Scheduler::current();
    sched.setWorkHeapLimit(0);
 
    bool timed_out = false;
@@ -1119,7 +1119,7 @@ TEST_CASE("post_overflow::block throws on timeout", "[post][overflow]")
 
 TEST_CASE("setWorkHeapLimit enforces heap overflow cap", "[post][overflow]")
 {
-   auto sched = scheduler_access::make(304);
+   auto& sched = Scheduler::current();
 
    // Allow only 10 heap-overflow items
    sched.setWorkHeapLimit(10);

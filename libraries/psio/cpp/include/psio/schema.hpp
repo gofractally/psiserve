@@ -144,13 +144,13 @@ namespace psio
       }
 
       template <typename T>
-      T& clio_unwrap_packable(Box<T>& box)
+      T& psio_unwrap_packable(Box<T>& box)
       {
          return *box;
       }
 
       template <typename T>
-      const T& clio_unwrap_packable(const Box<T>& box)
+      const T& psio_unwrap_packable(const Box<T>& box)
       {
          return *box;
       }
@@ -250,11 +250,11 @@ namespace psio
          from_json(*type.type, stream);
       }
 
-      inline auto& clio_unwrap_packable(List& type)
+      inline auto& psio_unwrap_packable(List& type)
       {
          return *type.type;
       }
-      inline auto& clio_unwrap_packable(const List& type)
+      inline auto& psio_unwrap_packable(const List& type)
       {
          return *type.type;
       }
@@ -274,11 +274,11 @@ namespace psio
          from_json(*type.type, stream);
       }
 
-      inline auto& clio_unwrap_packable(Option& type)
+      inline auto& psio_unwrap_packable(Option& type)
       {
          return *type.type;
       }
-      inline auto& clio_unwrap_packable(const Option& type)
+      inline auto& psio_unwrap_packable(const Option& type)
       {
          return *type.type;
       }
@@ -337,12 +337,12 @@ namespace psio
          from_json(type.members, stream);
       }
 
-      inline auto& clio_unwrap_packable(Tuple& type)
+      inline auto& psio_unwrap_packable(Tuple& type)
       {
          return type.members;
       }
 
-      inline auto& clio_unwrap_packable(const Tuple& type)
+      inline auto& psio_unwrap_packable(const Tuple& type)
       {
          return type.members;
       }
@@ -362,11 +362,11 @@ namespace psio
          from_json(type.type, stream);
       }
 
-      inline auto& clio_unwrap_packable(FracPack& type)
+      inline auto& psio_unwrap_packable(FracPack& type)
       {
          return *type.type;
       }
-      inline auto& clio_unwrap_packable(const FracPack& type)
+      inline auto& psio_unwrap_packable(const FracPack& type)
       {
          return *type.type;
       }
@@ -390,11 +390,11 @@ namespace psio
          from_json(type.type, stream);
       }
 
-      inline auto& clio_unwrap_packable(Type& type)
+      inline auto& psio_unwrap_packable(Type& type)
       {
          return type.type;
       }
-      inline auto& clio_unwrap_packable(const Type& type)
+      inline auto& psio_unwrap_packable(const Type& type)
       {
          return type.type;
       }
@@ -444,12 +444,12 @@ namespace psio
       {
          from_json(type.value, stream);
       }
-      inline auto& clio_unwrap_packable(AnyType& type)
+      inline auto& psio_unwrap_packable(AnyType& type)
       {
          return type.value;
       }
       template <std::same_as<AnyType> T>
-      auto& clio_unwrap_packable(const T& type)
+      auto& psio_unwrap_packable(const T& type)
       {
          return type.value;
       }
@@ -1949,7 +1949,7 @@ namespace psio
                }
                else if constexpr (PackableWrapper<T>)
                {
-                  schema.insert(name, insert<std::remove_cvref_t<decltype(clio_unwrap_packable(
+                  schema.insert(name, insert<std::remove_cvref_t<decltype(psio_unwrap_packable(
                                           std::declval<T&>()))>>());
                }
                else if constexpr (is_nested_wrapper_v<T>)

@@ -11,10 +11,20 @@ namespace psiber
    using FiberState     = detail::FiberState;
    using TaskSlotHeader = detail::TaskSlotHeader;
 
-   static thread_local Scheduler* t_current = nullptr;
+   static thread_local std::unique_ptr<Scheduler> t_owned;
+   static thread_local Scheduler*                 t_current = nullptr;
 
    template <typename Engine>
-   basic_scheduler<Engine>* basic_scheduler<Engine>::current() { return static_cast<basic_scheduler*>(t_current); }
+   basic_scheduler<Engine>& basic_scheduler<Engine>::current()
+   {
+      if (!t_current)
+      {
+         if (!t_owned)
+            t_owned = std::unique_ptr<Scheduler>(new Scheduler());
+         t_current = t_owned.get();
+      }
+      return *static_cast<basic_scheduler*>(t_current);
+   }
 
    template <typename Engine>
    basic_scheduler<Engine>::basic_scheduler(uint32_t index)
@@ -94,6 +104,7 @@ namespace psiber
    template <typename Engine>
    void basic_scheduler<Engine>::run()
    {
+      auto* prev_current = t_current;
       t_current = this;
       _io.registerUserEvent(_index);
 
@@ -346,7 +357,7 @@ namespace psiber
          }
       }
 
-      t_current = nullptr;
+      t_current = prev_current;
    }
 
    template <typename Engine>
@@ -806,10 +817,10 @@ namespace psiber
       // Spin limit exceeded -- yield fiber if possible, else keep spinning
       while (!try_lock())
       {
-         Scheduler* sched = Scheduler::current();
-         if (sched && sched->currentFiber())
+         auto& sched = Scheduler::current();
+         if (sched.currentFiber())
          {
-            sched->yieldCurrentFiber();
+            sched.yieldCurrentFiber();
          }
          else
          {
