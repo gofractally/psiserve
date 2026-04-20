@@ -4,6 +4,7 @@
 
 #include <pfs/store.hpp>
 #include <psitri/database.hpp>
+#include <psitri/database_impl.hpp>
 
 #include <psizam/error_codes.hpp>
 #include <psizam/host_function_table.hpp>

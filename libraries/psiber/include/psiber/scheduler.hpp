@@ -571,10 +571,10 @@ namespace psiber
                // Either a slot frees (wakePoolWaiter sets state to
                // Ready, "cancelling" the timer) or the timer fires
                // (pollAndUnblock sets state to Ready).
-               auto* sched = basic_scheduler::current();
-               if (sched == this && sched->currentFiber())
+               auto& sched = basic_scheduler::current();
+               if (&sched == this && sched.currentFiber())
                {
-                  Fiber* fiber = sched->currentFiber();
+                  Fiber* fiber = sched.currentFiber();
 
                   // Add to pool wait list (FIFO)
                   fiber->next_blocked = nullptr;

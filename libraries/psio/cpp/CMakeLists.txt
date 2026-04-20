@@ -84,6 +84,11 @@ if(PSIO_ENABLE_BENCHMARKS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
          benchmarks/bench_protobuf.cpp
          benchmarks/bench_schemas.pb.cc)
       target_link_libraries(psio_bench_protobuf PRIVATE protobuf::libprotobuf)
+      find_package(absl QUIET)
+      if(absl_FOUND)
+         target_link_libraries(psio_bench_protobuf PRIVATE
+            absl::log_internal_check_op absl::strings absl::status)
+      endif()
       target_include_directories(psio_bench_protobuf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
       target_compile_options(psio_bench_protobuf PRIVATE -O2)
       message(STATUS "Protobuf found — building psio_bench_protobuf")

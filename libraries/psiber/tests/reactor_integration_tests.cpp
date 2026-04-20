@@ -101,7 +101,7 @@ TEST_CASE("reactor integration: fiber migrates between threads", "[reactor-integ
          migrating_fiber = me;
          phase1_done.store(true, std::memory_order_release);
 
-         sched->parkCurrentFiber();
+         sched.parkCurrentFiber();
 
          tid_after = std::this_thread::get_id();
          phase2_done.store(true, std::memory_order_release);
