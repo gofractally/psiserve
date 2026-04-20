@@ -8,7 +8,7 @@ agent: psiserve-agent-psio
 branch: main
 created: 2026-04-19
 depends_on: []
-blocks: []
+blocks: [psizam-gas-state-redesign]
 ---
 
 ## Description
@@ -26,3 +26,12 @@ unsuitable for consensus — this replaces it with inline back-edge metering.
 Wall-clock (watchdog.hpp / SIGALRM) is explicitly non-consensus-eligible.
 Gas metering doesn't capture native host costs; consensus trusts producer to
 bill those separately.
+
+## Follow-on
+Phase 4 (heavy-opcode dynamic charges) is closed via
+`psizam-gas-heavy-opcodes`. The next piece of work is
+`psizam-gas-state-redesign` — replaces the atomic-counter model with a
+`gas_state { consumed, atomic deadline }` layout and per-mode codegen
+(DTD register-pinning for non-interrupt modes, back-edge deadline refresh
+for interrupt mode). Driven by the collision between the old
+`gas_handler_t` in `gas.hpp` and the new one in `runtime.hpp`.
