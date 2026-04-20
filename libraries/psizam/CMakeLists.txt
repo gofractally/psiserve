@@ -90,6 +90,14 @@ else()
    target_link_libraries(psizam INTERFACE Threads::Threads psio)
 endif()
 
+# ucc::typed_int is the type-safe int primitive used by gas_units and the
+# runtime_limits typed aliases. Available when psizam builds inside the
+# psiserve tree (psitri provides ucc as a subdirectory target). Standalone
+# psizam builds must vendor an equivalent header at the same path.
+if(TARGET ucc)
+   target_link_libraries(psizam INTERFACE ucc)
+endif()
+
 if(PSIZAM_ENABLE_SOFTFLOAT)
    target_compile_definitions(psizam INTERFACE PSIZAM_SOFTFLOAT)
    target_link_libraries(psizam INTERFACE softfloat)
