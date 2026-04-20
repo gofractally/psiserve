@@ -23,6 +23,7 @@
 //   auto inst = rt.instantiate(tmpl);
 //   inst.as<greeter>().run(5);
 
+#include <psizam/gas.hpp>
 #include <psizam/host_function_table.hpp>
 
 #include <cstddef>
@@ -58,27 +59,9 @@ struct archive_bytes {
    explicit archive_bytes(std::span<const uint8_t> d) : data(d) {}
 };
 
-// ═════════════════════════════════════════════════════════════════════
-// Gas state — monotonic consumed counter + moving deadline
-// ═════════════════════════════════════════════════════════════════════
-//
-// Lives in host memory (not WASM linear memory). During JIT execution,
-// consumed/deadline are held in dedicated registers and spilled at
-// call boundaries. Shared across instances via shared_ptr when the
-// policy groups them under one gas counter.
-
-struct gas_state {
-   uint64_t consumed = 0;     // monotonic, only increments
-   uint64_t deadline = 0;     // handler advances this on yield/restock
-};
-
-// ═════════════════════════════════════════════════════════════════════
-// Gas handler — called when consumed >= deadline
-// ═════════════════════════════════════════════════════════════════════
-
-struct execution_context_base;  // forward
-
-using gas_handler_t = void (*)(gas_state* gas, void* user_data);
+// gas_state + gas_handler_t live in <psizam/gas.hpp> — the unified
+// public surface for the metering subsystem. See the design in
+// libraries/psizam/docs/gas-metering-design.md.
 
 // ═════════════════════════════════════════════════════════════════════
 // Instance policy

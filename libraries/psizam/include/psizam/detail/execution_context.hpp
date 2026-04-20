@@ -211,52 +211,44 @@ namespace psizam::detail {
 
       // ── Gas metering (see libraries/psizam/docs/gas-metering-design.md) ──
       //
-      // Storage for the per-instance gas counter, exhaustion handler,
-      // and insertion-strategy selector. In Phase 2a the interpreter's
-      // call() checks the strategy and, when != off, does a fetch_sub
-      // + negative-test on the counter. Per-opcode cost is a placeholder
-      // (1 per call) pending CFG-based cost computation in Phase 2b.
+      // Stored as a single gas_state struct so handlers and JIT codegen
+      // see a stable layout: `consumed` (plain u64, owner-only) and
+      // `deadline` (atomic u64, any thread may store).
       //
-      // gas_counter() returns by reference so external threads can issue
-      // stores directly (e.g. `gas_counter().store(-1, relaxed)` for
-      // external interrupt).
-      inline std::atomic<int64_t>&       gas_counter()       { return _gas_counter; }
-      inline const std::atomic<int64_t>& gas_counter() const { return _gas_counter; }
-      inline gas_handler_t               gas_handler() const { return _gas_handler; }
-      inline gas_insertion_strategy      gas_strategy() const { return _gas_strategy; }
-      inline void set_gas_handler(gas_handler_t h) { _gas_handler = h; }
-      inline void set_gas_strategy(gas_insertion_strategy s) { _gas_strategy = s; }
-      inline void set_gas_budget(int64_t n) { _gas_counter.store(n, std::memory_order_relaxed); }
-      inline void set_gas_slice(int64_t n)  { _gas_slice = n; }
-      inline int64_t gas_slice() const { return _gas_slice; }
-      // Refill convenience used by yield / timeout-check handlers.
-      inline void restock_gas(int64_t n) { _gas_counter.store(n, std::memory_order_relaxed); }
+      // gas().deadline.store(v, relaxed) is how external threads issue
+      // interrupts (store 0 to trap ASAP); gas_charge() bumps consumed
+      // monotonically and invokes the handler when it crosses deadline.
+      inline gas_state&       gas()       { return _gas; }
+      inline const gas_state& gas() const { return _gas; }
 
-      // Runtime-switchable atomicity for the gas counter. False (default)
-      // = non-atomic decrement (single-fiber / deterministic / DoS-limit
-      // cases; ~1 ns per check on JIT). True = atomic fetch_sub, required
-      // only when another thread may store(-1) to trigger an external
-      // interrupt. JITs read this flag per prologue; setting it at
-      // instance creation is sufficient.
-      inline bool gas_atomic() const { return _gas_atomic; }
-      inline void set_gas_atomic(bool a) { _gas_atomic = a; }
+      inline gas_units gas_consumed() const {
+         return gas_units{_gas.consumed};
+      }
+      inline gas_units gas_deadline() const {
+         return gas_units{_gas.deadline.load(std::memory_order_relaxed)};
+      }
+      inline void set_gas_deadline(gas_units v) {
+         _gas.deadline.store(*v, std::memory_order_relaxed);
+      }
+      // Convenience: reset consumed to 0 and set deadline to `budget`.
+      inline void set_gas_budget(gas_units budget) {
+         _gas.consumed = 0;
+         _gas.deadline.store(*budget, std::memory_order_relaxed);
+      }
+      inline void set_gas_handler(gas_handler_t h, void* user_data = nullptr) {
+         _gas.handler   = h;
+         _gas.user_data = user_data;
+      }
+      inline gas_handler_t gas_handler() const { return _gas.handler; }
 
-      // Runtime check invoked at interpreter function-call boundaries.
-      // Hot path: inlined, one relaxed fetch_sub + branch. Off path
-      // (strategy == off) returns immediately; the branch predictor
-      // pins it so the extra compare is effectively free.
+      // Runtime check invoked at interpreter function-call boundaries
+      // and loop headers. Owner-thread only; `deadline` is re-read on
+      // every call (relaxed atomic → plain load on x86_64/aarch64) so
+      // external interrupts are observed on the next charge site.
       inline void gas_charge(int64_t cost) {
-         if (_gas_strategy == gas_insertion_strategy::off) return;
-         int64_t prev;
-         if (_gas_atomic) {
-            prev = _gas_counter.fetch_sub(cost, std::memory_order_relaxed);
-         } else {
-            int64_t cur = _gas_counter.load(std::memory_order_relaxed);
-            prev = cur;
-            _gas_counter.store(cur - cost, std::memory_order_relaxed);
-         }
-         if (prev - cost < 0) [[unlikely]] {
-            if (_gas_handler) _gas_handler(this);
+         _gas.consumed += static_cast<uint64_t>(cost);
+         if (_gas.consumed >= _gas.deadline.load(std::memory_order_relaxed)) [[unlikely]] {
+            if (_gas.handler) _gas.handler(&_gas, _gas.user_data);
             else PSIZAM_THROW(wasm_gas_exhausted_exception, "gas exhausted");
          }
       }
@@ -528,16 +520,17 @@ namespace psizam::detail {
          // Clone dropped state
          ctx->_dropped_elems = _dropped_elems;
          ctx->_dropped_data  = _dropped_data;
-         // Propagate gas policy to the child fiber. The counter itself is
-         // per-fiber (each fiber gets its own budget); handler + slice +
-         // strategy inherit from the parent so yield/timeout policy is
-         // consistent.
-         ctx->_gas_counter.store(_gas_counter.load(std::memory_order_relaxed),
-                                 std::memory_order_relaxed);
-         ctx->_gas_handler  = _gas_handler;
-         ctx->_gas_slice    = _gas_slice;
-         ctx->_gas_strategy = _gas_strategy;
-         ctx->_gas_atomic   = _gas_atomic;
+         // Propagate gas_state to the child fiber. Each fiber gets its
+         // own copy of consumed/deadline + the same handler pair so
+         // yield/timeout policy is consistent across fibers of a
+         // single instance. Atomic load of source deadline is relaxed
+         // (external threads may race this clone, but any write they
+         // make gets re-observed on the child's next charge site).
+         ctx->_gas.consumed  = _gas.consumed;
+         ctx->_gas.deadline.store(_gas.deadline.load(std::memory_order_relaxed),
+                                  std::memory_order_relaxed);
+         ctx->_gas.handler   = _gas.handler;
+         ctx->_gas.user_data = _gas.user_data;
          // Set call depth limit via derived accessor
          ctx->set_max_call_depth(derived().get_remaining_call_depth());
          return ctx;
@@ -585,15 +578,13 @@ namespace psizam::detail {
       std::vector<bool>               _dropped_elems;
       std::vector<bool>               _dropped_data;
       fp_mode                         _fp = use_softfloat ? fp_mode::softfloat : fp_mode::fast;
-      // Gas metering — defaults to strategy::off (no instrumentation),
-      // unlimited budget, null handler, non-atomic. Enable by calling
-      // set_gas_strategy(...) with a non-off strategy. Toggle atomicity
-      // via set_gas_atomic(true) when cross-thread interrupts are needed.
-      std::atomic<int64_t>            _gas_counter{gas_budget_unlimited};
-      gas_handler_t                   _gas_handler = nullptr;
-      int64_t                         _gas_slice   = gas_slice_default;
-      gas_insertion_strategy          _gas_strategy = gas_insertion_strategy::off;
-      bool                            _gas_atomic   = false;
+      // Gas metering — single gas_state struct. Defaults to inert
+      // (consumed=0, deadline=UINT64_MAX, null handler). Enable by
+      // calling set_gas_budget(gas_units{N}) and optionally
+      // set_gas_handler(h, user_data). External threads may store
+      // any u64 into gas().deadline at any time (including 0 for
+      // immediate interrupt at the next back-edge charge site).
+      gas_state                       _gas{};
    };
 
    struct jit_visitor { template<typename T> jit_visitor(T&&) {} };
@@ -656,9 +647,20 @@ namespace psizam::detail {
       // codegen embeds these as immediates to reach the fields from
       // the ctx pointer register. Not constexpr (offsetof on non-
       // standard-layout types isn't), but called once per compile.
-      static std::size_t gas_strategy_offset() { return offsetof(jit_execution_context, _gas_strategy); }
-      static std::size_t gas_atomic_offset()   { return offsetof(jit_execution_context, _gas_atomic); }
-      static std::size_t gas_counter_offset()  { return offsetof(jit_execution_context, _gas_counter); }
+      //
+      // `consumed` is plain uint64_t (owner-only); `deadline` is a
+      // relaxed std::atomic<uint64_t> that on x86_64/aarch64 is
+      // ABI-identical to a plain 8-byte slot — codegen loads it with
+      // a regular mov/ldr and external threads store to it without
+      // forcing an atomic RMW on the hot path.
+      static std::size_t gas_consumed_offset() {
+         return offsetof(jit_execution_context, _gas)
+              + offsetof(gas_state, consumed);
+      }
+      static std::size_t gas_deadline_offset() {
+         return offsetof(jit_execution_context, _gas)
+              + offsetof(gas_state, deadline);
+      }
 
       std::uint32_t get_remaining_call_depth() const { return this->_remaining_call_depth; }
 

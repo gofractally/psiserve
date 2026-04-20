@@ -189,34 +189,27 @@ uint64_t __psizam_atomic_rmw(void* ctx, uint8_t sub, uint32_t addr, uint32_t off
 
 void __psizam_gas_charge(void* ctx, int64_t cost) {
    // Callable from JIT-generated code across every backend. Do the
-   // decrement + exhaustion dispatch directly (rather than forwarding
-   // to the inline method) so the throw path uses escape_or_throw,
-   // which hands off to the JIT's setjmp trampoline. Forwarding
-   // through the inline gas_charge method uses a plain C++ throw,
-   // which fails to unwind through jit2 / jit_llvm frames.
+   // consumed bump + exhaustion dispatch directly (rather than
+   // forwarding to the inline method) so the throw path uses
+   // escape_or_throw, which hands off to the JIT's setjmp trampoline.
+   // Forwarding through the inline gas_charge method uses a plain C++
+   // throw, which fails to unwind through jit2 / jit_llvm frames.
    auto& c = as_ctx(ctx);
-   if (c.gas_strategy() == gas_insertion_strategy::off) return;
-   int64_t prev;
-   if (c.gas_atomic()) {
-      prev = c.gas_counter().fetch_sub(cost, std::memory_order_relaxed);
-   } else {
-      int64_t cur = c.gas_counter().load(std::memory_order_relaxed);
-      prev = cur;
-      c.gas_counter().store(cur - cost, std::memory_order_relaxed);
-   }
-   if (prev - cost < 0) {
-      auto h = c.gas_handler();
-      if (h) h(&c);
-      else   escape_or_throw<wasm_gas_exhausted_exception>("gas exhausted");
+   auto& gs = c.gas();
+   gs.consumed += static_cast<uint64_t>(cost);
+   if (gs.consumed >= gs.deadline.load(std::memory_order_relaxed)) {
+      if (gs.handler) gs.handler(&gs, gs.user_data);
+      else escape_or_throw<wasm_gas_exhausted_exception>("gas exhausted");
    }
 }
 
 void __psizam_gas_exhausted_check(void* ctx) {
-   auto& c = as_ctx(ctx);
-   // JIT already did the inline decrement; we just check and dispatch.
-   if (c.gas_counter().load(std::memory_order_relaxed) >= 0) return;
-   auto h = c.gas_handler();
-   if (h) h(&c);
+   auto& gs = as_ctx(ctx).gas();
+   // JIT already bumped consumed inline; re-read deadline (the handler
+   // may have advanced it, or an external thread may have raced us) and
+   // dispatch only if we're still over the line.
+   if (gs.consumed < gs.deadline.load(std::memory_order_relaxed)) return;
+   if (gs.handler) gs.handler(&gs, gs.user_data);
    else escape_or_throw<wasm_gas_exhausted_exception>("gas exhausted");
 }
 
