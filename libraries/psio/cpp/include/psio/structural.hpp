@@ -146,18 +146,48 @@ struct package_of
 #define PSIO_PACKAGE_TYPE_(NAME) \
    ::psio::detail::package_info<::psio::FixedString{#NAME}>
 
-#define PSIO_PACKAGE(NAME, VERSION)                                             \
+// Two-argument form (backward compatible): PSIO_PACKAGE(name, version)
+// Three-argument form (WIT-aware): PSIO_PACKAGE(namespace, package, version)
+// The three-argument form captures the WIT namespace:package identity
+// and derives the WIT package name "namespace:package" and a C-friendly
+// prefix "namespace_package" for import thunk symbols.
+
+#define PSIO_PACKAGE_2(NAME, VERSION)                                           \
    namespace psio::detail                                                       \
    {                                                                            \
       template <>                                                               \
       struct package_info<::psio::FixedString{#NAME}>                           \
       {                                                                         \
-         static constexpr ::psio::FixedString name    = #NAME;                  \
-         static constexpr ::psio::FixedString version = VERSION;                \
+         static constexpr ::psio::FixedString name      = #NAME;               \
+         static constexpr ::psio::FixedString version   = VERSION;             \
+         static constexpr ::psio::FixedString wit_ns    = "";                  \
+         static constexpr ::psio::FixedString wit_pkg   = #NAME;              \
+         static constexpr ::psio::FixedString c_prefix  = #NAME;              \
       };                                                                        \
       inline constexpr package_marker<::psio::FixedString{#NAME}>               \
           _psio_pkg_##NAME{};                                                   \
    }
+
+#define PSIO_PACKAGE_3(NS, PKG, VERSION)                                        \
+   namespace psio::detail                                                       \
+   {                                                                            \
+      template <>                                                               \
+      struct package_info<::psio::FixedString{#NS "_" #PKG}>                   \
+      {                                                                         \
+         static constexpr ::psio::FixedString name      = #NS "_" #PKG;       \
+         static constexpr ::psio::FixedString version   = VERSION;             \
+         static constexpr ::psio::FixedString wit_ns    = #NS;                \
+         static constexpr ::psio::FixedString wit_pkg   = #PKG;              \
+         static constexpr ::psio::FixedString c_prefix  = #NS "_" #PKG;      \
+         static constexpr ::psio::FixedString wit_name  = #NS ":" #PKG;      \
+      };                                                                        \
+      inline constexpr package_marker<::psio::FixedString{#NS "_" #PKG}>       \
+          _psio_pkg_##NS##_##PKG{};                                            \
+   }
+
+#define PSIO_PACKAGE_SELECT(_1, _2, _3, WHICH, ...) WHICH
+#define PSIO_PACKAGE(...) \
+   PSIO_PACKAGE_SELECT(__VA_ARGS__, PSIO_PACKAGE_3, PSIO_PACKAGE_2)(__VA_ARGS__)
 // !! After PSIO_PACKAGE, you must also write:
 //   #undef  PSIO_CURRENT_PACKAGE_
 //   #define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(NAME)
