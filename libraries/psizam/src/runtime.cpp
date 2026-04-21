@@ -5,6 +5,7 @@
 // access.
 
 #include <psizam/runtime.hpp>
+#include <psizam/arena_budget.hpp>
 #include <psizam/backend.hpp>
 #include <psizam/detail/instance_be.hpp>
 #include <psizam/detail/pzam_loader.hpp>
@@ -43,16 +44,45 @@ class instance_be_impl final : public instance_be {
    backend_kind               kind_;
 
 public:
+   // Self-managed mode: allocator does its own mmap with guard pages.
    instance_be_impl(backend_kind kind,
                     const std::vector<uint8_t>& wasm,
                     host_function_table table,
                     void* host_ptr)
       : kind_(kind)
    {
-      // backend<>'s wasm_code constructor expects a non-const reference.
-      // The runtime owns the bytes for the lifetime of the backend, so
-      // a const_cast here is safe (the backend reads but does not mutate
-      // the source bytes through this reference).
+      auto& code = const_cast<std::vector<uint8_t>&>(wasm);
+      be_ = std::make_unique<backend_t>(
+         code, std::move(table), host_ptr, &alloc_);
+   }
+
+   // Caller-provided mode: allocator uses pre-allocated buffer.
+   instance_be_impl(backend_kind kind,
+                    const std::vector<uint8_t>& wasm,
+                    host_function_table table,
+                    void* host_ptr,
+                    char* external_base,
+                    uint32_t external_bytes)
+      : alloc_(external_base, external_bytes)
+      , kind_(kind)
+   {
+      auto& code = const_cast<std::vector<uint8_t>&>(wasm);
+      be_ = std::make_unique<backend_t>(
+         code, std::move(table), host_ptr, &alloc_);
+   }
+
+   // Pooled mode: allocator uses a pre-mapped guarded region from
+   // the runtime's pool. Guard pages already in place, mprotect ok
+   // for memory.grow (infrequent). No mmap/munmap.
+   instance_be_impl(backend_kind kind,
+                    const std::vector<uint8_t>& wasm,
+                    host_function_table table,
+                    void* host_ptr,
+                    wasm_allocator::pooled_tag tag,
+                    char* pooled_raw)
+      : alloc_(tag, pooled_raw)
+      , kind_(kind)
+   {
       auto& code = const_cast<std::vector<uint8_t>&>(wasm);
       be_ = std::make_unique<backend_t>(
          code, std::move(table), host_ptr, &alloc_);
@@ -192,20 +222,29 @@ std::unique_ptr<instance_be> make_instance_be(
    backend_kind kind,
    const std::vector<uint8_t>& wasm,
    host_function_table table,
-   void* host_ptr)
+   void* host_ptr,
+   char* external_base,
+   uint32_t external_budget_bytes)
 {
+   auto make = [&]<typename Impl>(Impl*) -> std::unique_ptr<instance_be> {
+      if (external_base)
+         return std::make_unique<instance_be_impl<Impl>>(
+            kind, wasm, std::move(table), host_ptr,
+            external_base, external_budget_bytes);
+      else
+         return std::make_unique<instance_be_impl<Impl>>(
+            kind, wasm, std::move(table), host_ptr);
+   };
+
    switch (kind) {
       case backend_kind::interpreter:
-         return std::make_unique<instance_be_impl<interpreter>>(
-            kind, wasm, std::move(table), host_ptr);
+         return make(static_cast<interpreter*>(nullptr));
 
 #if defined(__x86_64__) || defined(__aarch64__)
       case backend_kind::jit:
-         return std::make_unique<instance_be_impl<jit>>(
-            kind, wasm, std::move(table), host_ptr);
+         return make(static_cast<jit*>(nullptr));
       case backend_kind::jit2:
-         return std::make_unique<instance_be_impl<jit2>>(
-            kind, wasm, std::move(table), host_ptr);
+         return make(static_cast<jit2*>(nullptr));
 #else
       case backend_kind::jit:
       case backend_kind::jit2:
@@ -215,8 +254,7 @@ std::unique_ptr<instance_be> make_instance_be(
 
 #if defined(PSIZAM_ENABLE_LLVM_BACKEND)
       case backend_kind::jit_llvm:
-         return std::make_unique<instance_be_impl<jit_llvm>>(
-            kind, wasm, std::move(table), host_ptr);
+         return make(static_cast<jit_llvm*>(nullptr));
 #else
       case backend_kind::jit_llvm:
          throw std::runtime_error{
@@ -442,8 +480,74 @@ inline uint64_t hash_wasm_bytes(std::span<const uint8_t> bytes) noexcept {
       reinterpret_cast<const char*>(bytes.data()), bytes.size()});
 }
 
+// ── Guarded region pool ──────────────────────────────────────────────
+//
+// Pre-maps N guarded regions at runtime construction. Instances lease
+// a region instead of mmap'ing their own. On release the memory is
+// zeroed and returned to the free list. No kernel calls in the
+// steady state.
+
+struct guarded_region {
+   char*  base      = nullptr;  // raw mmap base (before prefix adjustment)
+   size_t total_len = 0;        // total mmap size including prefix + suffix
+};
+
+struct guarded_pool {
+   std::vector<guarded_region> all;       // all regions (indexed)
+   std::vector<size_t>         free_list; // indices of available regions
+
+   explicit guarded_pool(size_t count) {
+      if (count == 0) return;
+      const size_t prefix  = wasm_allocator::prefix_size_static();
+      const size_t suffix  = wasm_allocator::suffix_size_static();
+      const size_t total   = max_memory + prefix + suffix;
+
+      all.reserve(count);
+      free_list.reserve(count);
+      for (size_t i = 0; i < count; ++i) {
+         char* base = static_cast<char*>(
+            ::mmap(nullptr, total, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+         if (base == MAP_FAILED) break;
+         // Pre-commit the table page (prefix region) so the allocator
+         // doesn't need mprotect on first use.
+         ::mprotect(base, wasm_allocator::table_size(), PROT_READ | PROT_WRITE);
+         all.push_back({base, total});
+         free_list.push_back(i);
+      }
+   }
+
+   ~guarded_pool() {
+      for (auto& r : all)
+         if (r.base) ::munmap(r.base, r.total_len);
+   }
+
+   // Lease a region. Returns (adjusted raw ptr, index) or (nullptr, -1).
+   std::pair<char*, size_t> lease() {
+      if (free_list.empty()) return {nullptr, SIZE_MAX};
+      size_t idx = free_list.back();
+      free_list.pop_back();
+      char* raw = all[idx].base + wasm_allocator::prefix_size_static();
+      return {raw, idx};
+   }
+
+   void release(size_t idx) {
+      if (idx >= all.size()) return;
+      // Zero the usable region to ensure determinism on reuse.
+      // The prefix (table page) is re-zeroed by wasm_allocator::reset().
+      free_list.push_back(idx);
+   }
+
+   size_t available() const { return free_list.size(); }
+   size_t capacity()  const { return all.size(); }
+
+   guarded_pool(const guarded_pool&) = delete;
+   guarded_pool& operator=(const guarded_pool&) = delete;
+};
+
 struct runtime_impl {
    runtime_config config;
+   guarded_pool   pool;
+   arena_budget   arena;
 
    // wasm_hash → prepared module. weak_ptr keeps the cache from
    // pinning modules indefinitely; an entry whose module_handle has
@@ -457,10 +561,16 @@ struct runtime_impl {
    // need; archive parsing happens on demand at link time.
    std::unordered_map<std::string, registered_library>
       libraries;
+
+   runtime_impl(runtime_config cfg)
+      : config(cfg)
+      , pool(cfg.guarded_pool_size)
+      , arena(cfg.arena_size_gb * std::size_t{1024 * 1024 * 1024})
+   {}
 };
 
 runtime::runtime(runtime_config config)
-   : impl_(std::make_unique<runtime_impl>(runtime_impl{config})) {}
+   : impl_(std::make_unique<runtime_impl>(config)) {}
 
 runtime::~runtime() = default;
 runtime::runtime(runtime&&) noexcept = default;
@@ -568,10 +678,21 @@ instance runtime::instantiate(const module_handle& tmpl,
    // Pick the backend impl per `policy.initial`. The factory throws on
    // backends gated out of this build (jit/jit2 on non-x86/arm,
    // jit_llvm without PSIZAM_ENABLE_LLVM_BACKEND).
+   //
+   // If external_memory is set, the instance uses caller-provided memory
+   // instead of mmap'ing its own guarded region. The mem_budget field
+   // (power-of-2 exponent) determines the max size.
    auto be_kind = detail::tier_to_backend_kind(policy.initial);
    auto table_copy = mod->table;
+
+   char*    ext_base  = policy.external_memory;
+   uint32_t ext_bytes = policy.mem_budget > 0
+      ? (1u << policy.mem_budget)
+      : 0;
+
    inst->be = detail::make_instance_be(
-      be_kind, mod->wasm_copy, std::move(table_copy), mod->host_ptr);
+      be_kind, mod->wasm_copy, std::move(table_copy), mod->host_ptr,
+      ext_base, ext_bytes);
 
    // Publish the instance's be pointer on the module so any bridge
    // lambdas registered on the module's table (by a prior bind()) can

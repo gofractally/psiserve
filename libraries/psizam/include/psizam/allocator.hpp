@@ -736,6 +736,10 @@ namespace psizam {
     private:
       char*   raw       = nullptr;
       int32_t page      = 0;
+      bool    external_ = false;  // true = caller-provided memory, no mmap/mprotect
+      bool    pooled_   = false;  // true = from guarded_pool, no mmap/munmap but mprotect ok
+      uint32_t max_pages_limit_ = max_pages; // for external: power-of-2 limit
+
       void update_stored_mem_size() {
          if (page >= 0) {
             uint64_t size_bytes = static_cast<uint64_t>(page) * page_size;
@@ -778,13 +782,29 @@ namespace psizam {
       static std::int32_t mem_size_offset() {
          return globals_end() - 20;
       }
+
+      bool is_external() const { return external_; }
+      bool is_pooled()   const { return pooled_; }
+      uint32_t max_pages_available() const { return max_pages_limit_; }
+
+      // Static accessors for the pool to compute region sizes without
+      // constructing an allocator instance.
+      static std::size_t prefix_size_static() {
+         return table_size() + syspagesize();
+      }
+      static std::size_t suffix_size_static() {
+         return syspagesize();
+      }
+
       template <typename T>
       void alloc(size_t size = 1 /*in pages*/) {
          if (size == 0) return;
          PSIZAM_ASSERT(page >= 0, wasm_bad_alloc, "require memory to allocate");
-         PSIZAM_ASSERT(size + page <= max_pages, wasm_bad_alloc, "exceeded max number of pages");
-         int err = mprotect(raw + (page_size * page), (page_size * size), PROT_READ | PROT_WRITE);
-         PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
+         PSIZAM_ASSERT(size + page <= max_pages_limit_, wasm_bad_alloc, "exceeded max number of pages");
+         if (!external_) {
+            int err = mprotect(raw + (page_size * page), (page_size * size), PROT_READ | PROT_WRITE);
+            PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
+         }
          T* ptr    = (T*)(raw + (page_size * page));
          memset(ptr, 0, page_size * size);
          page += size;
@@ -796,20 +816,26 @@ namespace psizam {
          PSIZAM_ASSERT(page >= 0, wasm_bad_alloc, "require memory to deallocate");
          PSIZAM_ASSERT(size <= static_cast<uint32_t>(page), wasm_bad_alloc, "freed too many pages");
          page -= size;
-         int err = mprotect(raw + (page_size * page), (page_size * size), PROT_NONE);
-         PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
+         if (!external_) {
+            int err = mprotect(raw + (page_size * page), (page_size * size), PROT_NONE);
+            PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
+         }
          update_stored_mem_size();
       }
       void free() {
-         ::munmap(raw - prefix_size(), max_memory + prefix_size() + suffix_size());
-         raw = nullptr;
+         if (!external_ && !pooled_ && raw) {
+            ::munmap(raw - prefix_size(), max_memory + prefix_size() + suffix_size());
+            raw = nullptr;
+         }
       }
       ~wasm_allocator() {
-         if (raw)
+         if (!external_ && !pooled_ && raw)
             ::munmap(raw - prefix_size(), max_memory + prefix_size() + suffix_size());
       }
       wasm_allocator(const wasm_allocator&) = delete;
       wasm_allocator& operator=(const wasm_allocator&) = delete;
+
+      // Self-managed mode: mmap a full guarded region.
       wasm_allocator() {
          raw  = (char*)::mmap(NULL, max_memory + prefix_size() + suffix_size(), PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
          PSIZAM_ASSERT( raw != MAP_FAILED, wasm_bad_alloc, "mmap failed to alloca pages" );
@@ -818,16 +844,53 @@ namespace psizam {
          raw += prefix_size();
          page = -1;
       }
+
+      // Caller-provided mode: use a pre-allocated buffer.
+      // The buffer must be at least (prefix_size() + max_bytes) in
+      // size, already read/write accessible. No mmap, no mprotect,
+      // no guard pages. Bounds checking must use checked mode.
+      // max_bytes must be a power of 2 and a multiple of page_size.
+      //
+      // The caller owns the memory and must keep it alive for the
+      // allocator's lifetime. free() is a no-op.
+      wasm_allocator(char* base, uint32_t max_bytes)
+         : external_(true)
+         , max_pages_limit_(max_bytes / page_size)
+      {
+         PSIZAM_ASSERT(base != nullptr, wasm_bad_alloc, "null base pointer");
+         PSIZAM_ASSERT(max_bytes >= page_size, wasm_bad_alloc, "max_bytes too small");
+         PSIZAM_ASSERT((max_bytes & (max_bytes - 1)) == 0, wasm_bad_alloc, "max_bytes must be power of 2");
+
+         raw = base + prefix_size();
+         memset(base, 0, prefix_size());
+         page = -1;
+      }
+
+      // Pooled mode: use a pre-mapped guarded region from the pool.
+      // raw_from_pool is already adjusted past prefix_size() by the
+      // pool's lease(). Guard pages are already in place from the
+      // initial mmap(PROT_NONE). mprotect is used for memory.grow
+      // (acceptable: infrequent, no mmap churn). free() is a no-op
+      // (the pool reclaims the region).
+      struct pooled_tag {};
+      wasm_allocator(pooled_tag, char* raw_from_pool)
+         : pooled_(true)
+      {
+         raw = raw_from_pool;
+         page = -1;
+      }
       // Initializes the memory controlled by the allocator.
       //
       // \post get_current_page() == new_pages
       // \post all allocated pages are zero-filled.
       void reset(uint32_t new_pages) {
          if (page >= 0) {
-            memset(raw, '\0', page_size * page); // zero the memory
-         } else {
+            memset(raw, '\0', page_size * page);
+         } else if (!external_) {
             int err = ::mprotect(raw - syspagesize(), syspagesize(), PROT_READ);
             PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
+            page = 0;
+         } else {
             page = 0;
          }
          if(new_pages > static_cast<uint32_t>(page)) {
@@ -841,9 +904,11 @@ namespace psizam {
       // Signal no memory defined
       void reset() {
          if (page >= 0) {
-            memset(raw, '\0', page_size * page); // zero the memory
-            int err = ::mprotect(raw - syspagesize(), page_size * page + syspagesize(), PROT_NONE);
-            PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
+            memset(raw, '\0', page_size * page);
+            if (!external_) {
+               int err = ::mprotect(raw - syspagesize(), page_size * page + syspagesize(), PROT_NONE);
+               PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
+            }
          }
          page = -1;
          uint64_t zero = 0;

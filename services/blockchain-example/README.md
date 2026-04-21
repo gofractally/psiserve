@@ -91,46 +91,44 @@ class Blockchain {
 
         set< handle<BlockchainConnection> > active_connections;
 
-        // Spawn another fiber on the current thread.
-        // This is today's psi_spawn — a fiber within the same WASM instance,
-        // sharing linear memory. It returns a future allowing the spawner
-        // to go on to other things.
-        future<result> listener_complete = spawn_fiber([&]() {
+        // Spawn a listener fiber on the current thread via async_call
+        // to self. This is the unified dispatch primitive — same mechanism
+        // as cross-instance calls, just targeting self with this_thread.
+        // Returns a future allowing the spawner to go on to other things.
+        future<result> listener_complete = async_call(self, "listener"_n,
+                                                      {}, thread::this_thread);
+        // ... listener body runs as a fiber on this thread:
+        auto listener = [&]() {
             for (;;) {
                 sock = psi_accept(0);   // fd 0 = listen socket from config
                 if (sock < 0)
                     return sock;
 
-                // Instantiate by name, templated on the interface type.
-                // The template parameter tells the host (and the compiler)
-                // that "blockchain-connection" exports BlockchainConnection,
-                // so bcc is a typed handle — bcc.handle_connection() is a
-                // real method call, not string dispatch.
-                // Like dlopen + dlsym, but type-safe at compile time.
+                // Instantiate by name. The template parameter tells the
+                // compiler that "blockchain-connection" exports
+                // BlockchainConnection. mem_budget::_1MB gives each
+                // connection 1MB of linear memory.
                 auto bcc = runtime.instantiate<BlockchainConnection>(
-                                "blockchain-connection", thread::fresh);
+                                "blockchain-connection", thread::fresh,
+                                mem_budget::_1MB);
                 active_connections.insert(bcc);
 
-                // Typed cross-instance call — works like native API.
-                // The compiler knows handle_connection exists on
-                // BlockchainConnection because it's a reflected interface.
-                //   borrow<self>  → temporary ref so it can call us back
-                //   own<socket>   → ownership transfers; our fd becomes invalid
-                //
-                // Fire-and-forget: we don't block waiting for the result.
-                future<result> r = bcc.handle_connection(
-                    borrow(self),    // callee can call back to push_transaction
-                    own(sock)        // socket ownership moves to callee
-                );
+                // async_call with thread::fresh — the connection handler
+                // runs on its own logical thread. borrow(self) gives it
+                // a handle to call back (push_transaction). own(sock)
+                // transfers socket ownership — our fd becomes invalid.
+                future<result> r = async_call(bcc, "handle_connection"_n,
+                    {borrow(self), own(sock)}, thread::fresh);
                 r.on_completion([&](result) {
                     active_connections.remove(bcc);
+                    runtime.destroy(bcc);  // dlclose — reclaim memory
                 });
             }
-        });
+        };
 
         // Block production loop — runs on the main fiber of this thread.
-        // Produce a new block every second until we get whatever kill signal
-        // the psiserve host wants to use for a graceful shutdown.
+        // Produce a new block every 3 seconds until we get whatever kill
+        // signal the psiserve host wants to use for a graceful shutdown.
         while (runtime.running()) {
             psi_sleep_until(next_second());
             _database.store(_pending_block.number(), _pending_block);
@@ -198,13 +196,12 @@ class Blockchain {
 
             if (!instances.contains(action.account)) {
                 // First action on this contract in this tx.
-                // The guest just declares what it needs — the host
-                // handles the full pipeline transparently:
-                //   pzam cached? → instantiate from native code
-                //   wasm cached? → JIT with registered policy → instantiate
-                //   nothing?     → fetch from registered DB → JIT → instantiate
+                // mem_budget comes from the account's registered policy.
+                // Linear memory is allocated from blockchain.wasm's own
+                // address space via alloc_child_memory — no mmap.
                 auto contract = runtime.instantiate_by_hash<SmartContract>(
-                    wasm_hash, thread::this_thread);
+                    wasm_hash, thread::this_thread,
+                    account.mem_budget());
 
                 // Selectively bind only the blockchain_api interface.
                 // The contract can call get_database(), call_contract(),
@@ -221,6 +218,12 @@ class Blockchain {
             runtime.call(instances[action.account], "apply"_n,
                          action.raw_bytes);
         }
+
+        // Destroy all per-tx contract instances — dlclose. Linear
+        // memory returned to blockchain.wasm's allocator via
+        // free_child_memory.
+        for (auto& [account, inst] : instances)
+            runtime.destroy(inst);
 
         return _pending_block.push(tx);
     }
@@ -754,14 +757,30 @@ check for optional features before calling — zero-cost, no trap.
 ### `psi:runtime/instances` — launch and manage instances
 
 ```
-instantiate:         func(name: u64, thread: u8) -> u32
-instantiate-by-hash: func(hash-ptr: u32, hash-len: u32, thread: u8) -> u32
+instantiate:         func(name: u64, thread: u8, mem-budget: u8,
+                          base-ptr: u32) -> u32
+instantiate-by-hash: func(hash-ptr: u32, hash-len: u32, thread: u8,
+                          mem-budget: u8, base-ptr: u32) -> u32
+destroy:             func(instance: u32)
 bind:                func(consumer: u32, provider: u32, iface: u64)
 register-contract-policy: func(config-ptr: u32, config-len: u32,
                                 db: u32, key-prefix: u64)
 running:             func() -> u32
 instance-name:       func() -> u64
 ```
+
+`mem-budget` is a power-of-2 exponent: the sub-instance's maximum linear
+memory is `1 << mem_budget` bytes (e.g. 16 = 64KB, 20 = 1MB, 22 = 4MB).
+
+`base-ptr`: if non-zero, the caller provides the child's linear memory
+at this offset within the caller's own linear memory. The caller owns
+and manages this memory. If zero, the host allocates via
+`alloc-child-memory` / `free-child-memory` (or the system arena if those
+exports are absent). See **Sub-Instance Memory Allocation** below.
+
+`destroy` is the `dlclose` equivalent — tears down the instance and
+reclaims its linear memory immediately. Callers should destroy instances
+when done to avoid memory accumulation on long-lived connections.
 
 Trusted services (blockchain.wasm, httpd.wasm) get this. Smart contracts
 do not — they cannot launch other instances directly. Cross-contract calls
@@ -773,13 +792,22 @@ go through blockchain.wasm's `blockchain_api.call_contract()`.
 call:       func(target: u32, method: u64, args-ptr: u32, args-len: u32,
                  ret-ptr: u32, ret-len: u32) -> i32
 post:       func(target: u32, method: u64, args-ptr: u32, args-len: u32)
-async-call: func(target: u32, method: u64, args-ptr: u32, args-len: u32) -> u32
+async-call: func(target: u32, method: u64, args-ptr: u32, args-len: u32,
+                 thread: u8) -> u32
 await:      func(future: u32, ret-ptr: u32, ret-len: u32) -> i32
 ```
 
 - `call` — synchronous, caller blocks until target returns
 - `post` — fire-and-forget, no return value
-- `async-call` — returns a future handle; `await` blocks until result ready
+- `async-call` — returns a future handle, does not block. `thread` hint
+  controls scheduling: `0 = this_thread`, `1 = fresh`. `await` blocks
+  until result ready.
+
+`async_call` subsumes the legacy `psi_spawn` concept: spawning a fiber
+within the same instance is `async_call(self, func, args, this_thread)`.
+Handing a connection to a new instance on its own thread is
+`async_call(bcc, handle_connection, args, fresh)`. One primitive, thread
+policy is orthogonal.
 
 ### `psi:runtime/metering` — gas and time control
 
@@ -793,16 +821,26 @@ set-trap-handler:  func(func-table-idx: u32)
 Only the orchestrator (blockchain.wasm) gets this. Contracts cannot see gas
 or set ceilings — gas is a host implementation detail invisible to them.
 
-### `psi:runtime/fibers` — in-process concurrency
+### `psi:runtime/fibers` — timers and clock
 
 ```
-spawn-fiber: func(func-table-idx: u32, arg: u32)
 sleep-until: func(deadline-ns: u64)
 clock:       func(clock-id: u32) -> u64
 ```
 
-Trusted services that need concurrent fibers within a single instance
-(e.g., httpd.wasm's accept loop + connection handlers).
+`clock` returns nanoseconds directly (i64 return, no pointer indirection).
+Clock IDs: 0 = realtime (wall clock), 1 = monotonic (steady clock).
+For deterministic contracts, blockchain.wasm can virtualize the clock by
+providing a mediated version through `blockchain_api` that returns the
+block timestamp instead of wall time.
+
+`sleep-until` suspends the current fiber until the monotonic clock
+reaches the given deadline. Used for block production timers.
+
+**Note:** `spawn-fiber` is gone. In-process concurrency uses
+`psi:runtime/dispatch::async_call(self, func, args, this_thread)` —
+same mechanism as cross-instance calls, no separate primitive. A WASI
+compatibility shim can map legacy `psi_spawn` to this if needed.
 
 ### `psi:runtime/io` — sockets and files
 
@@ -874,6 +912,255 @@ blockchain.wasm explicitly binds.
 
 ---
 
+## Sub-Instance Memory Allocation
+
+When a trusted service (blockchain.wasm) spawns sub-instances (contracts,
+UI modules) on `thread::this_thread`, the sub-instance's linear memory can
+be allocated **from the parent's own address space** rather than via a
+separate `mmap`. This avoids kernel VMA churn and address space exhaustion
+when spawning many short-lived instances (e.g., one contract per
+transaction, one UI module per HTTP request).
+
+### Memory safety tiers
+
+| Tier | Address reservation | Bounds enforcement | Who gets it |
+|------|--------------------|--------------------|-------------|
+| **Guarded** | 4GB+ per instance (mmap + guard pages) | Hardware page fault, zero per-access cost | Trusted config-launched services only, scarce |
+| **Checked** | Power-of-2 slice (64KB–256MB) | Software bounds check per access | Sub-instances, untrusted contracts, all memory64 |
+| **wasm16** | 64KB (1 page) | None needed — 16-bit pointer can't escape | Contracts declaring max 1 page |
+
+Guarded instances are scarce because each reserves 4GB+ of virtual
+address space. The total is configured at startup (`guarded_pool_size`,
+default 64). These are reserved for the small number of long-running
+trusted services. Everything else uses checked mode.
+
+### How parent-provided memory works
+
+There are two ways to provide memory for a sub-instance, controlled by
+the `base-ptr` parameter on `instantiate`:
+
+#### Caller-provided (`base-ptr != 0`)
+
+The caller allocates memory in its own linear memory (e.g. via its own
+`malloc`) and passes the offset as `base-ptr`. The caller owns this
+memory and is responsible for freeing it after `destroy`.
+
+```
+// Caller manages memory directly
+ptr = malloc(1 << 22);   // 4MB in caller's linear memory
+contract = instantiate(name, this_thread, 22, ptr);
+// ... use contract ...
+destroy(contract);
+free(ptr);               // caller frees when ready
+```
+
+#### Host-allocated (`base-ptr = 0`)
+
+The caller exports `alloc-child-memory` and `free-child-memory`. The
+host calls these to allocate/free on behalf of the caller:
+
+```
+alloc-child-memory: func(size: u32, align: u32) -> u32
+free-child-memory:  func(ptr: u32, size: u32, align: u32)
+```
+
+The presence of these exports is the **capability declaration** — it
+signals to the host that this module is prepared to host sub-instances.
+If absent, `instantiate` with `base-ptr = 0` falls back to host-managed
+memory from the system arena.
+
+```
+// Host manages allocation via caller's exports
+contract = instantiate(name, this_thread, 22, 0);
+// host called alloc-child-memory(4MB, 4MB) internally
+// ... use contract ...
+destroy(contract);
+// host called free-child-memory(ptr, 4MB, 4MB) internally
+```
+
+#### In both cases
+
+1. Host computes `base = parent.linear_memory() + offset`.
+2. Host constructs a `wasm_allocator` for the sub-instance backed by
+   `(base, 1 << mem_budget)` — no `mmap`, no `mprotect`, no kernel call.
+3. Sub-instance's bounds checks validate against its slice limit.
+4. The child's memory is within the parent's address space.
+
+The `mem_budget` parameter is a power-of-2 exponent:
+
+```
+mem_budget  bytes        typical use
+────────────────────────────────────────
+16          64KB         wasm16 contracts (zero bounds-check cost)
+20          1MB          lightweight contracts
+22          4MB          standard contracts
+24          16MB         data-heavy contracts
+26          64MB         large services
+```
+
+### Why this works
+
+- **No kernel interaction**: the parent's guarded region is already
+  mapped. Sub-allocation is pure userspace pointer arithmetic.
+- **No address space cost**: 1000 sub-instances × 64KB = 64MB, all
+  within the parent's existing 4GB region.
+- **Parent controls the budget**: the parent's allocator decides where
+  memory goes. A bump allocator wastes nothing. dlmalloc handles
+  fragmentation. The host just calls the parent's own exports.
+- **Clean teardown**: `destroy` calls `free-child-memory` to return the
+  slice. If the parent exits first, its entire region is reclaimed — no
+  leak.
+- **`dlclose` semantics**: callers must `destroy` sub-instances when
+  done. Long-lived connections that accumulate UI instances without
+  destroying them will exhaust their allocation budget and get errors
+  from subsequent `instantiate` calls.
+
+### Host-side instance overhead
+
+The per-instance host-side context (execution context, operand stack,
+call stack, gas state) is ~4–16KB — trivially small compared to even the
+minimum 64KB linear memory allocation. The dominant cost is always the
+linear memory itself, which the parent controls.
+
+### Relationship to memory64
+
+memory64 (64-bit WASM addresses) **cannot use guard pages** because a
+64-bit pointer can escape any virtual reservation. memory64 must use
+checked mode — the same software bounds checks used by sub-instances.
+The code paths unify: checked mode is parameterized on address width
+(u32 for memory32, u64 for memory64), same bounds check, same
+sub-allocation model.
+
+See `.issues/psizam-memory64-not-enforced.md` for the full analysis.
+
+### Zero-copy cross-instance calls (shared address space optimization)
+
+When a sub-instance's linear memory is a slice of the parent's memory
+(`base-ptr != 0` or host-allocated via `alloc-child-memory`), the host
+knows that both memories share the same native address space. This
+enables a **pointer-translation** path that avoids the canonical ABI's
+normal alloc + memcpy:
+
+**Standard path (separate address spaces):**
+
+```
+parent calls child.apply(action_bytes):
+  1. Host reads action_bytes from parent's memory              (lift)
+  2. Host calls child's cabi_realloc to allocate in child      (alloc)
+  3. Host copies bytes into child's memory                     (memcpy)
+  4. Host calls child.apply(child_ptr, len)
+  5. Child writes result into its memory
+  6. Host calls parent's cabi_realloc for return value          (alloc)
+  7. Host copies result into parent's memory                   (memcpy)
+```
+
+**Shared-address-space path (pointer translation):**
+
+```
+parent calls child.apply(action_bytes):
+  1. Host translates: child_ptr = parent_ptr - slice_offset    (subtract)
+  2. Host calls child.apply(child_ptr, len)                    (no copy)
+  3. Child writes result into its memory (= parent's memory)
+  4. Host translates: parent_ptr = child_ptr + slice_offset    (add)
+  5. Done                                                      (no copy)
+```
+
+Zero allocations, zero copies. The host replaces lift/lower with pointer
+arithmetic. The data never moves.
+
+**Guest-side type implications:**
+
+This changes the **ownership and lifetime** of return values, which the
+guest must know at compile time. Two proxy flavors are generated from
+the same `PSIO_INTERFACE` declaration:
+
+- **Borrowed proxy** (host-allocated, separate address spaces): return
+  values are views into the child's memory. Valid until `destroy`.
+  Caller must copy what it needs before destroying the instance.
+
+- **Owned proxy** (caller-provided memory, shared address space): return
+  values are offsets within the caller's own memory. Persist past
+  `destroy`. Caller owns the data and the memory it sits in.
+
+The distinction is a template parameter on the proxy type, determined
+at `instantiate` time by whether `base-ptr` was zero or not. Same
+interface, same host call, different C++ types enforcing correct
+lifetime handling.
+
+```cpp
+// Borrowed proxy — host-allocated, return values are views
+auto contract = instantiate<SmartContract>(hash, this_thread, _4MB, 0);
+auto result = contract.apply(args);  // result is a borrowed view
+my_copy = copy(result);              // must copy before destroy
+destroy(contract);                   // result now invalid
+
+// Owned proxy — caller-provided, return values in caller's memory
+auto contract = instantiate_in<SmartContract>(hash, this_thread, _4MB, buf);
+auto result = contract.apply(args);  // result is a caller-owned offset
+destroy(contract);                   // result still valid in buf
+use(result);                         // safe — data is in caller's memory
+```
+
+### Use case: deferred output buffering
+
+The shared-address-space model changes how contract outputs (console
+logs, event receipts, return data) flow through the system. Instead of
+the psibase model where each `writeConsole` was an immediate host call
+that copied bytes into a host-side buffer, contracts buffer their own
+output in their own linear memory. The parent reads it out on success
+via pointer translation — zero copies at every stage.
+
+```
+token.apply(action):
+   // Contract builds log entries in its own linear memory.
+   // The buffer is paid for out of the contract's mem_budget.
+   log_buf.append("transfer: bank -> alice 100 tokens")
+   log_buf.append("balance updated: bank=999900, alice=100")
+   // ... do the actual work ...
+   return {status: ok, log_ptr: log_buf.ptr, log_len: log_buf.len}
+
+blockchain (on success):
+   // result.log_ptr is in token's memory = blockchain's memory.
+   // Translate pointer, pass directly to host — zero copy.
+   psi_write_console(slice_offset + result.log_ptr, result.log_len)
+
+blockchain (on revert):
+   destroy(contract)
+   // Logs discarded with the instance. Never touched the host.
+```
+
+This delivers several properties that per-call host buffering cannot:
+
+- **Resource accountability**: the contract pays for log/event buffer
+  space out of its own `mem_budget`. A chatty contract that logs 1MB
+  eats its own allocation, not the host's. If it exceeds its budget,
+  `memory.grow` fails and the contract handles the pressure — the host
+  and parent are unaffected.
+
+- **Deferred commit**: blockchain.wasm can inspect contract outputs
+  before deciding whether to flush them to the host. Reverted
+  transactions discard all output with `destroy` — zero host work.
+  Successful transactions forward the output in one shot.
+
+- **No host-side buffer management**: the host doesn't need to decide
+  how much log buffer to allocate per contract, when to flush, or how
+  to handle overflow. The contract's own allocator makes those
+  decisions within its bounded memory.
+
+- **Generalizes to all contract output**: event receipts, return values,
+  diagnostic data, serialized state snapshots — anything the contract
+  produces follows the same pattern. The contract writes it, the parent
+  reads it at a translated offset, the host gets a direct pointer.
+
+This is a meaningful architectural advantage of the shared-address-space
+model over standard WASM component isolation, even though it requires
+a non-standard calling convention. The performance and resource
+accountability benefits justify the deviation for server-side runtimes
+where the trust hierarchy (host > trusted service > contract) is
+explicit and enforced.
+
+---
+
 ## Compilation Pipeline
 
 ```
@@ -903,33 +1190,61 @@ registered DB location → JIT → cache → instantiate).
 
 ---
 
+## Design Decisions (resolved)
+
+1. **`psi_spawn` is deprecated**: in-process fiber spawning is
+   `async_call(self, func, args, this_thread)` — same dispatch primitive
+   as cross-instance calls. No separate `psi_spawn` API.
+
+2. **Instance lifecycle**: parent calls `destroy(instance)` explicitly
+   (`dlclose` semantics). Connection close destroys all instances the
+   connection spawned. Untrusted code that fails to destroy gets bounded
+   by its address-space budget.
+
+3. **Clock API**: `psi.clock(clock_id) -> i64` returns nanoseconds
+   directly (no pointer indirection, no errno). WASI `clock_time_get`
+   not used — `psi.clock` is virtualizable per-instance for determinism.
+   A WASI compatibility shim is trivial if needed.
+
+4. **Sub-instance memory**: parent-provided via `alloc-child-memory` /
+   `free-child-memory` exports. Power-of-2 budgets. No mmap churn. See
+   **Sub-Instance Memory Allocation** section above.
+
+5. **UI instance lifetime**: per-connection, per-request pattern.
+   `bc_connection` instantiates UI modules on demand, destroys after
+   response. Optional LRU cache (max 2–3) within a connection to
+   amortize instantiation cost for repeated queries to the same service.
+   Not singleton, not pooled — each connection manages its own.
+
 ## Open Questions
 
 1. **Sequential / event DB**: psibase had `putSequential`/`getSequential` for
    append-only event logs. Should psiserve's `psi:db/store` include an event
    emission primitive for blockchain receipts and contract events?
 
-2. **Instance lifecycle**: who cleans up a connection instance when the socket
-   closes? (a) instance exits naturally, (b) parent destroys it, (c) runtime
-   GCs instances with no live fibers.
-
-3. **Subtree commit semantics**: uncommitted subtrees auto-discard on instance
+2. **Subtree commit semantics**: uncommitted subtrees auto-discard on instance
    destruction, or does blockchain.wasm need to explicitly abort?
 
-4. **Trap handler reentrancy**: the trap handler runs in blockchain.wasm's
+3. **Trap handler reentrancy**: the trap handler runs in blockchain.wasm's
    context. Can it make host calls (e.g., read gas_consumed, inspect the
    trapped instance's state)? Or is it restricted to just returning
    `resume` / `unwind`?
 
-5. **Determinism boundary**: how does the host distinguish objective instances
+4. **Determinism boundary**: how does the host distinguish objective instances
    (soft floats, no clock, gas-metered) from subjective ones? Is this a
    compile-time flag in `module_config`, or a per-interface binding decision?
 
-6. **`psi:runtime/dispatch` granularity**: should `call`, `post`, and
+5. **`psi:runtime/dispatch` granularity**: should `call`, `post`, and
    `async_call` be separate interfaces, or is the whole dispatch group
    either available or not? Finer granularity means a contract could have
    `call` (sync) but not `post` (fire-and-forget).
 
-7. **Capability bitmap format**: what is the concrete representation of the
+6. **Capability bitmap format**: what is the concrete representation of the
    capability set? A `u64` bitmap with one bit per interface? Or a list of
    `name_id`s? The bitmap is faster but limits the number of interfaces to 64.
+
+7. **Checked-mode read strategy**: deferred watermark (zero branches per
+   read, one check at loop/call boundaries) vs per-load bounds check
+   (one branch per read, immediate trap). Both paths exist in the codebase.
+   Benchmark needed to quantify the difference on real workloads. See
+   `.issues/psizam-memory64-not-enforced.md`.
