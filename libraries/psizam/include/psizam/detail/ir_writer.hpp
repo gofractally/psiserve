@@ -210,6 +210,9 @@ namespace psizam::detail {
       growable_allocator& get_ir_allocator() { return _ir_alloc; }
       jit_scratch_allocator& get_ir_scratch() { return _scratch; }
 
+      void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
+      void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+
       // Phase 4 gas-metering handles. The parser hooks these via SFINAE:
       // after emit_prologue it captures prologue_gas_handle(), after
       // emit_loop it captures last_loop_gas_handle(), and at end-of-scope
@@ -442,6 +445,8 @@ namespace psizam::detail {
                                      ? fp_mode::softfloat
                                      : fp_mode::fast);
             }
+            _codegen->set_mem_mode(_mem_mode);
+            _codegen->set_checked_kind(_checked_kind);
             _codegen->emit_entry_and_error_handlers();
          }
       }
@@ -3436,6 +3441,8 @@ namespace psizam::detail {
       uint32_t _num_functions = 0;
       ir_function* _func = nullptr;
       pzam_compile_result* _compile_result = nullptr;
+      mem_safety    _mem_mode     = mem_safety::guarded;
+      checked_mode  _checked_kind = checked_mode::strict;
       bool _skip_codegen = false;           // Set by subclasses to bypass native codegen
       std::size_t _post_array_offset = 0;   // IR alloc offset after _functions array
       // Lazy-initialized codegen and scratch allocators (created on first finalize)

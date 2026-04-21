@@ -125,6 +125,7 @@ namespace psizam::detail {
       void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
       bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
       bool is_checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
+      bool is_memory16() const noexcept { return _mem_mode == mem_safety::memory16; }
 
       ~machine_code_writer_t() {
          _allocator.end_code<true>(_code_segment_base);
@@ -6607,6 +6608,11 @@ namespace psizam::detail {
             emit(TEST, tmpreg, tmpreg);
             fix_branch(emit_branchcc32(JNZ), memory_handler);
          }
+         if (is_memory16()) {
+            // Memory16: zero-extend 16-bit address. movzwl %<out16>, %<out32>
+            auto out32 = static_cast<general_register32>(out);
+            emit(MOVZXW, out32, out32);
+         }
          if (offset & 0x80000000u) {
             emit_mov(offset, tmpreg);
             emit_add(static_cast<general_register64>(tmpreg), out);
@@ -6765,6 +6771,10 @@ namespace psizam::detail {
             emit(SHR_imm8, static_cast<imm8>(32), rcx);
             emit(TEST, ecx, ecx);
             fix_branch(emit_branchcc32(JNZ), memory_handler);
+         }
+         if (is_memory16()) {
+            // Memory16: zero-extend 16-bit address. movzwl %ax, %eax
+            emit(MOVZXW, eax, eax);
          }
          if (offset & 0x80000000) {
             // mov $offset, %ecx

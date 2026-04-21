@@ -363,6 +363,36 @@ if(PSIZAM_ENABLE_BENCH_COMPUTE)
       COMMENT "Compiling bench_misc.c -> WASM"
    )
 
+   # --- SHA-256 WASM module (1-page, for memory16 benchmarks) ---
+   set(SHA256_16_WASM "${CMAKE_CURRENT_BINARY_DIR}/bench_sha256_16.wasm")
+   add_custom_command(
+      OUTPUT "${SHA256_16_WASM}"
+      COMMAND "${WASM_CC}" ${WASM_CFLAGS}
+              -Wl,--initial-memory=65536
+              -Wl,-z,stack-size=8192
+              -o "${SHA256_16_WASM}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/compute/bench_sha256.c"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/compute/bench_sha256.c"
+      COMMENT "Compiling bench_sha256.c -> WASM (1-page, memory16)"
+   )
+
+   # --- Misc WASM module (1-page, for memory16 benchmarks) ---
+   set(MISC16_WASM "${CMAKE_CURRENT_BINARY_DIR}/bench_misc16.wasm")
+   add_custom_command(
+      OUTPUT "${MISC16_WASM}"
+      COMMAND "${WASM_CC}" ${WASM_CFLAGS}
+              -Wl,--export=bench_fib
+              -Wl,--export=bench_sort
+              -Wl,--export=bench_crc32
+              -Wl,--export=bench_matmul
+              -Wl,--initial-memory=65536
+              -Wl,-z,stack-size=8192
+              -o "${MISC16_WASM}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/compute/bench_misc.c"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/compute/bench_misc.c"
+      COMMENT "Compiling bench_misc.c -> WASM (1-page, memory16)"
+   )
+
    # --- Canonical ABI benchmark WASM module ---
    set(ABI_WASM "${CMAKE_CURRENT_BINARY_DIR}/bench_abi.wasm")
    add_custom_command(
@@ -385,7 +415,7 @@ if(PSIZAM_ENABLE_BENCH_COMPUTE)
       COMMENT "Compiling bench_abi.c -> WASM"
    )
 
-   add_custom_target(compute-wasm ALL DEPENDS "${SHA256_WASM}" "${ECDSA_WASM}" "${MISC_WASM}" "${ABI_WASM}")
+   add_custom_target(compute-wasm ALL DEPENDS "${SHA256_WASM}" "${SHA256_16_WASM}" "${ECDSA_WASM}" "${MISC_WASM}" "${MISC16_WASM}" "${ABI_WASM}")
 
    # --- Native baseline: compile the same C code as a native static library ---
    add_library(bench-native STATIC
@@ -452,6 +482,8 @@ if(PSIZAM_ENABLE_BENCH_COMPUTE)
       BENCH_SHA256_WASM="${SHA256_WASM}"
       BENCH_ECDSA_WASM="${ECDSA_WASM}"
       BENCH_MISC_WASM="${MISC_WASM}"
+      BENCH_MISC16_WASM="${MISC16_WASM}"
+      BENCH_SHA256_16_WASM="${SHA256_16_WASM}"
       BENCH_ABI_WASM="${ABI_WASM}"
       BENCH_HAS_ABI
    )

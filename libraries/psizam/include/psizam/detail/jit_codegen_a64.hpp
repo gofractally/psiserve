@@ -91,6 +91,7 @@ namespace psizam::detail {
       void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
       bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
       bool is_checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
+      bool is_memory16() const noexcept { return _mem_mode == mem_safety::memory16; }
 
       // Offset of _remaining_call_depth in unified frame_info_holder layout
       // (always at offset 16, after _bottom_frame and _top_frame pointers)
@@ -1185,6 +1186,10 @@ namespace psizam::detail {
             emit_branch_to_handler(COND_NE, memory_handler);
             // Truncate to 32 bits for guard-page-based OOB detection
             emit_mov_reg32(addr_reg, addr_reg);
+         } else if (is_memory16()) {
+            // Memory16: zero-extend 16-bit address.
+            // UXTH Wd, Wm = UBFM Wd, Wm, #0, #15
+            emit32(0x53003C00 | (addr_reg << 5) | addr_reg);
          } else {
             // Memory32: zero-extend address to 32 bits. Operations like
             // i32.trunc_f64_s can leave the upper 32 bits sign-extended

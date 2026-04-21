@@ -666,6 +666,44 @@ struct checked_options {
    checked_mode checked_kind;
 };
 
+struct memory16_options {
+   mem_safety   memory_mode   = mem_safety::memory16;
+   uint32_t     max_pages     = 1;
+   uint32_t     max_memory_offset = 0xFFFF;
+};
+
+template<typename Impl>
+static double run_psizam_compute_memory16(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n,
+                                          int64_t expected_result = INT64_MIN) {
+   memory16_options opts;
+   using backend_t = psizam::backend<std::nullptr_t, Impl, memory16_options>;
+   try {
+      wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+      wasm_allocator wa;
+      backend_t bkend(code, &wa, opts);
+      bkend.initialize(nullptr);
+
+      if (expected_result != INT64_MIN) {
+         auto check = bkend.call_with_return("env", func, (uint32_t)1);
+         int64_t cv = check ? check->to_i64() : INT64_MIN;
+         if (cv != expected_result) {
+            fprintf(stderr, "  %s memory16 WRONG (got %lld, expected %lld)\n", func, (long long)cv, (long long)expected_result);
+            return -1.0;
+         }
+      }
+
+      bkend.call_with_return("env", func, n);
+
+      auto t1 = std::chrono::high_resolution_clock::now();
+      bkend.call_with_return("env", func, n);
+      auto t2 = std::chrono::high_resolution_clock::now();
+      return std::chrono::duration<double, std::milli>(t2 - t1).count();
+   } catch (const std::exception& e) {
+      fprintf(stderr, "  %s memory16 FAILED: %s\n", func, e.what());
+      return -1.0;
+   }
+}
+
 template<typename Impl>
 static double run_psizam_compute_checked(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n,
                                          checked_mode kind = checked_mode::strict,
@@ -1313,6 +1351,68 @@ int main(int argc, char* argv[]) {
    // Disable native column again so it doesn't affect any further output
    runtimes[RT_NATIVE].enabled = false;
    num_active--;
+
+   // =========================================================================
+   // Memory16 vs guarded comparison (1-page WASM, misc benchmarks only)
+   // =========================================================================
+#ifdef BENCH_MISC16_WASM
+   {
+      std::vector<uint8_t> misc16_wasm;
+      try { misc16_wasm = psizam::read_wasm(BENCH_MISC16_WASM); } catch (...) {}
+
+      struct mem16_def { const char* label; const char* func; uint32_t iters; const std::vector<uint8_t>* wasm; };
+      std::vector<mem16_def> mem16_tests;
+
+#ifdef BENCH_SHA256_16_WASM
+      std::vector<uint8_t> sha16_wasm;
+      try { sha16_wasm = psizam::read_wasm(BENCH_SHA256_16_WASM); } catch (...) {}
+      if (!sha16_wasm.empty())
+         mem16_tests.push_back({"SHA-256 (64B, 10K)", "bench_sha256", 10'000, &sha16_wasm});
+#endif
+
+      if (!misc16_wasm.empty()) {
+         mem16_tests.push_back({"Fibonacci (1M)",          "bench_fib",    1'000'000, &misc16_wasm});
+         mem16_tests.push_back({"Bubble sort (10K)",       "bench_sort",   10'000,    &misc16_wasm});
+         mem16_tests.push_back({"CRC32 (100K)",            "bench_crc32",  100'000,   &misc16_wasm});
+         mem16_tests.push_back({"Matrix mult 8x8 (100K)",  "bench_matmul", 100'000,   &misc16_wasm});
+      }
+
+      if (!mem16_tests.empty()) {
+         fprintf(stderr, "\n=== Memory16 vs Guarded benchmark ===\n");
+
+         printf("\n╔═══════════════════════════════════════════════════════════════════════════╗\n");
+         printf("║  MEMORY16 BENCHMARK — 1-page (64KB) WASM, guarded vs memory16            ║\n");
+         printf("╠═══════════════════════════════════════════════════════════════════════════╣\n");
+         printf("║  %-24s │ %10s │ %10s │ %10s │ %7s ║\n", "Test", "guarded", "memory16", "checked", "m16/grd");
+         printf("╟──────────────────────────┼────────────┼────────────┼────────────┼─────────╢\n");
+
+         for (size_t t = 0; t < mem16_tests.size(); t++) {
+            auto func = mem16_tests[t].func;
+            auto iters = mem16_tests[t].iters;
+            const auto& wasm = *mem16_tests[t].wasm;
+            int64_t expected = check_psizam_compute<interpreter>(wasm, func);
+
+            fprintf(stderr, "%s guarded...\n", func); fflush(stderr);
+#if defined(__x86_64__) || defined(__aarch64__)
+            double guarded = run_psizam_compute<jit2>(wasm, func, iters, expected);
+            fprintf(stderr, "%s memory16...\n", func); fflush(stderr);
+            double memory16 = run_psizam_compute_memory16<jit2>(wasm, func, iters, expected);
+            fprintf(stderr, "%s checked...\n", func); fflush(stderr);
+            double checked = run_psizam_compute_checked<jit2>(wasm, func, iters, checked_mode::relaxed, expected);
+#else
+            double guarded = run_psizam_compute<interpreter>(wasm, func, iters, expected);
+            double memory16 = run_psizam_compute_memory16<interpreter>(wasm, func, iters, expected);
+            double checked = run_psizam_compute_checked<interpreter>(wasm, func, iters, checked_mode::relaxed, expected);
+#endif
+            double ratio = (guarded > 0 && memory16 > 0) ? memory16 / guarded : 0;
+            printf("║  %-24s │ %8.2f ms │ %8.2f ms │ %8.2f ms │ %5.2fx  ║\n",
+                   mem16_tests[t].label, guarded, memory16, checked, ratio);
+         }
+         printf("╚═══════════════════════════════════════════════════════════════════════════╝\n");
+         printf("  (ratio < 1.0 = memory16 faster, > 1.0 = guarded faster)\n\n");
+      }
+   }
+#endif
 #endif
 
    // =========================================================================

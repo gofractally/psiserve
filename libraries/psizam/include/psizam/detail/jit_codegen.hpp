@@ -177,6 +177,7 @@ namespace psizam::detail {
       void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
       bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
       bool is_checked_strict() const noexcept { return is_checked() && _checked_kind == checked_mode::strict; }
+      bool is_memory16() const noexcept { return _mem_mode == mem_safety::memory16; }
 
       /// Get the call_indirect error handler address (for element table patching).
       void* get_call_indirect_handler() const { return call_indirect_handler; }
@@ -4093,15 +4094,21 @@ namespace psizam::detail {
          int8_t pr_addr = get_phys(addr_vreg);
          int8_t pr_dest = get_phys(inst.dest);
 
-         // Load WASM address and zero-extend from i32 to 64-bit.
+         // Load WASM address and zero-extend from i32 (or i16 for memory16) to 64-bit.
          // i32 vregs may have garbage upper bits from register reuse.
          if (pr_addr >= 0) {
             if (is_memory64()) emit_mem64_check(phys_to_reg64(pr_addr), edx);
-            this->emit_mov(phys_to_reg32(pr_addr), ecx); // mov r32→ecx zero-extends
+            if (is_memory16())
+               this->emit(base::MOVZXW, phys_to_reg32(pr_addr), ecx);
+            else
+               this->emit_mov(phys_to_reg32(pr_addr), ecx); // mov r32→ecx zero-extends
          } else {
             load_vreg_rax(addr_vreg);
             if (is_memory64()) emit_mem64_check(rax, edx);
-            this->emit_mov(eax, ecx); // zero-extend
+            if (is_memory16())
+               this->emit(base::MOVZXW, eax, ecx);
+            else
+               this->emit_mov(eax, ecx); // zero-extend
          }
 
          // WASM effective address = base + offset. Use 64-bit add so overflow
@@ -4131,7 +4138,7 @@ namespace psizam::detail {
          uint32_t addr_vreg = inst.ri.src1;
          int8_t pr_addr = get_phys(addr_vreg);
 
-         // Load value to rax and address to rdx (zero-extended from i32)
+         // Load value to rax and address to rdx (zero-extended from i32/i16)
          load_vreg_rax(inst.dest);  // value to rax
          if (pr_addr >= 0) {
             if (is_memory64()) {
@@ -4140,7 +4147,10 @@ namespace psizam::detail {
                emit_mem64_check(phys_to_reg64(pr_addr), ecx);
                this->emit_pop_raw(rax);
             }
-            this->emit_mov(phys_to_reg32(pr_addr), edx); // zero-extend i32 addr
+            if (is_memory16())
+               this->emit(base::MOVZXW, phys_to_reg32(pr_addr), edx);
+            else
+               this->emit_mov(phys_to_reg32(pr_addr), edx); // zero-extend i32 addr
          } else {
             load_vreg_rcx(addr_vreg);
             if (is_memory64()) {
@@ -4148,7 +4158,10 @@ namespace psizam::detail {
                emit_mem64_check(rcx, edx);
                this->emit_pop_raw(rax);
             }
-            this->emit_mov(ecx, edx); // zero-extend i32 addr
+            if (is_memory16())
+               this->emit(base::MOVZXW, ecx, edx);
+            else
+               this->emit_mov(ecx, edx); // zero-extend i32 addr
          }
 
          if (uoffset != 0) {
@@ -5752,7 +5765,10 @@ namespace psizam::detail {
          uint32_t uoffset = static_cast<uint32_t>(offset);
          this->emit_pop_raw(rax);  // WASM address (i32/i64)
          if (is_memory64()) emit_mem64_check(rax, ecx);
-         this->emit_mov(eax, eax); // zero-extend i32 address to 64-bit
+         if (is_memory16())
+            this->emit(base::MOVZXW, eax, eax); // zero-extend i16 address to 64-bit
+         else
+            this->emit_mov(eax, eax); // zero-extend i32 address to 64-bit
          if (uoffset != 0) {
             emit_addr_offset_add(rax, uoffset);
          }
@@ -5769,7 +5785,10 @@ namespace psizam::detail {
          this->emit_pop_raw(rax);  // value
          this->emit_pop_raw(rcx);  // WASM address (i32/i64)
          if (is_memory64()) emit_mem64_check(rcx, edx);
-         this->emit_mov(ecx, ecx); // zero-extend i32 address to 64-bit
+         if (is_memory16())
+            this->emit(base::MOVZXW, ecx, ecx); // zero-extend i16 address to 64-bit
+         else
+            this->emit_mov(ecx, ecx); // zero-extend i32 address to 64-bit
          if (uoffset != 0) {
             emit_addr_offset_add(rcx, uoffset);
          }
@@ -5790,7 +5809,10 @@ namespace psizam::detail {
             this->emit_pop_raw(rax);   // fallback: pop from stack
          }
          if (is_memory64()) emit_mem64_check(rax, ecx);
-         this->emit_mov(eax, eax); // zero-extend i32 address to 64-bit
+         if (is_memory16())
+            this->emit(base::MOVZXW, eax, eax); // zero-extend i16 address to 64-bit
+         else
+            this->emit_mov(eax, eax); // zero-extend i32 address to 64-bit
          if (offset != 0) {
             emit_addr_offset_add(rax, static_cast<uint32_t>(offset));
          }

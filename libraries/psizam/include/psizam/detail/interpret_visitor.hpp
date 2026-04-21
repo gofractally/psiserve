@@ -177,7 +177,10 @@ namespace psizam::detail {
             }
             return effective;
          }
-         return static_cast<uint64_t>(op.offset) + static_cast<uint64_t>(ptr.to_ui32());
+         uint32_t addr = ptr.to_ui32();
+         if (context.mem_mode() == mem_safety::memory16)
+            addr &= 0xFFFF;
+         return static_cast<uint64_t>(op.offset) + static_cast<uint64_t>(addr);
       }
 
       template<typename Op>
