@@ -856,6 +856,13 @@ namespace psizam::detail {
          std::memset(entry.result_types, 0, sizeof(entry.result_types));
          std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs));
          std::memset(entry.param_vregs, 0xFF, sizeof(entry.param_vregs));
+         entry.merge_vreg = ir_vreg_none; // default; set below if a result vreg is allocated.
+                                          // Without this, aggregate-init leaves it as 0 (vreg 0 =
+                                          // the function return merge) and emit_end's unreachable
+                                          // path pushes that vreg back onto the vstack for every
+                                          // `if (empty) unreachable end` (the common gas-check
+                                          // pattern wasm-smith generates), poisoning subsequent
+                                          // binops that pop it as a phantom operand.
          if (result_count > 1) {
             consume_pending_result_types(entry, result_count);
             if (!_unreachable) {
