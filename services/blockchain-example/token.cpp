@@ -43,7 +43,7 @@ struct TokenService
       balances.upsert(to_key("bank"_n), to_val(1'000'000));
    }
 
-   void transfer(name_id from, name_id to, uint64_t amount, std::string memo)
+   void transfer(name_id from, name_id to, uint64_t amount, std::string_view memo)
    {
       auto db       = psi::blockchain::api::get_database();
       auto balances = db.get_table("balances");
