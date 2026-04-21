@@ -13,7 +13,9 @@ target_include_directories(psiserve PUBLIC
 )
 
 target_link_libraries(psiserve PUBLIC
+   pcrypt
    pfs
+   psi-api
    psiber
    psitri
    psizam
@@ -43,6 +45,24 @@ if(PSIZAM_ENABLE_TESTS)
    target_include_directories(db_host_test PRIVATE
       ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
    add_test(NAME db_host_test COMMAND db_host_test)
+
+   add_executable(module_store_test tests/module_store_test.cpp)
+   target_link_libraries(module_store_test PRIVATE psiserve)
+   target_include_directories(module_store_test PRIVATE
+      ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
+   add_test(NAME module_store_test COMMAND module_store_test)
+
+   add_executable(runtime_host_test tests/runtime_host_test.cpp)
+   target_link_libraries(runtime_host_test PRIVATE psiserve psi-api)
+   target_include_directories(runtime_host_test PRIVATE
+      ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
+   add_test(NAME runtime_host_test COMMAND runtime_host_test)
+
+   add_executable(instance_context_test tests/instance_context_test.cpp)
+   target_link_libraries(instance_context_test PRIVATE psiserve psi-api)
+   target_include_directories(instance_context_test PRIVATE
+      ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
+   add_test(NAME instance_context_test COMMAND instance_context_test)
 
    # ── E2E WASM guest test ──────────────────────────────────────────────────
    psi_add_wasm_module(db_guest

@@ -76,7 +76,9 @@ namespace psio {
       template <typename T>
       constexpr uint32_t canonical_align_impl() {
          using U = std::remove_cvref_t<T>;
-         if constexpr (std::is_same_v<U, bool> || std::is_same_v<U, uint8_t> || std::is_same_v<U, int8_t>)
+         if constexpr (std::is_void_v<U>)
+            return 1;
+         else if constexpr (std::is_same_v<U, bool> || std::is_same_v<U, uint8_t> || std::is_same_v<U, int8_t>)
             return 1;
          else if constexpr (std::is_same_v<U, uint16_t> || std::is_same_v<U, int16_t>)
             return 2;
@@ -154,7 +156,9 @@ namespace psio {
       template <typename T>
       constexpr uint32_t canonical_size_impl() {
          using U = std::remove_cvref_t<T>;
-         if constexpr (std::is_same_v<U, bool> || std::is_same_v<U, uint8_t> || std::is_same_v<U, int8_t>)
+         if constexpr (std::is_void_v<U>)
+            return 0;
+         else if constexpr (std::is_same_v<U, bool> || std::is_same_v<U, uint8_t> || std::is_same_v<U, int8_t>)
             return 1;
          else if constexpr (std::is_same_v<U, uint16_t> || std::is_same_v<U, int16_t>)
             return 2;
@@ -287,7 +291,9 @@ namespace psio {
       template <typename T>
       constexpr size_t canonical_flat_count_impl() {
          using U = std::remove_cvref_t<T>;
-         if constexpr (is_scalar_v<U>)
+         if constexpr (std::is_void_v<U>)
+            return 0;
+         else if constexpr (is_scalar_v<U>)
             return 1;
          else if constexpr (is_own_ct<U>::value || is_borrow_ct<U>::value)
             return 1;

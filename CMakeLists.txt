@@ -97,6 +97,7 @@ if(PSISERVE_ENABLE AND NOT PSISERVE_WASI)
    add_subdirectory(libraries/psi-sdk)
    add_subdirectory(programs/psiserve-cli)
    add_subdirectory(programs/chat-bench)
+   add_subdirectory(services/blockchain-example)
 endif()
 
 # source-to-pzam driver: host CLI that runs clang.pzam + wasm-ld.pzam under

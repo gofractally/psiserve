@@ -228,6 +228,121 @@ static inline const char* http_path(const http_request* req, int* out_len)
    return req->url;
 }
 
+/* ── Response helpers ─────────────────────────────────────────────── */
+
+/* Send an HTTP response with status code, content type, and body.
+ * Handles the full response: status line, headers, body.
+ * Uses cork/uncork for efficient TCP segment packing. */
+static inline void http_respond(tcp_conn* c, int status,
+                                const char* content_type,
+                                const char* body, int body_len)
+{
+   const char* reason = "OK";
+   if (status == 200) reason = "OK";
+   else if (status == 400) reason = "Bad Request";
+   else if (status == 404) reason = "Not Found";
+   else if (status == 500) reason = "Internal Server Error";
+   else if (status == 503) reason = "Service Unavailable";
+
+   char header[512];
+   int hlen = 0;
+
+   /* Status line */
+   const char* pre = "HTTP/1.1 ";
+   for (int i = 0; pre[i]; ++i) header[hlen++] = pre[i];
+   if (status >= 100) header[hlen++] = '0' + (status / 100);
+   header[hlen++] = '0' + ((status / 10) % 10);
+   header[hlen++] = '0' + (status % 10);
+   header[hlen++] = ' ';
+   for (int i = 0; reason[i]; ++i) header[hlen++] = reason[i];
+   header[hlen++] = '\r'; header[hlen++] = '\n';
+
+   /* Content-Type */
+   const char* ct = "Content-Type: ";
+   for (int i = 0; ct[i]; ++i) header[hlen++] = ct[i];
+   for (int i = 0; content_type[i]; ++i) header[hlen++] = content_type[i];
+   header[hlen++] = '\r'; header[hlen++] = '\n';
+
+   /* Content-Length */
+   const char* cl = "Content-Length: ";
+   for (int i = 0; cl[i]; ++i) header[hlen++] = cl[i];
+   {
+      char digits[16];
+      int dlen = 0;
+      int tmp = body_len;
+      if (tmp == 0) { digits[dlen++] = '0'; }
+      else { while (tmp > 0) { digits[dlen++] = '0' + (tmp % 10); tmp /= 10; } }
+      for (int i = dlen - 1; i >= 0; --i) header[hlen++] = digits[i];
+   }
+   header[hlen++] = '\r'; header[hlen++] = '\n';
+
+   /* Connection: close for simplicity */
+   const char* cc = "Connection: close\r\n";
+   for (int i = 0; cc[i]; ++i) header[hlen++] = cc[i];
+
+   /* CORS header for browser fetch */
+   const char* cors = "Access-Control-Allow-Origin: *\r\n";
+   for (int i = 0; cors[i]; ++i) header[hlen++] = cors[i];
+
+   /* End of headers */
+   header[hlen++] = '\r'; header[hlen++] = '\n';
+
+   tcp_cork(c);
+   tcp_write_all(c, header, hlen);
+   if (body_len > 0)
+      tcp_write_all(c, body, body_len);
+   tcp_uncork(c);
+}
+
+/* Convenience: send a string body with a given content type. */
+static inline void http_respond_str(tcp_conn* c, int status,
+                                    const char* content_type,
+                                    const char* body)
+{
+   int len = 0;
+   while (body[len]) ++len;
+   http_respond(c, status, content_type, body, len);
+}
+
+/* Convenience: send a JSON response. */
+static inline void http_respond_json(tcp_conn* c, int status,
+                                     const char* json_body)
+{
+   http_respond_str(c, status, "application/json", json_body);
+}
+
+/* Convenience: send an HTML response. */
+static inline void http_respond_html(tcp_conn* c, int status,
+                                     const char* html_body)
+{
+   http_respond_str(c, status, "text/html; charset=utf-8", html_body);
+}
+
+/* Parse a query string parameter value by key.
+ * Searches query_string for "key=value" and returns pointer to value.
+ * Sets *out_len to the value length. Returns NULL if not found.
+ * Does not decode URL encoding. */
+static inline const char* http_query_param(const char* query, int query_len,
+                                           const char* key, int key_len,
+                                           int* out_len)
+{
+   for (int i = 0; i + key_len < query_len; ++i)
+   {
+      if ((i == 0 || query[i-1] == '&') &&
+          _mem_eq(query + i, key, key_len) &&
+          query[i + key_len] == '=')
+      {
+         int vstart = i + key_len + 1;
+         int vend = vstart;
+         while (vend < query_len && query[vend] != '&') ++vend;
+         *out_len = vend - vstart;
+         return query + vstart;
+      }
+   }
+   *out_len = 0;
+   return 0;
+}
+
 #ifdef __cplusplus
 }
 #endif

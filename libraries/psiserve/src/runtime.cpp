@@ -1,5 +1,6 @@
+#include <psiserve/app_server.hpp>
+#include <psiserve/db_host.hpp>
 #include <psiserve/log.hpp>
-#include <psiserve/runtime.hpp>
 #include <psiserve/tls.hpp>
 
 #include <pfs/store.hpp>
@@ -50,12 +51,12 @@ namespace psiserve
 
    // ── Runtime ────────────────────────────────────────────────────────
 
-   Runtime::Runtime(Config cfg)
+   AppServer::AppServer(Config cfg)
       : _cfg(std::move(cfg))
    {
    }
 
-   Runtime::~Runtime() = default;
+   AppServer::~AppServer() = default;
 
    static RealFd createListenSocket(Port port, bool reuse_port = false)
    {
@@ -89,7 +90,7 @@ namespace psiserve
       return RealFd{fd};
    }
 
-   void Runtime::run()
+   void AppServer::run()
    {
       log::init();
       log::set_thread_name("main");
@@ -196,7 +197,7 @@ namespace psiserve
       PSI_INFO("Server stopped");
    }
 
-   void Runtime::runWorker(int worker_id, RealFd listen_fd, SSL_CTX* ssl_ctx,
+   void AppServer::runWorker(int worker_id, RealFd listen_fd, SSL_CTX* ssl_ctx,
                            std::barrier<>& ready_barrier)
    {
       auto& sched = psiber::Scheduler::current();
@@ -259,6 +260,34 @@ namespace psiserve
       // We set it as the host pointer so trampolines receive it.
       HostApi host(proc, sched, nullptr, _ipfs.get());
       mod.set_host_ptr(&host);
+
+      // Database host — provides psi:db/* imports. Opened per-worker
+      // so each worker gets its own write session (psitri write sessions
+      // are not thread-safe). The database itself is thread-safe.
+      //
+      // Uses PSIO_HOST_MODULE registration (db_host.hpp defines it) via
+      // the canonical-ABI 16-slot slow_dispatch path. Each entry gets a
+      // host_override pointing at the db_host instance so it doesn't
+      // conflict with the HostApi module-level host pointer.
+      std::unique_ptr<db_host> db;
+      std::filesystem::path db_dir = _cfg.datadir.empty()
+         ? std::filesystem::temp_directory_path() / "psiserve_db"
+         : _cfg.datadir;
+      std::filesystem::create_directories(db_dir);
+      {
+         auto db_path = (db_dir / "blockchain.db").string();
+         db = std::make_unique<db_host>();
+         db->db = psitri::database::open(db_path);
+         db->ws = db->db->start_write_session();
+         db->name_to_root["blockchain"] = 0;
+
+         _rt.provide<db_host>(mod, *db);
+
+         // wasi-libc links fd_write for abort/panic output.
+         // Stub it so the import resolves.
+         table.add<&db_host::fd_write>("wasi_snapshot_preview1", "fd_write");
+         table.entries_mutable().back().host_override = db.get();
+      }
 
       auto inst = _rt.instantiate(mod, policy);
 
