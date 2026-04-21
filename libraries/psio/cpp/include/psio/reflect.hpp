@@ -421,7 +421,25 @@ namespace psio
    };
 
    template <typename T>
-   using struct_tuple_t = get_struct_tuple_impl<typename reflect<T>::data_members>::type;
+   struct struct_tuple_impl
+   {
+      using type = typename get_struct_tuple_impl<typename reflect<T>::data_members>::type;
+   };
+
+   template <typename... Ts>
+   struct struct_tuple_impl<std::tuple<Ts...>>
+   {
+      using type = std::tuple<Ts...>;
+   };
+
+   template <typename... Ts>
+   struct struct_tuple_impl<const std::tuple<Ts...>>
+   {
+      using type = std::tuple<Ts...>;
+   };
+
+   template <typename T>
+   using struct_tuple_t = typename struct_tuple_impl<std::remove_cv_t<T>>::type;
 
    template <auto... M, typename F>
    constexpr decltype(auto) apply_members(MemberList<M...>*, F&& f)

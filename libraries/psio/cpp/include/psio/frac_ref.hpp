@@ -51,8 +51,11 @@ namespace psio
    // ── Compile-time layout info for a reflected struct ────────────────────────
 
    template <typename T>
+   struct frac_layout;
+
+   template <typename T>
       requires Reflected<T>
-   struct frac_layout
+   struct frac_layout<T>
    {
       static constexpr bool     has_header = !reflect<T>::definitionWillNotChange;
       static constexpr uint32_t hdr_size   = has_header ? 2 : 0;
@@ -118,6 +121,44 @@ namespace psio
       }
 
       static constexpr bool simd_eligible = all_4byte_aligned();
+   };
+
+   // ── frac_layout specialization for std::tuple ──────────────────────────────
+
+   template <typename... Ts>
+   struct frac_layout<std::tuple<Ts...>>
+   {
+      static constexpr bool     has_header = false;
+      static constexpr uint32_t hdr_size   = 0;
+
+      static constexpr auto   fixed_sizes = std::array<uint32_t, sizeof...(Ts)>{
+         is_packable<Ts>::fixed_size...};
+      static constexpr auto   is_variable = std::array<bool, sizeof...(Ts)>{
+         is_packable<Ts>::is_variable_size...};
+      static constexpr size_t num_members = sizeof...(Ts);
+
+      static consteval uint32_t offset_of(size_t index)
+      {
+         uint32_t off = 0;
+         for (size_t i = 0; i < index; ++i)
+            off += fixed_sizes[i];
+         return off;
+      }
+
+      static consteval auto compute_offsets()
+      {
+         std::array<uint32_t, sizeof...(Ts)> o{};
+         uint32_t off = 0;
+         for (size_t i = 0; i < sizeof...(Ts); ++i)
+         {
+            o[i] = off;
+            off += fixed_sizes[i];
+         }
+         return o;
+      }
+      static constexpr auto offsets = compute_offsets();
+
+      static constexpr uint32_t total_fixed = (is_packable<Ts>::fixed_size + ... + 0);
    };
 
    // ── Type-level path utilities ──────────────────────────────────────────────
@@ -1207,6 +1248,13 @@ namespace psio
             return static_cast<F>(val);
          }
          else if constexpr (std::is_arithmetic_v<F>)
+         {
+            F val;
+            std::memcpy(&val, field_pos, sizeof(F));
+            return val;
+         }
+         else if constexpr (Reflected<F> && !is_packable<F>::is_variable_size
+                            && sizeof(F) <= 16)
          {
             F val;
             std::memcpy(&val, field_pos, sizeof(F));

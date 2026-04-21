@@ -16,9 +16,11 @@
 //   auto args = psio::to_frac(std::tuple(from, to, amount, memo));
 //   blockchain_api::call_contract("token"_n, "transfer"_n, args);
 
+#include <psio/frac_ref.hpp>
 #include <psio/fracpack.hpp>
 #include <psio/name.hpp>
 #include <psio/reflect.hpp>
+#include <psio/view.hpp>
 
 #include <cstdint>
 #include <span>
@@ -48,8 +50,14 @@ namespace psibase
 
    namespace detail
    {
+      // Map view types back to owning types for fracpack deserialization.
+      // string_view → string (fracpack stores strings, view reads them)
+      template <typename T> struct to_value_type { using type = T; };
+      template <> struct to_value_type<std::string_view> { using type = std::string; };
+      template <typename T> using to_value_t = typename to_value_type<T>::type;
+
       template <typename R, typename C, typename... Args>
-      std::tuple<std::remove_cvref_t<Args>...> param_tuple_of(R (C::*)(Args...));
+      std::tuple<to_value_t<std::remove_cvref_t<Args>>...> param_tuple_of(R (C::*)(Args...));
 
       template <typename R, typename C, typename... Args>
       R return_type_of(R (C::*)(Args...));
@@ -75,6 +83,26 @@ namespace psibase
    /// data/len:  fracpack-encoded parameter tuple
    ///
    /// Returns 0 on success, non-zero on unknown method.
+   template <typename ParamTuple, typename ViewT>
+   struct frac_tuple_get;
+
+   // Specialization: extract element I from a fracpack-encoded tuple
+   template <typename... Ts>
+   struct frac_tuple_get<std::tuple<Ts...>, void>
+   {
+      template <std::size_t I>
+      static auto get(const char* data)
+      {
+         return psio::frac_detail::frac_view_field<std::tuple<Ts...>, I>(data);
+      }
+   };
+
+   template <typename ParamTuple, typename F, std::size_t... I>
+   decltype(auto) frac_tuple_call(F&& f, const char* data, std::index_sequence<I...>)
+   {
+      return f(frac_tuple_get<ParamTuple, void>::template get<I>(data)...);
+   }
+
    template <typename Service>
    uint32_t dispatch(name_id method_id, const char* data, uint32_t len)
    {
@@ -87,24 +115,40 @@ namespace psibase
             using ParamTuple = decltype(detail::param_tuple_of(member));
             using ReturnType = decltype(detail::return_type_of(member));
 
-            // Deserialize fracpack args into the parameter tuple.
-            // TODO: replace with psio::view<const ParamTuple> for
-            // zero-copy dispatch once psio view infrastructure is
-            // ported (psio::get<I>, tuple_size for views, etc.)
-            auto params = psio::from_frac<ParamTuple>(
-               std::span<const char>(data, len));
+            auto param_data = std::span<const char>{data, len};
+
+            check(psio::fracpack_validate<ParamTuple>(param_data),
+                  "invalid action args");
+
+            // frac_tuple_view: lightweight view over a fracpack-encoded
+            // tuple. Uses frac_view_field for per-element access without
+            // requiring PSIO_REFLECT on std::tuple.
+            struct frac_tuple_view
+            {
+               const char* data;
+               explicit frac_tuple_view(const char* d) : data(d) {}
+            };
+            frac_tuple_view param_view(param_data.data());
+
+            constexpr auto N = std::tuple_size_v<ParamTuple>;
 
             if constexpr (std::is_void_v<ReturnType>)
             {
-               std::apply([&](auto&&... args) {
-                  (service.*member)(std::forward<decltype(args)>(args)...);
-               }, std::move(params));
+               frac_tuple_call<ParamTuple>(
+                  [&](auto&&... args) {
+                     (service.*member)(std::forward<decltype(args)>(args)...);
+                  },
+                  param_view.data,
+                  std::make_index_sequence<N>{});
             }
             else
             {
-               auto result = std::apply([&](auto&&... args) {
-                  return (service.*member)(std::forward<decltype(args)>(args)...);
-               }, std::move(params));
+               auto result = frac_tuple_call<ParamTuple>(
+                  [&](auto&&... args) {
+                     return (service.*member)(std::forward<decltype(args)>(args)...);
+                  },
+                  param_view.data,
+                  std::make_index_sequence<N>{});
 
                auto rv = psio::to_frac(result);
                set_retval(rv.data(), static_cast<uint32_t>(rv.size()));
