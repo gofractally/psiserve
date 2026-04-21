@@ -253,6 +253,13 @@ namespace psizam {
          if constexpr (requires { options.checked_kind; }) {
             ctx.set_checked_kind(options.checked_kind);
          }
+         // Mirror the fp_mode the parser used to bake JIT code — for the
+         // interpreter this is where the mode actually takes effect, and
+         // for JITs the context-level setter just records the same value
+         // the code writer already baked.
+         if constexpr (requires { options.fp; }) {
+            ctx.set_fp_mode(options.fp);
+         }
       }
    }
 

@@ -170,17 +170,23 @@ static run_result execute_backend(BackendT& bkend) {
    return r;
 }
 
+// Options struct that carries the caller's requested fp_mode through both
+// the parser (JIT backends pick it up in write_code_out via SFINAE and bake
+// it into emitted code) and apply_mem_safety_options (which sets the
+// execution_context's _fp for the interpreter path).
+struct fp_options {
+   fp_mode fp;
+};
+
 template <typename Impl>
 static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
                               fp_mode fp = fp_mode::softfloat) {
-   using backend_t = backend<std::nullptr_t, Impl>;
+   using backend_t = backend<std::nullptr_t, Impl, fp_options>;
    wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
    wasm_allocator wa;
+   fp_options opts{ fp };
    try {
-      backend_t bkend(code, &wa);
-      if constexpr (!Impl::is_jit) {
-         bkend.set_fp_mode(fp);
-      }
+      backend_t bkend(code, &wa, opts);
       return execute_backend(bkend);
    } catch (wasm_parse_exception& e) {
       return {1, false, e.what(), {}, {}};
@@ -196,12 +202,14 @@ static run_result run_backend(const std::vector<uint8_t>& wasm_bytes,
 struct checked_options {
    mem_safety   memory_mode;
    checked_mode checked_kind;
+   fp_mode      fp;  // mirrors fp_options::fp so checked+fp compose
 };
 
 template <typename Impl>
 static run_result run_backend_checked(const std::vector<uint8_t>& wasm_bytes,
-                                      checked_mode kind = checked_mode::strict) {
-   checked_options opts{ mem_safety::checked, kind };
+                                      checked_mode kind = checked_mode::strict,
+                                      fp_mode fp = fp_mode::softfloat) {
+   checked_options opts{ mem_safety::checked, kind, fp };
    using backend_t = backend<std::nullptr_t, Impl, checked_options>;
    wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
    wasm_allocator wa;
@@ -421,57 +429,72 @@ struct test_result {
 
 static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char* source, bool verbose) {
    bool trace = getenv("PSIZAM_FUZZ_TRACE") != nullptr;
-   if (trace) fprintf(stderr, "[trace] interp/softfloat\n");
-   auto r_interp = run_backend<interpreter>(wasm, fp_mode::softfloat);
 
-   // Determinism cross-check: the same interpreter run in hw_deterministic
-   // must produce the same outcome as softfloat (invariant from config.hpp:
-   // hw_deterministic(x) == softfloat(x) bit-for-bit).
+   // Run every backend in both softfloat AND hw_deterministic modes. The
+   // config.hpp invariant says hw_det(x) == softfloat(x) bit-for-bit; we
+   // prove it per-backend (softfloat vs hw_det for the same backend) and
+   // verify cross-backend consistency in each mode. Strict bit-for-bit
+   // comparison for both — NaN bit-pattern divergence IS the bug we want
+   // to catch. Only the fast (non-deterministic) mode run, below, is
+   // NaN-tolerant since fast is explicitly spec-legal non-determinism.
+
+   if (trace) fprintf(stderr, "[trace] interp/softfloat\n");
+   auto r_interp    = run_backend<interpreter>(wasm, fp_mode::softfloat);
    if (trace) fprintf(stderr, "[trace] interp/hw_det\n");
    auto r_interp_hwd = run_backend<interpreter>(wasm, fp_mode::hw_deterministic);
 
    bool has_mismatch = false;
-   if (r_interp.outcome != r_interp_hwd.outcome) {
-      print_mismatch(source, "interp/softfloat", r_interp, "interp/hw_det", r_interp_hwd);
-      has_mismatch = true;
-   }
-   if (!compare_returns(source, "interp/softfloat", r_interp, "interp/hw_det", r_interp_hwd))
-      has_mismatch = true;
+
+   auto strict_cross = [&](const char* ba, const run_result& ra,
+                           const char* bb, const run_result& rb) {
+      if (ra.outcome != rb.outcome) {
+         print_mismatch(source, ba, ra, bb, rb);
+         has_mismatch = true;
+      }
+      if (!compare_returns(source, ba, ra, bb, rb))
+         has_mismatch = true;
+   };
+
+   // Invariant: interp softfloat == interp hw_det bit-for-bit.
+   strict_cross("interp/softfloat", r_interp, "interp/hw_det", r_interp_hwd);
 
 #if defined(__x86_64__) || defined(__aarch64__)
-   if (trace) fprintf(stderr, "[trace] jit\n");
-   auto r_jit = run_backend<jit>(wasm);
-   if (r_interp.outcome != r_jit.outcome) {
-      print_mismatch(source, "interpreter", r_interp, "jit", r_jit);
-      has_mismatch = true;
-   }
-   if (!compare_returns(source, "interpreter", r_interp, "jit", r_jit))
-      has_mismatch = true;
-#endif
+   if (trace) fprintf(stderr, "[trace] jit/softfloat\n");
+   auto r_jit_sf  = run_backend<jit>(wasm, fp_mode::softfloat);
+   if (trace) fprintf(stderr, "[trace] jit/hw_det\n");
+   auto r_jit_hwd = run_backend<jit>(wasm, fp_mode::hw_deterministic);
+   strict_cross("jit/softfloat",    r_jit_sf,  "jit/hw_det",    r_jit_hwd);
+   strict_cross("interp/softfloat", r_interp,  "jit/softfloat", r_jit_sf);
+   strict_cross("interp/hw_det",    r_interp_hwd, "jit/hw_det", r_jit_hwd);
 
-#if defined(__x86_64__) || defined(__aarch64__)
-   if (trace) fprintf(stderr, "[trace] jit2\n");
-   auto r_jit2 = run_backend<jit2>(wasm);
-   if (r_interp.outcome != r_jit2.outcome) {
-      print_mismatch(source, "interpreter", r_interp, "jit2", r_jit2);
-      has_mismatch = true;
-   }
-   if (!compare_returns(source, "interpreter", r_interp, "jit2", r_jit2))
-      has_mismatch = true;
+   if (trace) fprintf(stderr, "[trace] jit2/softfloat\n");
+   auto r_jit2_sf  = run_backend<jit2>(wasm, fp_mode::softfloat);
+   if (trace) fprintf(stderr, "[trace] jit2/hw_det\n");
+   auto r_jit2_hwd = run_backend<jit2>(wasm, fp_mode::hw_deterministic);
+   strict_cross("jit2/softfloat",   r_jit2_sf, "jit2/hw_det",    r_jit2_hwd);
+   strict_cross("interp/softfloat", r_interp,  "jit2/softfloat", r_jit2_sf);
+   strict_cross("interp/hw_det",    r_interp_hwd, "jit2/hw_det", r_jit2_hwd);
 #endif
 
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
-   if (trace) fprintf(stderr, "[trace] jit_llvm\n");
-   run_result r_jit_llvm;
-   if (getenv("PSIZAM_FUZZ_SKIP_LLVM")) { r_jit_llvm.outcome = r_interp.outcome; } else
-   r_jit_llvm = run_backend<jit_llvm>(wasm);
-   if (r_interp.outcome != r_jit_llvm.outcome) {
-      print_mismatch(source, "interpreter", r_interp, "jit_llvm", r_jit_llvm);
-      has_mismatch = true;
+   run_result r_llvm_sf{}, r_llvm_hwd{};
+   if (getenv("PSIZAM_FUZZ_SKIP_LLVM")) {
+      r_llvm_sf.outcome  = r_interp.outcome;
+      r_llvm_hwd.outcome = r_interp_hwd.outcome;
+   } else {
+      if (trace) fprintf(stderr, "[trace] jit_llvm/softfloat\n");
+      r_llvm_sf  = run_backend<jit_llvm>(wasm, fp_mode::softfloat);
+      if (trace) fprintf(stderr, "[trace] jit_llvm/hw_det\n");
+      r_llvm_hwd = run_backend<jit_llvm>(wasm, fp_mode::hw_deterministic);
+      strict_cross("jit_llvm/softfloat",  r_llvm_sf,  "jit_llvm/hw_det",    r_llvm_hwd);
+      strict_cross("interp/softfloat",    r_interp,   "jit_llvm/softfloat", r_llvm_sf);
+      strict_cross("interp/hw_det",       r_interp_hwd, "jit_llvm/hw_det",  r_llvm_hwd);
    }
-   if (!compare_returns(source, "interpreter", r_interp, "jit_llvm", r_jit_llvm))
-      has_mismatch = true;
+   // Keep a named handle so downstream code below still compiles.
+   run_result& r_jit_llvm = r_llvm_sf;
 #endif
+   // Primary "softfloat" oracle used by the legacy checked/wasm3 paths below.
+   // (They only care about psizam-side outcome — any deterministic mode works.)
 
    // Instruction-guarded (checked/strict) vs page-guarded differential.
    // Must produce identical outcomes and return values.

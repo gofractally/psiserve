@@ -212,6 +212,11 @@ namespace psizam::detail {
    PARSER_OPTION(compile_threads, static_cast<std::uint32_t>(0), std::uint32_t)
    PARSER_OPTION(memory_mode, mem_safety::guarded, mem_safety)
    PARSER_OPTION(checked_kind, checked_mode::strict, checked_mode)
+   // fp_mode picked up by write_code_out below and baked into JIT code
+   // at emission time. Default matches the build-time config (softfloat
+   // when PSIZAM_SOFTFLOAT is defined, fast otherwise) so existing
+   // embedders see no behavioral change.
+   PARSER_OPTION(fp, (use_softfloat ? fp_mode::softfloat : fp_mode::fast), fp_mode)
 
 #undef MAX_ELEMENTS
 #undef PARSER_OPTION
@@ -3367,6 +3372,12 @@ namespace psizam::detail {
          if constexpr (requires { code_writer.set_mem_mode(mem_safety{}); }) {
             code_writer.set_mem_mode(get_memory_mode(_options));
             code_writer.set_checked_kind(get_checked_kind(_options));
+         }
+         if constexpr (requires { code_writer.set_fp_mode(fp_mode{}); }) {
+            // Must run before any function body is emitted — all four JIT
+            // code writers (x86_64, aarch64, jit2/x86_64, jit2/aarch64, and
+            // ir_writer_llvm) bake _fp into their emitted instructions.
+            code_writer.set_fp_mode(get_fp(_options));
          }
 #if !defined(__wasi__)
          if constexpr (requires { code_writer.set_parse_callback(std::declval<typename Writer::parse_callback_t>()); }) {

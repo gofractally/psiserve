@@ -225,6 +225,12 @@ namespace psizam::detail {
          if (!handle || extra == 0) return;
          *static_cast<int64_t*>(handle) += extra;
       }
+
+      // Parser hook (called by write_code_out before any body is emitted).
+      // Stashed and applied inside ensure_codegen() once _codegen is
+      // constructed — overrides the codegen's default and any AOT
+      // compile_result setting.
+      void set_fp_mode(fp_mode m) noexcept { _requested_fp = m; }
       // Branch/label types — dummy values since IR tracks control flow directly.
       // The parser stores and passes these between emit_if/emit_else/emit_end/emit_br
       // but never interprets them. fix_branch is a no-op.
@@ -441,6 +447,12 @@ namespace psizam::detail {
                _codegen->set_fp_mode(_compile_result->softfloat
                                      ? fp_mode::softfloat
                                      : fp_mode::fast);
+            }
+            // Explicit caller override (from parser's set_fp_mode path)
+            // wins over the compile-result default so the fuzzer can
+            // pin a specific mode regardless of the build-time setting.
+            if (_requested_fp) {
+               _codegen->set_fp_mode(*_requested_fp);
             }
             _codegen->emit_entry_and_error_handlers();
          }
@@ -3466,6 +3478,9 @@ namespace psizam::detail {
       growable_allocator _codegen_scratch;
       growable_allocator _opt_scratch_alloc;
       std::optional<codegen_t> _codegen;
+      // Caller-requested fp_mode from parser's set_fp_mode path; unset
+      // means use the codegen's compile-result default (see ensure_codegen).
+      std::optional<fp_mode>   _requested_fp;
       // Parallel compilation state
       uint32_t _compile_threads = 0;          // 0 or 1 = serial, >1 = parallel threads
       std::size_t _max_func_bytes = 0;        // Largest function body in module
