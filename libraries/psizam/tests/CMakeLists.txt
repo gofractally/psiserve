@@ -336,9 +336,12 @@ target_compile_definitions(composition_tests PUBLIC
    CATCH_CONFIG_NO_POSIX_SIGNALS
    COMPOSITION_WASM_DIR="${CMAKE_BINARY_DIR}/libraries/psizam/examples/composition"
 )
-if(TARGET composition_provider_guest AND TARGET composition_consumer_guest)
-   add_dependencies(composition_tests composition_provider_guest composition_consumer_guest)
+if(NOT TARGET composition_provider_guest OR NOT TARGET composition_consumer_guest)
+   message(FATAL_ERROR
+      "composition_tests and runtime_parity_tests require WASM fixtures from examples/composition. "
+      "Install wasi-sdk or set -DPSIZAM_WASI_SDK=/path/to/wasi-sdk.")
 endif()
+add_dependencies(composition_tests composition_provider_guest composition_consumer_guest)
 catch_discover_tests(composition_tests)
 
 # ── Runtime parity tests ─────────────────────────────────────────────────────
@@ -362,9 +365,7 @@ target_compile_definitions(runtime_parity_tests PUBLIC
    CATCH_CONFIG_NO_POSIX_SIGNALS
    COMPOSITION_WASM_DIR="${CMAKE_BINARY_DIR}/libraries/psizam/examples/composition"
 )
-if(TARGET composition_provider_guest AND TARGET composition_consumer_guest)
-   add_dependencies(runtime_parity_tests composition_provider_guest composition_consumer_guest)
-endif()
+add_dependencies(runtime_parity_tests composition_provider_guest composition_consumer_guest)
 catch_discover_tests(runtime_parity_tests)
 
 add_executable(mem64_debug compliance/mem64_debug.cpp)

@@ -1272,16 +1272,20 @@ namespace psizam::detail {
 
       void mark_block_start(uint32_t block_idx) {
          if (block_idx < _num_blocks) {
-            _block_addrs[block_idx] = code;
-            // For branch_to_entry blocks, patch pending fixups at block start
-            if (_cur_func && _cur_func->blocks[block_idx].branch_to_entry) {
+            // Only set the block's start address for loops and branch_to_entry blocks.
+            // Regular blocks (emit_block) have their branches target the END — setting
+            // the start address here would cause forward branch fixups to resolve to the
+            // start, not the end. mark_block_end sets the address for regular blocks.
+            bool is_bte  = _cur_func && _cur_func->blocks[block_idx].branch_to_entry;
+            bool is_loop = _cur_func && _cur_func->blocks && _cur_func->blocks[block_idx].is_loop;
+            if (is_bte || is_loop) _block_addrs[block_idx] = code;
+            if (is_bte) {
                for (auto* f = _block_fixups[block_idx]; f; f = f->next) {
                   fix_branch(f->branch, code);
                }
                _block_fixups[block_idx] = nullptr;
             }
-            if (_cur_func && _cur_func->blocks &&
-                _cur_func->blocks[block_idx].is_loop) {
+            if (is_loop) {
                emit_gas_charge(1 + _cur_func->blocks[block_idx].loop_gas_extra);
             }
          }

@@ -164,7 +164,13 @@ function(psi_add_wasm_module name)
       add_custom_target(${name} ALL DEPENDS ${_out})
       set_target_properties(${name} PROPERTIES PSI_WASM_OUTPUT ${_out})
    else()
-      add_custom_target(${name} ALL DEPENDS ${_raw_out})
-      set_target_properties(${name} PROPERTIES PSI_WASM_OUTPUT ${_raw_out})
+      add_custom_command(
+         OUTPUT  ${_out}
+         COMMAND ${CMAKE_COMMAND} -E copy ${_raw_out} ${_out}
+         DEPENDS ${_raw_out}
+         COMMENT "Copying ${ARG_OUTPUT} (no pzam tool for WIT embedding)"
+         VERBATIM)
+      add_custom_target(${name} ALL DEPENDS ${_out})
+      set_target_properties(${name} PROPERTIES PSI_WASM_OUTPUT ${_out})
    endif()
 endfunction()
