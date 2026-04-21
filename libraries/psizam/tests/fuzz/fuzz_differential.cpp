@@ -438,15 +438,6 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
    if (!compare_returns(source, "interp/softfloat", r_interp, "interp/hw_det", r_interp_hwd))
       has_mismatch = true;
 
-   // Cross-backend comparisons below pass nan_tolerant=true. The determinism
-   // invariant (hw_det(x) == softfloat(x) bit-for-bit) is proven by the
-   // interp/softfloat vs interp/hw_det check above; across *different*
-   // backends we only require that NaN outputs are both valid NaNs
-   // (WASM-spec non-determinism in NaN payload is permitted when fp_mode
-   // isn't uniformly enforced end-to-end — e.g. JIT fp_mode is baked at
-   // construction and the fuzzer cannot yet rebuild each JIT per-mode).
-   // Non-NaN return bits are still compared bit-for-bit.
-
 #if defined(__x86_64__) || defined(__aarch64__)
    if (trace) fprintf(stderr, "[trace] jit\n");
    auto r_jit = run_backend<jit>(wasm);
@@ -454,7 +445,7 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
       print_mismatch(source, "interpreter", r_interp, "jit", r_jit);
       has_mismatch = true;
    }
-   if (!compare_returns(source, "interpreter", r_interp, "jit", r_jit, /*nan_tolerant=*/true))
+   if (!compare_returns(source, "interpreter", r_interp, "jit", r_jit))
       has_mismatch = true;
 #endif
 
@@ -465,7 +456,7 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
       print_mismatch(source, "interpreter", r_interp, "jit2", r_jit2);
       has_mismatch = true;
    }
-   if (!compare_returns(source, "interpreter", r_interp, "jit2", r_jit2, /*nan_tolerant=*/true))
+   if (!compare_returns(source, "interpreter", r_interp, "jit2", r_jit2))
       has_mismatch = true;
 #endif
 
@@ -478,7 +469,7 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
       print_mismatch(source, "interpreter", r_interp, "jit_llvm", r_jit_llvm);
       has_mismatch = true;
    }
-   if (!compare_returns(source, "interpreter", r_interp, "jit_llvm", r_jit_llvm, /*nan_tolerant=*/true))
+   if (!compare_returns(source, "interpreter", r_interp, "jit_llvm", r_jit_llvm))
       has_mismatch = true;
 #endif
 
@@ -504,7 +495,7 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
          print_mismatch(source, "interp/page-guarded", r_interp, "jit/instr-guarded", r_jit_cs);
          has_mismatch = true;
       }
-      if (!compare_returns(source, "interp/page-guarded", r_interp, "jit/instr-guarded", r_jit_cs, /*nan_tolerant=*/true))
+      if (!compare_returns(source, "interp/page-guarded", r_interp, "jit/instr-guarded", r_jit_cs))
          has_mismatch = true;
 
       if (trace) fprintf(stderr, "[trace] jit2/checked_strict\n");
@@ -513,7 +504,7 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
          print_mismatch(source, "interp/page-guarded", r_interp, "jit2/instr-guarded", r_jit2_cs);
          has_mismatch = true;
       }
-      if (!compare_returns(source, "interp/page-guarded", r_interp, "jit2/instr-guarded", r_jit2_cs, /*nan_tolerant=*/true))
+      if (!compare_returns(source, "interp/page-guarded", r_interp, "jit2/instr-guarded", r_jit2_cs))
          has_mismatch = true;
 #endif
 
@@ -525,7 +516,7 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
             print_mismatch(source, "interp/page-guarded", r_interp, "jit_llvm/instr-guarded", r_llvm_cs);
             has_mismatch = true;
          }
-         if (!compare_returns(source, "interp/page-guarded", r_interp, "jit_llvm/instr-guarded", r_llvm_cs, /*nan_tolerant=*/true))
+         if (!compare_returns(source, "interp/page-guarded", r_interp, "jit_llvm/instr-guarded", r_llvm_cs))
             has_mismatch = true;
       }
 #endif
