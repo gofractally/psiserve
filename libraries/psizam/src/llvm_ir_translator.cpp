@@ -2431,8 +2431,20 @@ namespace psizam::detail {
                   // vreg whose inferred type is float; load_vreg_as bitcasts
                   // through i32 so CreateZExt below doesn't fail verify.
                   llvm::Value* addr = load_vreg_as(inst.ri.src1, i32_ty);
-                  // For stores, inst.dest holds the value vreg
-                  llvm::Value* val = load_vreg(inst.dest);
+                  // For stores, inst.dest holds the value vreg. Coerce to
+                  // the opcode's storage type first so the CreateTrunc below
+                  // (for narrowing stores) doesn't fail verification when a
+                  // dead-path vreg was inferred as float.
+                  llvm::Type* val_ty;
+                  switch (inst.opcode) {
+                     case ir_op::i64_store: val_ty = i64_ty; break;
+                     case ir_op::f32_store: val_ty = f32_ty; break;
+                     case ir_op::f64_store: val_ty = f64_ty; break;
+                     case ir_op::i64_store8: case ir_op::i64_store16:
+                     case ir_op::i64_store32: val_ty = i64_ty; break;
+                     default: val_ty = i32_ty; break;
+                  }
+                  llvm::Value* val = load_vreg_as(inst.dest, val_ty);
                   if (!addr || !val) break;
                   uint32_t offset = static_cast<uint32_t>(inst.ri.imm);
 
