@@ -1,0 +1,11 @@
+# Agent Tasks
+
+Your assignment is in `../psiserve-tasks/.agents/psiserve-agent2.md`
+
+Full issue context is in `../psiserve-coordination/.issues/`
+
+## Quick Start
+1. Read `../psiserve-tasks/.agents/psiserve-agent2.md` for current assignment and coordinator notes
+2. Read the referenced issue file in `../psiserve-coordination/.issues/<id>.md` for full context and acceptance criteria
+3. Update your agent file status section as you complete work
+4. `git -C ../psiserve-tasks push` after updating your status

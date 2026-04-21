@@ -135,11 +135,17 @@ public:
 // `unsupported_backend` if `kind` is gated out of this build (e.g. jit_llvm
 // without PSIZAM_ENABLE_LLVM_BACKEND, jit / jit2 on platforms without
 // __x86_64__ / __aarch64__).
+//
+// If external_base is non-null, the instance uses caller-provided memory
+// at (external_base, 1 << external_budget) instead of mmap'ing its own
+// guarded region. Memory mode is forced to checked.
 std::unique_ptr<instance_be> make_instance_be(
    backend_kind kind,
    const std::vector<uint8_t>& wasm,
    host_function_table table,
-   void* host_ptr);
+   void* host_ptr,
+   char* external_base = nullptr,
+   uint32_t external_budget_bytes = 0);
 
 } // namespace detail
 } // namespace psizam

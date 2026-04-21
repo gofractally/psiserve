@@ -23,6 +23,7 @@
 //   auto inst = rt.instantiate(tmpl);
 //   inst.as<greeter>().run(5);
 
+#include <psizam/canonical_dispatch.hpp>
 #include <psizam/gas.hpp>
 #include <psizam/gas_pool.hpp>
 #include <psizam/host_function_table.hpp>
@@ -106,6 +107,16 @@ struct instance_policy {
    // ── Resources ───────────────────────────────────────────────────
    uint32_t  max_pages = 256;
    uint32_t  max_stack = 64 * 1024;
+
+   // ── External memory (caller-provided) ─────────────────────────
+   // If non-null, the instance uses this pre-allocated buffer
+   // instead of mmap'ing its own guarded region. The buffer must
+   // be at least wasm_allocator::prefix_size() + (1 << mem_budget)
+   // bytes, already read/write. Caller owns the memory.
+   // mem_budget is a power-of-2 exponent (e.g. 16=64KB, 22=4MB).
+   // When set, memory mode is forced to checked (no guard pages).
+   char*    external_memory   = nullptr;
+   uint8_t  mem_budget        = 0;  // 0 = use max_pages, >0 = 1<<mem_budget bytes
 
    // ── Metering ────────────────────────────────────────────────────
    enum class meter_mode {
@@ -268,8 +279,22 @@ public:
 // ═════════════════════════════════════════════════════════════════════
 
 struct runtime_config {
-   std::size_t guarded_pool_size = 64;    // for mem_safety::guarded
-   std::size_t arena_size_gb     = 256;   // for mem_safety::checked/unchecked
+   // Number of pre-mapped 4GB guarded regions. Each reserves ~8GB of
+   // virtual address space (4GB usable + guard pages). Used by
+   // mem_safety::guarded instances (trusted, config-launched services).
+   //
+   // Address space cost: guarded_pool_size * 8GB.
+   // Default 64 = 512GB virtual. Adjust down on systems with limited
+   // address space (32-bit hosts, constrained containers).
+   std::size_t guarded_pool_size = 64;
+
+   // Shared arena for mem_safety::checked / unchecked instances.
+   // Sub-instances that don't get their own guarded region allocate
+   // from this arena. Pure address space reservation (PROT_NONE);
+   // no physical memory committed until pages are touched.
+   //
+   // Address space cost: arena_size_gb * 1GB.
+   std::size_t arena_size_gb = 16;
 };
 
 // ═════════════════════════════════════════════════════════════════════
@@ -366,9 +391,53 @@ auto instance::as() {
 // Walks PSIO_HOST_MODULE interfaces and registers each method with the
 // module's host function table. Scalar methods get fast trampolines
 // (natural arg count, direct call). Canonical methods (strings, records,
-// lists) get the 16-wide handler with type-specialized lift/lower.
+// lists, resources, expected) get the 16-wide handler with type-specialized
+// lift/lower via the canonical dispatch machinery.
 
 namespace detail_runtime {
+
+   // Lower policy that writes flat values into a native_value array.
+   // Used by slow_dispatch to lower the host method's return value
+   // back to the guest's flat-value convention.
+   struct return_lower_policy
+   {
+      native_value* out;
+      std::size_t   idx = 0;
+      char*         memory = nullptr;
+
+      return_lower_policy(native_value* o, char* m) : out(o), memory(m) {}
+
+      void emit_i32(uint32_t v)  { out[idx].i64 = 0; out[idx].i32 = v; ++idx; }
+      void emit_i64(uint64_t v)  { out[idx].i64 = v; ++idx; }
+      void emit_f32(float v)     { out[idx].i64 = 0; out[idx].f32 = v; ++idx; }
+      void emit_f64(double v)    { out[idx].i64 = 0; out[idx].f64 = v; ++idx; }
+
+      uint32_t alloc(uint32_t align, uint32_t size) {
+         return detail::host_cabi_realloc(align, size);
+      }
+      void store_u8(uint32_t off, uint8_t v) {
+         if (memory) memory[off] = static_cast<char>(v);
+      }
+      void store_u16(uint32_t off, uint16_t v) {
+         if (memory) std::memcpy(memory + off, &v, 2);
+      }
+      void store_u32(uint32_t off, uint32_t v) {
+         if (memory) std::memcpy(memory + off, &v, 4);
+      }
+      void store_u64(uint32_t off, uint64_t v) {
+         if (memory) std::memcpy(memory + off, &v, 8);
+      }
+      void store_f32(uint32_t off, float v) {
+         if (memory) std::memcpy(memory + off, &v, 4);
+      }
+      void store_f64(uint32_t off, double v) {
+         if (memory) std::memcpy(memory + off, &v, 8);
+      }
+      void store_bytes(uint32_t off, const char* data, uint32_t len) {
+         if (memory && len > 0)
+            std::memcpy(memory + off, data, len);
+      }
+   };
 
    template <typename IfaceImpl, std::size_t I, typename HostImpl>
    void register_one_host_method(host_function_table& table,
@@ -418,25 +487,26 @@ namespace detail_runtime {
             if constexpr (std::is_void_v<ReturnType>) {
                std::apply([host](auto&&... a) {
                   (host->*method_ptr)(std::forward<decltype(a)>(a)...);
-               }, fn_args);
+               }, std::move(fn_args));
                return native_value{uint64_t{0}};
             } else {
                auto result = std::apply([host](auto&&... a) {
                   return (host->*method_ptr)(std::forward<decltype(a)>(a)...);
-               }, fn_args);
-               uint64_t rv = 0;
-               if constexpr (std::is_integral_v<ReturnType>)
-                  rv = static_cast<uint64_t>(result);
-               else if constexpr (std::is_floating_point_v<ReturnType>) {
-                  if constexpr (sizeof(ReturnType) == 4) {
-                     union { float f; uint32_t u; } cvt{result};
-                     rv = cvt.u;
-                  } else {
-                     union { double f; uint64_t u; } cvt{result};
-                     rv = cvt.u;
-                  }
-               }
-               return native_value{rv};
+               }, std::move(fn_args));
+
+               // Lower the return value through the canonical ABI path.
+               // This handles scalars, own<T>, borrow<T>,
+               // std::expected<own<T>, error>, strings, vectors, records —
+               // everything canonical_lower_flat knows about.
+               native_value ret_slots[16] = {};
+               return_lower_policy rlp{ret_slots, memory};
+               canonical_lower_flat(result, rlp);
+
+               // The first flat slot is the return value for single-slot
+               // returns (scalars, handles, discriminants). Multi-slot
+               // returns (strings, records) use a return-area pointer
+               // which canonical_lower_flat already emitted.
+               return ret_slots[0];
             }
          };
 

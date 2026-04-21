@@ -128,7 +128,7 @@ struct host_lift_policy
 template <auto MemPtr, typename Policy, typename... Args>
 auto lift_canonical_args(Policy& p, ::psio::TypeList<Args...>)
 {
-   return std::tuple{psizam::canonical_lift_flat<std::remove_cvref_t<Args>>(p)...};
+   return std::make_tuple(psizam::canonical_lift_flat<std::remove_cvref_t<Args>>(p)...);
 }
 
 template <auto MemPtr, typename Host, typename TC>

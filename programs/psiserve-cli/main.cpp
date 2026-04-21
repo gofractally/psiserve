@@ -1,4 +1,4 @@
-#include <psiserve/runtime.hpp>
+#include <psiserve/app_server.hpp>
 
 #include <boost/program_options.hpp>
 
@@ -46,7 +46,7 @@ int main(int argc, char** argv)
       return vm.count("help") ? 0 : 1;
    }
 
-   psiserve::Runtime::Config cfg;
+   psiserve::AppServer::Config cfg;
    cfg.wasm_path = vm["wasm"].as<std::string>();
    cfg.port      = psiserve::Port{vm["port"].as<uint16_t>()};
    if (vm.count("webroot"))
@@ -69,8 +69,8 @@ int main(int argc, char** argv)
 
    try
    {
-      psiserve::Runtime rt(cfg);
-      rt.run();
+      psiserve::AppServer server(cfg);
+      server.run();
    }
    catch (const std::exception& e)
    {

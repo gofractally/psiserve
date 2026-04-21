@@ -6,6 +6,7 @@
 
 #include <array>
 #include <chrono>
+#include <optional>
 #include <variant>
 
 namespace psiserve
@@ -143,6 +144,21 @@ namespace psiserve
             return false;
          _entries[i] = ClosedFd{};
          return true;
+      }
+
+      /// Extract a VirtualFd — removes and returns the entry.
+      /// Used for cross-instance ownership transfer (own<socket>).
+      /// The entry travels by value to the target instance's FdTable.
+      std::optional<FdEntry> extract(VirtualFd fd)
+      {
+         int i = *fd;
+         if (i < 0 || i >= max_fds)
+            return std::nullopt;
+         if (std::holds_alternative<ClosedFd>(_entries[i]))
+            return std::nullopt;
+         auto entry = std::move(_entries[i]);
+         _entries[i] = ClosedFd{};
+         return entry;
       }
 
      private:
