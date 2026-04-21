@@ -185,6 +185,41 @@ class view : public reflect<T>::template proxy<view_proxy<T, Fmt>>
    }
 };
 
+// ── Free-function get<I> for view — enables tuple_call / structured bindings
+
+template <std::size_t I, typename T, typename Fmt>
+auto get(const view<T, Fmt>& v)
+{
+   return v.template get<I>();
+}
+
+}  // namespace psio (temporarily close for std specialization)
+
+// ── tuple_size / tuple_element for view<tuple<...>, Fmt> ────────────────
+// Enables std::apply, structured bindings, and view_call on tuple views.
+
+template <typename... Ts, typename Fmt>
+struct std::tuple_size<psio::view<std::tuple<Ts...>, Fmt>>
+   : std::integral_constant<std::size_t, sizeof...(Ts)> {};
+
+template <typename... Ts, typename Fmt>
+struct std::tuple_size<psio::view<const std::tuple<Ts...>, Fmt>>
+   : std::integral_constant<std::size_t, sizeof...(Ts)> {};
+
+template <std::size_t I, typename... Ts, typename Fmt>
+struct std::tuple_element<I, psio::view<std::tuple<Ts...>, Fmt>>
+{
+   using type = decltype(std::declval<psio::view<std::tuple<Ts...>, Fmt>>().template get<I>());
+};
+
+template <std::size_t I, typename... Ts, typename Fmt>
+struct std::tuple_element<I, psio::view<const std::tuple<Ts...>, Fmt>>
+{
+   using type = decltype(std::declval<psio::view<const std::tuple<Ts...>, Fmt>>().template get<I>());
+};
+
+namespace psio {   // reopen
+
 // ── CRTP bases for sorted container algorithms ──────────────────────────
 //
 // Derived classes provide: read_key(i), size()  [and read_value(i) for maps]
