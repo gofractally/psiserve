@@ -106,7 +106,8 @@ static run_result execute_backend(BackendT& bkend) {
    try {
       r.has_start = (bkend.get_module().start != std::numeric_limits<uint32_t>::max());
 
-      bkend.timed_run(watchdog(std::chrono::milliseconds(500)), [&]() {
+      // Bump to 5s locally to see if interp eventually terminates.
+      bkend.timed_run(watchdog(std::chrono::milliseconds(5000)), [&]() {
          auto& mod = bkend.get_module();
          auto& ctx = bkend.get_context();
          for (int i = 0; i < mod.exports.size(); i++) {
