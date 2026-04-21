@@ -45,7 +45,9 @@ namespace psizam::detail {
             // Track definitions
             bool is_store_op = (inst.opcode >= ir_op::i32_store && inst.opcode <= ir_op::i64_store32);
             bool is_block_mk = (inst.opcode == ir_op::block_start || inst.opcode == ir_op::block_end);
-            if (!is_store_op && !is_block_mk && inst.dest != ir_vreg_none && inst.dest < num_vregs) {
+            // br/br_if/br_table use inst.dest for depth_change (control-flow metadata), not a vreg
+            bool is_branch_op = (inst.opcode == ir_op::br || inst.opcode == ir_op::br_if || inst.opcode == ir_op::br_table);
+            if (!is_store_op && !is_block_mk && !is_branch_op && inst.dest != ir_vreg_none && inst.dest < num_vregs) {
                // If this vreg was already defined, it's a phi merge from different
                // control flow paths. Kill constant status — the value depends on
                // which branch was taken at runtime.

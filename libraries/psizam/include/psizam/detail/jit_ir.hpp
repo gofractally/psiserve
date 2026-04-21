@@ -617,7 +617,7 @@ namespace psizam::detail {
          ir_inst inst{};
          inst.opcode = ir_op::block_start;
          inst.type = 0;
-         inst.flags = IR_NONE;
+         inst.flags = IR_SIDE_EFFECT; // prevent DCE (dest = block_idx, not a vreg)
          inst.dest = block_idx;
          inst.rr.src1 = v128_result_bytes;
          inst.rr.src2 = ir_vreg_none;

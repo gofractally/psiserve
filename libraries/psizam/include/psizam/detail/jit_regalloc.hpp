@@ -99,7 +99,9 @@ namespace psizam::detail {
             bool is_store = (inst.opcode >= ir_op::i32_store && inst.opcode <= ir_op::i64_store32);
             bool is_block_marker = (inst.opcode == ir_op::block_start || inst.opcode == ir_op::block_end);
             bool is_v128_op = (inst.opcode == ir_op::v128_op);
-            if (!is_store && !is_block_marker && !is_v128_op && inst.dest != ir_vreg_none && inst.dest < num_vregs) {
+            // br/br_if/br_table use inst.dest for depth_change (control-flow metadata), not a vreg
+            bool is_branch = (inst.opcode == ir_op::br || inst.opcode == ir_op::br_if || inst.opcode == ir_op::br_table);
+            if (!is_store && !is_block_marker && !is_v128_op && !is_branch && inst.dest != ir_vreg_none && inst.dest < num_vregs) {
                auto& iv = func.intervals[inst.dest];
                if (i < iv.start) iv.start = i;
                if (i > iv.end) iv.end = i;
