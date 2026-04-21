@@ -1481,8 +1481,10 @@ namespace psizam::detail {
 
                // ──── Control flow ────
                case ir_op::if_: {
-                  // Condition is in br.src1, target (else/end block) is in br.target
-                  llvm::Value* cond = load_vreg(inst.br.src1);
+                  // Condition is in br.src1, target (else/end block) is in br.target.
+                  // Use load_vreg_as(i32_ty) so a dead-path cond inferred as float
+                  // doesn't break CreateICmpNE (fails assertion: integer/pointer only).
+                  llvm::Value* cond = load_vreg_as(inst.br.src1, i32_ty);
                   if (!cond) break;
                   // WASM if: branch to else/end block if condition is zero
                   llvm::Value* cmp = builder.CreateICmpNE(cond,
@@ -1556,7 +1558,8 @@ namespace psizam::detail {
                   // scopes crossed by this branch. Must emit eh_leave on the
                   // taken path so the catch frame is popped before we jump.
                   uint32_t eh_count = inst.dest >> 16;
-                  llvm::Value* cond = load_vreg(inst.br.src1);
+                  // See ir_op::if_ above for why we force i32 here.
+                  llvm::Value* cond = load_vreg_as(inst.br.src1, i32_ty);
                   if (!cond || target >= func.block_count) break;
                   llvm::Value* cmp = builder.CreateICmpNE(cond,
                      llvm::Constant::getNullValue(cond->getType()));
@@ -1933,7 +1936,9 @@ namespace psizam::detail {
                   break;
 
                case ir_op::select: {
-                  llvm::Value* cond = load_vreg(inst.sel.cond);
+                  // WASM select's condition is i32. Use load_vreg_as so a
+                  // dead-path cond with float type doesn't break CreateICmpNE.
+                  llvm::Value* cond = load_vreg_as(inst.sel.cond, i32_ty);
                   if (inst.type == types::v128) {
                      auto* v128_ty_local = llvm::FixedVectorType::get(builder.getInt64Ty(), 2);
                      llvm::Value* val1 = load_v128(inst.sel.val1, v128_ty_local);
