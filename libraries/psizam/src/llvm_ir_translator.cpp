@@ -2355,7 +2355,12 @@ namespace psizam::detail {
                case ir_op::i64_load8_s: case ir_op::i64_load8_u:
                case ir_op::i64_load16_s: case ir_op::i64_load16_u:
                case ir_op::i64_load32_s: case ir_op::i64_load32_u: {
-                  llvm::Value* addr = load_vreg(inst.ri.src1);
+                  // Use load_vreg_as so an address vreg inferred as a wrong
+                  // type (e.g. a merge vreg pre-seeded to the function's float
+                  // return type, then observed only on a dead path) still
+                  // produces valid IR. load_vreg's raw value fails LLVM
+                  // verification when CreateZExt is applied to a float.
+                  llvm::Value* addr = load_vreg_as(inst.ri.src1, i32_ty);
                   if (!addr) break;
                   uint32_t offset = static_cast<uint32_t>(inst.ri.imm);
 
@@ -2415,7 +2420,10 @@ namespace psizam::detail {
                case ir_op::i32_store8: case ir_op::i32_store16:
                case ir_op::i64_store8: case ir_op::i64_store16:
                case ir_op::i64_store32: {
-                  llvm::Value* addr = load_vreg(inst.ri.src1);
+                  // See load case above: dead-code paths may supply an addr
+                  // vreg whose inferred type is float; load_vreg_as bitcasts
+                  // through i32 so CreateZExt below doesn't fail verify.
+                  llvm::Value* addr = load_vreg_as(inst.ri.src1, i32_ty);
                   // For stores, inst.dest holds the value vreg
                   llvm::Value* val = load_vreg(inst.dest);
                   if (!addr || !val) break;
