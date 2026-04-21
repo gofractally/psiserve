@@ -1487,15 +1487,20 @@ namespace psizam::detail {
                   // WASM if: branch to else/end block if condition is zero
                   llvm::Value* cmp = builder.CreateICmpNE(cond,
                      llvm::Constant::getNullValue(cond->getType()));
-                  // Determine the false branch target:
-                  // - if target has block_start (else body): jump to block_entries[target]
-                  // - if target has no block_start (no else): jump to block_exits[target]
+                  // Determine the false branch target. emit_if (ir_writer) now
+                  // emits block_start for both no-else and has-else cases, so
+                  // has_block_start[target] is always true — use is_if instead:
+                  //   is_if=1 → no else, target is the if's own body; skip it
+                  //             by branching to block_exits[target] (end merge).
+                  //   is_if=0 → has else, target is a separate else_block whose
+                  //             start emits into block_entries[target].
                   llvm::BasicBlock* false_bb = nullptr;
                   uint32_t target = inst.br.target;
                   if (target < func.block_count) {
-                     false_bb = has_block_start[target]
-                        ? block_entries[target]
-                        : block_exits[target];
+                     false_bb = (func.blocks && func.blocks[target].is_if)
+                        ? block_exits[target]
+                        : block_entries[target];
+                     if (!false_bb) false_bb = block_exits[target];
                   } else {
                      false_bb = llvm::BasicBlock::Create(*ctx, "if_false", fn);
                   }
