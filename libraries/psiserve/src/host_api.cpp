@@ -98,11 +98,6 @@ namespace psiserve
    {
    }
 
-   void HostApi::setFiberRunner(const FiberRunner* runner)
-   {
-      _fiberRunner = runner;
-   }
-
    PsiResult HostApi::psiAccept(VirtualFd listen_fd)
    {
       auto* entry = _proc->fds.get(listen_fd);
@@ -438,11 +433,6 @@ namespace psiserve
          ::close(*dir->real_fd);
 
       _proc->fds.close(fd);
-   }
-
-   void HostApi::psiSpawn(WasmPtr func_table_idx, WasmPtr arg)
-   {
-      (*_fiberRunner)(*func_table_idx, static_cast<int32_t>(*arg));
    }
 
    int64_t HostApi::psiClock(int32_t clock_id)

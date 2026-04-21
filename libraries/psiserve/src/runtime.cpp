@@ -7,8 +7,7 @@
 #include <psitri/database_impl.hpp>
 
 #include <psizam/error_codes.hpp>
-#include <psizam/host_function_table.hpp>
-#include <psizam/psizam.hpp>
+#include <psizam/runtime.hpp>
 #include <psizam/utils.hpp>
 
 #include <arpa/inet.h>
@@ -200,15 +199,49 @@ namespace psiserve
    void Runtime::runWorker(int worker_id, RealFd listen_fd, SSL_CTX* ssl_ctx,
                            std::barrier<>& ready_barrier)
    {
-      // Each worker gets its own host function table
-      host_function_table table;
+      auto& sched = psiber::Scheduler::current();
+
+      Process proc;
+      proc.name = _process_name.c_str();
+      proc.fds.alloc(SocketFd{listen_fd, ssl_ctx, nullptr});  // fd 0 = listen
+
+      if (!_cfg.webroot.empty())
+      {
+         int dir_fd = ::open(_cfg.webroot.c_str(), O_RDONLY | O_DIRECTORY);
+         if (dir_fd < 0)
+            throw std::runtime_error("Failed to open webroot: " + _cfg.webroot.string());
+         proc.fds.alloc(DirFd{RealFd{dir_fd}});  // fd 1 = webroot
+      }
+
+      log::set_active_logger(log::create_logger(proc.name));
+      sched.setShutdownCheck([]() { return g_shutdown.load(std::memory_order_relaxed); });
+
+      // Each worker prepares its own module handle (own host function
+      // table, own host pointer). The psizam::runtime caches compiled
+      // code internally, but each worker gets a separate handle so
+      // there's no concurrent mutation of the table.
+      auto code = read_wasm(_cfg.wasm_path.string());
+      instance_policy policy;
+      // jit1 for now — jit_llvm requires psizam-exec to link
+      // psizam-llvm (tracked separately in psizam CMake).
+      policy.initial = instance_policy::compile_tier::jit1;
+      policy.metering = instance_policy::meter_mode::none;
+
+      // Clear the cache so each worker gets a fresh module_handle_impl
+      // with its own table. TODO: runtime should support cloning a
+      // module_handle for per-worker host binding without re-parsing.
+      _rt.evict(wasm_bytes{code});
+      auto mod = _rt.prepare(wasm_bytes{code}, policy);
+
+      // Register host functions on the module's table (transitional —
+      // will move to PSIO_HOST_MODULE interfaces incrementally)
+      auto& table = mod.table();
       table.add<&HostApi::psiAccept>("psi", "accept");
       table.add<&HostApi::psiRead>("psi", "read");
       table.add<&HostApi::psiWrite>("psi", "write");
       table.add<&HostApi::psiOpen>("psi", "open");
       table.add<&HostApi::psiFstat>("psi", "fstat");
       table.add<&HostApi::psiClose>("psi", "close");
-      table.add<&HostApi::psiSpawn>("psi", "spawn");
       table.add<&HostApi::psiClock>("psi", "clock");
       table.add<&HostApi::psiSleepUntil>("psi", "sleep_until");
       table.add<&HostApi::psiSendFile>("psi", "sendfile");
@@ -222,102 +255,35 @@ namespace psiserve
       table.add<&HostApi::psiIpfsGet>("psi", "ipfs_get");
       table.add<&HostApi::psiIpfsStat>("psi", "ipfs_stat");
 
-      // Each worker gets its own scheduler (engine created internally)
-      auto& sched = psiber::Scheduler::current();
+      // HostApi is per-worker — each worker has its own process/scheduler.
+      // We set it as the host pointer so trampolines receive it.
+      HostApi host(proc, sched, nullptr, _ipfs.get());
+      mod.set_host_ptr(&host);
 
-      // Each worker gets its own process (own fd table, shared listen socket)
-      Process proc;
-      proc.name = _process_name.c_str();
-      proc.fds.alloc(SocketFd{listen_fd, ssl_ctx, nullptr});  // fd 0 = listen socket
+      auto inst = _rt.instantiate(mod, policy);
 
-      // Open webroot directory independently per worker (each needs its own dir fd)
-      if (!_cfg.webroot.empty())
-      {
-         int dir_fd = ::open(_cfg.webroot.c_str(), O_RDONLY | O_DIRECTORY);
-         if (dir_fd < 0)
-            throw std::runtime_error("Failed to open webroot: " + _cfg.webroot.string());
-         proc.fds.alloc(DirFd{RealFd{dir_fd}});  // fd 1 = webroot
-      }
+      // Now that the instance exists, update HostApi with the linear
+      // memory pointer (not known until after instantiation).
+      host.updateMemory(inst.linear_memory());
 
-      log::set_active_logger(log::create_logger(proc.name));
-      sched.setShutdownCheck([]() { return g_shutdown.load(std::memory_order_relaxed); });
-
-      // Each worker compiles its own WASM module (own wasm_allocator = own linear memory)
-      wasm_allocator wa;
-      auto           code = read_wasm(_cfg.wasm_path.string());
-#if defined(PSIZAM_ENABLE_LLVM_BACKEND)
-      compiled_module mod(std::move(code), std::move(table), &wa, {.eng = engine::jit_llvm});
-#else
-      compiled_module mod(std::move(code), std::move(table), &wa, {.eng = engine::jit});
-#endif
-
-      // Create the main execution instance for this worker
-      auto main_inst = mod.create_instance();
-
-      HostApi host(proc, sched, main_inst.linear_memory(), _ipfs.get());
-      main_inst.set_host(&host);
-
-      auto start = main_inst.get_function<void()>("_start");
-
-      // Fiber runner for this worker's scheduler.
-      // Lives on the worker thread stack; all fibers hold a pointer to it.
-      pfs::store* ipfs_ptr = _ipfs.get();
-      FiberRunner fiber_runner =
-         [&mod, &proc, &sched, &fiber_runner, ipfs_ptr](uint32_t func_idx, int32_t arg)
-         {
-            auto inst = std::make_shared<instance>(mod.create_fiber_instance());
-
-            sched.spawnFiber(
-               [inst, &proc, &sched, &fiber_runner, ipfs_ptr, func_idx, arg]()
-               {
-                  HostApi fiber_host(proc, sched, inst->linear_memory(), ipfs_ptr);
-                  fiber_host.setFiberRunner(&fiber_runner);
-                  inst->set_host(&fiber_host);
-                  try
-                  {
-                     auto handler = inst->get_table_function<void(int32_t)>(func_idx);
-                     handler(arg);
-                  }
-                  catch (const wasm_exit_exception&)
-                  {
-                     // Normal exit
-                  }
-                  catch (const std::exception& e)
-                  {
-                     PSI_ERROR("fiber exception: func_idx={} arg={}: type={} what={}",
-                               func_idx, arg, typeid(e).name(), e.what());
-                  }
-               },
-               "wasm");
-         };
-      host.setFiberRunner(&fiber_runner);
-
-      // Wait for all workers to finish compilation before accepting
       PSI_INFO("Worker {} ready", worker_id);
       ready_barrier.arrive_and_wait();
 
-      // Run _start in a fiber.  When _start returns (e.g., due to listen socket
-      // shutdown), interrupt the scheduler so blocked connection fibers don't
-      // keep the worker alive indefinitely.
       proc.markRunning();
       sched.spawnFiber(
-         [&start, &sched]()
+         [&inst, &sched]()
          {
             try
             {
-               start();
+               inst.run_start();
             }
-            catch (const wasm_exit_exception&)
+            catch (const psizam::wasm_exit_exception&)
             {
-               // Normal exit
             }
-            // Accept loop exited — tell scheduler to stop waiting for
-            // blocked fibers (idle keep-alive connections).
             sched.interrupt();
          },
          "_start");
 
-      // Run scheduler — blocks until all fibers complete
       try
       {
          sched.run();
