@@ -4,17 +4,12 @@
 #include <psiserve/scheduler.hpp>
 
 #include <cstdint>
-#include <functional>
 #include <string>
 
 namespace pfs { class store; }
 
 namespace psiserve
 {
-   /// Type-erased callback for spawning fibers.
-   /// Set by Runtime::run() where the backend type is known.
-   /// Parameters: (func_table_index, arg)
-   using FiberRunner = std::function<void(uint32_t, int32_t)>;
 
    /// Host functions exposed to WASM as imports (module "psi").
    ///
@@ -40,9 +35,9 @@ namespace psiserve
       HostApi(Process& proc, Scheduler& sched, char* wasm_memory,
               pfs::store* ipfs = nullptr);
 
-      /// Set the callback used by psiSpawn to create fibers.
-      /// The pointed-to FiberRunner must outlive this HostApi.
-      void setFiberRunner(const FiberRunner* runner);
+      /// Update the WASM linear memory pointer. Called after
+      /// instantiation when the memory address is known.
+      void updateMemory(char* wasm_memory) { _wasm_memory = wasm_memory; }
 
       // ── WASM imports (psi.*) ───────────────────────────────────────────────
 
@@ -77,11 +72,6 @@ namespace psiserve
       /// Silently ignores invalid fds.
       void psiClose(VirtualFd fd);
 
-      /// psi.spawn(func_table_idx: i32, arg: i32)
-      /// Creates a new fiber that calls the function at the given table index
-      /// with `arg` as its parameter.  The host allocates the fiber's WASM stack
-      /// and sets __stack_pointer automatically.
-      void psiSpawn(WasmPtr func_table_idx, WasmPtr arg);
 
       /// psi.clock(clock_id: i32) -> i64
       /// Returns nanoseconds for the requested clock.
@@ -160,7 +150,6 @@ namespace psiserve
       Scheduler*  _sched;
       char*       _wasm_memory;
       pfs::store* _ipfs = nullptr;
-      const FiberRunner* _fiberRunner = nullptr;
       uint64_t    _accept_count = 0;
    };
 
