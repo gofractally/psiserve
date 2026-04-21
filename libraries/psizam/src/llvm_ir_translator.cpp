@@ -2173,11 +2173,14 @@ namespace psizam::detail {
                   }
                   call_args.clear();
 
-                  // Ensure table_elem is i32
-                  if (table_elem->getType() != i32_ty) {
-                     if (table_elem->getType()->isIntegerTy())
-                        table_elem = builder.CreateTrunc(table_elem, i32_ty);
-                  }
+                  // Ensure table_elem is i32. Live paths always feed an i32
+                  // here (WASM validation), but dead paths can produce a
+                  // float/double vreg (merge vregs pre-seeded to the
+                  // function's return type). convert_type bitcasts through
+                  // the matching-size integer so the call's signature is
+                  // satisfied and LLVM verification doesn't fail.
+                  if (table_elem->getType() != i32_ty)
+                     table_elem = convert_type(table_elem, i32_ty);
 
                   // Checked mode: validate read watermark before indirect call
                   emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca, mem_size_cache);
@@ -2321,10 +2324,9 @@ namespace psizam::detail {
                      builder.CreateStore(v, slot);
                   }
                   call_args.clear();
-                  if (table_elem->getType() != i32_ty) {
-                     if (table_elem->getType()->isIntegerTy())
-                        table_elem = builder.CreateTrunc(table_elem, i32_ty);
-                  }
+                  // See ir_op::call_indirect above for why convert_type.
+                  if (table_elem->getType() != i32_ty)
+                     table_elem = convert_type(table_elem, i32_ty);
                   // Checked mode: validate read watermark before tail call indirect
                   emit_watermark_validate(builder, ctx_ptr, load_mem_ptr(), watermark_alloca, mem_size_cache);
                   builder.CreateCall(rt_call_depth_dec, {ctx_ptr});
