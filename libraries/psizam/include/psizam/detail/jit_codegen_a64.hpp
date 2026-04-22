@@ -4283,6 +4283,13 @@ namespace psizam::detail {
          emit32(0x1E270000);             // FMOV S0, W0
          emit32(0x1E270000 | (X1 << 5) | 1); // FMOV S1, W1
          emit32(op | (1 << 16));         // OP S0, S0, S1
+         // Canonicalize NaN: without FPCR.DN=1 (set only when use_native_fp
+         // is configured) FADD/FSUB/FMUL/FDIV propagate the input NaN
+         // payload as-is, so psizam's cross-backend determinism contract
+         // (hw_det(x) == softfloat(x) bit-for-bit) requires an explicit
+         // canonicalize. Matches the unary ceil/floor/trunc/nearest/sqrt
+         // emits.
+         emit_f32_canonicalize_nan();
          emit32(0x1E260000);             // FMOV W0, S0
          store_x0_vreg(inst.dest);
       }
@@ -4292,6 +4299,7 @@ namespace psizam::detail {
          emit32(0x9E670000);             // FMOV D0, X0
          emit32(0x9E670000 | (X1 << 5) | 1); // FMOV D1, X1
          emit32(op | (1 << 16));         // OP D0, D0, D1
+         emit_f64_canonicalize_nan();    // see emit_f32_binop for rationale
          emit32(0x9E660000);             // FMOV X0, D0
          store_x0_vreg(inst.dest);
       }

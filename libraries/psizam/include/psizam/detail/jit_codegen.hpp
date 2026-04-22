@@ -4586,24 +4586,14 @@ namespace psizam::detail {
          int8_t x1 = get_xmm(inst.rr.src1);
          int8_t x2 = get_xmm(inst.rr.src2);
          int8_t xd = get_xmm(inst.dest);
-         if (x1 >= 0 && x2 >= 0 && xd >= 0) {
-            auto vex_op = [op]() -> decltype(base::VADDSS) {
-               switch (op) {
-               case 0x58: return base::VADDSS;
-               case 0x5c: return base::VSUBSS;
-               case 0x59: return base::VMULSS;
-               case 0x5e: return base::VDIVSS;
-               default:   return base::VADDSS;
-               }
-            }();
-            this->emit(vex_op, static_cast<typename base::xmm_register>(x2),
-                               static_cast<typename base::xmm_register>(x1),
-                               static_cast<typename base::xmm_register>(xd));
-            return;
-         }
+         // Canonicalize NaN path is xmm0-only, so skip the 3-register VEX
+         // fast path when either source can be NaN (add/sub/mul/div are
+         // NaN-producing). Route through xmm0 instead so emit_f32_canonicalize_nan
+         // can operate on the result. Same reasoning as emit_f32_binop_sse.
          load_float_to_xmm(inst.rr.src1, xmm0, false);
          load_float_to_xmm(inst.rr.src2, xmm1, false);
          this->emit_bytes(0xf3, 0x0f, op, 0xc1);
+         emit_f32_canonicalize_nan();
          store_xmm_to_float(xmm0, inst.dest, false);
       }
       void emit_f64_binop(const ir_inst& inst, uint8_t op) {
@@ -4611,26 +4601,14 @@ namespace psizam::detail {
          int8_t x1 = get_xmm(inst.rr.src1);
          int8_t x2 = get_xmm(inst.rr.src2);
          int8_t xd = get_xmm(inst.dest);
-         if (x1 >= 0 && x2 >= 0 && xd >= 0) {
-            // Single VEX instruction: vOPsd xmm_src2, xmm_src1, xmm_dest
-            auto vex_op = [op]() -> decltype(base::VADDSD) {
-               switch (op) {
-               case 0x58: return base::VADDSD;
-               case 0x5c: return base::VSUBSD;
-               case 0x59: return base::VMULSD;
-               case 0x5e: return base::VDIVSD;
-               default:   return base::VADDSD; // shouldn't happen
-               }
-            }();
-            this->emit(vex_op, static_cast<typename base::xmm_register>(x2),
-                               static_cast<typename base::xmm_register>(x1),
-                               static_cast<typename base::xmm_register>(xd));
-            return;
-         }
-         // Fallback: use scratch xmm0/xmm1
+         (void)x1; (void)x2; (void)xd;
+         // Skip the 3-register VEX fast path — add/sub/mul/div can produce
+         // NaN and canonicalization runs on xmm0 only. Same reasoning as
+         // the f32 variant above.
          load_float_to_xmm(inst.rr.src1, xmm0, true);
          load_float_to_xmm(inst.rr.src2, xmm1, true);
          this->emit_bytes(0xf2, 0x0f, op, 0xc1);
+         emit_f64_canonicalize_nan();
          store_xmm_to_float(xmm0, inst.dest, true);
       }
       // Float comparison: cmpss/cmpsd with predicate, result = 0 or 1
@@ -4675,6 +4653,11 @@ namespace psizam::detail {
          this->emit_bytes(0xf3, 0x0f, 0x10, 0x44, 0x24, 0x08);
          // OPss (%rsp), %xmm0
          this->emit_bytes(0xf3, 0x0f, op, 0x04, 0x24);
+         // Canonicalize NaN: SSE preserves input NaN payload, but psizam's
+         // deterministic-mode contract (hw_det(x) == softfloat(x)) requires
+         // canonical NaN (0x7fc00000) for NaN-producing ops. Same reasoning
+         // as the unary ceil/floor/trunc/nearest/sqrt emits above.
+         emit_f32_canonicalize_nan();
          // lea 8(%rsp), %rsp
          this->emit_bytes(0x48, 0x8d, 0x64, 0x24, 0x08);
          // movss %xmm0, (%rsp)
@@ -4684,6 +4667,7 @@ namespace psizam::detail {
       void emit_f64_binop_sse(uint8_t op) {
          this->emit_bytes(0xf2, 0x0f, 0x10, 0x44, 0x24, 0x08);
          this->emit_bytes(0xf2, 0x0f, op, 0x04, 0x24);
+         emit_f64_canonicalize_nan();
          this->emit_bytes(0x48, 0x8d, 0x64, 0x24, 0x08);
          this->emit_bytes(0xf2, 0x0f, 0x11, 0x04, 0x24);
       }

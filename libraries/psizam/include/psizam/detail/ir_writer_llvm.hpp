@@ -43,9 +43,15 @@ namespace psizam::detail {
          llvm_deferred_exception = nullptr;
       }
 
-      // Parser calls these via `requires` to propagate memory safety options.
+      // Parser calls these via `requires` to propagate options to the
+      // underlying code_writer BEFORE emission. For LLVM the emission is
+      // deferred to the destructor, so we only have to stash the values.
       void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
       void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+      void set_fp_mode(fp_mode m) noexcept {
+         _fp = m;
+         _deterministic = (m != fp_mode::fast);
+      }
 
       ~ir_writer_llvm() {
          if (std::uncaught_exceptions() > 0) return;
@@ -65,6 +71,7 @@ namespace psizam::detail {
 
     private:
       bool         _deterministic = false;
+      fp_mode      _fp            = fp_mode::fast;
       mem_safety   _mem_mode      = mem_safety::guarded;
       checked_mode _checked_kind  = checked_mode::strict;
    };

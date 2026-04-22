@@ -400,12 +400,34 @@ namespace psizam::detail {
       void emit_epilogue(const func_type& ft, const std::vector<local_entry>& locals, uint32_t /*funcnum*/) {
          emit_check_stack_limit_end();
          if (ft.return_types.size() > 1) {
-            // Multi-value return: copy N return values from operand stack to ctx->_multi_return
+            // Multi-value return: copy N return values from the operand stack
+            // to ctx->_multi_return[]. Slot sizes differ: scalar = 1 slot (8B),
+            // v128 = 2 slots (16B). The old one-slot-per-result loop read v128
+            // high lane bytes as scalar results (observed as old-jit returning
+            // a v128 lane's bit pattern for an i32 multi-return slot), so
+            // iterate from rsp (which holds result[N-1]) upward, honoring
+            // per-type size in both the stack and _multi_return buffers.
+            uint32_t stack_offs = 0;   // byte offset from rsp
+            uint32_t mr_idx     = 0;   // _multi_return slot index (64-bit slots)
+            // First compute the total slot count so we can translate from
+            // "last-first" stack layout to per-result addressing.
+            uint32_t total_slots = 0;
+            for (uint8_t rt : ft.return_types)
+               total_slots += (rt == types::v128) ? 2 : 1;
+            // Walk results from result[0] (deepest on stack / highest address)
+            // down to result[N-1] (top / rsp + 0).
+            uint32_t slots_above = 0;
             for (uint32_t i = 0; i < ft.return_types.size(); i++) {
-               // Values are on stack: RSP is result[N-1] (top), RSP+(N-1)*8 is result[0]
-               uint32_t stack_idx = ft.return_types.size() - 1 - i;
-               emit_mov(*(rsp + static_cast<int32_t>(stack_idx * 8)), rax);
-               emit_mov(rax, *(rdi + multi_return_offset + static_cast<int32_t>(i * 8)));
+               uint8_t rt = ft.return_types[i];
+               uint32_t slot_count = (rt == types::v128) ? 2 : 1;
+               uint32_t base_slot  = total_slots - slots_above - slot_count;
+               stack_offs = base_slot * 8;
+               for (uint32_t s = 0; s < slot_count; s++) {
+                  emit_mov(*(rsp + static_cast<int32_t>(stack_offs + s * 8)), rax);
+                  emit_mov(rax, *(rdi + multi_return_offset + static_cast<int32_t>((mr_idx + s) * 8)));
+               }
+               mr_idx      += slot_count;
+               slots_above += slot_count;
             }
             // Restore frame
             emit_mov(rbp, rsp);

@@ -228,6 +228,12 @@ namespace psizam::detail {
          if (!handle || extra == 0) return;
          *static_cast<int64_t*>(handle) += extra;
       }
+
+      // Parser hook (called by write_code_out before any body is emitted).
+      // Stashed and applied inside ensure_codegen() once _codegen is
+      // constructed — overrides the codegen's default and any AOT
+      // compile_result setting.
+      void set_fp_mode(fp_mode m) noexcept { _requested_fp = m; }
       // Branch/label types — dummy values since IR tracks control flow directly.
       // The parser stores and passes these between emit_if/emit_else/emit_end/emit_br
       // but never interprets them. fix_branch is a no-op.
@@ -444,6 +450,12 @@ namespace psizam::detail {
                _codegen->set_fp_mode(_compile_result->softfloat
                                      ? fp_mode::softfloat
                                      : fp_mode::fast);
+            }
+            // Explicit caller override (from parser's set_fp_mode path)
+            // wins over the compile-result default so the fuzzer can
+            // pin a specific mode regardless of the build-time setting.
+            if (_requested_fp) {
+               _codegen->set_fp_mode(*_requested_fp);
             }
             _codegen->set_mem_mode(_mem_mode);
             _codegen->set_checked_kind(_checked_kind);
@@ -861,6 +873,13 @@ namespace psizam::detail {
          std::memset(entry.result_types, 0, sizeof(entry.result_types));
          std::memset(entry.merge_vregs, 0xFF, sizeof(entry.merge_vregs));
          std::memset(entry.param_vregs, 0xFF, sizeof(entry.param_vregs));
+         entry.merge_vreg = ir_vreg_none; // default; set below if a result vreg is allocated.
+                                          // Without this, aggregate-init leaves it as 0 (vreg 0 =
+                                          // the function return merge) and emit_end's unreachable
+                                          // path pushes that vreg back onto the vstack for every
+                                          // `if (empty) unreachable end` (the common gas-check
+                                          // pattern wasm-smith generates), poisoning subsequent
+                                          // binops that pop it as a phantom operand.
          if (result_count > 1) {
             consume_pending_result_types(entry, result_count);
             if (!_unreachable) {
@@ -3466,6 +3485,9 @@ namespace psizam::detail {
       growable_allocator _codegen_scratch;
       growable_allocator _opt_scratch_alloc;
       std::optional<codegen_t> _codegen;
+      // Caller-requested fp_mode from parser's set_fp_mode path; unset
+      // means use the codegen's compile-result default (see ensure_codegen).
+      std::optional<fp_mode>   _requested_fp;
       // Parallel compilation state
       uint32_t _compile_threads = 0;          // 0 or 1 = serial, >1 = parallel threads
       std::size_t _max_func_bytes = 0;        // Largest function body in module

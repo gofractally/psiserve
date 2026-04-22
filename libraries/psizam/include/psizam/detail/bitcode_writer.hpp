@@ -103,7 +103,11 @@ namespace psizam::detail {
             ci.data = (static_cast<uint32_t>(c.kind) << 24) | (c.tag_index & 0x00FFFFFF);
             ci.pc = c.depth_change; // depth_change encoded here; handler_pc patched into ci2.pc below
             auto& ci2 = append_instr(try_table_t{});
-            ci2.data = 0;
+            // Stash eh_leave_count (number of intervening try_table scopes the
+            // catch's target exits besides the matching try_table itself) in
+            // ci2.data so dispatch_exception can pop them on match. ci2.data was
+            // previously unused.
+            ci2.data = c.eh_leave_count;
             ci2.pc = 0; // will be filled by fix_branch
             clause_pcs.push_back(&ci2.pc);
          }
