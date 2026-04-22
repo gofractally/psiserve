@@ -1294,6 +1294,11 @@ namespace psizam::detail {
          uint32_t tag_index;      // tag to catch (only for kind 0,1)
          uint32_t handler_pc;     // bitcode PC of catch label target
          uint32_t operand_depth;  // operand stack depth at label target
+         uint32_t eh_leave_count; // number of *intervening* try_table frames
+                                  // (besides the matching frame) that the catch's
+                                  // target label exits — dispatch_exception pops
+                                  // these after the match so branching past an
+                                  // outer try_table doesn't leave a stale frame.
       };
 
       struct eh_frame {

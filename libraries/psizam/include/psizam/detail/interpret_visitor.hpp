@@ -3233,12 +3233,14 @@ namespace psizam::detail {
             auto* pc_op = context.get_pc();
             auto& pc_data = pc_op->template get<try_table_t>();
             uint32_t label_pc = pc_data.pc;
+            uint32_t eh_leave_count = pc_data.data;   // stashed by bitcode_writer
 
             context.push_eh_catch({
                kind,
                tag_idx,
                label_pc,
-               try_depth - depth_change
+               try_depth - depth_change,
+               eh_leave_count
             });
             context.inc_pc();
          }
@@ -3267,6 +3269,16 @@ namespace psizam::detail {
                }
 
                if (matches) {
+                  // Pop intervening try_table frames that the catch's target
+                  // exits. Without this, branching out past an outer
+                  // try_table leaves the outer's eh_frame stale and a later
+                  // throw gets caught by it (observed in fuzz repro 139022:
+                  // interp catches a throw from a start function where the
+                  // JITs and wasmtime correctly propagate the exception —
+                  // the interp was running the stale outer's handler PC
+                  // against an unrelated activation frame).
+                  uint32_t pending_leaves = entry.eh_leave_count;
+
                   // Unwind call stack to the try_table's call depth
                   context.unwind_call_stack_to(frame.call_depth);
 
@@ -3294,10 +3306,20 @@ namespace psizam::detail {
                      context.push_operand({i64_const_t{static_cast<int64_t>(exn_idx)}});
                   }
 
-                  // Pop the eh_frame and trim catch entries
+                  // Pop the eh_frame and trim catch entries (matching try_table)
                   uint32_t trim_catches = frame.first_catch;
                   context.pop_eh_frame();
                   context.trim_eh_catches(trim_catches);
+
+                  // Pop intervening try_table frames that the catch's target
+                  // exits (see pending_leaves above).
+                  while (pending_leaves > 0 && context.has_eh_frames()) {
+                     auto& outer = context.current_eh_frame();
+                     uint32_t outer_trim = outer.first_catch;
+                     context.pop_eh_frame();
+                     context.trim_eh_catches(outer_trim);
+                     --pending_leaves;
+                  }
 
                   // Jump to the handler
                   context.set_relative_pc(entry.handler_pc);
