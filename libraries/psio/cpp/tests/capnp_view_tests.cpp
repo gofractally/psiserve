@@ -1178,7 +1178,7 @@ TEST_CASE("cp validate: valid packed messages", "[view][cp]")
    {
       CpPoint pt{1.0, 2.0};
       auto    buf = psio::capnp_pack(pt);
-      REQUIRE(psio::capnp_validate(buf.data(), buf.size()));
+      REQUIRE(psio::validate_capnp(buf.data(), buf.size()));
    }
    // Complex struct with strings, lists, nested structs
    {
@@ -1197,16 +1197,16 @@ TEST_CASE("cp validate: valid packed messages", "[view][cp]")
       order.items = {{"P", 1, 5.0}};
 
       auto buf = psio::capnp_pack(order);
-      REQUIRE(psio::capnp_validate(buf.data(), buf.size()));
+      REQUIRE(psio::validate_capnp(buf.data(), buf.size()));
    }
 }
 
 TEST_CASE("cp validate: too-short buffer", "[view][cp]")
 {
-   REQUIRE_FALSE(psio::capnp_validate(nullptr, 0));
+   REQUIRE_FALSE(psio::validate_capnp(nullptr, 0));
 
    uint8_t small[4] = {};
-   REQUIRE_FALSE(psio::capnp_validate(small, 4));
+   REQUIRE_FALSE(psio::validate_capnp(small, 4));
 }
 
 TEST_CASE("cp validate: cyclic pointer detected", "[view][cp]")
@@ -1228,7 +1228,7 @@ TEST_CASE("cp validate: cyclic pointer detected", "[view][cp]")
    // The message is small (3 words of segment), budget = 3*8 = 24 words.
    // Each visit costs 2 words (1 data + 1 ptr), so it'll loop ~12 times
    // before the budget runs out.
-   REQUIRE_FALSE(psio::capnp_validate(buf.data(), buf.size()));
+   REQUIRE_FALSE(psio::validate_capnp(buf.data(), buf.size()));
 }
 
 TEST_CASE("cp validate: truncated segment", "[view][cp]")
@@ -1236,7 +1236,7 @@ TEST_CASE("cp validate: truncated segment", "[view][cp]")
    CpPoint pt{1.0, 2.0};
    auto    buf = psio::capnp_pack(pt);
    // Truncate: claim full size but only provide half
-   REQUIRE_FALSE(psio::capnp_validate(buf.data(), buf.size() / 2));
+   REQUIRE_FALSE(psio::validate_capnp(buf.data(), buf.size() / 2));
 }
 
 // ============================================================================

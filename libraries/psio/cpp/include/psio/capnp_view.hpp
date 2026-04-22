@@ -1327,7 +1327,7 @@ namespace psio
    }
 
    // ══════════════════════════════════════════════════════════════════════════
-   // capnp_validate — bounds-check a Cap'n Proto flat-array message
+   // validate_capnp — bounds-check a Cap'n Proto flat-array message
    // ══════════════════════════════════════════════════════════════════════════
 
    namespace capnp_detail
@@ -1460,7 +1460,7 @@ namespace psio
    /// traversal limit is not exceeded.  The traversal limit defaults to
    /// 8x the segment size (matching the official capnp library's default),
    /// which detects cycles and amplification attacks.
-   inline bool capnp_validate(const void* buf, size_t len)
+   inline bool validate_capnp(const void* buf, size_t len)
    {
       auto* msg = static_cast<const uint8_t*>(buf);
       if (len < 8)
@@ -3952,7 +3952,7 @@ namespace psio
       T unpack() const { return capnp_unpack<T>(buf_.data()); }
 
       /// Validate the message
-      bool validate() const { return capnp_validate(buf_.data(), buf_.size()); }
+      bool validate() const { return validate_capnp(buf_.data(), buf_.size()); }
 
       /// Free-list statistics
       const capnp_detail::capnp_free_list& free_list() const

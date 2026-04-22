@@ -1,7 +1,7 @@
 // bench_cp_view.cpp — Benchmark for psio view<T, cp> (our capnp implementation)
 //
 // Same schemas and data as bench_fracpack.cpp and bench_capnp.cpp.
-// Measures: capnp_pack, capnp_unpack, view<T,cp> field access, capnp_validate,
+// Measures: capnp_pack, capnp_unpack, view<T,cp> field access, validate_capnp,
 //           and wire size.
 //
 // Build:
@@ -496,23 +496,23 @@ void bench_validate()
    auto sens_buf  = psio::capnp_pack(make_sensor());
 
    bench("cp-validate/Point", pt_buf.size(), [&] {
-      bool ok = psio::capnp_validate(pt_buf.data(), pt_buf.size());
+      bool ok = psio::validate_capnp(pt_buf.data(), pt_buf.size());
       do_not_optimize(ok);
    });
    bench("cp-validate/Token", tok_buf.size(), [&] {
-      bool ok = psio::capnp_validate(tok_buf.data(), tok_buf.size());
+      bool ok = psio::validate_capnp(tok_buf.data(), tok_buf.size());
       do_not_optimize(ok);
    });
    bench("cp-validate/UserProfile", user_buf.size(), [&] {
-      bool ok = psio::capnp_validate(user_buf.data(), user_buf.size());
+      bool ok = psio::validate_capnp(user_buf.data(), user_buf.size());
       do_not_optimize(ok);
    });
    bench("cp-validate/Order", order_buf.size(), [&] {
-      bool ok = psio::capnp_validate(order_buf.data(), order_buf.size());
+      bool ok = psio::validate_capnp(order_buf.data(), order_buf.size());
       do_not_optimize(ok);
    });
    bench("cp-validate/SensorReading", sens_buf.size(), [&] {
-      bool ok = psio::capnp_validate(sens_buf.data(), sens_buf.size());
+      bool ok = psio::validate_capnp(sens_buf.data(), sens_buf.size());
       do_not_optimize(ok);
    });
 }

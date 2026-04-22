@@ -13,7 +13,7 @@ add_executable(psio_tests
    wit_attribute_tests.cpp
    psio_attribute_tests.cpp
    psio_structural_tests.cpp
-   fracpack_validate_tests.cpp
+   validate_frac_tests.cpp
 )
 
 target_link_libraries(psio_tests PRIVATE psio)

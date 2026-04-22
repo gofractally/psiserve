@@ -818,7 +818,7 @@ namespace psio
          bool enableCustom = true;
       };
 
-      validation_t fracpack_validate(std::span<const char> data,
+      validation_t validate_frac(std::span<const char> data,
                                      const CompiledSchema& schema,
                                      const std::string&    type);
 
@@ -828,7 +828,7 @@ namespace psio
       ///
       ///   auto schema = SchemaBuilder{}.insert<MyType>("MyType").build();
       ///   auto v      = psio::compile(schema, "MyType");
-      ///   auto result = psio::fracpack_validate(bytes, v);   // validation_t
+      ///   auto result = psio::validate_frac(bytes, v);   // validation_t
       ///
       /// Not copyable or movable — CompiledSchema holds a reference to its
       /// source Schema, so CompiledValidator must be constructed in place
@@ -853,7 +853,7 @@ namespace psio
       };
 
       /// Compile a schema into a rapid-validation artifact for a specific root
-      /// type. Pair with fracpack_validate(bytes, validator).
+      /// type. Pair with validate_frac(bytes, validator).
       inline CompiledValidator compile(const Schema& s, std::string_view root_type_name)
       {
          return CompiledValidator{s, root_type_name};
@@ -861,12 +861,12 @@ namespace psio
 
       /// Validate a FracPack byte buffer against a compiled validator.
       /// Wraps the (schema, type) 3-arg form with a single compiled artifact.
-      inline validation_t fracpack_validate(std::span<const char>    data,
+      inline validation_t validate_frac(std::span<const char>    data,
                                             const CompiledValidator& v)
       {
          if (!v.valid())
             return validation_t::invalid;
-         return fracpack_validate(data, v.compiled, v.root_name);
+         return validate_frac(data, v.compiled, v.root_name);
       }
 
       struct OpenToken
@@ -2436,7 +2436,7 @@ namespace psio
 
    using schema_types::compile;
    using schema_types::CompiledValidator;
-   using schema_types::fracpack_validate;
+   using schema_types::validate_frac;
    using schema_types::match;
    using schema_types::Schema;
    using schema_types::SchemaBuilder;

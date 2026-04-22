@@ -1,11 +1,11 @@
 // Dynamic FracPack validation tests.
 //
-// Exercises the compile(schema, root) / fracpack_validate(buffer, validator)
+// Exercises the compile(schema, root) / validate_frac(buffer, validator)
 // flow: schema reflection → compile → validate arbitrary byte buffers without
 // the validator being compiled against the user types.
 //
 // This is the "ship a schema blob + data blob; validator has never seen the
-// C++ types" path, complementing the compile-time fracpack_validate<T>.
+// C++ types" path, complementing the compile-time validate_frac<T>.
 
 #include <catch2/catch.hpp>
 #include <psio/fracpack.hpp>
@@ -44,7 +44,7 @@ PSIO_REFLECT(FvContainer, label, points)
 //  CORE ROUND-TRIP: serialize T, validate dynamically
 // ────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("dyn validate: valid FracPack of a struct", "[schema][fracpack_validate]")
+TEST_CASE("dyn validate: valid FracPack of a struct", "[schema][validate_frac]")
 {
    auto schema = psio::SchemaBuilder{}.insert<FvPoint>("Point").build();
    auto v      = psio::compile(schema, "Point");
@@ -53,11 +53,11 @@ TEST_CASE("dyn validate: valid FracPack of a struct", "[schema][fracpack_validat
    FvPoint p{7, 42};
    auto    bytes = psio::to_frac(p);
 
-   auto result = psio::fracpack_validate(bytes, v);
+   auto result = psio::validate_frac(bytes, v);
    REQUIRE(result == psio::validation_t::valid);
 }
 
-TEST_CASE("dyn validate: variable-size struct with optional", "[schema][fracpack_validate]")
+TEST_CASE("dyn validate: variable-size struct with optional", "[schema][validate_frac]")
 {
    auto schema = psio::SchemaBuilder{}.insert<FvPerson>("Person").build();
    auto v      = psio::compile(schema, "Person");
@@ -66,10 +66,10 @@ TEST_CASE("dyn validate: variable-size struct with optional", "[schema][fracpack
    FvPerson p{"alice", 30, 99};
    auto     bytes = psio::to_frac(p);
 
-   REQUIRE(psio::fracpack_validate(bytes, v) == psio::validation_t::valid);
+   REQUIRE(psio::validate_frac(bytes, v) == psio::validation_t::valid);
 }
 
-TEST_CASE("dyn validate: nested list of struct", "[schema][fracpack_validate]")
+TEST_CASE("dyn validate: nested list of struct", "[schema][validate_frac]")
 {
    auto schema = psio::SchemaBuilder{}.insert<FvContainer>("Container").build();
    auto v      = psio::compile(schema, "Container");
@@ -78,14 +78,14 @@ TEST_CASE("dyn validate: nested list of struct", "[schema][fracpack_validate]")
    FvContainer c{"test", {{1, 2}, {3, 4}, {5, 6}}};
    auto        bytes = psio::to_frac(c);
 
-   REQUIRE(psio::fracpack_validate(bytes, v) == psio::validation_t::valid);
+   REQUIRE(psio::validate_frac(bytes, v) == psio::validation_t::valid);
 }
 
 // ────────────────────────────────────────────────────────────────────────
 //  INVALID INPUTS
 // ────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("dyn validate: unknown root type returns invalid", "[schema][fracpack_validate]")
+TEST_CASE("dyn validate: unknown root type returns invalid", "[schema][validate_frac]")
 {
    auto schema = psio::SchemaBuilder{}.insert<FvPoint>("Point").build();
    auto v      = psio::compile(schema, "NotATypeInTheSchema");
@@ -93,10 +93,10 @@ TEST_CASE("dyn validate: unknown root type returns invalid", "[schema][fracpack_
 
    FvPoint p{1, 2};
    auto    bytes = psio::to_frac(p);
-   REQUIRE(psio::fracpack_validate(bytes, v) == psio::validation_t::invalid);
+   REQUIRE(psio::validate_frac(bytes, v) == psio::validation_t::invalid);
 }
 
-TEST_CASE("dyn validate: truncated buffer is invalid", "[schema][fracpack_validate]")
+TEST_CASE("dyn validate: truncated buffer is invalid", "[schema][validate_frac]")
 {
    auto schema = psio::SchemaBuilder{}.insert<FvPerson>("Person").build();
    auto v      = psio::compile(schema, "Person");
@@ -107,24 +107,24 @@ TEST_CASE("dyn validate: truncated buffer is invalid", "[schema][fracpack_valida
 
    // Chop off the tail — validator must reject truncation of variable-size data.
    std::vector<char> truncated(bytes.begin(), bytes.begin() + bytes.size() / 2);
-   REQUIRE(psio::fracpack_validate(truncated, v) == psio::validation_t::invalid);
+   REQUIRE(psio::validate_frac(truncated, v) == psio::validation_t::invalid);
 }
 
-TEST_CASE("dyn validate: empty buffer against fixed-size struct", "[schema][fracpack_validate]")
+TEST_CASE("dyn validate: empty buffer against fixed-size struct", "[schema][validate_frac]")
 {
    auto schema = psio::SchemaBuilder{}.insert<FvPoint>("Point").build();
    auto v      = psio::compile(schema, "Point");
    REQUIRE(v.valid());
 
    std::vector<char> empty;
-   REQUIRE(psio::fracpack_validate(empty, v) == psio::validation_t::invalid);
+   REQUIRE(psio::validate_frac(empty, v) == psio::validation_t::invalid);
 }
 
 // ────────────────────────────────────────────────────────────────────────
 //  COMPILE ONCE, VALIDATE MANY
 // ────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("dyn validate: reuse validator across many buffers", "[schema][fracpack_validate]")
+TEST_CASE("dyn validate: reuse validator across many buffers", "[schema][validate_frac]")
 {
    auto schema = psio::SchemaBuilder{}.insert<FvPoint>("Point").build();
    auto v      = psio::compile(schema, "Point");
@@ -134,7 +134,7 @@ TEST_CASE("dyn validate: reuse validator across many buffers", "[schema][fracpac
    {
       FvPoint p{i, i * 2};
       auto    bytes = psio::to_frac(p);
-      REQUIRE(psio::fracpack_validate(bytes, v) == psio::validation_t::valid);
+      REQUIRE(psio::validate_frac(bytes, v) == psio::validation_t::valid);
    }
 }
 
@@ -146,7 +146,7 @@ TEST_CASE("dyn validate: reuse validator across many buffers", "[schema][fracpac
 // against the user's types receives (a) the schema as FracPack bytes and
 // (b) a data blob, and answers yes/no.
 
-TEST_CASE("dyn validate: schema ships as FracPack and rehydrates", "[schema][fracpack_validate][self-hosting]")
+TEST_CASE("dyn validate: schema ships as FracPack and rehydrates", "[schema][validate_frac][self-hosting]")
 {
    // Sender side: build the schema, serialize it.
    auto              schema      = psio::SchemaBuilder{}.insert<FvContainer>("Container").build();
@@ -163,6 +163,6 @@ TEST_CASE("dyn validate: schema ships as FracPack and rehydrates", "[schema][fra
    auto v = psio::compile(rehydrated, "Container");
    REQUIRE(v.valid());
 
-   auto result = psio::fracpack_validate(payload_wire, v);
+   auto result = psio::validate_frac(payload_wire, v);
    REQUIRE(result == psio::validation_t::valid);
 }

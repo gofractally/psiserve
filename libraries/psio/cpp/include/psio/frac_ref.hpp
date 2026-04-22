@@ -814,7 +814,7 @@ namespace psio
       // Validate
       validation_t validate() const
       {
-         return fracpack_validate<T>({buf_.data(), buf_.size()});
+         return validate_frac<T>({buf_.data(), buf_.size()});
       }
 
       // Full deserialization

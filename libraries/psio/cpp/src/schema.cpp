@@ -831,7 +831,7 @@ namespace psio::schema_types
    }
    //-----
 
-   validation_t fracpack_validate(std::span<const char> data,
+   validation_t validate_frac(std::span<const char> data,
                                   const CompiledSchema& schema,
                                   const std::string&    type)
    {

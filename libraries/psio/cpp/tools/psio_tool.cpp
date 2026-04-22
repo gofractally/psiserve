@@ -983,7 +983,7 @@ static int cmd_validate(int argc, char** argv)
             return 1;
          }
 
-         bool valid = psio::capnp_validate(data.data(), data.size());
+         bool valid = psio::validate_capnp(data.data(), data.size());
          if (valid)
          {
             std::cout << "valid\n";
@@ -1082,7 +1082,7 @@ static int cmd_inspect(int argc, char** argv)
             std::cerr << "error: data too small for capnp message\n";
             return 1;
          }
-         if (!psio::capnp_validate(data.data(), data.size()))
+         if (!psio::validate_capnp(data.data(), data.size()))
          {
             std::cerr << "warning: capnp validation failed, attempting to read anyway\n";
          }
@@ -1234,7 +1234,7 @@ static int cmd_convert(int argc, char** argv)
                       << data.size() << ")\n";
             return 1;
          }
-         if (!psio::capnp_validate(data.data(), data.size()))
+         if (!psio::validate_capnp(data.data(), data.size()))
          {
             std::cerr << "warning: capnp validation failed, attempting to read anyway\n";
          }

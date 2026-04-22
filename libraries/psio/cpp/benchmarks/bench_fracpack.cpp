@@ -711,19 +711,19 @@ void bench_validate()
    auto sensor_data = psio::to_frac(make_sensor());
 
    bench("validate/UserProfile", user_data.size(), [&] {
-      auto r = psio::fracpack_validate<UserProfile>(
+      auto r = psio::validate_frac<UserProfile>(
           std::span<const char>(user_data.data(), user_data.size()));
       do_not_optimize(r);
       return r;
    });
    bench("validate/Order", order_data.size(), [&] {
-      auto r = psio::fracpack_validate<Order>(
+      auto r = psio::validate_frac<Order>(
           std::span<const char>(order_data.data(), order_data.size()));
       do_not_optimize(r);
       return r;
    });
    bench("validate/SensorReading", sensor_data.size(), [&] {
-      auto r = psio::fracpack_validate<SensorReading>(
+      auto r = psio::validate_frac<SensorReading>(
           std::span<const char>(sensor_data.data(), sensor_data.size()));
       do_not_optimize(r);
       return r;
@@ -731,7 +731,7 @@ void bench_validate()
 
    auto point_data = psio::to_frac(make_point());
    bench("validate/Point", point_data.size(), [&] {
-      auto r = psio::fracpack_validate<BPoint>(
+      auto r = psio::validate_frac<BPoint>(
           std::span<const char>(point_data.data(), point_data.size()));
       do_not_optimize(r);
       return r;
@@ -739,7 +739,7 @@ void bench_validate()
 
    auto token_data = psio::to_frac(make_token());
    bench("validate/Token", token_data.size(), [&] {
-      auto r = psio::fracpack_validate<Token>(
+      auto r = psio::validate_frac<Token>(
           std::span<const char>(token_data.data(), token_data.size()));
       do_not_optimize(r);
       return r;

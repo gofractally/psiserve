@@ -1632,7 +1632,7 @@ namespace psio
       extended,
    };
    template <Packable T>
-   validation_t fracpack_validate(std::span<const char> data)
+   validation_t validate_frac(std::span<const char> data)
    {
       bool          has_unknown = false;
       bool          known_end;
@@ -1645,14 +1645,14 @@ namespace psio
       return has_unknown ? validation_t::extended : validation_t::valid;
    }
    template <Packable T>
-   bool fracpack_validate_compatible(std::span<const char> data)
+   bool validate_frac_compatible(std::span<const char> data)
    {
-      return fracpack_validate<T>(data) != validation_t::invalid;
+      return validate_frac<T>(data) != validation_t::invalid;
    }
    template <Packable T>
-   bool fracpack_validate_strict(std::span<const char> data)
+   bool validate_frac_strict(std::span<const char> data)
    {
-      return fracpack_validate<T>(data) == validation_t::valid;
+      return validate_frac<T>(data) == validation_t::valid;
    }
 
    template <typename T>
