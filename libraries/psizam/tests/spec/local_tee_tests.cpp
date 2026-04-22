@@ -293,6 +293,12 @@ BACKEND_TEST_CASE( "Testing wasm <local_tee_41_wasm>", "[local_tee_41_wasm_tests
    CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
 }
 
+BACKEND_TEST_CASE( "Testing wasm <local_tee_42_wasm>", "[local_tee_42_wasm_tests]" ) {
+   using backend_t = backend<standalone_function_t, TestType>;
+   auto code = read_wasm( std::string(wasm_directory) + "local_tee.42.wasm");
+   CHECK_THROWS_AS(backend_t(code, nullptr), std::exception);
+}
+
 BACKEND_TEST_CASE( "Testing wasm <local_tee_5_wasm>", "[local_tee_5_wasm_tests]" ) {
    using backend_t = backend<standalone_function_t, TestType>;
    auto code = read_wasm( std::string(wasm_directory) + "local_tee.5.wasm");

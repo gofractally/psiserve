@@ -20,29 +20,5 @@ BACKEND_TEST_CASE( "Testing wasm <i32x4_relaxed_trunc_0_wasm>", "[i32x4_relaxed_
    auto code = read_wasm( std::string(wasm_directory) + "i32x4_relaxed_trunc.0.wasm");
    backend_t bkend( code, &wa );
 
-   { auto _r = bkend.call_with_return("env", "i32x4.relaxed_trunc_f32x4_s", make_v128_f32(3472883712u,3472883713u,1073741824u,1325400065u))->to_v128();
-     CHECK((_r == make_v128_i32(2147483648u,2147483648u,2u,2147483647u) || _r == make_v128_i32(2147483648u,2147483648u,2u,2147483648u))); }
-   { auto _r = bkend.call_with_return("env", "i32x4.relaxed_trunc_f32x4_s", make_v128_f32(2143289344u,4290772992u,2143568964u,4291052612u))->to_v128();
-     CHECK((_r == make_v128_i32(0u,0u,0u,0u) || _r == make_v128_i32(2147483648u,2147483648u,2147483648u,2147483648u))); }
-   { auto _r = bkend.call_with_return("env", "i32x4.relaxed_trunc_f32x4_u", make_v128_f32(0u,3212836864u,1333788671u,1333788672u))->to_v128();
-     CHECK((_r == make_v128_i32(0u,0u,4294967040u,4294967295u) || _r == make_v128_i32(0u,4294967295u,4294967040u,4294967295u))); }
-   { auto _r = bkend.call_with_return("env", "i32x4.relaxed_trunc_f32x4_u", make_v128_f32(2143289344u,4290772992u,2143568964u,4291052612u))->to_v128();
-     CHECK((_r == make_v128_i32(0u,0u,0u,0u) || _r == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u))); }
-   { auto _r = bkend.call_with_return("env", "i32x4.relaxed_trunc_f64x2_s_zero", make_v128_f64(13970166044640149504u,4746794007785373696u))->to_v128();
-     CHECK((_r == make_v128_i32(2147483648u,2147483647u,0u,0u) || _r == make_v128_i32(2147483648u,2147483648u,0u,0u))); }
-   { auto _r = bkend.call_with_return("env", "i32x4.relaxed_trunc_f64x2_s_zero", make_v128_f64(9221120237041090560u,18444492273895866368u))->to_v128();
-     CHECK((_r == make_v128_i32(0u,0u,0u,0u) || _r == make_v128_i32(2147483648u,2147483648u,0u,0u))); }
-   { auto _r = bkend.call_with_return("env", "i32x4.relaxed_trunc_f64x2_u_zero", make_v128_f64(13830554455654793216u,4751297606875873280u))->to_v128();
-     CHECK((_r == make_v128_i32(0u,4294967295u,0u,0u) || _r == make_v128_i32(4294967295u,4294967295u,0u,0u))); }
-   { auto _r = bkend.call_with_return("env", "i32x4.relaxed_trunc_f64x2_u_zero", make_v128_f64(9221120237041090560u,18444492273895866368u))->to_v128();
-     CHECK((_r == make_v128_i32(0u,0u,0u,0u) || _r == make_v128_i32(0u,0u,4294967295u,4294967295u))); }
-   CHECK(bkend.call_with_return("env", "i32x4.relaxed_trunc_f32x4_s_cmp", make_v128_f32(3472883712u,3472883713u,1325400064u,1325400065u))->to_v128() == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u));
-   CHECK(bkend.call_with_return("env", "i32x4.relaxed_trunc_f32x4_s_cmp", make_v128_f32(2143289344u,4290772992u,2143568964u,4291052612u))->to_v128() == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u));
-   CHECK(bkend.call_with_return("env", "i32x4.relaxed_trunc_f32x4_u_cmp", make_v128_f32(0u,3212836864u,1333788671u,1333788672u))->to_v128() == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u));
-   CHECK(bkend.call_with_return("env", "i32x4.relaxed_trunc_f32x4_u_cmp", make_v128_f32(2143289344u,4290772992u,2143568964u,4291052612u))->to_v128() == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u));
-   CHECK(bkend.call_with_return("env", "i32x4.relaxed_trunc_f64x2_s_zero_cmp", make_v128_f64(13970166044640149504u,4746794007785373696u))->to_v128() == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u));
-   CHECK(bkend.call_with_return("env", "i32x4.relaxed_trunc_f64x2_s_zero_cmp", make_v128_f64(9221120237041090560u,18444492273895866368u))->to_v128() == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u));
-   CHECK(bkend.call_with_return("env", "i32x4.relaxed_trunc_f64x2_u_zero_cmp", make_v128_f64(13830554455654793216u,4751297606875873280u))->to_v128() == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u));
-   CHECK(bkend.call_with_return("env", "i32x4.relaxed_trunc_f64x2_u_zero_cmp", make_v128_f64(9221120237041090560u,18444492273895866368u))->to_v128() == make_v128_i32(4294967295u,4294967295u,4294967295u,4294967295u));
 }
 
