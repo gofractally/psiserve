@@ -177,6 +177,7 @@ namespace psizam::detail {
       void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
       bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
       bool is_checked_strict() const noexcept { return is_checked() && _checked_kind == checked_mode::strict; }
+      bool is_checked_immediate() const noexcept { return is_checked() && _checked_kind == checked_mode::immediate; }
       bool is_memory16() const noexcept { return _mem_mode == mem_safety::memory16; }
 
       /// Get the call_indirect error handler address (for element table patching).
@@ -4116,9 +4117,12 @@ namespace psizam::detail {
          if (uoffset != 0) {
             emit_addr_offset_add(rcx, uoffset);
          }
-         // Checked mode: update R15 watermark (deferred read check). Clobbers RDX.
-         if (access_size > 0)
-            emit_checked_read_watermark(rcx, access_size);
+         if (access_size > 0) {
+            if (is_checked_immediate())
+               emit_checked_write_bounds(rcx, access_size);
+            else
+               emit_checked_read_watermark(rcx, access_size);
+         }
          this->emit(instr, *(rcx + rsi + 0), reg);
 
          // Move result from reg (eax/rax) to dest physical register if different
@@ -5772,9 +5776,12 @@ namespace psizam::detail {
          if (uoffset != 0) {
             emit_addr_offset_add(rax, uoffset);
          }
-         // Checked mode: update R15 watermark (deferred read check)
-         if (access_size > 0)
-            emit_checked_read_watermark(rax, access_size);
+         if (access_size > 0) {
+            if (is_checked_immediate())
+               emit_checked_write_bounds(rax, access_size);
+            else
+               emit_checked_read_watermark(rax, access_size);
+         }
          this->emit(instr, *(rax + rsi + 0), reg);
          this->emit_push_raw(rax);
       }
@@ -5824,8 +5831,10 @@ namespace psizam::detail {
       void simd_loadop(Op op, uint32_t offset, uint32_t addr_vreg = ir_vreg_none,
                        uint32_t access_size = 16) {
          simd_load_address(offset, addr_vreg);
-         // Checked mode: watermark tracking for SIMD read (clobbers RDX only)
-         emit_checked_read_watermark(rax, access_size);
+         if (is_checked_immediate())
+            emit_checked_write_bounds(rax, access_size);
+         else
+            emit_checked_read_watermark(rax, access_size);
          this->emit(op, *(rax + rsi + 0), xmm0);
          this->emit_sub(16, rsp);
          this->emit_vmovdqu(xmm0, *rsp);
@@ -5860,9 +5869,12 @@ namespace psizam::detail {
          this->emit_vmovdqu(*rsp, xmm0);
          this->emit_add(16, rsp);
          simd_load_address(offset, addr_vreg);
-         // Checked mode: watermark tracking for lane load (clobbers RDX)
-         if (access_size > 0)
-            emit_checked_read_watermark(rax, access_size);
+         if (access_size > 0) {
+            if (is_checked_immediate())
+               emit_checked_write_bounds(rax, access_size);
+            else
+               emit_checked_read_watermark(rax, access_size);
+         }
          this->emit_add(rsi, rax);
          this->emit(op, typename base::imm8{lane}, *rax, xmm0, xmm0);
          this->emit_sub(16, rsp);

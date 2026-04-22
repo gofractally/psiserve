@@ -17,7 +17,7 @@ constexpr max_func_local_bytes_flags_t operator&(max_func_local_bytes_flags_t lh
 }
 
 enum class mem_safety : unsigned char { guarded, checked, unchecked, memory16 };
-enum class checked_mode : unsigned char { strict, relaxed };
+enum class checked_mode : unsigned char { strict, relaxed, immediate };
 
 struct options {
    mem_safety    memory_mode   = mem_safety::guarded;

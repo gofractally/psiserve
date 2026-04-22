@@ -91,6 +91,7 @@ namespace psizam::detail {
       void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
       bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
       bool is_checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
+      bool is_checked_immediate() const noexcept { return _checked_kind == checked_mode::immediate; }
       bool is_memory16() const noexcept { return _mem_mode == mem_safety::memory16; }
 
       // Offset of _remaining_call_depth in unified frame_info_holder layout
@@ -1121,6 +1122,10 @@ namespace psizam::detail {
       // rd = native address of access start, access_size = bytes being read.
       void emit_read_watermark(uint32_t rd, uint32_t access_size) {
          if (!is_checked()) return;
+         if (is_checked_immediate()) {
+            emit_write_bounds_check(rd, access_size);
+            return;
+         }
          if (is_checked_strict()) {
             // ADD X8, Xrd, #access_size  (native end of read)
             emit_add_imm(X8, rd, access_size);

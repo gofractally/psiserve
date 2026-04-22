@@ -188,10 +188,14 @@ namespace psizam::detail {
          uint64_t effective = compute_effective(op);
          if (context.mem_mode() == mem_safety::checked) {
             uint64_t end = effective + access_size;
-            if (context.checked_strict())
+            if (context.checked_kind() == checked_mode::immediate) {
+               PSIZAM_ASSERT(end <= context.memory_size_bytes(),
+                             wasm_memory_exception, "memory read out of bounds");
+            } else if (context.checked_strict()) {
                context.track_read_max(end);
-            else
+            } else {
                context.track_read_or(end);
+            }
          }
          return context.linear_memory() + effective;
       }
