@@ -125,6 +125,8 @@ namespace psizam::detail {
       void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
       bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
       bool is_checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
+      bool is_checked_immediate() const noexcept { return _checked_kind == checked_mode::immediate; }
+      bool is_memory16() const noexcept { return _mem_mode == mem_safety::memory16; }
 
       ~machine_code_writer_t() {
          _allocator.end_code<true>(_code_segment_base);
@@ -6607,6 +6609,11 @@ namespace psizam::detail {
             emit(TEST, tmpreg, tmpreg);
             fix_branch(emit_branchcc32(JNZ), memory_handler);
          }
+         if (is_memory16()) {
+            // Memory16: zero-extend 16-bit address. movzwl %<out16>, %<out32>
+            auto out32 = static_cast<general_register32>(out);
+            emit(MOVZXW, out32, out32);
+         }
          if (offset & 0x80000000u) {
             emit_mov(offset, tmpreg);
             emit_add(static_cast<general_register64>(tmpreg), out);
@@ -6739,7 +6746,10 @@ namespace psizam::detail {
       template<class I, class R>
       void emit_load_impl2(uint32_t offset, I instr, R reg, uint32_t access_size) {
          auto addr = emit_pop_address(offset, rax, ecx);
-         emit_read_watermark(rax, addr.offset, access_size, rcx);
+         if (is_checked_immediate())
+            emit_write_bounds_check(rax, addr.offset, access_size, rcx);
+         else
+            emit_read_watermark(rax, addr.offset, access_size, rcx);
          emit(instr, addr, reg);
          emit_push(rax);
       }
@@ -6765,6 +6775,10 @@ namespace psizam::detail {
             emit(SHR_imm8, static_cast<imm8>(32), rcx);
             emit(TEST, ecx, ecx);
             fix_branch(emit_branchcc32(JNZ), memory_handler);
+         }
+         if (is_memory16()) {
+            // Memory16: zero-extend 16-bit address. movzwl %ax, %eax
+            emit(MOVZXW, eax, eax);
          }
          if (offset & 0x80000000) {
             // mov $offset, %ecx
@@ -6852,7 +6866,10 @@ namespace psizam::detail {
       void emit_v128_loadop(Op op, uint32_t /*align*/, uint32_t offset, uint32_t access_size) {
          auto icount = simd_instr();
          auto expr = emit_pop_address(offset, rax, ecx);
-         emit_read_watermark(rax, expr.offset, access_size, rcx);
+         if (is_checked_immediate())
+            emit_write_bounds_check(rax, expr.offset, access_size, rcx);
+         else
+            emit_read_watermark(rax, expr.offset, access_size, rcx);
          emit(op, expr, xmm0);
          emit_push_v128(xmm0);
       }
@@ -6863,7 +6880,10 @@ namespace psizam::detail {
          auto icount = simd_instr();
          emit_pop_v128(xmm0);
          emit_pop_address(offset);
-         emit_read_watermark_native(access_size, rcx);
+         if (is_checked_immediate())
+            emit_write_bounds_check_native(rax, access_size, rcx);
+         else
+            emit_read_watermark_native(access_size, rcx);
          emit(op, imm8{lane}, *rax, xmm0, xmm0);
          emit_sub(16, rsp);
          emit_vmovdqu(xmm0, *rsp);

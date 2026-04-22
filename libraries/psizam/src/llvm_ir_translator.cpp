@@ -1367,6 +1367,8 @@ namespace psizam::detail {
             if (access_size > 0) {
                if (is_store)
                   emit_write_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff_addr, access_size, mem_size_cache);
+               else if (opts.checked_kind == checked_mode::immediate)
+                  emit_read_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff_addr, access_size, mem_size_cache);
                else
                   emit_read_watermark_update(builder, eff_addr, access_size, watermark_alloca);
             }
@@ -2400,9 +2402,10 @@ namespace psizam::detail {
                      default: load_ty = i32_ty; result_ty = i32_ty; access_size = 4; break;
                   }
 
-                  // Checked mode: deferred watermark (umax, no branch per read).
-                  // Validated at loop headers and before host calls.
-                  emit_read_watermark_update(builder, eff_addr, access_size, watermark_alloca);
+                  if (opts.checked_kind == checked_mode::immediate)
+                     emit_read_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff_addr, access_size, mem_size_cache);
+                  else
+                     emit_read_watermark_update(builder, eff_addr, access_size, watermark_alloca);
 
                   llvm::Value* ptr = builder.CreateGEP(i8_ty, load_mem_ptr(), eff_addr);
                   auto* load_inst = builder.CreateLoad(load_ty, ptr);
@@ -5061,7 +5064,10 @@ namespace psizam::detail {
                            case atomic_sub::i64_atomic_load: asz = 8; break;
                            default: break;
                         }
-                        emit_read_watermark_update(builder, eff64, asz, watermark_alloca);
+                        if (opts.checked_kind == checked_mode::immediate)
+                           emit_read_bounds_check(builder, ctx_ptr, load_mem_ptr(), eff64, asz, mem_size_cache);
+                        else
+                           emit_read_watermark_update(builder, eff64, asz, watermark_alloca);
                      }
                      auto* ptr = builder.CreateGEP(builder.getInt8Ty(), load_mem_ptr(), eff64);
                      llvm::Value* val = nullptr;

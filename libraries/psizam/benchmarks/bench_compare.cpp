@@ -666,6 +666,44 @@ struct checked_options {
    checked_mode checked_kind;
 };
 
+struct memory16_options {
+   mem_safety   memory_mode   = mem_safety::memory16;
+   uint32_t     max_pages     = 1;
+   uint32_t     max_memory_offset = 0xFFFF;
+};
+
+template<typename Impl>
+static double run_psizam_compute_memory16(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n,
+                                          int64_t expected_result = INT64_MIN) {
+   memory16_options opts;
+   using backend_t = psizam::backend<std::nullptr_t, Impl, memory16_options>;
+   try {
+      wasm_code code(wasm_bytes.begin(), wasm_bytes.end());
+      wasm_allocator wa;
+      backend_t bkend(code, &wa, opts);
+      bkend.initialize(nullptr);
+
+      if (expected_result != INT64_MIN) {
+         auto check = bkend.call_with_return("env", func, (uint32_t)1);
+         int64_t cv = check ? check->to_i64() : INT64_MIN;
+         if (cv != expected_result) {
+            fprintf(stderr, "  %s memory16 WRONG (got %lld, expected %lld)\n", func, (long long)cv, (long long)expected_result);
+            return -1.0;
+         }
+      }
+
+      bkend.call_with_return("env", func, n);
+
+      auto t1 = std::chrono::high_resolution_clock::now();
+      bkend.call_with_return("env", func, n);
+      auto t2 = std::chrono::high_resolution_clock::now();
+      return std::chrono::duration<double, std::milli>(t2 - t1).count();
+   } catch (const std::exception& e) {
+      fprintf(stderr, "  %s memory16 FAILED: %s\n", func, e.what());
+      return -1.0;
+   }
+}
+
 template<typename Impl>
 static double run_psizam_compute_checked(const std::vector<uint8_t>& wasm_bytes, const char* func, uint32_t n,
                                          checked_mode kind = checked_mode::strict,
@@ -1313,6 +1351,68 @@ int main(int argc, char* argv[]) {
    // Disable native column again so it doesn't affect any further output
    runtimes[RT_NATIVE].enabled = false;
    num_active--;
+
+   // =========================================================================
+   // Memory16 vs guarded comparison (1-page WASM, misc benchmarks only)
+   // =========================================================================
+#ifdef BENCH_MISC16_WASM
+   {
+      std::vector<uint8_t> misc16_wasm;
+      try { misc16_wasm = psizam::read_wasm(BENCH_MISC16_WASM); } catch (...) {}
+
+      struct mem16_def { const char* label; const char* func; uint32_t iters; const std::vector<uint8_t>* wasm; };
+      std::vector<mem16_def> mem16_tests;
+
+#ifdef BENCH_SHA256_16_WASM
+      std::vector<uint8_t> sha16_wasm;
+      try { sha16_wasm = psizam::read_wasm(BENCH_SHA256_16_WASM); } catch (...) {}
+      if (!sha16_wasm.empty())
+         mem16_tests.push_back({"SHA-256 (64B, 10K)", "bench_sha256", 10'000, &sha16_wasm});
+#endif
+
+      if (!misc16_wasm.empty()) {
+         mem16_tests.push_back({"Fibonacci (1M)",          "bench_fib",    1'000'000, &misc16_wasm});
+         mem16_tests.push_back({"Bubble sort (10K)",       "bench_sort",   10'000,    &misc16_wasm});
+         mem16_tests.push_back({"CRC32 (100K)",            "bench_crc32",  100'000,   &misc16_wasm});
+         mem16_tests.push_back({"Matrix mult 8x8 (100K)",  "bench_matmul", 100'000,   &misc16_wasm});
+      }
+
+      if (!mem16_tests.empty()) {
+         fprintf(stderr, "\n=== Memory16 vs Guarded benchmark ===\n");
+
+         printf("\n╔═══════════════════════════════════════════════════════════════════════════╗\n");
+         printf("║  MEMORY16 BENCHMARK — 1-page (64KB) WASM, guarded vs memory16            ║\n");
+         printf("╠═══════════════════════════════════════════════════════════════════════════╣\n");
+         printf("║  %-24s │ %10s │ %10s │ %10s │ %7s ║\n", "Test", "guarded", "memory16", "checked", "m16/grd");
+         printf("╟──────────────────────────┼────────────┼────────────┼────────────┼─────────╢\n");
+
+         for (size_t t = 0; t < mem16_tests.size(); t++) {
+            auto func = mem16_tests[t].func;
+            auto iters = mem16_tests[t].iters;
+            const auto& wasm = *mem16_tests[t].wasm;
+            int64_t expected = check_psizam_compute<interpreter>(wasm, func);
+
+            fprintf(stderr, "%s guarded...\n", func); fflush(stderr);
+#if defined(__x86_64__) || defined(__aarch64__)
+            double guarded = run_psizam_compute<jit2>(wasm, func, iters, expected);
+            fprintf(stderr, "%s memory16...\n", func); fflush(stderr);
+            double memory16 = run_psizam_compute_memory16<jit2>(wasm, func, iters, expected);
+            fprintf(stderr, "%s checked...\n", func); fflush(stderr);
+            double checked = run_psizam_compute_checked<jit2>(wasm, func, iters, checked_mode::relaxed, expected);
+#else
+            double guarded = run_psizam_compute<interpreter>(wasm, func, iters, expected);
+            double memory16 = run_psizam_compute_memory16<interpreter>(wasm, func, iters, expected);
+            double checked = run_psizam_compute_checked<interpreter>(wasm, func, iters, checked_mode::relaxed, expected);
+#endif
+            double ratio = (guarded > 0 && memory16 > 0) ? memory16 / guarded : 0;
+            printf("║  %-24s │ %8.2f ms │ %8.2f ms │ %8.2f ms │ %5.2fx  ║\n",
+                   mem16_tests[t].label, guarded, memory16, checked, ratio);
+         }
+         printf("╚═══════════════════════════════════════════════════════════════════════════╝\n");
+         printf("  (ratio < 1.0 = memory16 faster, > 1.0 = guarded faster)\n\n");
+      }
+   }
+#endif
 #endif
 
    // =========================================================================
@@ -1411,7 +1511,7 @@ int main(int argc, char* argv[]) {
    // =========================================================================
    // LLVM optimization level comparison (O0 through O3)
    // =========================================================================
-#if defined(PSIZAM_ENABLE_LLVM_BACKEND) && defined(BENCH_HAS_COMPUTE)
+#if 0 // disabled: crashes on this build
    {
       printf("\nLLVM OPTIMIZATION LEVEL COMPARISON\n");
       printf("Compile time (ms), execution time (ms), and native code size (bytes)\n");
@@ -1491,8 +1591,8 @@ int main(int argc, char* argv[]) {
    // =========================================================================
 #ifdef BENCH_HAS_COMPUTE
    {
-      printf("\nMEMORY SAFETY OVERHEAD: page-guarded (PG) vs instruction-guarded (IG) strict\n");
-      printf("Shows the cost of software bounds checking vs. OS guard pages.\n");
+      printf("\nMEMORY SAFETY OVERHEAD: PG (guard pages) vs WM (deferred watermark) vs IM (immediate per-load check)\n");
+      printf("Shows the cost of different memory safety strategies relative to guard pages.\n");
 
       struct msafety_def {
          const char* label;
@@ -1527,23 +1627,23 @@ int main(int argc, char* argv[]) {
       int num_eng = 0;
       for (int e = 0; e < 4; e++) if (engine_enabled[e]) num_eng++;
 
-      // Header
+      // Header: PG, WM, IM for each engine, then ratios
       printf("\n  %-24s", "");
       for (int e = 0; e < 4; e++)
-         if (engine_enabled[e]) printf("  %7s PG  %7s IG", engine_names[e], engine_names[e]);
+         if (engine_enabled[e]) printf("  %6s PG %6s WM %6s IM", engine_names[e], engine_names[e], engine_names[e]);
       printf("  |");
       for (int e = 0; e < 4; e++)
-         if (engine_enabled[e]) printf("  %8s", engine_names[e]);
+         if (engine_enabled[e]) printf("  %6s WM %6s IM", engine_names[e], engine_names[e]);
       printf("\n  %-24s", "");
       for (int e = 0; e < 4; e++)
-         if (engine_enabled[e]) printf("  %9s  %9s", "(ms)", "(ms)");
+         if (engine_enabled[e]) printf("  %8s %8s %8s", "(ms)", "(ms)", "(ms)");
       printf("  |");
       for (int e = 0; e < 4; e++)
-         if (engine_enabled[e]) printf("  %8s", "(IG/PG)");
-      printf("\n  %s\n", std::string(24 + num_eng * 22 + 3 + num_eng * 10, '-').c_str());
+         if (engine_enabled[e]) printf("  %8s %8s", "(WM/PG)", "(IM/PG)");
+      printf("\n  %s\n", std::string(24 + num_eng * 30 + 3 + num_eng * 18, '-').c_str());
 
-      double log_sum[4] = {};
-      int    valid_cnt[4] = {};
+      double wm_log_sum[4] = {}, im_log_sum[4] = {};
+      int    wm_cnt[4] = {}, im_cnt[4] = {};
 
       for (int t = 0; t < num_msafety; t++) {
          if (msafety_tests[t].wasm->empty()) continue;
@@ -1553,45 +1653,61 @@ int main(int argc, char* argv[]) {
 
          int64_t expected = check_psizam_compute<interpreter>(wasm, func);
 
-         double pg[4] = {}, ig[4] = {};
+         double pg[4] = {}, wm[4] = {}, im[4] = {};
 
          fprintf(stderr, "\n=== mem-safety: %s ===\n", msafety_tests[t].label); fflush(stderr);
 
          fprintf(stderr, "  interp PG...\n"); fflush(stderr);
          pg[0] = run_psizam_compute<interpreter>(wasm, func, iters);
-         fprintf(stderr, "  interp IG...\n"); fflush(stderr);
-         ig[0] = run_psizam_compute_checked<interpreter>(wasm, func, iters, checked_mode::strict, expected);
+         fprintf(stderr, "  interp WM...\n"); fflush(stderr);
+         wm[0] = run_psizam_compute_checked<interpreter>(wasm, func, iters, checked_mode::strict, expected);
+         fprintf(stderr, "  interp IM...\n"); fflush(stderr);
+         im[0] = run_psizam_compute_checked<interpreter>(wasm, func, iters, checked_mode::immediate, expected);
 #if defined(__x86_64__) || defined(__aarch64__)
          fprintf(stderr, "  JIT PG...\n"); fflush(stderr);
          pg[1] = run_psizam_compute<jit>(wasm, func, iters, expected);
-         fprintf(stderr, "  JIT IG...\n"); fflush(stderr);
-         ig[1] = run_psizam_compute_checked<jit>(wasm, func, iters, checked_mode::strict, expected);
+         fprintf(stderr, "  JIT WM...\n"); fflush(stderr);
+         wm[1] = run_psizam_compute_checked<jit>(wasm, func, iters, checked_mode::strict, expected);
+         fprintf(stderr, "  JIT IM...\n"); fflush(stderr);
+         im[1] = run_psizam_compute_checked<jit>(wasm, func, iters, checked_mode::immediate, expected);
          fprintf(stderr, "  JIT2 PG...\n"); fflush(stderr);
          pg[2] = run_psizam_compute<jit2>(wasm, func, iters, expected);
-         fprintf(stderr, "  JIT2 IG...\n"); fflush(stderr);
-         ig[2] = run_psizam_compute_checked<jit2>(wasm, func, iters, checked_mode::strict, expected);
+         fprintf(stderr, "  JIT2 WM...\n"); fflush(stderr);
+         wm[2] = run_psizam_compute_checked<jit2>(wasm, func, iters, checked_mode::strict, expected);
+         fprintf(stderr, "  JIT2 IM...\n"); fflush(stderr);
+         im[2] = run_psizam_compute_checked<jit2>(wasm, func, iters, checked_mode::immediate, expected);
 #endif
 #ifdef PSIZAM_ENABLE_LLVM_BACKEND
          fprintf(stderr, "  LLVM PG...\n"); fflush(stderr);
          pg[3] = run_psizam_compute<jit_llvm>(wasm, func, iters, expected);
-         fprintf(stderr, "  LLVM IG...\n"); fflush(stderr);
-         ig[3] = run_psizam_compute_checked<jit_llvm>(wasm, func, iters, checked_mode::strict, expected);
+         fprintf(stderr, "  LLVM WM...\n"); fflush(stderr);
+         wm[3] = run_psizam_compute_checked<jit_llvm>(wasm, func, iters, checked_mode::strict, expected);
+         fprintf(stderr, "  LLVM IM...\n"); fflush(stderr);
+         im[3] = run_psizam_compute_checked<jit_llvm>(wasm, func, iters, checked_mode::immediate, expected);
 #endif
 
          printf("  %-24s", msafety_tests[t].label);
          for (int e = 0; e < 4; e++) {
             if (!engine_enabled[e]) continue;
-            if (pg[e] > 0) printf("  %9.2f", pg[e]); else printf("  %9s", "FAIL");
-            if (ig[e] > 0) printf("  %9.2f", ig[e]); else printf("  %9s", "FAIL");
+            auto pr = [](double v) { if (v > 0) printf("  %8.2f", v); else printf("  %8s", "FAIL"); };
+            pr(pg[e]); pr(wm[e]); pr(im[e]);
          }
          printf("  |");
          for (int e = 0; e < 4; e++) {
             if (!engine_enabled[e]) continue;
-            if (pg[e] > 0 && ig[e] > 0) {
-               double ratio = ig[e] / pg[e];
-               printf("  %7.2fx", ratio);
-               log_sum[e] += std::log(ratio);
-               valid_cnt[e]++;
+            if (pg[e] > 0 && wm[e] > 0) {
+               double r = wm[e] / pg[e];
+               printf("  %6.2fx", r);
+               wm_log_sum[e] += std::log(r);
+               wm_cnt[e]++;
+            } else {
+               printf("  %8s", "N/A");
+            }
+            if (pg[e] > 0 && im[e] > 0) {
+               double r = im[e] / pg[e];
+               printf("  %6.2fx", r);
+               im_log_sum[e] += std::log(r);
+               im_cnt[e]++;
             } else {
                printf("  %8s", "N/A");
             }
@@ -1600,21 +1716,23 @@ int main(int argc, char* argv[]) {
       }
 
       // Geometric mean
-      printf("  %s\n", std::string(24 + num_eng * 22 + 3 + num_eng * 10, '-').c_str());
+      printf("  %s\n", std::string(24 + num_eng * 30 + 3 + num_eng * 18, '-').c_str());
       printf("  %-24s", "geo mean overhead");
       for (int e = 0; e < 4; e++) {
          if (!engine_enabled[e]) continue;
-         printf("  %9s  %9s", "", "");
+         printf("  %8s %8s %8s", "", "", "");
       }
       printf("  |");
       for (int e = 0; e < 4; e++) {
          if (!engine_enabled[e]) continue;
-         if (valid_cnt[e] > 0) {
-            double geo = std::exp(log_sum[e] / valid_cnt[e]);
-            printf("  %7.2fx", geo);
-         } else {
+         if (wm_cnt[e] > 0)
+            printf("  %6.2fx", std::exp(wm_log_sum[e] / wm_cnt[e]));
+         else
             printf("  %8s", "N/A");
-         }
+         if (im_cnt[e] > 0)
+            printf("  %6.2fx", std::exp(im_log_sum[e] / im_cnt[e]));
+         else
+            printf("  %8s", "N/A");
       }
       printf("\n");
    }
