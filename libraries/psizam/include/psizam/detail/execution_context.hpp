@@ -1100,6 +1100,85 @@ namespace psizam::detail {
          return i;
       }
 
+#elif defined(__aarch64__)
+      // Walks the native JIT-emitted FP chain on AArch64.
+      // Frame layout after standard prologue (STP X29,X30,[SP,#-16]!; MOV X29,SP):
+      //   [X29 + 0] = caller's X29 (previous FP)
+      //   [X29 + 8] = saved X30 (return address into caller)
+      // _top_frame stores the FP value captured at WASM entry from the host;
+      // walking stops when the FP chain reaches it.
+      // _bottom_frame is set on WASM→host transitions so the walker can pick
+      // up from a known good frame even when the signal lands in host code.
+      int backtrace(void** out, int count, void* uc) const {
+         static_assert(EnableBacktrace);
+         void* end = this->_top_frame;
+         if (end == nullptr) return 0;
+         void* fp;
+         int i = 0;
+         if (this->_bottom_frame) {
+            fp = this->_bottom_frame;
+         } else if (count != 0) {
+            if (uc) {
+#ifdef __APPLE__
+               auto pc = reinterpret_cast<void*>(
+                   static_cast<ucontext_t*>(uc)->uc_mcontext->__ss.__pc);
+               fp = reinterpret_cast<void*>(
+                   static_cast<ucontext_t*>(uc)->uc_mcontext->__ss.__fp);
+               auto lr = reinterpret_cast<void*>(
+                   static_cast<ucontext_t*>(uc)->uc_mcontext->__ss.__lr);
+#else
+               // Linux: sigcontext.regs[0..30] = X0..X30
+               auto pc = reinterpret_cast<void*>(
+                   static_cast<ucontext_t*>(uc)->uc_mcontext.pc);
+               fp = reinterpret_cast<void*>(
+                   static_cast<ucontext_t*>(uc)->uc_mcontext.regs[29]);
+               auto lr = reinterpret_cast<void*>(
+                   static_cast<ucontext_t*>(uc)->uc_mcontext.regs[30]);
+#endif
+               out[i++] = pc;
+               // Prologue/epilogue detection. On AArch64 the two-instruction
+               // prologue is:
+               //   0xA9BF7BFD  STP X29, X30, [SP, #-16]!
+               //   0x910003FD  MOV X29, SP
+               // and the epilogue is:
+               //   0xA8C17BFD  LDP X29, X30, [SP], #16
+               //   0xD65F03C0  RET
+               // If the signal fires before the STP, X30 holds the unsaved
+               // return address — don't trust FP, use LR instead.
+               auto code_base = reinterpret_cast<const unsigned char*>(
+                   _mod->allocator.get_code_start());
+               auto code_end  = code_base + _mod->allocator._code_size;
+               auto pc_bytes  = static_cast<unsigned char*>(pc);
+               if (pc_bytes >= code_base && pc_bytes + 4 <= code_end && count > 1) {
+                  uint32_t insn = *reinterpret_cast<const uint32_t*>(pc_bytes);
+                  if (insn == 0xA9BF7BFD) {
+                     // Between prologue entry and STP — LR unsaved.
+                     if (lr != pc) out[i++] = lr;
+                  } else if (insn == 0x910003FD) {
+                     // STP executed, MOV X29,SP pending. FP not yet updated;
+                     // LR is at [SP + 8] (just pushed by STP).
+                     // Conservative: also trust LR register value.
+                     if (lr != pc) out[i++] = lr;
+                  } else if (insn == 0xD65F03C0) {
+                     // At RET: LR register already reloaded, FP restored.
+                     out[i++] = lr;
+                  }
+               }
+            } else {
+               fp = __builtin_frame_address(0);
+            }
+         }
+         while (i < count) {
+            if (fp == end) break;
+            if (fp == nullptr) break;
+            // On arm64 the saved LR is at [FP, #8], previous FP is at [FP, #0].
+            void* saved_lr = static_cast<void**>(fp)[1];
+            out[i++] = saved_lr;
+            fp = *static_cast<void**>(fp);
+         }
+         return i;
+      }
+
 #endif
 
       static constexpr bool async_backtrace() { return EnableBacktrace; }

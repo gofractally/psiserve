@@ -140,6 +140,19 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    target_link_libraries(psizam-exec PUBLIC psizam)
 endif()
 
+# ── Debug library (native only, always built) ────────────────────────────────
+# DWARF parser, ELF synthesizer, and GDB/LLDB JIT registrar. Consumers opt
+# in at the template level by instantiating backend<..., debug_instr_map>.
+# Unused when no consumer selects debug_instr_map — linker DCE strips it.
+# No CMake gate: host release builds retain the ability to symbolize WASM
+# traces purely by template selection at the call site.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
+   add_library(psizam-debug STATIC
+      src/debug/dwarf.cpp
+   )
+   target_link_libraries(psizam-debug PUBLIC psizam)
+endif()
+
 # ── LLVM Compile Backend (opt-in) ────────────────────────────────────────────
 option(PSIZAM_ENABLE_LLVM "Build LLVM AOT/JIT backend" OFF)
 

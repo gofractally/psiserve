@@ -278,6 +278,34 @@ add_executable(spec_test_generator ${CMAKE_CURRENT_SOURCE_DIR}/spec_test_generat
 
 catch_discover_tests(unit_tests)
 
+# ── Debug trap tests ──────────────────────────────────────────────────────────
+
+add_executable(psizam_debug_tests main.cpp
+   debug_trap_tests.cpp
+)
+target_link_libraries(psizam_debug_tests psizam psizam-exec psizam-debug Catch2::Catch2)
+target_include_directories(psizam_debug_tests PUBLIC
+   ${CMAKE_CURRENT_SOURCE_DIR}
+   ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_compile_definitions(psizam_debug_tests PUBLIC
+   CATCH_CONFIG_NO_POSIX_SIGNALS
+   PSIZAM_DEBUG_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/debug_fixtures"
+)
+if(PSIZAM_ENABLE_LLVM)
+   target_link_libraries(psizam_debug_tests psizam-llvm)
+endif()
+catch_discover_tests(psizam_debug_tests)
+
+# Standalone helper exercised by the scripted lldb/gdb attach test. Must be
+# its own executable so the debugger can single-step into it clean.
+add_executable(psizam_debug_attach_helper
+   debug_fixtures/attach_helper.cpp
+)
+target_link_libraries(psizam_debug_attach_helper PRIVATE
+   psizam psizam-exec psizam-debug
+)
+
 # ── Compliance / differential tests ───────────────────────────────────────────
 
 add_executable(psizam_compliance_tests main.cpp
