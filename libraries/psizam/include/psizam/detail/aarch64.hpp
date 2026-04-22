@@ -279,7 +279,10 @@ namespace psizam::detail {
          emit32(0xAA1F03FA); // MOV X26, XZR
 
          if (_enable_backtrace) {
-            emit32(0xF9000673); // STR X19, [X19, #8] (store FP for backtrace)
+            // Store X29 (caller's FP at WASM entry) to ctx+8 = _top_frame.
+            // Walker uses this as the stop marker when unwinding the JIT-frame
+            // chain out of WASM code.
+            emit32(0xF900067D); // STR X29, [X19, #8]
          }
 
          if constexpr (use_native_fp) {
@@ -4964,7 +4967,10 @@ namespace psizam::detail {
          emit32(0x910003FD); // MOV X29, SP
 
          if (_enable_backtrace) {
-            emit32(0xF9000273); // STR X19, [X19]
+            // Store X29 (FP) to ctx+0 = _bottom_frame. X29 points at
+            // [saved_X29, saved_X30] on the stack — walker starts here
+            // when signal fires during a host call from WASM.
+            emit32(0xF900027D); // STR X29, [X19]
          }
 
          // All host calls go through call_host_function which wraps in

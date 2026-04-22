@@ -1005,6 +1005,7 @@ namespace psizam {
       inline auto&           get_context() { return *ctx; }
 
       const DebugInfo& get_debug() const { return debug; }
+      DebugInfo&       get_debug()       { return debug; }
 
     private:
       wasm_allocator* memory_alloc = nullptr; // non owning pointer
