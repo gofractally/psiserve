@@ -469,6 +469,9 @@ namespace psizam {
             PSIZAM_ASSERT(err == 0, wasm_bad_alloc, "mprotect failed");
             std::memcpy(executable_code, _code_base, _code_size);
             _code_base = (char*)executable_code;
+#ifdef __aarch64__
+            __builtin___clear_cache(_code_base, _code_base + _actual_code_size);
+#endif
             enable_code(IsJit);
             _is_jit = true;
             _offset = (char*)code_base - _base;
@@ -799,7 +802,14 @@ namespace psizam {
       }
       void free() {
          ::munmap(raw - prefix_size(), max_memory + prefix_size() + suffix_size());
+         raw = nullptr;
       }
+      ~wasm_allocator() {
+         if (raw)
+            ::munmap(raw - prefix_size(), max_memory + prefix_size() + suffix_size());
+      }
+      wasm_allocator(const wasm_allocator&) = delete;
+      wasm_allocator& operator=(const wasm_allocator&) = delete;
       wasm_allocator() {
          raw  = (char*)::mmap(NULL, max_memory + prefix_size() + suffix_size(), PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
          PSIZAM_ASSERT( raw != MAP_FAILED, wasm_bad_alloc, "mmap failed to alloca pages" );
