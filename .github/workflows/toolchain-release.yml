@@ -1,0 +1,186 @@
+# .github/workflows/toolchain-release.yml
+#
+# Cross-builds clang.wasm + wasm-ld.wasm + wasi-sysroot bundle for the
+# LLVM version pinned in cmake/llvm-wasi/prebuilts.cmake, uploads the
+# artifacts + their SHA256s to a GitHub Release.
+#
+# Runs in two modes:
+#
+# * `workflow_dispatch` — manual trigger from the Actions UI. Produces
+#   a DRAFT release named `llvm-wasi-v<ver>`. Use this to test a bump
+#   before publishing.
+#
+# * `push` on tag `llvm-wasi-v*` — promotes the corresponding draft
+#   release to a published release (or creates one fresh if none
+#   exists). Hash values are printed at the end of the job so the
+#   pinned values in prebuilts.cmake can be updated.
+#
+# The job is idempotent: it keys the ccache + the LLVM source download
+# on the LLVM version, so consecutive runs re-use everything except
+# the final link.
+
+name: Build WASI-compiled toolchain
+
+on:
+   workflow_dispatch:
+   push:
+      tags:
+         - 'llvm-wasi-v*'
+
+jobs:
+   build:
+      # Cross-building clang + lld for wasm takes ~2-4 hours on a regular
+      # ubuntu-latest runner; use the large variant if available to your
+      # org.
+      runs-on: ubuntu-22.04
+      timeout-minutes: 600  # 10 h ceiling; typical ~3 h
+
+      permissions:
+         contents: write   # needed to create/update releases
+
+      steps:
+         - name: Checkout
+           uses: actions/checkout@v4
+
+         - name: Free disk space
+           # Default ubuntu runners have ~14 GB free; LLVM cross-build
+           # intermediates want 25-40 GB. Remove preinstalled tooling
+           # we never touch to get headroom.
+           run: |
+              sudo rm -rf /usr/share/dotnet          \
+                          /usr/local/lib/android     \
+                          /opt/ghc                   \
+                          /opt/hostedtoolcache/CodeQL \
+                          /usr/local/share/boost     \
+                          /usr/local/graalvm         \
+                          /usr/local/share/powershell
+              df -h
+
+         - name: Read pinned LLVM version
+           id: pinned
+           run: |
+              # Pulls PSI_LLVM_VERSION out of prebuilts.cmake so the workflow
+              # and the build consistently target the same release.
+              version=$(awk -F'"' '/set\(PSI_LLVM_VERSION/ {print $2}' \
+                 cmake/llvm-wasi/prebuilts.cmake)
+              echo "llvm_version=$version" >> "$GITHUB_OUTPUT"
+              echo "Pinned LLVM: $version"
+
+         - name: Install host prerequisites
+           run: |
+              sudo apt-get update
+              sudo apt-get install -y ninja-build ccache zstd curl \
+                                      cmake python3
+
+         - name: Install wasi-sdk
+           run: |
+              WASI_SDK_VER=24
+              curl -fsSL -o /tmp/wasi-sdk.tar.gz \
+                 "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VER}/wasi-sdk-${WASI_SDK_VER}.0-x86_64-linux.tar.gz"
+              mkdir -p $HOME/wasi-sdk
+              tar -xzf /tmp/wasi-sdk.tar.gz --strip-components=1 -C $HOME/wasi-sdk
+
+              # wasi-llvm-toolchain.cmake was written around macOS
+              # Homebrew's split layout (wasi-libc, wasi-runtimes,
+              # llvm as three separate packages). wasi-sdk is one
+              # flat install. Stand up a fake-Homebrew layout via
+              # symlinks so the toolchain file works unmodified.
+              mkdir -p $HOME/fake-brew/wasi-libc/share
+              mkdir -p $HOME/fake-brew/wasi-runtimes/share/wasi-runtimes/lib
+
+              ln -sfn $HOME/wasi-sdk/share/wasi-sysroot \
+                      $HOME/fake-brew/wasi-libc/share/wasi-sysroot
+              ln -sfn $HOME/wasi-sdk/share/wasi-sysroot \
+                      $HOME/fake-brew/wasi-runtimes/share/wasi-sysroot
+
+              # libclang_rt.builtins.a lives under
+              #   $HOME/wasi-sdk/lib/clang/<ver>/lib/wasm32-unknown-wasip1
+              # in wasi-sdk; the toolchain file expects it at
+              #   $WASI_RUNTIMES_PREFIX/share/wasi-runtimes/lib/wasm32-unknown-wasip1
+              CLANG_RT_DIR=$(ls -d $HOME/wasi-sdk/lib/clang/*/lib/wasm32-unknown-wasip1 | head -1)
+              ln -sfn "$CLANG_RT_DIR" \
+                      $HOME/fake-brew/wasi-runtimes/share/wasi-runtimes/lib/wasm32-unknown-wasip1
+
+              {
+                 echo "PSIZAM_WASI_SDK=$HOME/wasi-sdk"
+                 echo "LLVM_PREFIX=$HOME/wasi-sdk"
+                 echo "WASI_LIBC_PREFIX=$HOME/fake-brew/wasi-libc"
+                 echo "WASI_RUNTIMES_PREFIX=$HOME/fake-brew/wasi-runtimes"
+              } >> "$GITHUB_ENV"
+
+         - name: Restore ccache
+           uses: actions/cache@v4
+           with:
+              path: ~/.ccache
+              key: llvm-wasi-ccache-${{ steps.pinned.outputs.llvm_version }}-v1
+
+         - name: Build toolchain
+           env:
+              BUILD_CLANG: '1'
+              # ThinLTO stays on — it's what keeps the resulting
+              # clang.wasm / wasm-ld.wasm small and fast. But its
+              # final link spins up N=nproc parallel optimizer
+              # workers, each holding the clang module graph. On
+              # small runners (7-16 GB RAM) that OOMs. Cap parallel
+              # link jobs so peak memory stays bounded; wall-clock
+              # goes up but the link always finishes.
+              LLVM_WASI_LINK_JOBS: '1'
+           run: |
+              scripts/build-llvm-wasi.sh "$GITHUB_WORKSPACE/build-llvm-wasi"
+
+         - name: Package sysroot
+           run: |
+              cd "$HOME/wasi-sdk/share"
+              tar --zstd -cf "$GITHUB_WORKSPACE/wasi-sysroot.tar.zst" wasi-sysroot
+
+         - name: Collect artifacts
+           id: artifacts
+           run: |
+              out="$GITHUB_WORKSPACE/toolchain-artifacts"
+              mkdir -p "$out"
+              cp build-llvm-wasi/install/bin/clang.wasm   "$out/clang.wasm"
+              cp build-llvm-wasi/install/bin/wasm-ld.wasm "$out/wasm-ld.wasm"
+              mv wasi-sysroot.tar.zst                     "$out/wasi-sysroot.tar.zst"
+
+              cd "$out"
+              clang_hash=$(sha256sum clang.wasm           | awk '{print $1}')
+              wasm_ld_hash=$(sha256sum wasm-ld.wasm       | awk '{print $1}')
+              sysroot_hash=$(sha256sum wasi-sysroot.tar.zst | awk '{print $1}')
+
+              echo "clang_hash=$clang_hash"     >> "$GITHUB_OUTPUT"
+              echo "wasm_ld_hash=$wasm_ld_hash" >> "$GITHUB_OUTPUT"
+              echo "sysroot_hash=$sysroot_hash" >> "$GITHUB_OUTPUT"
+
+              {
+                 echo "## Toolchain artifact hashes"
+                 echo ""
+                 echo "Update the matching SHA256 values in"
+                 echo "\`cmake/llvm-wasi/prebuilts.cmake\`:"
+                 echo ""
+                 echo "    PSI_TOOLCHAIN_CLANG_HASH   = $clang_hash"
+                 echo "    PSI_TOOLCHAIN_WASM_LD_HASH = $wasm_ld_hash"
+                 echo "    PSI_TOOLCHAIN_SYSROOT_HASH = $sysroot_hash"
+              } >> "$GITHUB_STEP_SUMMARY"
+
+         - name: Create/update GitHub Release
+           uses: softprops/action-gh-release@v2
+           with:
+              tag_name: llvm-wasi-v${{ steps.pinned.outputs.llvm_version }}
+              name: LLVM WASI toolchain v${{ steps.pinned.outputs.llvm_version }}
+              # Mark as draft on manual runs; a tag push promotes it.
+              draft: ${{ github.event_name == 'workflow_dispatch' }}
+              files: |
+                 toolchain-artifacts/clang.wasm
+                 toolchain-artifacts/wasm-ld.wasm
+                 toolchain-artifacts/wasi-sysroot.tar.zst
+              body: |
+                 Built from the pinned LLVM
+                 ${{ steps.pinned.outputs.llvm_version }} sources.
+
+                 - `clang.wasm`            sha256: `${{ steps.artifacts.outputs.clang_hash }}`
+                 - `wasm-ld.wasm`          sha256: `${{ steps.artifacts.outputs.wasm_ld_hash }}`
+                 - `wasi-sysroot.tar.zst`  sha256: `${{ steps.artifacts.outputs.sysroot_hash }}`
+
+                 Update `cmake/llvm-wasi/prebuilts.cmake` with these
+                 hashes and commit; consumers will then `FetchContent`
+                 from this release.

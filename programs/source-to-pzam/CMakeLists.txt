@@ -97,19 +97,40 @@ cmp \"\$WORK/a.pzam\" \"\$WORK/b.pzam\" || { echo \"determinism regression: two 
       LABELS "source-to-pzam")
 endif()
 
-# If llvm-wasi produced clang.wasm / wasm-ld.wasm (standalone build outside
-# the main tree), stage them into our bin/ so SOURCE_TO_PZAM_DEFAULT_TOOLDIR
-# points at one dir containing every tool. Checked at configure time — pass
-# -DLLVM_WASI_INSTALL=<path> to override the default search location.
+# Stage clang.wasm / wasm-ld.wasm into our bin/ so
+# SOURCE_TO_PZAM_DEFAULT_TOOLDIR points at one directory containing every
+# tool we shell out to.
+#
+# Sources, in priority order:
+#   1. PSI_TOOLCHAIN_DIR       (set by cmake/PsiToolchain.cmake when
+#                                PSI_TOOLCHAIN_ENABLE=ON at the top level)
+#   2. LLVM_WASI_INSTALL       (standalone cmake/llvm-wasi build)
+#
+# Either is a full path to a directory containing bin/clang.wasm and
+# bin/wasm-ld.wasm.
 set(LLVM_WASI_INSTALL "${CMAKE_SOURCE_DIR}/build/llvm-wasi/install" CACHE PATH
    "Install prefix of the standalone cmake/llvm-wasi build (clang.wasm, wasm-ld.wasm)")
+
+set(_wasi_tool_search "")
+if(PSI_TOOLCHAIN_DIR AND EXISTS "${PSI_TOOLCHAIN_DIR}/clang.wasm")
+   # PsiToolchain places artifacts flat under PSI_TOOLCHAIN_DIR.
+   list(APPEND _wasi_tool_search "${PSI_TOOLCHAIN_DIR}")
+endif()
+if(EXISTS "${LLVM_WASI_INSTALL}/bin/clang.wasm")
+   # llvm-wasi standalone build uses the bin/ convention.
+   list(APPEND _wasi_tool_search "${LLVM_WASI_INSTALL}/bin")
+endif()
+
 foreach(_wasi_tool clang.wasm wasm-ld.wasm)
-   set(_src "${LLVM_WASI_INSTALL}/bin/${_wasi_tool}")
-   if(EXISTS "${_src}")
-      add_custom_command(TARGET source-to-pzam POST_BUILD
-         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                 "${_src}" "${SOURCE_TO_PZAM_DEFAULT_TOOLDIR}/${_wasi_tool}"
-         COMMENT "Staging ${_wasi_tool} into source-to-pzam tooldir"
-         VERBATIM)
-   endif()
+   foreach(_search_dir ${_wasi_tool_search})
+      set(_src "${_search_dir}/${_wasi_tool}")
+      if(EXISTS "${_src}")
+         add_custom_command(TARGET source-to-pzam POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_src}" "${SOURCE_TO_PZAM_DEFAULT_TOOLDIR}/${_wasi_tool}"
+            COMMENT "Staging ${_wasi_tool} into source-to-pzam tooldir"
+            VERBATIM)
+         break()   # use the first match
+      endif()
+   endforeach()
 endforeach()

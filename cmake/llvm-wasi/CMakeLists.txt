@@ -50,6 +50,14 @@ set(CLANG_HOST_TBLGEN "" CACHE FILEPATH "Path to host clang-tblgen binary (optio
 set(LLVM_WASI_LTO "Thin" CACHE STRING "LTO mode for WASI-targeted LLVM/clang (OFF, Thin, Full)")
 set_property(CACHE LLVM_WASI_LTO PROPERTY STRINGS OFF Thin Full)
 
+# ThinLTO's final link spins up N=nproc parallel optimizer workers, each
+# holding much of the clang module graph. On small-RAM CI runners (7–16 GB)
+# that OOMs. Empty (default) means "use LLVM's default = nproc"; set to 1
+# or 2 on memory-constrained hosts. Affects link wall-clock, not the size
+# or speed of the resulting artifact.
+set(LLVM_WASI_LINK_JOBS "" CACHE STRING
+   "Parallel link jobs for the LLVM cross-build (blank = nproc)")
+
 # Swap wasi-libc's default dlmalloc for mimalloc on the wasm clang/lld
 # binaries. dlmalloc fragments badly under clang's long-running, mixed-size
 # allocation pattern (AST + IR + analysis passes), which pushes the wasm
@@ -176,6 +184,9 @@ set(_LLVM_WASI_ARGS
 )
 if(NOT LLVM_WASI_LTO STREQUAL "OFF")
    list(APPEND _LLVM_WASI_ARGS -DLLVM_ENABLE_LTO=${LLVM_WASI_LTO})
+endif()
+if(LLVM_WASI_LINK_JOBS)
+   list(APPEND _LLVM_WASI_ARGS -DLLVM_PARALLEL_LINK_JOBS=${LLVM_WASI_LINK_JOBS})
 endif()
 
 # Determine dependencies
@@ -457,6 +468,9 @@ if(LLVM_WASI_BUILD_CLANG)
    )
    if(NOT LLVM_WASI_LTO STREQUAL "OFF")
       list(APPEND _CLANG_WASI_ARGS -DLLVM_ENABLE_LTO=${LLVM_WASI_LTO})
+   endif()
+   if(LLVM_WASI_LINK_JOBS)
+      list(APPEND _CLANG_WASI_ARGS -DLLVM_PARALLEL_LINK_JOBS=${LLVM_WASI_LINK_JOBS})
    endif()
    if(LLVM_WASI_USE_MIMALLOC)
       list(APPEND _CLANG_WASI_ARGS
