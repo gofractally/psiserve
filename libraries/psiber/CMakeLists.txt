@@ -103,6 +103,9 @@ if(PSIBER_ENABLE_BENCHMARKS)
       ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include
    )
 
+   add_executable(sync_vs_call_bench benchmarks/sync_vs_call_bench.cpp)
+   target_link_libraries(sync_vs_call_bench PRIVATE psiber Threads::Threads)
+
    # Optional Boost.Fiber comparison benchmark (for marketing/evaluation)
    option(PSIBER_ENABLE_BOOST_FIBER_BENCH "Build Boost.Fiber comparison benchmark" OFF)
    if(PSIBER_ENABLE_BOOST_FIBER_BENCH)

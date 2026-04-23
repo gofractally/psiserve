@@ -200,6 +200,13 @@ namespace psiber
       /// The fiber is re-enqueued and will be resumed later.
       void yieldCurrentFiber();
 
+      /// Place a fiber just promoted to strand::_active into this
+      /// scheduler's local ready queue.  Used by callers that obtained
+      /// a fiber from strand::release() (e.g. strand::sync migration)
+      /// and need to schedule it locally — matches the run loop's
+      /// post-release handoff.
+      void promoteStrandWaiter(Fiber* fiber);
+
       /// Register a POSIX signal for fiber-aware delivery.
       /// Must be called before run(). Blocks the signal from default handling.
       void registerSignal(int signo);
@@ -283,6 +290,13 @@ namespace psiber
       void pollAndUnblock(bool blocking);
       Fiber* popFromReadyQueues();
       void addToReadyQueue(Fiber* fiber);
+
+      /// Route a fiber waking from Blocked/Sleeping into the ready queue,
+      /// re-entering its home strand if it has one.  If the strand is free,
+      /// the fiber becomes active and is placed in the local ready queue.
+      /// If the strand is busy, the fiber is queued in the strand's wait
+      /// list (state set to Parked) and will be promoted on release().
+      void resumeBlockedFiber(Fiber* fiber);
 
       // ── LIFO slot (Tokio pattern) ───────────────────────────────────
       Fiber*   _lifo_slot        = nullptr;

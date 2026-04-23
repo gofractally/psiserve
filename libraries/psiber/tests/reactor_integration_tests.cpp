@@ -140,6 +140,11 @@ TEST_CASE("reactor integration: fiber migrates between threads", "[reactor-integ
 
 TEST_CASE("reactor integration: strand::post serializes execution", "[reactor-integration]")
 {
+   // Strand serializes fibers *between suspend points*.  Within a
+   // non-yielding window, at most one fiber runs at a time.  Yielding
+   // (as of the I/O-release fix) is a suspend point that releases the
+   // strand; see the "strand yield is a suspend point" test below for
+   // the interleaving case.
    reactor pool(2);
    strand  s(pool);
 
@@ -148,7 +153,6 @@ TEST_CASE("reactor integration: strand::post serializes execution", "[reactor-in
    std::atomic<int> concurrent{0};
    std::atomic<int> max_concurrent{0};
 
-   // Post several tasks to the same strand.  Only one should run at a time.
    for (int i = 0; i < N; ++i)
    {
       pool.scheduler(i % pool.num_threads()).post([&]() noexcept {
@@ -158,10 +162,6 @@ TEST_CASE("reactor integration: strand::post serializes execution", "[reactor-in
             while (cur > old_max &&
                    !max_concurrent.compare_exchange_weak(old_max, cur))
                ;
-
-            // Yield to give other strand fibers a chance to violate serialization
-            Scheduler::current().yieldCurrentFiber();
-
             concurrent.fetch_sub(1, std::memory_order_relaxed);
             completed.fetch_add(1, std::memory_order_relaxed);
          });
@@ -173,7 +173,53 @@ TEST_CASE("reactor integration: strand::post serializes execution", "[reactor-in
    pool.join();
 
    REQUIRE(completed.load() == N);
-   REQUIRE(max_concurrent.load() == 1);  // strand serialization held
+   REQUIRE(max_concurrent.load() == 1);  // no interleaving within the critical section
+}
+
+TEST_CASE("reactor integration: strand yield is a suspend point", "[reactor-integration]")
+{
+   // yieldCurrentFiber on a strand-bound fiber releases the strand,
+   // letting queued waiters run before we resume.  Multiple fibers
+   // can have "started" (past fetch_add) and "not finished"
+   // (before fetch_sub) simultaneously — but only one is actually
+   // executing at any instant.
+   reactor pool(2);
+   strand  s(pool);
+
+   constexpr int N = 4;
+   std::atomic<int> completed{0};
+   std::atomic<int> in_flight{0};
+   std::atomic<int> max_in_flight{0};
+
+   for (int i = 0; i < N; ++i)
+   {
+      pool.scheduler(i % pool.num_threads()).post([&]() noexcept {
+         s.post([&]() {
+            int cur = in_flight.fetch_add(1, std::memory_order_relaxed) + 1;
+            int old_max = max_in_flight.load(std::memory_order_relaxed);
+            while (cur > old_max &&
+                   !max_in_flight.compare_exchange_weak(old_max, cur))
+               ;
+
+            // Yield: releases strand, promotes waiter, parks self.
+            // After this, other fibers on S will have incremented
+            // in_flight before we resume.
+            Scheduler::current().yieldCurrentFiber();
+
+            in_flight.fetch_sub(1, std::memory_order_relaxed);
+            completed.fetch_add(1, std::memory_order_relaxed);
+         });
+      });
+   }
+
+   std::this_thread::sleep_for(std::chrono::milliseconds{200});
+   pool.stop();
+   pool.join();
+
+   REQUIRE(completed.load() == N);
+   // All N fibers should have been in flight simultaneously at peak
+   // (each past its fetch_add, yielded, waiting its turn to resume).
+   REQUIRE(max_in_flight.load() > 1);
 }
 
 // ── Strand unit tests (queue semantics, no scheduler) ────────────────────
