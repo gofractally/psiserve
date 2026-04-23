@@ -1,5 +1,20 @@
 # psiserve Design
 
+> **NOTE — COW forking is retracted.** Earlier versions of this document
+> described per-instance linear memory as COW-forked from a template
+> image. **That approach is abandoned.** The kernel VMA rbtree cost of
+> maintaining many `MAP_PRIVATE` regions at scale is prohibitive —
+> every fork multiplies live mappings, and the rbtree walks dominate
+> page-fault and munmap latency long before any application-level
+> benefit appears. psiserve does not rely on kernel COW to share
+> state across instances.
+>
+> Wherever this document still mentions "COW fork," read it as
+> "snapshot-fork via explicit memcpy" (or, where appropriate, no
+> sharing at all). Cross-instance code sharing, when we need it, will
+> be handled at the pzam / JIT layer — not at the OS mapping layer.
+> A follow-up pass will scrub the body text.
+
 psiserve is a high-performance WebAssembly TCP application server. It is built from four components:
 
 ```

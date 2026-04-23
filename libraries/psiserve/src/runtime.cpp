@@ -245,6 +245,7 @@ namespace psiserve
       table.add<&HostApi::psiClose>("psi", "close");
       table.add<&HostApi::psiClock>("psi", "clock");
       table.add<&HostApi::psiSleepUntil>("psi", "sleep_until");
+      table.add<&HostApi::psiLog>("psi", "log");
       table.add<&HostApi::psiSendFile>("psi", "sendfile");
       table.add<&HostApi::psiCork>("psi", "cork");
       table.add<&HostApi::psiUncork>("psi", "uncork");
@@ -257,9 +258,16 @@ namespace psiserve
       table.add<&HostApi::psiIpfsStat>("psi", "ipfs_stat");
 
       // HostApi is per-worker — each worker has its own process/scheduler.
-      // We set it as the host pointer so trampolines receive it.
+      // We set it as the module-level host pointer AND pin every psi.*
+      // entry's host_override to it. The override matters once db_host
+      // is provided below — runtime::provide rewrites the module-level
+      // host pointer, so without the per-entry pin the psi.* trampolines
+      // would silently dispatch against a db_host* cast to HostApi*.
       HostApi host(proc, sched, nullptr, _ipfs.get());
       mod.set_host_ptr(&host);
+      for (auto& e : table.entries_mutable())
+         if (e.module_name == "psi" && !e.host_override)
+            e.host_override = &host;
 
       // Database host — provides psi:db/* imports. Opened per-worker
       // so each worker gets its own write session (psitri write sessions
@@ -288,6 +296,12 @@ namespace psiserve
          table.add<&db_host::fd_write>("wasi_snapshot_preview1", "fd_write");
          table.entries_mutable().back().host_override = db.get();
       }
+
+      // provide<db_host> overwrote the module-level host pointer. Put
+      // HostApi back for any entry that doesn't already have a per-
+      // entry override (which is almost everything — we only pin psi.*
+      // above; db_host entries carry their own override).
+      mod.set_host_ptr(&host);
 
       auto inst = _rt.instantiate(mod, policy);
 

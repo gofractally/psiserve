@@ -7,8 +7,13 @@
 // that match what PSIO_HOST_MODULE registers in db_host.hpp.
 
 #include <psi/db.hpp>
-#include <psio/guest_alloc.hpp>
 #include <psizam/component_proxy.hpp>
+
+// NOTE: `cabi_realloc` is NOT pulled in here. It is a non-inline
+// symbol and must be defined in exactly one translation unit per
+// wasm link (see <psio/guest_alloc.hpp>). Pulling it through an
+// included-everywhere header like this one trips duplicate-symbol
+// errors as soon as any guest has more than one TU.
 
 using psizam::flat_val;
 using psizam::raw_import_fn;

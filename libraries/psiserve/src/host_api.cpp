@@ -467,6 +467,52 @@ namespace psiserve
       _sched->sleep(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now));
    }
 
+   void HostApi::psiLog(int32_t level, WasmPtr msg, WasmSize len)
+   {
+      ++_log_count;
+
+      // A guest that calls psi.log before its linear memory has been
+      // wired on the host side (e.g. during a test) gets a diagnostic
+      // rather than a segfault.
+      if (!_wasm_memory)
+      {
+         PSI_WARN("psi.log called before linear memory was bound");
+         return;
+      }
+
+      uint32_t n = static_cast<uint32_t>(*len);
+      bool     truncated = false;
+      if (n > log_max_len)
+      {
+         n         = log_max_len;
+         truncated = true;
+      }
+
+      std::string_view view(_wasm_memory + *msg, n);
+      if (truncated)
+      {
+         // Avoid formatter surprises with embedded NULs or {} in the
+         // payload — emit the guest message as a plain {} argument.
+         switch (level)
+         {
+            case 0: PSI_DEBUG("[guest] {} [truncated]", view); break;
+            case 2: PSI_WARN ("[guest] {} [truncated]", view); break;
+            case 3: PSI_ERROR("[guest] {} [truncated]", view); break;
+            default:PSI_INFO ("[guest] {} [truncated]", view); break;
+         }
+      }
+      else
+      {
+         switch (level)
+         {
+            case 0: PSI_DEBUG("[guest] {}", view); break;
+            case 2: PSI_WARN ("[guest] {}", view); break;
+            case 3: PSI_ERROR("[guest] {}", view); break;
+            default:PSI_INFO ("[guest] {}", view); break;
+         }
+      }
+   }
+
    PsiResult HostApi::psiSendFile(VirtualFd sock_fd, VirtualFd file_fd, int64_t len)
    {
       auto* sock_entry = _proc->fds.get(sock_fd);

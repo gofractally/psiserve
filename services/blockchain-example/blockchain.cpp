@@ -1,381 +1,237 @@
-// blockchain.cpp — Blockchain orchestrator for the PoC.
+// blockchain.cpp — Chain state, transaction lifecycle, block producer.
 //
-// Phase 1 (sequential): handles HTTP directly in the accept loop,
-// dispatches token actions inline, produces blocks on a timer.
-// Phase 2: uses async_call for listener fiber + bc_connection.
+// Implements the API declared in <blockchain-example/blockchain.hpp>.
+// Owns the on-disk store, the write-tx helper, and the `blocks` table.
+// Delegates all contract-level logic to the relevant service (today
+// only TokenService) running in-process in Phase 1.
 //
-// This is the module loaded by psiserve-cli. fd 0 = listen socket.
+// This file does not know about HTTP, TCP, HTML, JSON, or the UI.
+// Those concerns live in bc_connection.cpp and token_ui.cpp.
 
-#include "types.hpp"
-#include "db_imports.hpp"
+#include <blockchain-example/blockchain.hpp>
+#include <blockchain-example/token.hpp>
 
+#include <psi/blockchain_guest.hpp>
+#include <psi/db_imports.hpp>
 #include <psi/host.h>
-#include <psi/tcp.h>
-#include <psi/http.h>
+#include <psi/log.hpp>
 
-#include <psio/fracpack.hpp>
-#include <psio/to_json.hpp>
-#include <psio/from_json.hpp>
+#include <cstdint>
+#include <cstring>
+#include <string_view>
 
-#include "token_ui_html.h"
-
-static uint64_t    g_block_num    = 0;
-static uint64_t    g_last_block_ns = 0;
-static const int64_t BLOCK_INTERVAL_NS = 3000000000LL;  // 3 seconds
-
-static uint32_t g_db_handle = 0;
-
-static void seed_database()
+namespace blockchain_example::chain
 {
-   using namespace psi::db;
 
-   auto tx = db::db_start_write(psio::borrow<database>{g_db_handle});
-   auto tx_h = tx.handle;
+   // ─── Process-wide state ────────────────────────────────────────────
 
-   // Check if balances table already has the bank account
-   auto tbl_res = db::tx_open_table(psio::borrow<transaction>{tx_h}, "balances");
-   if (tbl_res)
+   namespace
    {
-      auto bank_check = db::tbl_get(
-         psio::borrow<table>{tbl_res->handle},
-         db::make_bytes("bank"));
-      if (bank_check)
+      uint32_t g_db_handle     = 0;
+      uint64_t g_block_num     = 0;
+      uint64_t g_last_block_ns = 0;
+
+      // ── Binary helpers ──────────────────────────────────────────────
+
+      psi::db::bytes u64_be(uint64_t v)
       {
-         db::tbl_drop(psio::own<table>{tbl_res->handle});
-         db::tx_abort(psio::borrow<transaction>{tx_h});
-         db::tx_drop(psio::own<transaction>{tx_h});
-         return;
-      }
-      db::tbl_drop(psio::own<table>{tbl_res->handle});
-      db::tx_abort(psio::borrow<transaction>{tx_h});
-      db::tx_drop(psio::own<transaction>{tx_h});
-      tx = db::db_start_write(psio::borrow<database>{g_db_handle});
-      tx_h = tx.handle;
-   }
-
-   // Create balances table with bank account
-   auto bal_tbl = db::tx_create_table(psio::borrow<transaction>{tx_h}, "balances");
-   if (!bal_tbl)
-   {
-      db::tx_drop(psio::own<transaction>{tx_h});
-      return;
-   }
-
-   uint64_t initial_balance = 1000000;
-   psi::db::bytes bal_bytes(sizeof(initial_balance));
-   __builtin_memcpy(bal_bytes.data(), &initial_balance, sizeof(initial_balance));
-
-   db::tbl_upsert(psio::borrow<table>{bal_tbl->handle},
-                   db::make_bytes("bank"), bal_bytes);
-   db::tbl_drop(psio::own<table>{bal_tbl->handle});
-
-   // Create blocks table
-   db::tx_create_table(psio::borrow<transaction>{tx_h}, "blocks");
-
-   db::tx_commit(psio::borrow<transaction>{tx_h});
-   db::tx_drop(psio::own<transaction>{tx_h});
-}
-
-static void produce_block()
-{
-   g_block_num++;
-   g_last_block_ns = psi_clock(PSI_CLOCK_MONOTONIC);
-}
-
-static bool url_starts_with(const char* url, int url_len, const char* prefix)
-{
-   int plen = 0;
-   while (prefix[plen]) plen++;
-   if (url_len < plen) return false;
-   for (int i = 0; i < plen; i++)
-      if (url[i] != prefix[i]) return false;
-   return true;
-}
-
-static void handle_request(tcp_conn* conn, http_request* req)
-{
-   int path_len;
-   const char* path = http_path(req, &path_len);
-
-   if (http_method_is(req, "GET") &&
-       url_starts_with(path, path_len, "/api/balance"))
-   {
-      // Parse ?account=NAME from URL
-      const char* qmark = nullptr;
-      for (int i = 0; i < path_len; i++)
-      {
-         if (path[i] == '?') { qmark = path + i + 1; break; }
+         // Big-endian so cursors scan blocks in numeric order.
+         psi::db::bytes out(8);
+         for (int i = 0; i < 8; ++i)
+            out[i] = static_cast<uint8_t>(v >> (56 - 8 * i));
+         return out;
       }
 
-      std::string_view account = "bank";
-      if (qmark)
-      {
-         int qlen = path_len - (int)(qmark - path);
-         int vlen;
-         const char* val = http_query_param(qmark, qlen, "account", 7, &vlen);
-         if (val) account = std::string_view(val, vlen);
-      }
+      // ── Transaction lifecycle helper ────────────────────────────────
+      //
+      // Runs `action` inside a fresh write transaction, publishing the
+      // transaction handle via psi::blockchain::current_tx() for the
+      // duration of the call. Commits if `action` returns true,
+      // aborts otherwise. This is the only place in Phase 1 that opens
+      // or ends a transaction — services never touch the lifecycle
+      // themselves.
 
-      // Read balance from DB
-      using namespace psi::db;
-      auto tx = db::db_start_read(psio::borrow<database>{g_db_handle}, 0);
-      auto tbl = db::tx_open_table(psio::borrow<transaction>{tx.handle}, "balances");
-
-      uint64_t balance = 0;
-      bool found = false;
-      if (tbl)
+      template <typename Action>
+      bool with_write_tx(Action&& action)
       {
-         auto val = db::tbl_get(psio::borrow<table>{tbl->handle},
-                                db::make_bytes(account));
-         if (val && val->size() >= sizeof(uint64_t))
+         auto tx   = db::db_start_write(
+            psio::borrow<psi::db::database>{g_db_handle});
+         auto tx_h = tx.handle;
+
+         bool ok;
          {
-            __builtin_memcpy(&balance, val->data(), sizeof(uint64_t));
-            found = true;
+            psi::blockchain::detail::active_tx_scope guard(tx_h);
+            ok = action();
          }
-         db::tbl_drop(psio::own<table>{tbl->handle});
-      }
-      db::tx_drop(psio::own<transaction>{tx.handle});
 
-      char json[256];
-      int jlen;
-      if (found)
-      {
-         jlen = 0;
-         const char* pre = "{\"account\":\"";
-         for (int i = 0; pre[i]; i++) json[jlen++] = pre[i];
-         for (int i = 0; i < (int)account.size() && jlen < 200; i++)
-            json[jlen++] = account[i];
-         const char* mid = "\",\"balance\":";
-         for (int i = 0; mid[i]; i++) json[jlen++] = mid[i];
-
-         char digits[20];
-         int dlen = 0;
-         uint64_t tmp = balance;
-         if (tmp == 0) digits[dlen++] = '0';
-         else while (tmp > 0) { digits[dlen++] = '0' + (tmp % 10); tmp /= 10; }
-         for (int i = dlen - 1; i >= 0; i--) json[jlen++] = digits[i];
-         json[jlen++] = '}';
-      }
-      else
-      {
-         const char* nf = "{\"account\":\"not_found\",\"balance\":0}";
-         jlen = 0;
-         for (int i = 0; nf[i]; i++) json[jlen++] = nf[i];
-      }
-
-      http_respond(conn, 200, "application/json", json, jlen);
-      return;
-   }
-
-   if (http_method_is(req, "POST") &&
-       url_starts_with(path, path_len, "/api/transfer"))
-   {
-      // Read POST body (after headers)
-      int body_offset = req->raw_len;
-      int cl_len;
-      const char* cl_val = http_find_header(req, "Content-Length", 14, &cl_len);
-      int content_length = 0;
-      if (cl_val)
-         for (int i = 0; i < cl_len; i++)
-            content_length = content_length * 10 + (cl_val[i] - '0');
-
-      // The body may already be in the header buffer past raw_len
-      // For simplicity, read the body separately
-      char body[1024] = {};
-      int body_len = 0;
-      if (content_length > 0 && content_length < (int)sizeof(body))
-      {
-         // Check if body is already in the header buffer
-         // (http_read_request may have read past the headers)
-         body_len = tcp_read_all(conn, body, content_length);
-      }
-
-      // Parse JSON body: {"from":"X","to":"Y","amount":N}
-      // Minimal manual parser for PoC
-      std::string_view bv(body, body_len > 0 ? body_len : 0);
-      std::string from_str, to_str;
-      uint64_t amount = 0;
-
-      auto extract = [&](const char* key, std::string& out) {
-         auto klen = __builtin_strlen(key);
-         auto pos = bv.find(key);
-         if (pos == std::string_view::npos) return;
-         pos += klen;
-         while (pos < bv.size() && (bv[pos] == '"' || bv[pos] == ':' || bv[pos] == ' '))
-            pos++;
-         auto end = bv.find('"', pos);
-         if (end != std::string_view::npos)
-            out = std::string(bv.substr(pos, end - pos));
-      };
-
-      extract("from", from_str);
-      extract("to", to_str);
-
-      auto amt_pos = bv.find("amount");
-      if (amt_pos != std::string_view::npos)
-      {
-         amt_pos += 6;
-         while (amt_pos < bv.size() && (bv[amt_pos] < '0' || bv[amt_pos] > '9'))
-            amt_pos++;
-         while (amt_pos < bv.size() && bv[amt_pos] >= '0' && bv[amt_pos] <= '9')
-         {
-            amount = amount * 10 + (bv[amt_pos] - '0');
-            amt_pos++;
-         }
-      }
-
-      // Execute transfer directly (inline token logic for Phase 1)
-      using namespace psi::db;
-      auto tx = db::db_start_write(psio::borrow<database>{g_db_handle});
-      auto tx_h = tx.handle;
-      auto tbl_res = db::tx_open_table(psio::borrow<transaction>{tx_h}, "balances");
-
-      const char* result_json;
-      if (!tbl_res)
-      {
-         db::tx_abort(psio::borrow<transaction>{tx_h});
-         db::tx_drop(psio::own<transaction>{tx_h});
-         result_json = "{\"success\":false,\"message\":\"balances table not found\"}";
-      }
-      else
-      {
-         auto tbl_h = tbl_res->handle;
-
-         auto from_bal_r = db::tbl_get(psio::borrow<table>{tbl_h},
-                                       db::make_bytes(from_str));
-         if (!from_bal_r)
-         {
-            db::tbl_drop(psio::own<table>{tbl_h});
-            db::tx_abort(psio::borrow<transaction>{tx_h});
-            db::tx_drop(psio::own<transaction>{tx_h});
-            result_json = "{\"success\":false,\"message\":\"sender account not found\"}";
-         }
+         if (ok)
+            db::tx_commit(psio::borrow<psi::db::transaction>{tx_h});
          else
-         {
-            uint64_t from_bal = 0;
-            __builtin_memcpy(&from_bal, from_bal_r->data(),
-                             from_bal_r->size() < 8 ? from_bal_r->size() : 8);
-
-            if (from_bal < amount)
-            {
-               db::tbl_drop(psio::own<table>{tbl_h});
-               db::tx_abort(psio::borrow<transaction>{tx_h});
-               db::tx_drop(psio::own<transaction>{tx_h});
-               result_json = "{\"success\":false,\"message\":\"insufficient funds\"}";
-            }
-            else
-            {
-               from_bal -= amount;
-               db::tbl_upsert(psio::borrow<table>{tbl_h},
-                              db::make_bytes(from_str),
-                              db::make_bytes(std::string_view(
-                                 reinterpret_cast<const char*>(&from_bal), 8)));
-
-               uint64_t to_bal = 0;
-               auto to_bal_r = db::tbl_get(psio::borrow<table>{tbl_h},
-                                           db::make_bytes(to_str));
-               if (to_bal_r && to_bal_r->size() >= 8)
-                  __builtin_memcpy(&to_bal, to_bal_r->data(), 8);
-
-               to_bal += amount;
-               db::tbl_upsert(psio::borrow<table>{tbl_h},
-                              db::make_bytes(to_str),
-                              db::make_bytes(std::string_view(
-                                 reinterpret_cast<const char*>(&to_bal), 8)));
-
-               db::tbl_drop(psio::own<table>{tbl_h});
-               db::tx_commit(psio::borrow<transaction>{tx_h});
-               db::tx_drop(psio::own<transaction>{tx_h});
-               result_json = "{\"success\":true,\"message\":\"transfer complete\"}";
-            }
-         }
+            db::tx_abort(psio::borrow<psi::db::transaction>{tx_h});
+         return ok;
       }
 
-      int rlen = 0;
-      while (result_json[rlen]) rlen++;
-      http_respond(conn, 200, "application/json", result_json, rlen);
-      return;
-   }
+      // ── Genesis ─────────────────────────────────────────────────────
 
-   if (http_method_is(req, "GET") &&
-       url_starts_with(path, path_len, "/api/blocks"))
-   {
-      // Return current block info as JSON array
-      char json[256];
-      int jlen = 0;
-      json[jlen++] = '[';
-      if (g_block_num > 0)
+      void seed_database()
       {
-         const char* pre = "{\"number\":";
-         for (int i = 0; pre[i]; i++) json[jlen++] = pre[i];
+         with_write_tx([]() {
+            // ISSUE psitri-subtree-persist: psitri skips write-back on
+            // subtrees that never received a row, so a freshly created
+            // empty table is gone at commit. We drop a sentinel row at
+            // key=0 into `blocks` so subsequent produce_block calls
+            // take the fast tx_open_table path instead of having to
+            // tx_create_table every time.
+            auto blocks = psi::blockchain::current_tx().get_table("blocks");
+            if (blocks && !blocks.get(u64_be(0)))
+               blocks.upsert(u64_be(0), psi::db::bytes(12, 0));
 
-         char digits[20];
-         int dlen = 0;
-         uint64_t tmp = g_block_num;
-         if (tmp == 0) digits[dlen++] = '0';
-         else while (tmp > 0) { digits[dlen++] = '0' + (tmp % 10); tmp /= 10; }
-         for (int i = dlen - 1; i >= 0; i--) json[jlen++] = digits[i];
-
-         const char* mid = ",\"timestamp_ns\":";
-         for (int i = 0; mid[i]; i++) json[jlen++] = mid[i];
-
-         dlen = 0;
-         tmp = g_last_block_ns;
-         if (tmp == 0) digits[dlen++] = '0';
-         else while (tmp > 0) { digits[dlen++] = '0' + (tmp % 10); tmp /= 10; }
-         for (int i = dlen - 1; i >= 0; i--) json[jlen++] = digits[i];
-
-         const char* suf = ",\"tx_count\":0}";
-         for (int i = 0; suf[i]; i++) json[jlen++] = suf[i];
+            // Hand genesis off to the token service — the contract
+            // owns the balances schema, not the chain.
+            TokenService{}.init();
+            return true;
+         });
       }
-      json[jlen++] = ']';
+   }  // namespace
 
-      http_respond(conn, 200, "application/json", json, jlen);
-      return;
+   // ─── Lifecycle ─────────────────────────────────────────────────────
+
+   bool init()
+   {
+      auto db_res = db::store_open("blockchain");
+      if (!db_res)
+      {
+         psi::log::error("chain::init: store_open failed");
+         return false;
+      }
+      g_db_handle     = db_res->handle;
+      g_last_block_ns = psi_clock(PSI_CLOCK_MONOTONIC);
+
+      seed_database();
+      psi::log::info("chain::init complete; store handle={}", g_db_handle);
+      return true;
    }
 
-   if (http_method_is(req, "GET") &&
-       (path_len == 1 && path[0] == '/'))
+   void shutdown()
    {
-      http_respond(conn, 200, "text/html; charset=utf-8",
-                   TOKEN_UI_HTML, TOKEN_UI_HTML_LEN);
-      return;
+      if (g_db_handle != 0)
+      {
+         db::db_drop(psio::own<psi::db::database>{g_db_handle});
+         g_db_handle = 0;
+      }
    }
 
-   http_respond_str(conn, 404, "text/plain", "Not Found");
-}
+   // ─── Block production ──────────────────────────────────────────────
 
-extern "C" [[clang::export_name("_start")]]
-void _start(void)
-{
-   // Open database
-   auto db_res = db::store_open("blockchain");
-   if (!db_res) return;
-   g_db_handle = db_res->handle;
-
-   seed_database();
-   g_last_block_ns = psi_clock(PSI_CLOCK_MONOTONIC);
-
-   for (;;)
+   void maybe_produce_block()
    {
-      // Check if it's time to produce a block
       int64_t now = psi_clock(PSI_CLOCK_MONOTONIC);
-      if (now - g_last_block_ns >= BLOCK_INTERVAL_NS)
-         produce_block();
+      if (now - static_cast<int64_t>(g_last_block_ns) < BLOCK_INTERVAL_NS)
+         return;
 
-      // Accept a connection (blocks until one arrives or shutdown)
-      tcp_conn conn = tcp_accept(0);
-      if (!tcp_is_open(&conn))
-         break;
+      g_block_num    += 1;
+      g_last_block_ns = static_cast<uint64_t>(now);
 
-      char buf[8192];
-      http_request req;
-      int r = http_read_request(&conn, &req, buf, sizeof(buf));
-      if (r > 0)
-         handle_request(&conn, &req);
+      bool committed = with_write_tx([]() {
+         auto tbl = psi::blockchain::current_tx().get_table("blocks");
+         if (!tbl)
+            return false;
 
-      tcp_close(&conn);
+         // value layout: timestamp_ns (u64 LE) | tx_count (u32 LE)
+         psi::db::bytes value(12);
+         std::memcpy(value.data(),     &g_last_block_ns, 8);
+         uint32_t txc = 0;
+         std::memcpy(value.data() + 8, &txc,             4);
+
+         tbl.upsert(u64_be(g_block_num), std::move(value));
+         return true;
+      });
+
+      // ISSUE psitri-write-cursor-budget: psitri currently drops new
+      // block commits after roughly three successful produce_block
+      // cycles on a single write-session (tracked upstream). We log
+      // the abort and keep running — /api/blocks will reflect only
+      // the persisted subset until psitri is fixed.
+      if (!committed)
+         psi::log::warn("produce_block: commit aborted for #{}",
+                        g_block_num);
    }
 
-   db::db_drop(psio::own<psi::db::database>{g_db_handle});
-}
+   uint64_t head_block_num() { return g_block_num; }
+   uint64_t head_block_ns()  { return g_last_block_ns; }
+
+   std::vector<BlockHeader> recent_blocks(int limit)
+   {
+      if (limit <= 0) limit = 10;
+
+      std::vector<BlockHeader> out;
+      out.reserve(limit);
+
+      with_write_tx([&]() {
+         auto tbl = psi::blockchain::current_tx().get_table("blocks");
+         if (!tbl)
+            return false;
+
+         uint64_t start = g_block_num;
+         if (start == 0) return false;
+         uint64_t end = start > uint64_t(limit) - 1
+                           ? start - uint64_t(limit) + 1
+                           : 1;
+
+         for (uint64_t bn = start;
+              bn >= end && out.size() < static_cast<size_t>(limit);
+              --bn)
+         {
+            auto v = tbl.get(u64_be(bn));
+            if (v && v->size() >= 12)
+            {
+               BlockHeader h;
+               h.number = bn;
+               std::memcpy(&h.timestamp_ns, v->data(),     8);
+               std::memcpy(&h.tx_count,     v->data() + 8, 4);
+               out.push_back(h);
+            }
+            if (bn == 1) break;
+         }
+         return false;  // read-only — roll back to release the lock.
+      });
+
+      return out;
+   }
+
+   // ─── Action dispatch ───────────────────────────────────────────────
+   //
+   // These are the Phase-1 typed facades. Each wraps the call in a
+   // write transaction and invokes TokenService in-process. Phase 2
+   // replaces the body of each with a cross-instance dispatch; the
+   // signature, and everything that calls it, stays put.
+
+   ActionResult transfer(psio::name_id    from,
+                         psio::name_id    to,
+                         uint64_t         amount,
+                         std::string_view memo)
+   {
+      // ISSUE psibase-check-surface-errors: TokenService::transfer
+      // calls psibase::check which traps on missing sender /
+      // insufficient funds. Until we wrap the service invocation with
+      // a trap catch, any logical failure unwinds the whole wasm —
+      // this function only distinguishes "all good" from "tx rolled
+      // back by the host" today.
+      bool committed = with_write_tx([&]() {
+         TokenService{}.transfer(from, to, amount, memo);
+         return true;
+      });
+      return committed ? ActionResult::Ok : ActionResult::Aborted;
+   }
+
+   uint64_t balance(psio::name_id account)
+   {
+      uint64_t bal = 0;
+      with_write_tx([&]() {
+         bal = TokenService{}.balance(account);
+         return false;  // read-only: roll back.
+      });
+      return bal;
+   }
+
+}  // namespace blockchain_example::chain
