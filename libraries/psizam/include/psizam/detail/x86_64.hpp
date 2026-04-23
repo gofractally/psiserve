@@ -123,6 +123,14 @@ namespace psizam::detail {
 
       void set_mem_mode(mem_safety m) noexcept { _mem_mode = m; }
       void set_checked_kind(checked_mode k) noexcept { _checked_kind = k; }
+
+      // Parser hook: called before emit_br/br_if/br_table/return with the
+      // actual WASM result types of the branch target. Single-result branches
+      // don't call it — the gap is already correct from depth_change alone.
+      void set_pending_result_types(const uint8_t* types, uint32_t count) {
+         _pending_result_types       = types;
+         _pending_result_types_count = count;
+      }
       bool is_checked() const noexcept { return _mem_mode == mem_safety::checked; }
       bool is_checked_strict() const noexcept { return _checked_kind == checked_mode::strict; }
       bool is_checked_immediate() const noexcept { return _checked_kind == checked_mode::immediate; }
@@ -6315,6 +6323,13 @@ namespace psizam::detail {
       uint64_t _local_count;
       uint32_t _table_element_size;
 
+      // Parser hook: set before emit_br/br_if/br_table/return for multi-value
+      // branches so the branch's gap-collapse logic can honor v128 = 2 slots
+      // when sizing per-result slot counts. Null when the pending branch has
+      // <= 1 result value (gap computation works by slot count alone).
+      const uint8_t* _pending_result_types       = nullptr;
+      uint32_t       _pending_result_types_count = 0;
+
       // Gas-metering patch handles (Phase 4 heavy-op accumulator).
       // Point at the imm32 bytes of the relevant emit_gas_charge
       // sequence. Parser patches through patch_gas_imm once per-scope
@@ -6529,14 +6544,31 @@ namespace psizam::detail {
          }
       }
 
-      // Multi-value multipop: copy result_count qwords from top of stack
-      // past (depth_change - result_count) garbage slots, then adjust RSP
+      // Multi-value multipop: preserve the result_count values at the top of
+      // the operand stack, then collapse any gap slots between them and the
+      // branch target's depth. depth_change is in 8-byte slots (v128 = 2 slots);
+      // result_count is in type entries. When _pending_result_types is set
+      // (any multi-value branch that might contain v128), use it to compute
+      // per-result slot counts; otherwise assume scalars.
       void emit_multipop_multivalue(uint32_t depth_change, uint32_t result_count) {
-         uint32_t gap = depth_change - result_count;
+         // Compute total result slots honoring v128 = 2 slots.
+         uint32_t result_slots = 0;
+         if (_pending_result_types && _pending_result_types_count == result_count) {
+            for (uint32_t i = 0; i < result_count; ++i)
+               result_slots += (_pending_result_types[i] == types::v128) ? 2 : 1;
+         } else {
+            result_slots = result_count;
+         }
+         _pending_result_types       = nullptr;
+         _pending_result_types_count = 0;
+         if (depth_change < result_slots) return; // defensive
+         uint32_t gap = depth_change - result_slots;
          if (gap == 0) return;
          // Copy in reverse order (deepest result first) to avoid overwriting
-         // source slots that haven't been read yet.
-         for (uint32_t i = result_count; i > 0; i--) {
+         // source slots that haven't been read yet. Walk slot-by-slot rather
+         // than result-by-result; this is correct for mixed types since every
+         // result occupies a whole number of 8-byte slots on the native stack.
+         for (uint32_t i = result_slots; i > 0; i--) {
             int32_t src_offset = static_cast<int32_t>(i - 1) * 8;
             int32_t dst_offset = static_cast<int32_t>(i - 1 + gap) * 8;
             emit_mov(*(rsp + src_offset), rax);
@@ -6576,8 +6608,13 @@ namespace psizam::detail {
       // \post the result (if any) is at the top of the stack
       void emit_multipop(const func_type& ft) {
          if (ft.return_types.size() > 1) {
-            // Multi-value return: pop params, then push N results from ctx->_multi_return
-            auto icount = variable_size_instr(0, 7 + ft.return_types.size() * 16);
+            // Multi-value return: pop params, then push N results from ctx->_multi_return.
+            // Each v128 occupies 2 slots (16B) both in _multi_return and on the
+            // operand stack; scalars occupy 1 slot (8B). Pushing every result
+            // as a single qword corrupted the stack for any mixed-type multi-
+            // return that included v128 (observed as SIGBUS crashing the
+            // subsequent op in fuzz regression mismatch_940_seed711811333).
+            auto icount = variable_size_instr(0, 7 + ft.return_types.size() * 18);
             uint32_t total_size = 0;
             for(uint32_t i = 0; i < ft.param_types.size(); ++i) {
                total_size += (ft.param_types[i] == v128) ? 16 : 8;
@@ -6585,10 +6622,19 @@ namespace psizam::detail {
             if(total_size != 0) {
                emit_add(total_size, rsp);
             }
-            // Push return values from ctx->_multi_return (result[0] first = deepest)
+            // Push return values from ctx->_multi_return (result[0] first = deepest).
+            // mr_idx tracks the 8B slot within _multi_return for the current result.
+            uint32_t mr_idx = 0;
             for (uint32_t i = 0; i < ft.return_types.size(); i++) {
-               emit_mov(*(rdi + multi_return_offset + static_cast<int32_t>(i * 8)), rax);
-               emit_push(rax);
+               if (ft.return_types[i] == types::v128) {
+                  emit_vmovdqu(*(rdi + multi_return_offset + static_cast<int32_t>(mr_idx * 8)), xmm0);
+                  emit_push_v128(xmm0);
+                  mr_idx += 2;
+               } else {
+                  emit_mov(*(rdi + multi_return_offset + static_cast<int32_t>(mr_idx * 8)), rax);
+                  emit_push(rax);
+                  mr_idx += 1;
+               }
             }
             return;
          }
