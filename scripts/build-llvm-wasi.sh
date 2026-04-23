@@ -71,10 +71,18 @@ if [ "$BUILD_CLANG" = "1" ]; then
     CLANG_ARGS+=("-DLLVM_WASI_BUILD_CLANG=ON")
 fi
 
+# Cap ThinLTO link parallelism on memory-constrained hosts; env var
+# overrides the nproc default.
+EXTRA_ARGS=()
+if [ -n "${LLVM_WASI_LINK_JOBS:-}" ]; then
+    EXTRA_ARGS+=("-DLLVM_WASI_LINK_JOBS=${LLVM_WASI_LINK_JOBS}")
+fi
+
 cmake -B "$BUILD_DIR" -S "$ROOT/cmake/llvm-wasi" \
     -DWASI_TOOLCHAIN_FILE="$ROOT/cmake/llvm-wasi/wasi-llvm-toolchain.cmake" \
     "${TBLGEN_ARGS[@]}" \
-    "${CLANG_ARGS[@]}"
+    "${CLANG_ARGS[@]}" \
+    "${EXTRA_ARGS[@]}"
 
 cmake --build "$BUILD_DIR" -j"$JOBS"
 
