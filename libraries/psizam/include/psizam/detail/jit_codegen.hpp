@@ -438,6 +438,16 @@ namespace psizam::detail {
          this->emit_movd(0x1f80, *(rbp - 8));
          this->emit_bytes(0x0f, 0xae, 0x55, 0xf8); // ldmxcsr [rbp-8]
 
+         // R15 is the read watermark register in checked mode. The host's
+         // incoming R15 is arbitrary; checked mode's first gas charge runs
+         // emit_validate_watermark, which traps on R15 > mem_size. Preserve
+         // the caller's R15 on the stack and zero R15 before the call so
+         // the first wasm function's validate_watermark sees a clean 0.
+         // This is restored in the epilogue below. Mirrors the save/restore
+         // in machine_code_writer's emit_sysv_abi_interface (jit1).
+         this->emit_push_raw(r15);
+         this->emit_xor(general_register32(15), general_register32(15));
+
          // copy args loop
          this->emit(base::TEST, r9, r9);
          void* loop_end = this->emit_branch8(base::JZ);
@@ -467,6 +477,10 @@ namespace psizam::detail {
          this->emit_vpextrq(0, xmm0, rax);
          this->emit_vpextrq(1, xmm0, rdx);
          base::fix_branch8(is_vector, code);
+
+         // Restore incoming R15 (see push above). Use rbp-relative addressing
+         // since rsp may have been moved by the args-copy loop.
+         this->emit_mov(*(rbp - 24), r15);
 
          this->emit_mov(rbp, rsp);
          this->emit_pop_raw(rbp);
@@ -632,6 +646,11 @@ namespace psizam::detail {
          // + prepay_extra (heavy-op weights for opcodes outside any loop,
          // accumulated by the parser and stored on the IR before codegen).
          // No byte patching needed — codegen happens after accumulation.
+         // Note: emit_gas_charge begins with emit_validate_watermark which
+         // reads R15. For wasm-to-wasm calls R15 carries the caller's
+         // in-flight read watermark (validated implicitly here). For the
+         // initial host→wasm transition the entry stub (emit_sysv_abi_interface)
+         // zeros R15 before the call so validate_watermark sees a clean 0.
          emit_gas_charge(static_cast<int64_t>(_mod.code[func.func_index].wasm_body_bytes)
                          + func.prologue_gas_extra);
 
