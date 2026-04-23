@@ -1,19 +1,27 @@
-// token_ui.cpp — UI service for the token contract.
+// token_ui.cpp — UI rendering for the token example.
 //
-// Exports handle_query(path, query) which returns response bytes.
-// Serves the HTML page and handles balance/block queries.
-// Reads the token database (read-only).
+// Implements the seam declared in
+// <blockchain-example/token_ui.hpp>. Owns the HTML shell and the JSON
+// responses bc_connection ships back to the browser. Knows nothing
+// about transactions, tables, or the wire — it is given chain values
+// by the caller and returns bytes.
+//
+// Phase 2 splits this module into its own WASM instance. Nothing in
+// the surface below assumes it runs in-process with the chain.
 
-#include "types.hpp"
-#include "db_imports.hpp"
+#include <blockchain-example/token_ui.hpp>
 
-#include <psio/fracpack.hpp>
-#include <psio/guest_alloc.hpp>
-#include <psizam/module.hpp>
+#include <cstdio>
+#include <string>
 
-#include "shared_interfaces.hpp"
-
-static const char HTML_PAGE[] = R"html(<!DOCTYPE html>
+namespace blockchain_example::token_ui
+{
+   namespace
+   {
+      // NOTE: raw string literal; keep it straightforward HTML so a
+      // future build can hash this byte-for-byte as a content-addressed
+      // asset if we want.
+      constexpr std::string_view kIndexHtml = R"html(<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -125,45 +133,60 @@ setInterval(refreshBlocks, 3000);
 </html>
 )html";
 
-struct token_ui_impl
-{
-   wit::vector<uint8_t> handle_query(std::string_view path,
-                                      std::string_view query)
+      void append_uint(std::string& s, uint64_t v)
+      {
+         char buf[21];
+         int  n = 0;
+         if (v == 0) buf[n++] = '0';
+         else while (v) { buf[n++] = char('0' + v % 10); v /= 10; }
+         for (int i = n - 1; i >= 0; --i) s.push_back(buf[i]);
+      }
+   }  // namespace
+
+   std::string_view index_html() { return kIndexHtml; }
+
+   std::string render_balance(std::string_view account, uint64_t balance,
+                              bool found)
    {
-      if (path == "/" || path.empty())
-      {
-         auto p = reinterpret_cast<const uint8_t*>(HTML_PAGE);
-         return wit::vector<uint8_t>{{p, p + sizeof(HTML_PAGE) - 1}};
-      }
-
-      if (path == "/balance")
-      {
-         // Parse ?account=NAME from query string
-         // Minimal parser for PoC
-         std::string_view account = "bank";
-         auto pos = query.find("account=");
-         if (pos != std::string_view::npos)
-         {
-            auto start = pos + 8;
-            auto end = query.find('&', start);
-            if (end == std::string_view::npos) end = query.size();
-            account = query.substr(start, end - start);
-         }
-
-         // TODO: read from database when DB imports are wired
-         // For now, return a placeholder
-         std::string json = "{\"account\":\"";
-         json += account;
-         json += "\",\"balance\":0}";
-
-         auto p = reinterpret_cast<const uint8_t*>(json.data());
-         return wit::vector<uint8_t>{{p, p + json.size()}};
-      }
-
-      auto msg = std::string_view("Not found");
-      auto p = reinterpret_cast<const uint8_t*>(msg.data());
-      return wit::vector<uint8_t>{{p, p + msg.size()}};
+      // ISSUE json-escape: account names come from URL query and flow
+      // straight into the response. A real build would JSON-escape
+      // the value; for the PoC we trust the sender (and name_id's
+      // character set happens to be safe).
+      std::string json = "{\"account\":\"";
+      if (found) json.append(account.data(), account.size());
+      else       json.append("not_found");
+      json.append("\",\"balance\":");
+      append_uint(json, found ? balance : 0);
+      json.push_back('}');
+      return json;
    }
-};
 
-PSIO_MODULE(token_ui_impl, handle_query)
+   std::string render_transfer_result(bool             success,
+                                      std::string_view message)
+   {
+      std::string json = "{\"success\":";
+      json.append(success ? "true" : "false");
+      json.append(",\"message\":\"");
+      json.append(message.data(), message.size());
+      json.append("\"}");
+      return json;
+   }
+
+   std::string render_blocks(std::span<const chain::BlockHeader> blocks)
+   {
+      std::string json = "[";
+      bool first = true;
+      for (const auto& b : blocks)
+      {
+         if (!first) json.push_back(',');
+         first = false;
+         json.append("{\"number\":");       append_uint(json, b.number);
+         json.append(",\"timestamp_ns\":"); append_uint(json, b.timestamp_ns);
+         json.append(",\"tx_count\":");     append_uint(json, b.tx_count);
+         json.push_back('}');
+      }
+      json.push_back(']');
+      return json;
+   }
+
+}  // namespace blockchain_example::token_ui

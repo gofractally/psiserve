@@ -142,8 +142,25 @@ namespace psiserve
       /// Returns 0 on success, or -PsiError on error.
       PsiResult psiIpfsStat(WasmPtr cid_ptr, WasmSize cid_len, WasmPtr size_out);
 
+      /// psi.log(level: i32, msg: i32, len: i32)
+      /// Emit a structured log line through the host's logger so guests
+      /// can surface diagnostics before TCP I/O is set up.
+      ///   level 0 = debug, 1 = info, 2 = warn, 3 = error
+      /// Messages are truncated at `log_max_len` to bound host work.
+      /// Safe to call before the WASM linear-memory pointer is wired:
+      /// a null memory base yields a single warning and returns.
+      void psiLog(int32_t level, WasmPtr msg, WasmSize len);
+
+      /// Upper bound on bytes forwarded per psi.log call.  Longer lines
+      /// are truncated and annotated with a `[truncated]` suffix.
+      static constexpr uint32_t log_max_len = 4096;
+
       /// Number of connections accepted by this host instance.
       uint64_t acceptCount() const { return _accept_count; }
+
+      /// Number of guest log lines emitted via psi.log.
+      /// Mainly for test assertions — runtime code should read the log.
+      uint64_t logCount() const { return _log_count; }
 
      private:
       Process*    _proc;
@@ -151,6 +168,7 @@ namespace psiserve
       char*       _wasm_memory;
       pfs::store* _ipfs = nullptr;
       uint64_t    _accept_count = 0;
+      uint64_t    _log_count    = 0;
    };
 
 }  // namespace psiserve

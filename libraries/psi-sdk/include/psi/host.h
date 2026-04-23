@@ -101,6 +101,30 @@ static inline void psi_sleep(int ms)
    psi_sleep_until(now + (long long)ms * 1000000LL);
 }
 
+/* ── Host console logging ─────────────────────────────────────────── */
+
+/* Levels accepted by psi_log.  The host routes each call to the
+ * matching quill severity; other values default to info. */
+#define PSI_LOG_DEBUG 0
+#define PSI_LOG_INFO  1
+#define PSI_LOG_WARN  2
+#define PSI_LOG_ERROR 3
+
+/* Forward a UTF-8 message to the host logger.  Messages longer than
+ * the host's bound are truncated; newlines are preserved.  Available
+ * before any TCP fd is set up, so it is the right tool for bring-up
+ * diagnostics. */
+__attribute__((import_module("psi"), import_name("log")))
+void psi_log(int level, const void* msg, int len);
+
+/* Convenience: log a NUL-terminated C string at info level. */
+static inline void psi_log_info_cstr(const char* s)
+{
+   int n = 0;
+   while (s[n]) ++n;
+   psi_log(PSI_LOG_INFO, s, n);
+}
+
 /* ── Helpers ──────────────────────────────────────────────────────── */
 
 static inline void psi_write_all(int fd, const char* buf, int len)

@@ -34,6 +34,12 @@ typedef struct
    /* Full header block including request line */
    const char* raw;
    int         raw_len;    /* total bytes up to and including \r\n\r\n */
+
+   /* http_read_request may read past the header terminator. The
+    * overflow bytes (already-buffered body) live at raw + raw_len,
+    * with length buf_total - raw_len.  http_read_body uses this to
+    * avoid re-reading the socket for data it already has. */
+   int         buf_total;
 } http_request;
 
 /* ── Parsing ─────────────────────────────────────────────────────── */
@@ -84,8 +90,9 @@ static inline int http_read_request(tcp_conn* c, http_request* req,
    return -1; /* headers too large */
 
 done:
-   req->raw     = buf;
-   req->raw_len = header_end;
+   req->raw       = buf;
+   req->raw_len   = header_end;
+   req->buf_total = total;
 
    /* Parse request line: METHOD SP URL SP VERSION CRLF */
    int pos = 0;
@@ -193,6 +200,52 @@ static inline const char* http_find_header(const http_request* req,
    }
    *out_len = 0;
    return 0;
+}
+
+/* Parse the Content-Length header as an int.  Returns 0 when the
+ * header is missing or malformed — callers should treat that as
+ * "no body expected". */
+static inline int http_content_length(const http_request* req)
+{
+   int vlen = 0;
+   const char* v = http_find_header(req, "Content-Length", 14, &vlen);
+   if (!v) return 0;
+   int n = 0;
+   for (int i = 0; i < vlen; ++i)
+   {
+      if (v[i] < '0' || v[i] > '9') break;
+      n = n * 10 + (v[i] - '0');
+   }
+   return n;
+}
+
+/* Read the request body into `out` (at most out_cap bytes).
+ * Consumes both the already-buffered overflow from http_read_request
+ * AND any additional bytes still pending on the socket.  Returns the
+ * number of bytes written to out (== min(Content-Length, out_cap)),
+ * or <0 on I/O error. */
+static inline int http_read_body(tcp_conn* c, const http_request* req,
+                                 char* out, int out_cap)
+{
+   int cl = http_content_length(req);
+   if (cl <= 0) return 0;
+   if (cl > out_cap) cl = out_cap;
+
+   int buffered = req->buf_total - req->raw_len;
+   if (buffered < 0) buffered = 0;
+   if (buffered > cl) buffered = cl;
+
+   for (int i = 0; i < buffered; ++i)
+      out[i] = req->raw[req->raw_len + i];
+
+   int got = buffered;
+   while (got < cl)
+   {
+      int n = tcp_read(c, out + got, cl - got);
+      if (n <= 0) return n == 0 ? got : n;
+      got += n;
+   }
+   return got;
 }
 
 /* Check if the request method matches (exact, case-sensitive). */

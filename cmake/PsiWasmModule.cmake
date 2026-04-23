@@ -82,9 +82,9 @@ endfunction()
 
 function(psi_add_wasm_module name)
    cmake_parse_arguments(ARG
-      ""                      # no flags
-      "OUTPUT"                # one-value
-      "SOURCES;DEPS;FLAGS"    # multi-value
+      ""                                 # no flags
+      "OUTPUT;EXEC_MODEL"                # one-value
+      "SOURCES;DEPS;FLAGS"               # multi-value
       ${ARGN})
 
    if(NOT ARG_SOURCES)
@@ -92,6 +92,17 @@ function(psi_add_wasm_module name)
    endif()
    if(NOT ARG_OUTPUT)
       set(ARG_OUTPUT ${name}.wasm)
+   endif()
+   if(NOT ARG_EXEC_MODEL)
+      # Default stays "reactor" so existing callers are unaffected.
+      # "command" builds link wasi-libc's crt1-command, which emits
+      # _start and calls `int main(int, char**)` inside it.
+      set(ARG_EXEC_MODEL reactor)
+   endif()
+   if(NOT (ARG_EXEC_MODEL STREQUAL "reactor" OR
+           ARG_EXEC_MODEL STREQUAL "command"))
+      message(FATAL_ERROR
+         "psi_add_wasm_module(${name}): EXEC_MODEL must be reactor or command")
    endif()
 
    _psi_detect_wasi_sdk()
@@ -125,10 +136,10 @@ function(psi_add_wasm_module name)
       list(APPEND _include_flags -I${_dir})
    endforeach()
 
-   set(_reactor_flags
+   set(_base_flags
       --target=wasm32-wasip1
       --sysroot=${_sysroot}
-      -mexec-model=reactor     # library-mode: host calls in, no main()
+      -mexec-model=${ARG_EXEC_MODEL}
       -std=c++23
       -fno-exceptions
       -fno-rtti
@@ -142,13 +153,13 @@ function(psi_add_wasm_module name)
    add_custom_command(
       OUTPUT  ${_raw_out}
       COMMAND ${_cxx}
-              ${_reactor_flags}
+              ${_base_flags}
               ${ARG_FLAGS}
               ${_include_flags}
               ${_srcs}
               -o ${_raw_out}
       DEPENDS ${_srcs}
-      COMMENT "Building wasm guest ${ARG_OUTPUT} (wasi-sdk)"
+      COMMENT "Building wasm guest ${ARG_OUTPUT} (wasi-sdk, ${ARG_EXEC_MODEL})"
       VERBATIM)
 
    # Post-link: promote PSIO1_WIT blobs from data section to custom sections.

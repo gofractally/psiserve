@@ -494,19 +494,52 @@ namespace detail_runtime {
                   return (host->*method_ptr)(std::forward<decltype(a)>(a)...);
                }, std::move(fn_args));
 
-               // Lower the return value through the canonical ABI path.
-               // This handles scalars, own<T>, borrow<T>,
-               // std::expected<own<T>, error>, strings, vectors, records —
-               // everything canonical_lower_flat knows about.
-               native_value ret_slots[16] = {};
-               return_lower_policy rlp{ret_slots, memory};
-               canonical_lower_flat(result, rlp);
+               // Canonical ABI has two return-value protocols:
+               //   * rflat <= MAX_FLAT_RESULTS:  lower into flat slots,
+               //                                 return slot 0.
+               //   * rflat >  MAX_FLAT_RESULTS:  caller allocates a
+               //                                 return area and passes
+               //                                 its pointer as the next
+               //                                 arg slot after the real
+               //                                 args; the callee writes
+               //                                 canonical fields there
+               //                                 and returns the pointer.
+               //
+               // `canonical_lower_flat` only handles the first case —
+               // without this branch the extra slots that it emits would
+               // be dropped because `return ret_slots[0]` can only carry
+               // one i64 out.
+               constexpr std::size_t rflat =
+                  ::psio::canonical_flat_count_v<ReturnType>;
 
-               // The first flat slot is the return value for single-slot
-               // returns (scalars, handles, discriminants). Multi-slot
-               // returns (strings, records) use a return-area pointer
-               // which canonical_lower_flat already emitted.
-               return ret_slots[0];
+               if constexpr (rflat <= ::psio::MAX_FLAT_RESULTS) {
+                  native_value        ret_slots[16] = {};
+                  return_lower_policy rlp{ret_slots, memory};
+                  canonical_lower_flat(result, rlp);
+                  return ret_slots[0];
+               } else {
+                  // Number of flat arg slots the caller consumed before
+                  // it placed the return-area pointer.
+                  constexpr std::size_t arg_flats = []<typename H, typename R,
+                                                       typename... As>(
+                     R (H::*)(As...))
+                  {
+                     return (std::size_t{0} + ... +
+                        ::psio::canonical_flat_count_v<
+                           std::remove_cvref_t<As>>);
+                  }(method_ptr);
+
+                  const uint32_t retptr =
+                     static_cast<uint32_t>(args[arg_flats].i32);
+
+                  return_lower_policy rlp{nullptr, memory};
+                  ::psio::canonical_lower_fields(result, rlp, retptr);
+
+                  native_value rv;
+                  rv.i64 = 0;
+                  rv.i32 = retptr;
+                  return rv;
+               }
             }
          };
 

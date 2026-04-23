@@ -64,6 +64,18 @@ if(PSIZAM_ENABLE_TESTS)
       ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
    add_test(NAME instance_context_test COMMAND instance_context_test)
 
+   add_executable(fd_table_test tests/fd_table_test.cpp)
+   target_link_libraries(fd_table_test PRIVATE psiserve)
+   target_include_directories(fd_table_test PRIVATE
+      ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
+   add_test(NAME fd_table_test COMMAND fd_table_test)
+
+   add_executable(host_api_log_test tests/host_api_log_test.cpp)
+   target_link_libraries(host_api_log_test PRIVATE psiserve)
+   target_include_directories(host_api_log_test PRIVATE
+      ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include)
+   add_test(NAME host_api_log_test COMMAND host_api_log_test)
+
    # ── E2E WASM guest test ──────────────────────────────────────────────────
    psi_add_wasm_module(db_guest
       SOURCES tests/db_guest.cpp

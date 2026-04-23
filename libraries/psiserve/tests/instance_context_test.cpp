@@ -122,3 +122,138 @@ TEST_CASE("multiple transfers between instances", "[instance_context]")
    CHECK(*std::get<SocketFd>(*conn1.process.fds.get(c1_vfd)).real_fd == 10);
    CHECK(*std::get<SocketFd>(*conn2.process.fds.get(c2_vfd)).real_fd == 11);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Resource-transfer edge cases
+//
+// The socket variant was the motivating case, but the same machinery
+// must work uniformly for the other fd variants — UDP, files,
+// preopened dirs.  These tests keep the uniform story honest.
+// ═══════════════════════════════════════════════════════════════════
+
+TEST_CASE("transfer_socket moves UDP variants", "[instance_context]")
+{
+   InstanceContext src;
+   InstanceContext dst;
+
+   auto vfd = src.process.fds.alloc(UdpFd{RealFd{55}});
+   REQUIRE(*vfd >= 0);
+
+   auto d = src.transfer_socket(vfd, dst);
+   REQUIRE(*d >= 0);
+   CHECK(src.process.fds.get(vfd) == nullptr);
+
+   auto* entry = dst.process.fds.get(d);
+   REQUIRE(entry != nullptr);
+   CHECK(std::holds_alternative<UdpFd>(*entry));
+   CHECK(*std::get<UdpFd>(*entry).real_fd == 55);
+}
+
+TEST_CASE("transfer_socket moves FileFd variants", "[instance_context]")
+{
+   InstanceContext src;
+   InstanceContext dst;
+
+   auto vfd = src.process.fds.alloc(FileFd{RealFd{66}});
+   auto d   = src.transfer_socket(vfd, dst);
+   REQUIRE(*d >= 0);
+
+   auto* entry = dst.process.fds.get(d);
+   REQUIRE(entry != nullptr);
+   CHECK(std::holds_alternative<FileFd>(*entry));
+}
+
+TEST_CASE("transfer_socket moves DirFd variants", "[instance_context]")
+{
+   InstanceContext src;
+   InstanceContext dst;
+
+   auto vfd = src.process.fds.alloc(DirFd{RealFd{77}});
+   auto d   = src.transfer_socket(vfd, dst);
+   REQUIRE(*d >= 0);
+
+   auto* entry = dst.process.fds.get(d);
+   REQUIRE(entry != nullptr);
+   CHECK(std::holds_alternative<DirFd>(*entry));
+}
+
+TEST_CASE("transfer_socket fails into a saturated destination",
+          "[instance_context]")
+{
+   InstanceContext src;
+   InstanceContext dst;
+
+   // Fill dst completely so there is no free slot to land in.
+   for (int i = 0; i < max_fds; ++i)
+      REQUIRE(*dst.process.fds.alloc(SocketFd{RealFd{i}, nullptr, nullptr}) >= 0);
+
+   auto src_vfd = src.process.fds.alloc(SocketFd{RealFd{100}, nullptr, nullptr});
+   REQUIRE(*src_vfd >= 0);
+
+   auto d = src.transfer_socket(src_vfd, dst);
+
+   // Destination is full → no slot allocated; but note that the source
+   // slot has already been extracted (by design — extract precedes the
+   // alloc in transfer_socket).  This asymmetry is the motivator for
+   // the TODO in the comment below.
+   CHECK(*d == *invalid_virtual_fd);
+   CHECK(src.process.fds.get(src_vfd) == nullptr);
+}
+
+TEST_CASE("double transfer of the same vfd fails on second attempt",
+          "[instance_context]")
+{
+   InstanceContext src;
+   InstanceContext dst1;
+   InstanceContext dst2;
+
+   auto vfd = src.process.fds.alloc(SocketFd{RealFd{88}, nullptr, nullptr});
+
+   auto first  = src.transfer_socket(vfd, dst1);
+   auto second = src.transfer_socket(vfd, dst2);
+
+   CHECK(*first  >= 0);
+   CHECK(*second == *invalid_virtual_fd);
+
+   CHECK(dst2.process.fds.get(VirtualFd{0}) == nullptr);
+}
+
+TEST_CASE("round-trip transfer restores ownership to the original",
+          "[instance_context]")
+{
+   InstanceContext a;
+   InstanceContext b;
+
+   auto vfd = a.process.fds.alloc(SocketFd{RealFd{11}, nullptr, nullptr});
+   REQUIRE(*vfd >= 0);
+
+   auto in_b  = a.transfer_socket(vfd, b);
+   REQUIRE(*in_b >= 0);
+   CHECK(a.process.fds.get(vfd) == nullptr);
+
+   auto in_a2 = b.transfer_socket(in_b, a);
+   REQUIRE(*in_a2 >= 0);
+   CHECK(b.process.fds.get(in_b) == nullptr);
+
+   auto* entry = a.process.fds.get(in_a2);
+   REQUIRE(entry != nullptr);
+   CHECK(*std::get<SocketFd>(*entry).real_fd == 11);
+}
+
+TEST_CASE("transfer_socket does not duplicate the resource into source",
+          "[instance_context]")
+{
+   // Sanity: after a successful transfer the source must not still
+   // observe the resource, even if its internal index matches the
+   // destination's new vfd.
+   InstanceContext src;
+   InstanceContext dst;
+
+   auto vfd = src.process.fds.alloc(SocketFd{RealFd{200}, nullptr, nullptr});
+   auto d   = src.transfer_socket(vfd, dst);
+   REQUIRE(*d >= 0);
+
+   CHECK(src.process.fds.get(vfd) == nullptr);
+   // The destination slot is its own index, which will generally be 0.
+   CHECK(src.process.fds.get(d) == nullptr);
+}
