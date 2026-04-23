@@ -64,6 +64,17 @@ find_package(Boost REQUIRED)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(PsiWasmModule)
 
+# ── WASI-compiled toolchain (clang.wasm / wasm-ld.wasm / sysroot) ─────────────
+# Fetches the pinned prebuilts by default; override with
+# -DPSI_BUILD_TOOLCHAIN=ON to build from source (~1-4 h) or
+# -DPSI_TOOLCHAIN_DIR=/path to use locally staged artifacts.
+# Only needed for source-to-pzam; psiserve itself doesn't require it.
+option(PSI_TOOLCHAIN_ENABLE "Resolve the WASI-compiled clang/wasm-ld toolchain" OFF)
+if(PSI_TOOLCHAIN_ENABLE AND NOT PSISERVE_WASI)
+   include(PsiToolchain)
+   psi_ensure_toolchain()
+endif()
+
 # ── Testing ────────────────────────────────────────────────────────────────────
 if(NOT PSISERVE_WASI)
    enable_testing()
@@ -99,6 +110,7 @@ if(PSISERVE_ENABLE AND NOT PSISERVE_WASI)
    add_subdirectory(programs/psiserve-cli)
    add_subdirectory(programs/chat-bench)
    add_subdirectory(services/blockchain-example)
+   add_subdirectory(services/psibase)
 endif()
 
 # source-to-pzam driver: host CLI that runs clang.pzam + wasm-ld.pzam under
