@@ -939,7 +939,11 @@ namespace psizam::detail {
                break;
             case opcodes::ref_null:
                PSIZAM_ASSERT(type == types::funcref || type == types::externref, wasm_parse_exception, "expected reference type for ref.null");
-               ie.value.i64 = 0;
+               // Runtime convention: null ref is UINT32_MAX (matches ref.null
+               // opcode emission in interpreter/JIT and ref.is_null comparison).
+               // Storing 0 here made global-initialized null refs compare
+               // unequal to null at runtime (fuzz regression 41953).
+               ie.value.i64 = static_cast<uint32_t>(UINT32_MAX);
                ++code; // consume the reference type byte
                break;
             case opcodes::ref_func: {
