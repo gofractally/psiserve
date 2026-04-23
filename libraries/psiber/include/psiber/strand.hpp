@@ -9,8 +9,11 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <new>
+#include <optional>
 #include <type_traits>
+#include <variant>
 
 namespace psiber
 {
@@ -66,6 +69,19 @@ namespace psiber
       /// Returns true on success, false if the arena is exhausted.
       template <typename F>
       bool post(F&& fn);
+
+      /// Synchronously run `fn` on this strand, temporarily migrating the
+      /// calling fiber from its current strand (if any).  The fiber releases
+      /// its home strand, enters this strand, runs `fn`, then releases this
+      /// strand and re-enters its original home.  Returns fn's return value
+      /// (or void).  Exceptions from fn propagate after cleanup.
+      ///
+      /// Must be called from inside a fiber, and `this` must differ from
+      /// the caller's current home_strand.  Callers should not migrate
+      /// recursively (A→B→A on the same fiber) — the order of re-entry
+      /// is not enforced against deadlock.
+      template <typename F>
+      auto sync(F&& fn) -> std::invoke_result_t<F>;
 
       // ── Strand scheduling ──────────────────────────────────────
 
@@ -202,6 +218,100 @@ namespace psiber
       });
 
       return true;
+   }
+
+   // ── strand::sync<F>() template implementation ───────────────────────
+   //
+   // Migration: the caller's fiber leaves its home strand, enters `this`
+   // strand, runs fn(), then leaves this strand and re-enters home.
+   //
+   // State of home_strand during the transition:
+   //   me->home_strand = src   initially
+   //   me->home_strand = nullptr after releasing src (in transit)
+   //   me->home_strand = this  while running fn()
+   //   me->home_strand = nullptr after releasing this (in transit)
+   //   me->home_strand = src   after re-entering src
+   //
+   // The run loop's release-on-park logic uses home_strand to decide
+   // which strand to release; setting it to nullptr during transit
+   // prevents misfires when we park waiting to enter.  Matches the
+   // same discipline used by strand::post (strand.hpp line 180-183).
+
+   template <typename F>
+   auto strand::sync(F&& fn) -> std::invoke_result_t<F>
+   {
+      using R = std::invoke_result_t<F>;
+
+      auto&  sched = Scheduler::current();
+      Fiber* me    = sched.currentFiber();
+      assert(me && "strand::sync must be called from within a fiber");
+      assert(_active.load(std::memory_order_relaxed) != me &&
+             "strand::sync called on the caller's own strand");
+
+      strand* src = me->home_strand;
+
+      // 1. Release source strand (hand off next waiter locally).
+      me->home_strand = nullptr;
+      if (src)
+      {
+         Fiber* next = src->release();
+         if (next)
+            sched.promoteStrandWaiter(next);
+      }
+
+      // 2. Enter target strand; park if queued behind another fiber.
+      if (!this->enter(me))
+         sched.parkCurrentFiber();
+      me->home_strand = this;
+
+      // 3. Run fn(), capturing its result or exception.
+      std::exception_ptr err;
+      std::optional<std::conditional_t<std::is_void_v<R>, std::monostate, R>> result;
+      try
+      {
+         if constexpr (std::is_void_v<R>)
+            fn();
+         else
+            result.emplace(fn());
+      }
+      catch (...)
+      {
+         err = std::current_exception();
+      }
+
+      // 4. Release target strand; hand off its next waiter.  The fiber
+      //    may have moved schedulers during fn() (cross-thread wakes
+      //    through home_strand re-entry).  Use current scheduler.
+      auto&  sched2 = Scheduler::current();
+      me->home_strand = nullptr;
+      {
+         Fiber* next = this->release();
+         if (next)
+            sched2.promoteStrandWaiter(next);
+      }
+
+      // 5. Re-enter source strand.  Park if someone else holds it.
+      //    parkCurrentFiber may throw shutdown_exception — preserve
+      //    any earlier err from fn() ahead of a late shutdown.
+      if (src)
+      {
+         try
+         {
+            if (!src->enter(me))
+               sched2.parkCurrentFiber();
+            me->home_strand = src;
+         }
+         catch (...)
+         {
+            if (!err)
+               err = std::current_exception();
+         }
+      }
+
+      if (err)
+         std::rethrow_exception(err);
+      if constexpr (!std::is_void_v<R>)
+         return std::move(*result);
    }
 
 }  // namespace psiber

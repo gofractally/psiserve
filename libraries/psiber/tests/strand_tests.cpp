@@ -1,9 +1,11 @@
 #include <catch2/catch.hpp>
 
+#include <psiber/reactor.hpp>
 #include <psiber/strand.hpp>
 
 #include <atomic>
 #include <cstring>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -316,4 +318,227 @@ TEST_CASE("strand arena: non-adjacent blocks are not coalesced", "[strand]")
    REQUIRE(big != nullptr);
    // Verify it's NOT from the free list (should be past p3)
    REQUIRE(big > p3);
+}
+
+// ── strand::sync (cross-strand migration) tests ─────────────────────────
+
+namespace
+{
+   // Helper: spin-wait for a flag with a short backoff.
+   void wait_until(std::atomic<bool>& flag)
+   {
+      while (!flag.load(std::memory_order_acquire))
+         std::this_thread::sleep_for(std::chrono::milliseconds{1});
+   }
+
+   // Helper: post a strand fiber from an external thread.  strand::post
+   // requires a scheduler context, so we post work to a reactor worker
+   // first, which then spawns the strand fiber.  Pass a sched_index
+   // when tests need to ensure two posted fibers land on different
+   // workers (e.g. one holds a strand busy-spinning while another runs).
+   template <typename F>
+   void post_strand_fiber(reactor& pool, strand& s, F&& f, uint32_t sched_index = 0)
+   {
+      pool.scheduler(sched_index).post(
+         [&s, fn = std::forward<F>(f)]() mutable noexcept {
+            s.post(std::move(fn));
+         });
+   }
+}
+
+TEST_CASE("strand::sync returns a value across strands", "[strand][sync]")
+{
+   reactor pool(1);
+   strand  a(pool, 1024);
+   strand  b(pool, 1024);
+
+   std::atomic<int>  result{0};
+   std::atomic<bool> done{false};
+
+   post_strand_fiber(pool, a, [&] {
+      int x = b.sync([&] { return 42; });
+      result.store(x, std::memory_order_release);
+      done.store(true, std::memory_order_release);
+   });
+
+   wait_until(done);
+   REQUIRE(result.load() == 42);
+
+   pool.stop();
+   pool.join();
+}
+
+TEST_CASE("strand::sync with void return runs the callable", "[strand][sync]")
+{
+   reactor pool(1);
+   strand  a(pool, 1024);
+   strand  b(pool, 1024);
+
+   std::atomic<int>  count{0};
+   std::atomic<bool> done{false};
+
+   post_strand_fiber(pool, a, [&] {
+      b.sync([&] { count.fetch_add(1, std::memory_order_relaxed); });
+      done.store(true, std::memory_order_release);
+   });
+
+   wait_until(done);
+   REQUIRE(count.load() == 1);
+
+   pool.stop();
+   pool.join();
+}
+
+TEST_CASE("strand::sync: home_strand tracks current strand during migration",
+          "[strand][sync]")
+{
+   reactor pool(1);
+   strand  a(pool, 1024);
+   strand  b(pool, 1024);
+
+   std::atomic<bool> done{false};
+   const strand*     home_before = nullptr;
+   const strand*     home_during = nullptr;
+   const strand*     home_after  = nullptr;
+
+   post_strand_fiber(pool, a, [&] {
+      auto* me    = Scheduler::current().currentFiber();
+      home_before = me->home_strand;
+      b.sync([&] {
+         auto* m2    = Scheduler::current().currentFiber();
+         home_during = m2->home_strand;
+      });
+      home_after = me->home_strand;
+      done.store(true, std::memory_order_release);
+   });
+
+   wait_until(done);
+   REQUIRE(home_before == &a);
+   REQUIRE(home_during == &b);
+   REQUIRE(home_after == &a);
+
+   pool.stop();
+   pool.join();
+}
+
+TEST_CASE("strand::sync propagates exceptions and restores source strand",
+          "[strand][sync][exception]")
+{
+   reactor pool(1);
+   strand  a(pool, 1024);
+   strand  b(pool, 1024);
+
+   std::atomic<bool> caught{false};
+   std::atomic<bool> done{false};
+   const strand*     home_after = nullptr;
+
+   post_strand_fiber(pool, a, [&] {
+      try
+      {
+         b.sync([&] { throw std::runtime_error("migration failure"); });
+      }
+      catch (const std::runtime_error& e)
+      {
+         if (std::string{e.what()} == "migration failure")
+            caught.store(true, std::memory_order_release);
+      }
+      home_after = Scheduler::current().currentFiber()->home_strand;
+      done.store(true, std::memory_order_release);
+   });
+
+   wait_until(done);
+   REQUIRE(caught.load());
+   REQUIRE(home_after == &a);
+
+   pool.stop();
+   pool.join();
+}
+
+TEST_CASE("strand::sync: contended target strand queues migrant",
+          "[strand][sync]")
+{
+   // Two pool threads so a holder on B can run concurrently with a
+   // migrant trying to enter B.
+   reactor pool(2);
+   strand  a(pool, 1024);
+   strand  b(pool, 1024);
+
+   std::atomic<bool> b_busy{false};
+   std::atomic<bool> b_release{false};
+   std::atomic<int>  phase{0};
+   std::atomic<bool> migrant_done{false};
+
+   // Holder on B: hold B continuously via pure busy-wait until we
+   // signal release.  Can't use yield/sleep/park here — all release
+   // the strand, which would let the migrant in and defeat the point.
+   // Post to scheduler 0 so it monopolizes that thread.
+   post_strand_fiber(pool, b, [&] {
+      b_busy.store(true, std::memory_order_release);
+      while (!b_release.load(std::memory_order_acquire))
+      {
+         // busy-spin — no suspend, no strand release
+      }
+   }, /*sched_index=*/0);
+
+   wait_until(b_busy);
+
+   // Migrant on A: must run on a different scheduler than the busy-
+   // spinning holder, or it'll never get CPU.
+   post_strand_fiber(pool, a, [&] {
+      phase.store(1, std::memory_order_release);
+      b.sync([&] { phase.store(2, std::memory_order_release); });
+      phase.store(3, std::memory_order_release);
+      migrant_done.store(true, std::memory_order_release);
+   }, /*sched_index=*/1);
+
+   // Give the migrant time to park; it should be stuck at phase 1.
+   std::this_thread::sleep_for(std::chrono::milliseconds{20});
+   REQUIRE(phase.load() == 1);
+
+   // Free B; migrant should now complete.
+   b_release.store(true, std::memory_order_release);
+
+   wait_until(migrant_done);
+   REQUIRE(phase.load() == 3);
+
+   pool.stop();
+   pool.join();
+}
+
+TEST_CASE("strand::sync: multiple migrants serialize through target",
+          "[strand][sync][concurrent]")
+{
+   reactor pool(2);
+   strand  a(pool, 4096);
+   strand  b(pool, 4096);
+
+   constexpr int     N = 16;
+   std::atomic<int>  completed{0};
+   std::atomic<int>  concurrent_on_b{0};
+   std::atomic<int>  max_concurrent_on_b{0};
+
+   for (int i = 0; i < N; ++i)
+   {
+      post_strand_fiber(pool, a, [&] {
+         b.sync([&] {
+            int c = concurrent_on_b.fetch_add(1, std::memory_order_acq_rel) + 1;
+            int m = max_concurrent_on_b.load(std::memory_order_relaxed);
+            while (c > m && !max_concurrent_on_b.compare_exchange_weak(
+                              m, c, std::memory_order_relaxed))
+            {}
+            concurrent_on_b.fetch_sub(1, std::memory_order_acq_rel);
+         });
+         completed.fetch_add(1, std::memory_order_release);
+      });
+   }
+
+   while (completed.load(std::memory_order_acquire) < N)
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+
+   REQUIRE(completed.load() == N);
+   // Strand B serializes — only one fiber on B at any time.
+   REQUIRE(max_concurrent_on_b.load() == 1);
+
+   pool.stop();
+   pool.join();
 }

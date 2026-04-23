@@ -169,22 +169,28 @@ namespace psiber
 
             _current = nullptr;
 
-            // Strand release: if a strand fiber parks or finishes,
-            // release the strand so the next waiting fiber can run.
-            // I/O-blocked and sleeping fibers stay "active" — they'll
-            // resume on this thread when the event/timer fires.
+            // Strand release: any yield-like state (Parked, Blocked,
+            // Sleeping, Recyclable) releases the strand so other queued
+            // fibers can make progress.  I/O is cooperative — a fiber
+            // blocked on an fd or timer does not own its strand during
+            // the wait.  On wake, the fiber routes back through
+            // home_strand->enqueue() (pollAndUnblock / wakePoolWaiter /
+            // drainWakeList all use this pattern).
+            //
+            // Guard: only release if this fiber is actually _active of
+            // its strand.  A fiber resumed via the shutdown path may
+            // have home_strand set but was already released on its
+            // earlier Blocked/Sleeping transition.
             if (fiber->home_strand &&
+                fiber->home_strand->active() == fiber &&
                 (fiber->state == FiberState::Parked ||
-                 fiber->state == FiberState::Recyclable))
+                 fiber->state == FiberState::Recyclable ||
+                 fiber->state == FiberState::Blocked ||
+                 fiber->state == FiberState::Sleeping))
             {
                Fiber* next = fiber->home_strand->release();
                if (next)
-               {
-                  next->home_sched = this;
-                  next->state      = FiberState::Ready;
-                  next->posted_num = _posted_counter++;
-                  addToReadyQueue(next);
-               }
+                  promoteStrandWaiter(next);
             }
 
             // If the fiber's entry finished, pool it for reuse
@@ -374,7 +380,10 @@ namespace psiber
       if (_interrupted)
          throw shutdown_exception{};
 
-      _io.removeFdEvents(fd, events);
+      // Note: fd event removal is done by pollAndUnblock on the scheduler
+      // that owns the io_engine — the fiber may resume on a different
+      // scheduler (through strand re-entry) than the one where the fd
+      // was registered.
    }
 
    template <typename Engine>
@@ -428,12 +437,60 @@ namespace psiber
    void basic_scheduler<Engine>::yieldCurrentFiber()
    {
       assert(_current && "yieldCurrentFiber called with no current fiber");
-      _current->state      = FiberState::Ready;
-      _current->posted_num = _posted_counter++;
-      addToReadyQueue(_current);
 
-      auto& sched = *_current->sched_cont;
-      sched       = sched.resume();
+      Fiber*  me = _current;
+      strand* s  = me->home_strand;
+
+      if (s && s->active() == me)
+      {
+         // Strand-bound yield is a true suspend point: release the
+         // strand so other fibers on S can run, then re-enter at the
+         // tail.  If we skipped the release, any arrival during our
+         // yield (via cross-thread strand::post) would queue behind
+         // us and be stuck until our next real park/block/finish.
+         // home_strand goes nullptr during transit so the run loop's
+         // release-on-park logic doesn't misfire if we park.
+         me->home_strand = nullptr;
+
+         Fiber* next = s->release();
+         if (next)
+            promoteStrandWaiter(next);
+
+         if (s->enter(me))
+         {
+            // Nobody else wanted S in the gap — active again.
+            me->home_strand = s;
+            me->state       = FiberState::Ready;
+            me->posted_num  = _posted_counter++;
+            addToReadyQueue(me);
+         }
+         else
+         {
+            // Queued behind a fiber that entered S during our gap.
+            // Park with home_strand==nullptr so the run loop skips
+            // the release-on-park path; when release promotes us,
+            // we'll re-set home_strand after the resume below.
+            me->state = FiberState::Parked;
+         }
+
+         auto& sched = *me->sched_cont;
+         sched       = sched.resume();
+
+         // Restore home_strand after potential park.  Safe to overwrite
+         // even in the no-park case — promoteStrandWaiter doesn't touch it.
+         me->home_strand = s;
+      }
+      else
+      {
+         // Non-strand fiber (or stale active check): classic ready
+         // queue cycle.
+         me->state      = FiberState::Ready;
+         me->posted_num = _posted_counter++;
+         addToReadyQueue(me);
+
+         auto& sched = *me->sched_cont;
+         sched       = sched.resume();
+      }
 
       if (_interrupted)
          throw shutdown_exception{};
@@ -469,6 +526,54 @@ namespace psiber
       _task_list.push(slot);
 
       notifyIfPolling();
+   }
+
+   // ── Strand waiter handoff helper ─────────────────────────────────────────
+   //
+   // After strand::release() returns a fiber that has just been promoted
+   // to _active, schedule it locally.  Replicates the inline logic in the
+   // run loop (strand-release branch) so external callers (strand::sync)
+   // can do the same.
+   template <typename Engine>
+   void basic_scheduler<Engine>::promoteStrandWaiter(Fiber* fiber)
+   {
+      fiber->home_sched = this;
+      fiber->state      = FiberState::Ready;
+      fiber->posted_num = _posted_counter++;
+      addToReadyQueue(fiber);
+   }
+
+   // ── Wake routing helper ──────────────────────────────────────────────────
+   //
+   // Used by pollAndUnblock (I/O and timer completions) and wakePoolWaiter
+   // to put a fiber back into execution after it was released from its
+   // strand on the blocking-yield path.  Re-enters the home strand if set,
+   // so strand serialization is preserved across I/O.
+   template <typename Engine>
+   void basic_scheduler<Engine>::resumeBlockedFiber(Fiber* fiber)
+   {
+      if (fiber->home_strand)
+      {
+         Fiber* local = fiber->home_strand->enqueue(fiber);
+         if (local)
+         {
+            local->state      = FiberState::Ready;
+            local->posted_num = _posted_counter++;
+            addToReadyQueue(local);
+         }
+         else
+         {
+            // Queued in strand wait list — Parked is the canonical
+            // "waiting for strand turn" state (same as strand::post).
+            fiber->state = FiberState::Parked;
+         }
+      }
+      else
+      {
+         fiber->state      = FiberState::Ready;
+         fiber->posted_num = _posted_counter++;
+         addToReadyQueue(fiber);
+      }
    }
 
    // ── Drain helpers ────────────────────────────────────────────────────────
@@ -652,10 +757,12 @@ namespace psiber
 
          if (waiter->state == FiberState::Sleeping)
          {
-            // Cancel the timer by setting Ready before pollAndUnblock sees it
-            waiter->state      = FiberState::Ready;
-            waiter->posted_num = _posted_counter++;
-            addToReadyQueue(waiter);
+            // Re-enter home strand if applicable — the strand was
+            // released when the fiber went Sleeping on the pool wait.
+            // resumeBlockedFiber transitions state out of Sleeping,
+            // which also signals to pollAndUnblock that the timer
+            // should not re-fire this fiber.
+            resumeBlockedFiber(waiter);
             return;
          }
          // else: timer already woke this fiber — try next waiter
@@ -697,14 +804,14 @@ namespace psiber
    {
       auto now = std::chrono::steady_clock::now();
 
-      // Wake sleeping fibers whose time has come
+      // Wake sleeping fibers whose time has come.
+      // Re-enters the home strand if the fiber is strand-bound — the
+      // strand was released when the fiber went Sleeping.
       for (auto& fiber : _fibers)
       {
          if (fiber->state == FiberState::Sleeping && fiber->wake_time <= now)
          {
-            fiber->state      = FiberState::Ready;
-            fiber->posted_num = _posted_counter++;
-            addToReadyQueue(fiber.get());
+            resumeBlockedFiber(fiber.get());
          }
       }
 
@@ -758,11 +865,17 @@ namespace psiber
                 fiber->blocked_fd == events[i].real_fd &&
                 (fiber->blocked_events & events[i].events))
             {
-               fiber->state          = FiberState::Ready;
+               // Unregister fd events on this scheduler's io_engine
+               // before routing the fiber: after I/O release, the
+               // fiber may resume on a different scheduler via strand
+               // re-entry, and that scheduler's _io isn't the one that
+               // owns this fd registration.
+               _io.removeFdEvents(fiber->blocked_fd, fiber->blocked_events);
                fiber->blocked_fd     = invalid_real_fd;
                fiber->blocked_events = {};
-               fiber->posted_num     = _posted_counter++;
-               addToReadyQueue(fiber.get());
+               // Re-enter home strand (if any) — the strand was
+               // released when the fiber went Blocked on the fd.
+               resumeBlockedFiber(fiber.get());
                break;
             }
          }
