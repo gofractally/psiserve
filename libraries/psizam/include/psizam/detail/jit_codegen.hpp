@@ -677,11 +677,7 @@ namespace psizam::detail {
          // overwrites the slot setjmp saved rsp points to, corrupting the
          // restored rsp and everything that flows from it. Frame-relative
          // slots are above the lowest rsp we'll ever reach, so they're safe.
-         // 3 save slots (ctx / mem / pre-align rsp) PER try_table.
-         // Nested try_tables would otherwise share slots, so an inner
-         // pre-setjmp's save clobbers the outer's, and a longjmp to
-         // the outer's jmpbuf restores rsp from a stale slot.
-         _eh_save_slots = func.eh_data_count * 3;
+         _eh_save_slots = (func.eh_data_count > 0) ? 3 : 0;
 
          // Checked mode reserves an extra frame slot for the R15 watermark save.
          _checked_r15_save = is_checked() ? 1u : 0u;
@@ -721,16 +717,15 @@ namespace psizam::detail {
          }
       }
 
-      // EH save-slot offsets from rbp. 3 slots per try_table (eh_idx):
-      // 0=rdi(ctx), 1=rsi(mem), 2=pre-align rsp.
-      int32_t eh_save_slot_offset(uint32_t eh_idx, uint32_t slot) const {
+      // EH save-slot offsets from rbp. Valid only when _eh_save_slots > 0.
+      // Slot 0: saved rdi (ctx). Slot 1: saved rsi (mem). Slot 2: saved pre-align rsp.
+      int32_t eh_save_slot_offset(uint32_t slot) const {
          return -static_cast<int32_t>(
-            (_body_locals + _num_spill_slots + _callee_saved_count
-             + eh_idx * 3 + slot + 1) * 8);
+            (_body_locals + _num_spill_slots + _callee_saved_count + slot + 1) * 8);
       }
-      int32_t eh_ctx_save_offset(uint32_t eh_idx) const { return eh_save_slot_offset(eh_idx, 0); }
-      int32_t eh_mem_save_offset(uint32_t eh_idx) const { return eh_save_slot_offset(eh_idx, 1); }
-      int32_t eh_rsp_save_offset(uint32_t eh_idx) const { return eh_save_slot_offset(eh_idx, 2); }
+      int32_t eh_ctx_save_offset() const { return eh_save_slot_offset(0); }
+      int32_t eh_mem_save_offset() const { return eh_save_slot_offset(1); }
+      int32_t eh_rsp_save_offset() const { return eh_save_slot_offset(2); }
 
       // Checked-mode R15 save slot offset from rbp (Phase 3 only, placed after EH slots).
       int32_t checked_r15_save_offset() const {
@@ -2067,32 +2062,33 @@ namespace psizam::detail {
             break;
          }
          case ir_op::eh_setjmp: {
-            // Per-try_table save slots indexed by eh_idx — nested try_tables
-            // must not share slots, or an inner pre-setjmp clobbers the
-            // outer's saved rsp and the post-setjmp after a longjmp to the
-            // outer's jmpbuf reloads garbage (rsp=0) and faults on the next
-            // push (fuzz regression 106113).
-            uint32_t eh_idx = static_cast<uint32_t>(inst.ri.imm);
+            // Save rdi/rsi/rsp to frame slots (NOT on the top of stack) so that
+            // throw's prologue pushes inside __psizam_eh_throw cannot corrupt
+            // them between setjmp and longjmp. See comment on _eh_save_slots.
             this->emit_pop_raw(rax); // jmpbuf ptr
-            this->emit_mov(rdi, *(rbp + eh_ctx_save_offset(eh_idx)));
-            this->emit_mov(rsi, *(rbp + eh_mem_save_offset(eh_idx)));
+            this->emit_mov(rdi, *(rbp + eh_ctx_save_offset()));
+            this->emit_mov(rsi, *(rbp + eh_mem_save_offset()));
             this->emit_mov(rax, rdi); // jmpbuf → arg1
-            this->emit_mov(rsp, *(rbp + eh_rsp_save_offset(eh_idx)));
-            // Force rsp below *every* save slot so setjmp's push-of-ret-addr
-            // and throw's prologue can't clobber any saved value. The lowest
-            // address slot belongs to the last try_table, so anchor there.
+            this->emit_mov(rsp, *(rbp + eh_rsp_save_offset()));
+            // Force rsp to a 16-byte aligned slot BELOW all eh save slots
+            // before the setjmp call. Using `and $-16, %rsp` alone doesn't
+            // guarantee this: when body regalloc raises rsp to a position
+            // inside the save-slot range (observed in jit2 fuzz modules
+            // with nested try_tables), the aligned rsp can land exactly on
+            // a save slot, and `call` writes the return address ONTO the
+            // mem-save slot — longjmp then restores rsi to that return
+            // address, and the next `[rsi-0x1008]` global access segfaults.
             {
-               uint32_t last_idx = _eh_save_slots > 0 ? (_eh_save_slots / 3) - 1 : eh_idx;
-               uint32_t abs_off = static_cast<uint32_t>(-eh_rsp_save_offset(last_idx)) + 16u;
+               uint32_t abs_off = static_cast<uint32_t>(-eh_rsp_save_offset()) + 16u;
                abs_off = (abs_off + 15u) & ~15u;
                this->emit(LEA, *(rbp - static_cast<int32_t>(abs_off)), rsp);
             }
             this->emit_bytes(0x48, 0xb8);
             this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_setjmp));
             this->emit_bytes(0xff, 0xd0); // call *%rax
-            this->emit_mov(*(rbp + eh_rsp_save_offset(eh_idx)), rsp);
-            this->emit_mov(*(rbp + eh_mem_save_offset(eh_idx)), rsi);
-            this->emit_mov(*(rbp + eh_ctx_save_offset(eh_idx)), rdi);
+            this->emit_mov(*(rbp + eh_rsp_save_offset()), rsp);
+            this->emit_mov(*(rbp + eh_mem_save_offset()), rsi);
+            this->emit_mov(*(rbp + eh_ctx_save_offset()), rdi);
             this->emit_push_raw(rax); // push result (0 or non-zero)
             break;
          }
@@ -3785,28 +3781,30 @@ namespace psizam::detail {
             return true;
          }
          case ir_op::eh_setjmp: {
-            // Per-try_table save slots indexed by eh_idx. See the phase-3
-            // version above and the _eh_save_slots comment for why nested
-            // try_tables must not share slots.
-            uint32_t eh_idx = static_cast<uint32_t>(inst.ri.imm);
+            // Save rdi/rsi/rsp to frame slots (not stack top). See comment on
+            // _eh_save_slots — push-based save is unsafe because throw's
+            // prologue inside __psizam_eh_throw overwrites the saved rsp slot
+            // that setjmp's pop rsp would read from on longjmp return.
             load_vreg_rax(inst.rr.src1); // jmpbuf ptr
-            this->emit_mov(rdi, *(rbp + eh_ctx_save_offset(eh_idx)));
-            this->emit_mov(rsi, *(rbp + eh_mem_save_offset(eh_idx)));
+            this->emit_mov(rdi, *(rbp + eh_ctx_save_offset()));
+            this->emit_mov(rsi, *(rbp + eh_mem_save_offset()));
             this->emit_mov(rax, rdi);
-            this->emit_mov(rsp, *(rbp + eh_rsp_save_offset(eh_idx)));
-            // Force rsp below every save slot (anchor against last try_table).
+            this->emit_mov(rsp, *(rbp + eh_rsp_save_offset()));
+            // Force rsp to a 16-byte aligned slot BELOW all eh save slots
+            // (see jit1 eh_setjmp for full explanation — `and $-16, %rsp`
+            // alone can leave rsp inside the save-slot range and let `call`
+            // clobber a save slot with its return address).
             {
-               uint32_t last_idx = _eh_save_slots > 0 ? (_eh_save_slots / 3) - 1 : eh_idx;
-               uint32_t abs_off = static_cast<uint32_t>(-eh_rsp_save_offset(last_idx)) + 16u;
+               uint32_t abs_off = static_cast<uint32_t>(-eh_rsp_save_offset()) + 16u;
                abs_off = (abs_off + 15u) & ~15u;
                this->emit(LEA, *(rbp - static_cast<int32_t>(abs_off)), rsp);
             }
             this->emit_bytes(0x48, 0xb8);
             this->emit_operand_ptr(reinterpret_cast<void*>(&__psizam_setjmp));
             this->emit_bytes(0xff, 0xd0);
-            this->emit_mov(*(rbp + eh_rsp_save_offset(eh_idx)), rsp);
-            this->emit_mov(*(rbp + eh_mem_save_offset(eh_idx)), rsi);
-            this->emit_mov(*(rbp + eh_ctx_save_offset(eh_idx)), rdi);
+            this->emit_mov(*(rbp + eh_rsp_save_offset()), rsp);
+            this->emit_mov(*(rbp + eh_mem_save_offset()), rsi);
+            this->emit_mov(*(rbp + eh_ctx_save_offset()), rdi);
             store_rax_vreg(inst.dest);
             return true;
          }
