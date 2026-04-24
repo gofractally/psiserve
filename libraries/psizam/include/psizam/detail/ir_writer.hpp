@@ -2880,6 +2880,19 @@ namespace psizam::detail {
 
          uint32_t num_catches = static_cast<uint32_t>(clauses.size());
 
+         // 0-catch try_tables can't match anything, so treat them as plain
+         // blocks instead of pushing an EH frame. The parser's
+         // is_try_table = (num_catches > 0) gate on emit_eh_leave matches
+         // this: a 0-catch scope emits no eh_leave on end/branch/return, so
+         // if we *did* push a frame here it would be stale and a later
+         // throw could longjmp through it into a dead stack frame (fuzz
+         // mismatch 440594). The jit1 (x86_64) backend already short-circuits
+         // 0-catch try_tables — align with that.
+         if (num_catches == 0) {
+            emit_block(result_type, result_count, param_count);
+            return {};
+         }
+
          // ── 1. Store catch clause data in EH side table ──
          uint32_t eh_idx = _func->add_eh_data(num_catches, clauses.data());
 
