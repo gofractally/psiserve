@@ -23,11 +23,11 @@ set(LLVM_VERSION "22.1.2" CACHE STRING "LLVM version the fork is based on")
 
 # We pull LLVM from the gofractally/llvm-project fork rather than upstream.
 # The fork's psi/v<ver> tag carries:
-#   - Proper #if LLVM_ENABLE_THREADS guards on Support/DebugInfo headers
-#     that unconditionally included <mutex>/<condition_variable>/<shared_mutex>.
-#   - A small wasi-shims/ directory with header stubs for <future>/<thread>
-#     and residual cases not fixable without invasive API changes. Wired in
-#     via -isystem below.
+#   - #if LLVM_ENABLE_THREADS guards on Support/DebugInfo headers that
+#     unconditionally included <mutex>/<condition_variable>/<shared_mutex>
+#     (small upstream-style cleanups).
+#   - The wasm32-*-p16 ABI variant: 16-bit pointer ABI on the unchanged
+#     wasm32 ISA (DataLayout + Clang TargetInfo).
 # See https://github.com/gofractally/llvm-project/tree/psi/22.1.2 .
 set(LLVM_URL "https://github.com/gofractally/llvm-project/archive/refs/tags/psi/v${LLVM_VERSION}.tar.gz"
     CACHE STRING "URL to LLVM source tarball (psiserve fork)")
@@ -91,19 +91,6 @@ FetchContent_MakeAvailable(llvm_src)
 set(LLVM_SRC_DIR "${llvm_src_SOURCE_DIR}/llvm")
 message(STATUS "LLVM source: ${LLVM_SRC_DIR}")
 
-# The fork ships header stubs for <future>/<thread> (and passthrough
-# shims for <mutex>/<condition_variable>/<shared_mutex>) at this path.
-# The toolchain file picks PSI_WASI_SHIMS_DIR up via environment when
-# it's non-empty and adds -isystem ahead of the libc++ include path.
-set(_PSI_WASI_SHIMS_DIR "${LLVM_SRC_DIR}/cmake/wasi-shims")
-if(NOT EXISTS "${_PSI_WASI_SHIMS_DIR}/mutex")
-   message(FATAL_ERROR
-      "Expected fork's wasi-shims/ at ${_PSI_WASI_SHIMS_DIR} but the "
-      "directory is missing. The URL in LLVM_URL should point at the "
-      "gofractally/llvm-project fork's psi/v${LLVM_VERSION} tag.")
-endif()
-message(STATUS "Using wasi-shims from fork: ${_PSI_WASI_SHIMS_DIR}")
-
 # ---------- Phase 1: host llvm-tblgen ----------
 
 if(LLVM_HOST_TBLGEN)
@@ -157,7 +144,6 @@ set(_LLVM_WASI_ARGS
    -DCMAKE_TOOLCHAIN_FILE=${WASI_TOOLCHAIN_FILE}
    -DCMAKE_INSTALL_PREFIX=${LLVM_WASI_INSTALL_PREFIX}
    -DCMAKE_BUILD_TYPE=MinSizeRel
-   -DPSI_WASI_SHIMS_DIR=${_PSI_WASI_SHIMS_DIR}
    -DLLVM_TABLEGEN=${_HOST_TBLGEN}
    -DCMAKE_CROSSCOMPILING=ON
    # WASI is Unix-like; LLVM needs UNIX=ON to select Unix code paths
@@ -440,7 +426,6 @@ if(LLVM_WASI_BUILD_CLANG)
       -DCMAKE_TOOLCHAIN_FILE=${WASI_TOOLCHAIN_FILE}
       -DCMAKE_INSTALL_PREFIX=${LLVM_WASI_INSTALL_PREFIX}
       -DCMAKE_BUILD_TYPE=MinSizeRel
-      -DPSI_WASI_SHIMS_DIR=${_PSI_WASI_SHIMS_DIR}
       # Toolchain opt-in: adds -L.../lib -lwasi_llvm_stubs to the default
       # executable link line. Keeps the toolchain's -lc++ -lc++abi defaults
       # intact (a full -DCMAKE_EXE_LINKER_FLAGS override would drop them).

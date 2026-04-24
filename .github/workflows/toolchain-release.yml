@@ -74,7 +74,12 @@ jobs:
 
          - name: Install wasi-sdk
            run: |
-              WASI_SDK_VER=24
+              # wasi-sdk 32+ ships libc++ with threads enabled and weak
+              # single-threaded pthread stubs in libc.a, so LLVM's
+              # unconditional <mutex>/<thread>/<future> includes compile
+              # cleanly without any shim layer. Bundles LLVM 22.x, which
+              # matches the version we cross-compile from the fork.
+              WASI_SDK_VER=32
               curl -fsSL -o /tmp/wasi-sdk.tar.gz \
                  "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VER}/wasi-sdk-${WASI_SDK_VER}.0-x86_64-linux.tar.gz"
               mkdir -p $HOME/wasi-sdk
