@@ -1,6 +1,7 @@
 #pragma once
 
 #include <psizam/allocator.hpp>
+#include <psizam/config.hpp>
 #include <psizam/constants.hpp>
 #include <psizam/exceptions.hpp>
 #include <psizam/detail/leb128.hpp>
