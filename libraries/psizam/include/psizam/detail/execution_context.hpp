@@ -162,16 +162,19 @@ namespace psizam::detail {
       template<typename Module>
       inline int32_t grow_linear_memory_impl(const Module& mod, int32_t pages) {
          const int32_t sz = _wasm_alloc->get_current_page();
-         if (pages < 0) {
-            if (sz + pages < 0)
-               return -1;
-            _wasm_alloc->free<char>(-pages);
-         } else {
-            if (!mod.memories.size() || _max_pages - sz < static_cast<uint32_t>(pages) ||
-                (mod.memories[0].limits.flags && (static_cast<int32_t>(mod.memories[0].limits.maximum) - sz < pages)))
-               return -1;
-            _wasm_alloc->alloc<char>(pages);
-         }
+         // WASM memory.grow delta is unsigned i32. Huge values (> remaining
+         // headroom) must fail cleanly with -1, not fall into a shrink path.
+         // The signed-pages branch here actually freed pages on any delta
+         // with the high bit set — e.g. i32.wrap_i64 of 0xFFFFFF_FFFFFFFF
+         // produced -1, which decremented the page count from 1 to 0 and
+         // zeroed the stored mem_size, making every subsequent checked-mode
+         // access spuriously trap as OOB (fuzz repro 8107).
+         uint32_t udelta = static_cast<uint32_t>(pages);
+         if (!mod.memories.size() || _max_pages - sz < udelta ||
+             (mod.memories[0].limits.flags && static_cast<uint32_t>(mod.memories[0].limits.maximum) - sz < udelta))
+            return -1;
+         if (udelta > 0)
+            _wasm_alloc->alloc<char>(udelta);
          return sz;
       }
 

@@ -5681,9 +5681,19 @@ namespace psizam::detail {
             // imm32 sign-extends positively in 64-bit mode
             this->emit_add(static_cast<int32_t>(offset), reg);
          } else {
-            // Large offset: zero-extend via ecx, then 64-bit add
-            this->emit_mov(offset, ecx);
-            this->emit_add(rcx, reg);
+            // Large offset: zero-extend via scratch, then 64-bit add.
+            // The scratch must differ from reg — callers pass reg=rcx for
+            // loads, so using ecx as scratch would overwrite the base
+            // address before the add (observed as "memory OOB" on valid
+            // accesses whose 32-bit wrap lands in the guarded region,
+            // and as the silent 8GB access in fuzz regression 8107).
+            // rdx is free here: the load/store paths reserve it as a
+            // memory64-check scratch only while the address is still in
+            // the source vreg, and emit_addr_offset_add runs after that.
+            auto scratch32 = (reg == rcx) ? edx : ecx;
+            auto scratch64 = (reg == rcx) ? rdx : rcx;
+            this->emit_mov(offset, scratch32);
+            this->emit_add(scratch64, reg);
          }
       }
 
