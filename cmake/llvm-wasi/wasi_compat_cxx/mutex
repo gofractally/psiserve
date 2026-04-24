@@ -18,9 +18,13 @@
 
 #include_next <mutex>
 
-// Detect "libc++ configured without threads" across historical macros.
-#if (defined(_LIBCPP_HAS_NO_THREADS) && _LIBCPP_HAS_NO_THREADS) || \
-    (defined(_LIBCPP_HAS_THREADS) && (_LIBCPP_HAS_THREADS == 0))
+// Detect "libc++ configured without threads" across historical macro spellings.
+// _LIBCPP_HAS_NO_THREADS is a bare `#define` (no value) in older libc++, so we
+// only check definedness for it. _LIBCPP_HAS_THREADS (newer) is always defined
+// as 0 or 1, so we value-compare.
+#if defined(_LIBCPP_HAS_NO_THREADS)
+#  define _PSI_WASI_COMPAT_NO_THREADS 1
+#elif defined(_LIBCPP_HAS_THREADS) && (_LIBCPP_HAS_THREADS == 0)
 #  define _PSI_WASI_COMPAT_NO_THREADS 1
 #else
 #  define _PSI_WASI_COMPAT_NO_THREADS 0
