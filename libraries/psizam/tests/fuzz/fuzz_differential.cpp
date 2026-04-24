@@ -464,19 +464,14 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
          has_mismatch = true;
       // Gas-charge divergence: when both backends reached the same
       // outcome they should have charged the same number of gas units.
-      // Fatal for outcome == 0 (deterministic complete runs must agree
-      // byte-for-byte on charges); warn-only when both trapped, since
-      // the trap-point's precise gas-at-fire can legitimately differ
-      // when backends disagree on *where* an unreachable-via-fuel
-      // trap fires (jit2 currently traps earlier on some modules — see
-      // regressions 1823 and 4772; real under-counting but separate
-      // from the charge-site bugs the fatal check catches).
+      // Every shared charge site (function prologue, tail-call re-entry,
+      // loop header) now agrees across interp, jit, jit2, jit_llvm, so
+      // this is fatal regardless of outcome.
       if (ra.outcome == rb.outcome && ra.gas_used != rb.gas_used) {
-         fprintf(stderr, "GAS %s [%s]: %s=%llu %s=%llu (outcome=%d)\n",
-                 ra.outcome == 0 ? "MISMATCH" : "DELTA",
+         fprintf(stderr, "GAS MISMATCH [%s]: %s=%llu %s=%llu (outcome=%d)\n",
                  source, ba, (unsigned long long)ra.gas_used,
                  bb, (unsigned long long)rb.gas_used, ra.outcome);
-         if (ra.outcome == 0) has_mismatch = true;
+         has_mismatch = true;
       }
    };
 

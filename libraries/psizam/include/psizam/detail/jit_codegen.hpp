@@ -7011,6 +7011,16 @@ namespace psizam::detail {
             // Checked mode: re-zero R15 watermark for the next iteration
             if (is_checked())
                this->emit_xor(general_register32(15), general_register32(15));
+            // Re-charge the callee's prologue gas explicitly — the jmp
+            // target (_body_start) is past emit_function_prologue's
+            // emit_gas_charge, so without this every self-recursive
+            // return_call iteration skipped its body_bytes+extra cost.
+            // Jit1, interp, and jit_llvm all re-run the prologue via
+            // register_call/call-site semantics, so they didn't miss it
+            // (surfaced by fuzz gas oracle GAS DELTA on regressions
+            // 1823 and 4772: jit2 535 vs others 12035, 2328 vs 235128).
+            emit_gas_charge(static_cast<int64_t>(_mod.code[func.func_index].wasm_body_bytes)
+                            + func.prologue_gas_extra);
             // JMP to body_start (after prologue)
             this->emit_bytes(0xe9); // jmp rel32
             int32_t rel = static_cast<int32_t>(static_cast<char*>(_body_start) - (reinterpret_cast<char*>(code) + 4));
