@@ -84,17 +84,33 @@ int pzam_run_main(int argc, char** argv);
 int main(int argc, char** argv) { return pzam_run_main(argc, argv); }
 #endif
 
+// Trust levels for the input .pzam. Determines which safety checks pzam-run
+// runs at load time. More trust = less work = faster startup; less trust =
+// more defensive checks against malformed or hostile input.
+//
+//   none    - treat the .pzam as adversarial: run fracpack_validate_compatible
+//             over the whole file before decoding, fail closed on any
+//             malformation. Default: safe for arbitrary third-party .pzam.
+//   full    - assume the .pzam came from a trusted local source (e.g. our
+//             own pzam-compile from a .wasm we already trust) and skip the
+//             upfront validate pass. from_frac still rejects malformed
+//             fracpack encodings as it decodes -- this flag just skips the
+//             redundant second walk over the ~100s of MB file. Saves ~300 ms
+//             on a 168 MB clang.pzam. Do NOT use for untrusted input.
+enum class trust_level { none, full };
+
 int pzam_run_main(int argc, char** argv) {
    phase_profile profile;
 
    if (argc < 2) {
-      std::cerr << "Usage: pzam-run [--dir=guest:host ...] <module.pzam> [-- args...]\n";
+      std::cerr << "Usage: pzam-run [--dir=guest:host ...] [--trust=none|full] <module.pzam> [-- args...]\n";
       return 1;
    }
 
    std::string pzam_file_path;
    std::vector<std::pair<std::string, std::string>> dirs;
    std::vector<std::string> wasm_args;
+   trust_level trust = trust_level::none;
 
    // Parse options
    int i = 1;
@@ -107,6 +123,16 @@ int pzam_run_main(int argc, char** argv) {
             dirs.push_back({val.substr(0, colon), val.substr(colon + 1)});
          else
             dirs.push_back({val, val});
+      } else if (arg.starts_with("--trust=")) {
+         auto val = arg.substr(8);
+         if (val == "none") {
+            trust = trust_level::none;
+         } else if (val == "full") {
+            trust = trust_level::full;
+         } else {
+            std::cerr << "Error: --trust must be 'none' or 'full', got '" << val << "'\n";
+            return 1;
+         }
       } else if (arg == "--") {
          i++;
          break;
@@ -164,10 +190,25 @@ int pzam_run_main(int argc, char** argv) {
 
    profile.mark("mmap .pzam file");
 
-   // Parse the .pzam. from_frac already rejects malformed encodings by
-   // returning an error (we get an exception via abort_error), so we skip
-   // the separate pzam_validate walk that used to precede it — it was a
-   // second full walk over ~168 MB for no extra safety.
+   // Validate the fracpack encoding before decoding. fracpack_validate_compatible
+   // walks the whole file and rejects malformed pointer chains, out-of-bounds
+   // offsets, inconsistent length prefixes, etc. Skippable with --trust=full
+   // when the caller produced this .pzam from a trusted source — from_frac
+   // below will still catch most encoding errors, but the upfront validate
+   // is a stricter, defense-in-depth pass. Keep it on by default.
+   if (trust == trust_level::none) {
+      if (!pzam_validate(pzam_bytes)) {
+         std::cerr << "Error: invalid .pzam file (fracpack validation failed)\n";
+         ::munmap(pzam_mapped, pzam_size);
+         return 1;
+      }
+      profile.mark("pzam_validate (trust=none)");
+   } else {
+      profile.mark("skip pzam_validate (trust=full)");
+   }
+
+   // Parse the .pzam. from_frac decodes into a pzam_file struct; malformed
+   // encodings trip abort_error via stream_error::invalid_frac_encoding.
    pzam_file pzam;
    try {
       pzam = pzam_load(pzam_bytes);
