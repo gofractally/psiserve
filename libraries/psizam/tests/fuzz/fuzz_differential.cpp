@@ -26,6 +26,12 @@ extern "C" {
 #include <cstring>
 #include <fstream>
 #include <string>
+
+// Inline (no-link) XXH3 — ~30 GB/s vs FNV-1a's ~500 MB/s. With ~7 MB of
+// linear memory hashed per fuzz module (12 runs × up to 640 KB), FNV
+// would burn most of a core; XXH3 is effectively free.
+#define XXH_INLINE_ALL
+#include <xxhash.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
@@ -99,18 +105,35 @@ struct run_result {
    std::vector<return_value> returns;  // one per exported function that completed
    std::vector<std::string> export_names;  // names of exported functions (in order called)
    uint64_t gas_used = 0;  // execution_context.gas_consumed() at end of run
+   uint32_t memory_pages = 0;  // linear memory page count post-run
+   uint64_t memory_hash = 0;  // FNV-1a over linear memory bytes
 };
+
 
 template <typename BackendT>
 static run_result execute_backend(BackendT& bkend) {
    run_result r{};
-   // Record gas consumed on scope exit regardless of success/throw — lets the
-   // cross-backend oracle compare charge totals even when both backends trap.
-   auto record_gas = [&] { r.gas_used = *bkend.get_context().gas_consumed(); };
-   struct gas_on_exit {
-      decltype(record_gas)& f;
-      ~gas_on_exit() { try { f(); } catch (...) {} }
-   } _gas_guard{record_gas};
+   // Record gas consumed + linear memory hash on scope exit regardless of
+   // success/throw — lets the cross-backend oracle compare charge totals
+   // and memory state byte-for-byte even when both backends trap.
+   auto record_state = [&] {
+      auto& ctx = bkend.get_context();
+      r.gas_used = *ctx.gas_consumed();
+      // Allocator returns int32_t and uses -1 as "no memory section" /
+      // "allocator reset" (see allocator.hpp line 913). Must not cast
+      // blindly to uint32_t — that wraps to UINT32_MAX and sends XXH3
+      // reading 256 TB of address space.
+      int32_t pages = ctx.current_linear_memory();
+      r.memory_pages = (pages > 0) ? static_cast<uint32_t>(pages) : 0;
+      if (r.memory_pages > 0 && ctx.linear_memory()) {
+         size_t bytes = static_cast<size_t>(r.memory_pages) * 65536u;
+         r.memory_hash = XXH3_64bits(ctx.linear_memory(), bytes);
+      }
+   };
+   struct state_on_exit {
+      decltype(record_state)& f;
+      ~state_on_exit() { try { f(); } catch (...) {} }
+   } _state_guard{record_state};
    try {
       r.has_start = (bkend.get_module().start != std::numeric_limits<uint32_t>::max());
 
@@ -471,6 +494,18 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
          fprintf(stderr, "GAS MISMATCH [%s]: %s=%llu %s=%llu (outcome=%d)\n",
                  source, ba, (unsigned long long)ra.gas_used,
                  bb, (unsigned long long)rb.gas_used, ra.outcome);
+         has_mismatch = true;
+      }
+      // Linear memory divergence: WASM semantics are fully deterministic
+      // for memory (same init data + same op sequence ⇒ same bytes). Any
+      // cross-backend disagreement on final memory pages or bytes is a
+      // bug, even when return values and gas agree (silent state drift
+      // in e.g. SIMD stores, memory.fill/copy edge cases, etc.).
+      if (ra.outcome == rb.outcome &&
+          (ra.memory_pages != rb.memory_pages || ra.memory_hash != rb.memory_hash)) {
+         fprintf(stderr, "MEMORY MISMATCH [%s]: %s=%u pages/0x%016llx %s=%u pages/0x%016llx (outcome=%d)\n",
+                 source, ba, ra.memory_pages, (unsigned long long)ra.memory_hash,
+                 bb, rb.memory_pages, (unsigned long long)rb.memory_hash, ra.outcome);
          has_mismatch = true;
       }
    };
