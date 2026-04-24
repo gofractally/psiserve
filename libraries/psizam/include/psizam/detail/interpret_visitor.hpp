@@ -3220,6 +3220,20 @@ namespace psizam::detail {
          // Subsequent try_table_t instructions in the bitcode stream carry the clause descriptors
          uint32_t num_clauses = op.data;
 
+         // 0-catch try_tables are treated as plain blocks by the parser
+         // (is_try_table=false at parser.hpp:2076) and jit2's IR writer.
+         // Skip the eh_frame push here too: otherwise `br` out of the
+         // try_table's body crosses this scope without the parser
+         // counting it in count_eh_leaves_for_branch, so the frame leaks
+         // onto the eh_stack and a later throw in a different activation
+         // can match its (empty) catch list's enclosing frame (observed
+         // as fuzz mismatch 440594 — a 0-catch try_table leaked an outer
+         // try_table's frame, catching a throw from the start function).
+         if (num_clauses == 0) {
+            context.inc_pc();
+            return;
+         }
+
          // Push an eh_frame
          context.push_eh_frame({
             context.call_depth(),  // call_depth
