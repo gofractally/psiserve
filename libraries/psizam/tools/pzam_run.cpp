@@ -16,11 +16,57 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
+
+namespace {
+
+// Opt-in phase profiler. Enable with PZAM_RUN_PROFILE=1 in the environment;
+// prints a sorted breakdown of where startup time goes to stderr just before
+// _start is invoked. Off by default to keep pzam-run output tidy.
+class phase_profile {
+   struct entry { const char* name; double ms; };
+   std::vector<entry> _entries;
+   std::chrono::steady_clock::time_point _anchor;
+   bool _enabled;
+
+public:
+   phase_profile()
+      : _anchor(std::chrono::steady_clock::now()),
+        _enabled(std::getenv("PZAM_RUN_PROFILE") != nullptr) {
+      if (_enabled) _entries.reserve(32);
+   }
+
+   bool enabled() const { return _enabled; }
+
+   void mark(const char* name) {
+      if (!_enabled) return;
+      auto now = std::chrono::steady_clock::now();
+      double ms = std::chrono::duration<double, std::milli>(now - _anchor).count();
+      _entries.push_back({name, ms});
+      _anchor = now;
+   }
+
+   void dump(std::FILE* out) const {
+      if (!_enabled) return;
+      double total = 0;
+      for (auto& e : _entries) total += e.ms;
+      std::fprintf(out, "[pzam-run] profile (PZAM_RUN_PROFILE=1):\n");
+      for (auto& e : _entries) {
+         std::fprintf(out, "  %8.2f ms  %5.1f%%  %s\n",
+                      e.ms, total > 0 ? (e.ms / total * 100.0) : 0.0, e.name);
+      }
+      std::fprintf(out, "  --------\n");
+      std::fprintf(out, "  %8.2f ms  100.0%%  TOTAL (pre-_start)\n", total);
+   }
+};
+
+} // namespace
 
 #ifdef __APPLE__
 #include <crt_externs.h>
@@ -37,6 +83,8 @@ int main(int argc, char** argv) { return pzam_run_main(argc, argv); }
 #endif
 
 int pzam_run_main(int argc, char** argv) {
+   phase_profile profile;
+
    if (argc < 2) {
       std::cerr << "Usage: pzam-run [--dir=guest:host ...] <module.pzam> [-- args...]\n";
       return 1;
@@ -83,6 +131,8 @@ int pzam_run_main(int argc, char** argv) {
    if (dirs.empty())
       dirs.push_back({".", "."});
 
+   profile.mark("arg parsing + preopen setup");
+
    // Read the .pzam file
    std::ifstream pzam_in(pzam_file_path, std::ios::binary | std::ios::ate);
    if (!pzam_in.is_open()) {
@@ -93,6 +143,8 @@ int pzam_run_main(int argc, char** argv) {
    pzam_in.seekg(0);
    std::vector<char> pzam_data(pzam_size);
    pzam_in.read(pzam_data.data(), pzam_size);
+
+   profile.mark("read .pzam file (I/O)");
 
    // Load and validate .pzam file
    if (!pzam_validate(pzam_data)) {
@@ -110,6 +162,8 @@ int pzam_run_main(int argc, char** argv) {
       std::cerr << "Error: bad .pzam magic\n";
       return 1;
    }
+
+   profile.mark("pzam_validate + pzam_load");
 
    // Find a code section matching this platform's architecture
    auto expected_arch =
@@ -138,6 +192,8 @@ int pzam_run_main(int argc, char** argv) {
    module mod = restore_module(pzam.metadata);
    mod.allocator.use_default_memory();
 
+   profile.mark("restore_module from metadata");
+
    if (cs->functions.size() != mod.code.size()) {
       std::cerr << "Error: code section function count (" << cs->functions.size()
                 << ") doesn't match metadata (" << mod.code.size() << ")\n";
@@ -158,6 +214,8 @@ int pzam_run_main(int argc, char** argv) {
    host_function_table table;
    register_wasi(table);
    table.resolve(mod);
+
+   profile.mark("wasi_host setup + register_wasi");
 
    // Build symbol table for relocation
    void* symbol_table[static_cast<size_t>(reloc_symbol::NUM_SYMBOLS)];
@@ -187,6 +245,8 @@ int pzam_run_main(int argc, char** argv) {
    // Overlay LLVM runtime symbols
    build_llvm_symbol_table(symbol_table);
 
+   profile.mark("build symbol table");
+
    // Build relocations
    std::vector<code_relocation> relocs(cs->relocations.size());
    for (size_t j = 0; j < cs->relocations.size(); j++) {
@@ -195,6 +255,8 @@ int pzam_run_main(int argc, char** argv) {
       relocs[j].type = static_cast<reloc_type>(cs->relocations[j].type);
       relocs[j].addend = cs->relocations[j].addend;
    }
+
+   profile.mark("build reloc vector");
 
 #if defined(__aarch64__)
    // On aarch64, BL instructions have +-128MB range. Generate veneers for
@@ -217,6 +279,8 @@ int pzam_run_main(int argc, char** argv) {
    size_t total_code_size = cs->code_blob.size();
 #endif
 
+   profile.mark("plan veneers (aarch64)");
+
    // Allocate executable memory
    size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
    size_t code_alloc_size = (total_code_size + page_size - 1) & ~(page_size - 1);
@@ -227,7 +291,12 @@ int pzam_run_main(int argc, char** argv) {
       perror("[pzam-run] mprotect RW failed");
       return 1;
    }
+
+   profile.mark("alloc + mprotect RW exec region");
+
    std::memcpy(exec_code, cs->code_blob.data(), cs->code_blob.size());
+
+   profile.mark("memcpy code blob");
 
 #if defined(__aarch64__)
    // Write veneers
@@ -252,6 +321,8 @@ int pzam_run_main(int argc, char** argv) {
          }
       }
    }
+
+   profile.mark("write veneers + rewrite BL relocs");
 #endif
 
    symbol_table[static_cast<uint32_t>(reloc_symbol::code_blob_self)] = exec_code;
@@ -287,18 +358,27 @@ int pzam_run_main(int argc, char** argv) {
       std::cerr << "[pzam-run] ADRP stats: " << adrp_total << " total, "
                 << adrp_overflow << " overflows (±4GB range)\n";
    }
+
+   profile.mark("ADRP overflow diagnostic scan");
 #endif
 
    apply_relocations(static_cast<char*>(exec_code), relocs.data(),
                      static_cast<uint32_t>(relocs.size()), symbol_table);
 
+   profile.mark("apply_relocations");
+
    if (mprotect(exec_code, code_alloc_size, PROT_READ | PROT_EXEC) != 0) {
       perror("[pzam-run] mprotect RX failed");
       return 1;
    }
+
+   profile.mark("mprotect RX");
+
 #if defined(__aarch64__)
    __builtin___clear_cache(static_cast<char*>(exec_code),
                            static_cast<char*>(exec_code) + total_code_size);
+
+   profile.mark("__clear_cache (icache flush)");
 #endif
 
    // Update module function entries based on backend type
@@ -328,6 +408,8 @@ int pzam_run_main(int argc, char** argv) {
    mod.maximum_stack = cs->max_stack;
    mod.stack_limit_is_bytes = cs->stack_limit_mode != 0;
 
+   profile.mark("populate function entries");
+
    // Fix up element segment code_ptr fields for JIT dispatch
    if (is_jit) {
       uint32_t num_imports = mod.get_imported_functions_size();
@@ -343,12 +425,16 @@ int pzam_run_main(int argc, char** argv) {
       }
    }
 
+   profile.mark("fixup element-segment code_ptr");
+
    // Set up execution context
    wasm_allocator wa;
    jit_execution_context<> ctx(mod, 8192);
    ctx.set_wasm_allocator(&wa);
    ctx.set_host_table(&table);
    ctx.reset();
+
+   profile.mark("wasm_allocator + execution_context setup");
 
    // Populate _host_trampoline_ptrs. The trampoline direction depends on how
    // the compiled .pzam packs host-call args:
@@ -378,6 +464,8 @@ int pzam_run_main(int argc, char** argv) {
       }
    }
    ctx._host_trampoline_ptrs = trampoline_ptrs.data();
+
+   profile.mark("build host trampoline ptrs");
 
 #if defined(PSIZAM_JIT_SIGNAL_DIAGNOSTICS)
    // Populate jit_func_ranges for crash diagnostics — lets the signal
@@ -455,6 +543,8 @@ int pzam_run_main(int argc, char** argv) {
                    << call26_overflow << " overflows (±128MB range)\n";
       }
    }
+
+   profile.mark("jit_func_ranges + BL diagnostic scan");
 #endif
 
    // Handle page_size mismatch between compile-time and runtime
@@ -507,6 +597,10 @@ int pzam_run_main(int argc, char** argv) {
                 << " mem_pages=" << std::dec << ctx.current_linear_memory()
                 << " is_llvm=" << (mod.allocator._code_base == nullptr) << "\n";
    }
+
+   profile.mark("page-size mismatch fixups + final prep");
+
+   if (profile.enabled()) profile.dump(stderr);
 
    try {
       if (mod.start != std::numeric_limits<uint32_t>::max()) {
