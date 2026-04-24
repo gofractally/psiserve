@@ -39,7 +39,26 @@ pub mod dynamic_schema;
 // Multi-format wire formats
 pub mod capnp;
 pub mod flatbuf;
+pub mod pssz;
+#[macro_use]
+pub mod pssz_derive;
+pub mod pssz_view;
+pub mod ssz;
+#[macro_use]
+pub mod ssz_derive;
+pub mod ssz_view;
 pub mod wit;
+
+// Cross-validation tests against C++ encoder fixtures
+#[cfg(test)]
+mod cross_validation_tests;
+
+// Ethereum Phase-0 BeaconState types (Rust port of beacon_types.hpp)
+pub mod beacon_types;
+
+// BeaconState Phase-0 Validator cross-val (Phase J of parity plan)
+#[cfg(test)]
+mod beacon_state_tests;
 
 // Dynamic dispatch (runtime field access by name)
 pub mod dynamic_view;

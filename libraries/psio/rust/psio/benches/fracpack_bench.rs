@@ -12,14 +12,14 @@ use rkyv::rancor::Error as RkyvError;
 // ============================================================
 
 // Tier 1: Micro (fixed-size, no heap)
-#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
+#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
 #[fracpack(fracpack_mod = "psio", definition_will_not_change)]
 struct Point {
     x: f64,
     y: f64,
 }
 
-#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
+#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
 #[fracpack(fracpack_mod = "psio", definition_will_not_change)]
 struct RGBA {
     r: u8,
@@ -29,7 +29,7 @@ struct RGBA {
 }
 
 // Tier 2: Small (1-2 variable fields)
-#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
+#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
 #[fracpack(fracpack_mod = "psio")]
 struct Token {
     kind: u16,
@@ -39,7 +39,7 @@ struct Token {
 }
 
 // Tier 3: Medium (many fields, mixed types)
-#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
+#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
 #[fracpack(fracpack_mod = "psio")]
 struct UserProfile {
     id: u64,
@@ -53,7 +53,7 @@ struct UserProfile {
 }
 
 // Tier 4: Nested
-#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
+#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
 #[fracpack(fracpack_mod = "psio")]
 struct LineItem {
     product: String,
@@ -61,7 +61,7 @@ struct LineItem {
     unit_price: f64,
 }
 
-#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
+#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
 #[fracpack(fracpack_mod = "psio")]
 struct Order {
     id: u64,
@@ -72,7 +72,7 @@ struct Order {
 }
 
 // Tier 5: Wide (many fields)
-#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
+#[derive(Pack, Unpack, FracView, FracMutView, ToCanonicalJson, FromCanonicalJson, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Debug, PartialEq)]
 #[fracpack(fracpack_mod = "psio")]
 struct SensorReading {
     timestamp: u64,
@@ -939,6 +939,68 @@ fn bench_competitor_bincode(c: &mut Criterion) {
 }
 
 // ============================================================
+// Competitor: borsh (NEAR / Solana canonical binary format)
+// ============================================================
+
+fn bench_competitor_borsh(c: &mut Criterion) {
+    use borsh::{BorshDeserialize, BorshSerialize};
+
+    let mut group = c.benchmark_group("competitor_borsh");
+
+    let point = make_point();
+    let token = make_token();
+    let user = make_user();
+    let order = make_order();
+    let sensor = make_sensor();
+
+    let point_bytes = borsh::to_vec(&point).unwrap();
+    let token_bytes = borsh::to_vec(&token).unwrap();
+    let user_bytes = borsh::to_vec(&user).unwrap();
+    let order_bytes = borsh::to_vec(&order).unwrap();
+    let sensor_bytes = borsh::to_vec(&sensor).unwrap();
+
+    eprintln!("\n--- borsh wire sizes ---");
+    eprintln!("Point: {} B, Token: {} B, UserProfile: {} B, Order: {} B, SensorReading: {} B",
+        point_bytes.len(), token_bytes.len(), user_bytes.len(), order_bytes.len(), sensor_bytes.len());
+
+    // Pack
+    group.bench_function("serialize/Point", |b| {
+        b.iter(|| borsh::to_vec(black_box(&point)).unwrap())
+    });
+    group.bench_function("serialize/Token", |b| {
+        b.iter(|| borsh::to_vec(black_box(&token)).unwrap())
+    });
+    group.bench_function("serialize/UserProfile", |b| {
+        b.iter(|| borsh::to_vec(black_box(&user)).unwrap())
+    });
+    group.bench_function("serialize/Order", |b| {
+        b.iter(|| borsh::to_vec(black_box(&order)).unwrap())
+    });
+    group.bench_function("serialize/SensorReading", |b| {
+        b.iter(|| borsh::to_vec(black_box(&sensor)).unwrap())
+    });
+
+    // Unpack
+    group.bench_function("deserialize/Point", |b| {
+        b.iter(|| Point::try_from_slice(black_box(&point_bytes)).unwrap())
+    });
+    group.bench_function("deserialize/Token", |b| {
+        b.iter(|| Token::try_from_slice(black_box(&token_bytes)).unwrap())
+    });
+    group.bench_function("deserialize/UserProfile", |b| {
+        b.iter(|| UserProfile::try_from_slice(black_box(&user_bytes)).unwrap())
+    });
+    group.bench_function("deserialize/Order", |b| {
+        b.iter(|| Order::try_from_slice(black_box(&order_bytes)).unwrap())
+    });
+    group.bench_function("deserialize/SensorReading", |b| {
+        b.iter(|| SensorReading::try_from_slice(black_box(&sensor_bytes)).unwrap())
+    });
+
+    group.finish();
+}
+
+// ============================================================
 // Competitor: postcard (compact no_std serde binary format)
 // ============================================================
 
@@ -1203,6 +1265,7 @@ criterion_group! {
         bench_roundtrip,
         bench_competitor_serde,
         bench_competitor_bincode,
+        bench_competitor_borsh,
         bench_competitor_postcard,
         bench_competitor_rmp,
         bench_competitor_rkyv,

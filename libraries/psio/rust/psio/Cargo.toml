@@ -16,10 +16,34 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0.135", features = ["preserve_order"] }
 serde-aux = "4.5"
 psio-macros = { path = "../psio-macros" }
+paste = "1"
+
+# Competitor Rust SSZ libraries, gated behind features. Live under
+# [dependencies] because Cargo doesn't allow optional dev-dependencies,
+# but every use is inside `#[cfg(feature = "bench_*")]` so the default
+# build (`cargo build`, `cargo test`) pulls nothing extra.
+#
+#   cargo bench -p psio --bench ssz_validator_bench
+#   cargo bench -p psio --bench ssz_validator_bench --features bench_ethereum_ssz
+#   cargo bench -p psio --bench ssz_validator_bench --features bench_ssz_rs
+#   cargo bench -p psio --bench ssz_validator_bench \
+#       --features "bench_ethereum_ssz bench_ssz_rs"
+ethereum_ssz        = { version = "0.7",  optional = true }
+ethereum_ssz_derive = { version = "0.7",  optional = true }
+ssz_types           = { version = "0.8",  optional = true }
+typenum             = { version = "1",    optional = true }
+ssz_rs              = { version = "0.9",  optional = true }
+
+[features]
+default = []
+bench_ethereum_ssz = ["dep:ethereum_ssz", "dep:ethereum_ssz_derive",
+                       "dep:ssz_types", "dep:typenum"]
+bench_ssz_rs       = ["dep:ssz_rs"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 bincode = "1"
+borsh = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["alloc"] }
 rmp-serde = "1"
 rkyv = { version = "0.8", features = ["bytecheck"] }
@@ -27,3 +51,13 @@ rkyv = { version = "0.8", features = ["bytecheck"] }
 [[bench]]
 name = "fracpack_bench"
 harness = false
+
+[[bench]]
+name = "ssz_validator_bench"
+harness = false
+required-features = []  # runs with any combo of competitor features
+
+[[bench]]
+name = "ssz_beacon_bench"
+harness = false
+required-features = []  # ssz_rs optional via --features bench_ssz_rs
