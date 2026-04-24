@@ -98,11 +98,19 @@ struct run_result {
    std::string what;
    std::vector<return_value> returns;  // one per exported function that completed
    std::vector<std::string> export_names;  // names of exported functions (in order called)
+   uint64_t gas_used = 0;  // execution_context.gas_consumed() at end of run
 };
 
 template <typename BackendT>
 static run_result execute_backend(BackendT& bkend) {
    run_result r{};
+   // Record gas consumed on scope exit regardless of success/throw — lets the
+   // cross-backend oracle compare charge totals even when both backends trap.
+   auto record_gas = [&] { r.gas_used = *bkend.get_context().gas_consumed(); };
+   struct gas_on_exit {
+      decltype(record_gas)& f;
+      ~gas_on_exit() { try { f(); } catch (...) {} }
+   } _gas_guard{record_gas};
    try {
       r.has_start = (bkend.get_module().start != std::numeric_limits<uint32_t>::max());
 
@@ -454,6 +462,22 @@ static test_result test_module_impl(const std::vector<uint8_t>& wasm, const char
       }
       if (!compare_returns(source, ba, ra, bb, rb))
          has_mismatch = true;
+      // Gas-charge divergence: when both backends reached the same
+      // outcome they should have charged the same number of gas units.
+      // Fatal for outcome == 0 (deterministic complete runs must agree
+      // byte-for-byte on charges); warn-only when both trapped, since
+      // the trap-point's precise gas-at-fire can legitimately differ
+      // when backends disagree on *where* an unreachable-via-fuel
+      // trap fires (jit2 currently traps earlier on some modules — see
+      // regressions 1823 and 4772; real under-counting but separate
+      // from the charge-site bugs the fatal check catches).
+      if (ra.outcome == rb.outcome && ra.gas_used != rb.gas_used) {
+         fprintf(stderr, "GAS %s [%s]: %s=%llu %s=%llu (outcome=%d)\n",
+                 ra.outcome == 0 ? "MISMATCH" : "DELTA",
+                 source, ba, (unsigned long long)ra.gas_used,
+                 bb, (unsigned long long)rb.gas_used, ra.outcome);
+         if (ra.outcome == 0) has_mismatch = true;
+      }
    };
 
    // Invariant: interp softfloat == interp hw_det bit-for-bit.
@@ -661,6 +685,7 @@ int main(int argc, char* argv[]) {
       else { fprintf(stderr, "Unknown backend: %s\n", which); return 1; }
       fprintf(stderr, "%s: %s", which, outcome_name(r.outcome));
       if (!r.what.empty()) fprintf(stderr, " (%s)", r.what.c_str());
+      fprintf(stderr, " gas=%llu", (unsigned long long)r.gas_used);
       fprintf(stderr, "\n");
       return 0;
    }
