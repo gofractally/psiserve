@@ -7,7 +7,7 @@
 // Serialized with psio fracpack for zero-copy access via psio::view<pzam_file>.
 //
 // A .pzam file is fully self-contained — no .wasm file needed at runtime.
-// Load path: mmap → fracpack_validate → view<pzam_file> → pick code section → execute.
+// Load path: mmap → validate_frac → view<pzam_file> → pick code section → execute.
 
 #include <psizam/detail/jit_reloc.hpp>
 #include <psizam/wit_types.hpp>
@@ -274,7 +274,7 @@ namespace psizam {
 
    /// Validate a .pzam buffer without deserializing.
    inline bool pzam_validate(std::span<const char> data) {
-      return psio::fracpack_validate_compatible<pzam_file>(data);
+      return psio::validate_frac_compatible<pzam_file>(data);
    }
 
 } // namespace psizam
