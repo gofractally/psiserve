@@ -76,6 +76,9 @@ set(_RT_LIB "${_WASI_RT_CLANG}/lib/wasm32-unknown-wasip1")
 
 # Compat headers for POSIX types LLVM needs but WASI lacks (signal, mman, setjmp)
 get_filename_component(_COMPAT_DIR "${CMAKE_CURRENT_LIST_DIR}/wasi_compat" ABSOLUTE)
+# C++ threading shims that make LLVM's unconditional <mutex>/<condition_variable>/
+# <shared_mutex> includes compile against no-threads libc++. See wasi_compat_cxx/README.md.
+get_filename_component(_CXX_COMPAT_DIR "${CMAKE_CURRENT_LIST_DIR}/wasi_compat_cxx" ABSOLUTE)
 
 set(_COMMON_FLAGS "--target=${_TARGET} --sysroot=${_WASI_SYSROOT}")
 # Compat headers searched before sysroot
@@ -93,7 +96,9 @@ set(_COMMON_FLAGS "${_COMMON_FLAGS} -DCLANG_BUILD_STATIC")
 set(_COMMON_FLAGS "${_COMMON_FLAGS} -DBYTE_ORDER=1234 -DLITTLE_ENDIAN=1234 -DBIG_ENDIAN=4321")
 
 set(CMAKE_C_FLAGS_INIT "${_COMMON_FLAGS}")
-set(CMAKE_CXX_FLAGS_INIT "${_COMMON_FLAGS} -isystem ${_CXX_INCLUDE} -stdlib=libc++")
+# C++ shims must come BEFORE the real libc++ include so #include_next in the
+# shim resolves to the real header underneath.
+set(CMAKE_CXX_FLAGS_INIT "${_COMMON_FLAGS} -isystem ${_CXX_COMPAT_DIR} -isystem ${_CXX_INCLUDE} -stdlib=libc++")
 
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${_CXX_LIB} -L${_RT_LIB} -lc++ -lc++abi -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-process-clocks")
 

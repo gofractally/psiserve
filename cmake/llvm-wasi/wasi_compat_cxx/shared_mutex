@@ -1,0 +1,139 @@
+// <shared_mutex> shim for LLVM built against no-threads libc++.
+//
+// Same strategy as condition_variable: libc++'s real <shared_mutex> hard
+// #errors when threads are off, so we substitute compile-only stubs for
+// std::shared_mutex and std::shared_lock that satisfy LLVM's type-system
+// needs (struct fields, template instantiations). Runtime calls are
+// guarded by LLVM_ENABLE_THREADS upstream.
+//
+// When libc++ has threads, this file is a pure passthrough to the real
+// header via #include_next.
+
+#ifndef PSI_WASI_COMPAT_CXX_SHARED_MUTEX_H
+#define PSI_WASI_COMPAT_CXX_SHARED_MUTEX_H
+
+#include <__config>
+
+#if (defined(_LIBCPP_HAS_NO_THREADS) && _LIBCPP_HAS_NO_THREADS) || \
+    (defined(_LIBCPP_HAS_THREADS) && (_LIBCPP_HAS_THREADS == 0))
+#  define _PSI_WASI_COMPAT_NO_THREADS 1
+#else
+#  define _PSI_WASI_COMPAT_NO_THREADS 0
+#endif
+
+#if !_PSI_WASI_COMPAT_NO_THREADS
+
+#include_next <shared_mutex>
+
+#else
+
+#include <mutex>
+#include <chrono>
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+class shared_mutex {
+public:
+   shared_mutex() noexcept                        = default;
+   ~shared_mutex()                                = default;
+   shared_mutex(const shared_mutex&)              = delete;
+   shared_mutex& operator=(const shared_mutex&)   = delete;
+
+   void lock()                   noexcept {}
+   bool try_lock()               noexcept { return true; }
+   void unlock()                 noexcept {}
+
+   void lock_shared()            noexcept {}
+   bool try_lock_shared()        noexcept { return true; }
+   void unlock_shared()          noexcept {}
+};
+
+class shared_timed_mutex : public shared_mutex {
+public:
+   template <class _Rep, class _Period>
+   bool try_lock_for(const chrono::duration<_Rep, _Period>&) noexcept { return true; }
+   template <class _Clock, class _Duration>
+   bool try_lock_until(const chrono::time_point<_Clock, _Duration>&) noexcept { return true; }
+   template <class _Rep, class _Period>
+   bool try_lock_shared_for(const chrono::duration<_Rep, _Period>&) noexcept { return true; }
+   template <class _Clock, class _Duration>
+   bool try_lock_shared_until(const chrono::time_point<_Clock, _Duration>&) noexcept { return true; }
+};
+
+template <class _Mutex>
+class shared_lock {
+public:
+   using mutex_type = _Mutex;
+
+   shared_lock() noexcept : __m_(nullptr), __owns_(false) {}
+
+   explicit shared_lock(mutex_type& __m)
+      : __m_(&__m), __owns_(true) { __m.lock_shared(); }
+
+   shared_lock(mutex_type& __m, defer_lock_t) noexcept
+      : __m_(&__m), __owns_(false) {}
+
+   shared_lock(mutex_type& __m, try_to_lock_t)
+      : __m_(&__m), __owns_(__m.try_lock_shared()) {}
+
+   shared_lock(mutex_type& __m, adopt_lock_t) noexcept
+      : __m_(&__m), __owns_(true) {}
+
+   template <class _Clock, class _Duration>
+   shared_lock(mutex_type& __m,
+               const chrono::time_point<_Clock, _Duration>&)
+      : __m_(&__m), __owns_(true) { __m.lock_shared(); }
+
+   template <class _Rep, class _Period>
+   shared_lock(mutex_type& __m,
+               const chrono::duration<_Rep, _Period>&)
+      : __m_(&__m), __owns_(true) { __m.lock_shared(); }
+
+   ~shared_lock() { if (__owns_) __m_->unlock_shared(); }
+
+   shared_lock(const shared_lock&)            = delete;
+   shared_lock& operator=(const shared_lock&) = delete;
+
+   shared_lock(shared_lock&& __u) noexcept
+      : __m_(__u.__m_), __owns_(__u.__owns_)
+   { __u.__m_ = nullptr; __u.__owns_ = false; }
+
+   shared_lock& operator=(shared_lock&& __u) noexcept {
+      if (__owns_) __m_->unlock_shared();
+      __m_       = __u.__m_;
+      __owns_    = __u.__owns_;
+      __u.__m_   = nullptr;
+      __u.__owns_ = false;
+      return *this;
+   }
+
+   void lock()              { if (__m_) { __m_->lock_shared();     __owns_ = true; } }
+   bool try_lock()          { return __m_ ? (__owns_ = __m_->try_lock_shared()) : false; }
+   void unlock()            { if (__owns_ && __m_) { __m_->unlock_shared(); __owns_ = false; } }
+
+   void swap(shared_lock& __u) noexcept {
+      auto* __tm = __m_; __m_ = __u.__m_; __u.__m_ = __tm;
+      bool  __to = __owns_; __owns_ = __u.__owns_; __u.__owns_ = __to;
+   }
+
+   mutex_type* release() noexcept {
+      auto* __r = __m_;
+      __m_ = nullptr;
+      __owns_ = false;
+      return __r;
+   }
+
+   bool owns_lock() const noexcept { return __owns_; }
+   explicit operator bool() const noexcept { return __owns_; }
+   mutex_type* mutex() const noexcept { return __m_; }
+
+private:
+   mutex_type* __m_;
+   bool        __owns_;
+};
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif // _PSI_WASI_COMPAT_NO_THREADS
+
+#endif // PSI_WASI_COMPAT_CXX_SHARED_MUTEX_H

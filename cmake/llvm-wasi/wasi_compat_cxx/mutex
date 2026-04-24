@@ -1,0 +1,49 @@
+// <mutex> shim for LLVM built against no-threads libc++.
+//
+// Passes through to the real libc++ <mutex> via #include_next. The real
+// header loads cleanly under _LIBCPP_HAS_NO_THREADS — it just omits the
+// std::mutex type. We add a no-op std::mutex afterwards so LLVM's struct
+// fields can name the type. Call sites are guarded by LLVM_ENABLE_THREADS
+// so the no-op methods are never actually invoked at runtime.
+//
+// When libc++ is built with threads (e.g. wasm32-wasip1-threads, host
+// builds), the include_next below supplies the real std::mutex and the
+// PSI_WASI_COMPAT_NO_THREADS check is 0, so this file becomes a pure
+// passthrough with zero runtime cost.
+
+#ifndef PSI_WASI_COMPAT_CXX_MUTEX_H
+#define PSI_WASI_COMPAT_CXX_MUTEX_H
+
+#include <__config>
+
+#include_next <mutex>
+
+// Detect "libc++ configured without threads" across historical macros.
+#if (defined(_LIBCPP_HAS_NO_THREADS) && _LIBCPP_HAS_NO_THREADS) || \
+    (defined(_LIBCPP_HAS_THREADS) && (_LIBCPP_HAS_THREADS == 0))
+#  define _PSI_WASI_COMPAT_NO_THREADS 1
+#else
+#  define _PSI_WASI_COMPAT_NO_THREADS 0
+#endif
+
+#if _PSI_WASI_COMPAT_NO_THREADS
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+class mutex {
+public:
+   constexpr mutex() noexcept = default;
+   ~mutex() = default;
+   mutex(const mutex&)            = delete;
+   mutex& operator=(const mutex&) = delete;
+
+   void lock() noexcept {}
+   bool try_lock() noexcept { return true; }
+   void unlock() noexcept {}
+};
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif // _PSI_WASI_COMPAT_NO_THREADS
+
+#endif // PSI_WASI_COMPAT_CXX_MUTEX_H
