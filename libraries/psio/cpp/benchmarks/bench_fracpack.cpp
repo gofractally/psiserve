@@ -15,15 +15,22 @@
 #include <psio/from_json.hpp>
 #include <psio/from_bin.hpp>
 #include <psio/from_bincode.hpp>
+#include <psio/from_borsh.hpp>
 #include <psio/from_avro.hpp>
 #include <psio/reflect.hpp>
 #include <psio/to_json.hpp>
 #include <psio/to_json_fast.hpp>
 #include <psio/to_bin.hpp>
 #include <psio/to_bincode.hpp>
+#include <psio/to_borsh.hpp>
 #include <psio/to_avro.hpp>
 #include <psio/to_key.hpp>
 #include <psio/from_key.hpp>
+#include <psio/to_ssz.hpp>
+#include <psio/from_ssz.hpp>
+#include <psio/to_pssz.hpp>
+#include <psio/from_pssz.hpp>
+#include <psio/wit_view.hpp>
 #include <psio/schema.hpp>
 
 #include <algorithm>
@@ -169,6 +176,74 @@ struct TreeNode
    std::vector<TreeNode>  children;
 };
 PSIO_REFLECT(TreeNode, value, label, children)
+
+// ── Bounded mirrors of the bench types ───────────────────────────────────────
+//
+// Real app schemas typically know their caps: a display-name < 64 B, an
+// email < 254 B (RFC 5321), a bio < 1 KiB, a tag < 32 B with at most 16
+// tags, an Order with at most 100 line items, etc. Declaring these bounds
+// lets pSSZ auto-select pssz8 or pssz16 and shave per-offset bytes.
+
+struct BToken
+{
+   uint16_t                     kind;
+   uint32_t                     offset;
+   uint32_t                     length;
+   psio::bounded_string<64>      text;
+};
+PSIO_REFLECT(BToken, kind, offset, length, text)
+
+struct BUserProfile
+{
+   uint64_t                                              id;
+   psio::bounded_string<64>                               name;
+   psio::bounded_string<254>                              email;
+   std::optional<psio::bounded_string<1024>>              bio;
+   uint32_t                                              age;
+   double                                                score;
+   psio::bounded_list<psio::bounded_string<32>, 16>        tags;
+   bool                                                  verified;
+};
+PSIO_REFLECT(BUserProfile, id, name, email, bio, age, score, tags, verified)
+
+struct BLineItem
+{
+   psio::bounded_string<128>     product;
+   uint32_t                     qty;
+   double                       unit_price;
+};
+PSIO_REFLECT(BLineItem, product, qty, unit_price)
+
+struct BOrder
+{
+   uint64_t                                        id;
+   BUserProfile                                    customer;
+   psio::bounded_list<BLineItem, 100>               items;
+   double                                          total;
+   std::optional<psio::bounded_string<256>>         note;
+};
+PSIO_REFLECT(BOrder, id, customer, items, total, note)
+
+struct BSensorReading
+{
+   uint64_t                                        timestamp;
+   psio::bounded_string<32>                         device_id;
+   double                                          temp, humidity, pressure;
+   double                                          accel_x, accel_y, accel_z;
+   double                                          gyro_x, gyro_y, gyro_z;
+   double                                          mag_x, mag_y, mag_z;
+   float                                           battery;
+   int16_t                                         signal_dbm;
+   std::optional<uint32_t>                         error_code;
+   psio::bounded_string<16>                         firmware;
+};
+PSIO_REFLECT(BSensorReading,
+             timestamp, device_id,
+             temp, humidity, pressure,
+             accel_x, accel_y, accel_z,
+             gyro_x, gyro_y, gyro_z,
+             mag_x, mag_y, mag_z,
+             battery, signal_dbm, error_code, firmware)
 
 // ── Test data factories ──────────────────────────────────────────────────────
 
@@ -1896,6 +1971,537 @@ void print_summary()
    print_comparison("Deserialize UserProfile", "fracpack", unpack_u, "json", jsonr_u);
 }
 
+// ── Bounded-type factories and bench (pssz8/pssz16 break-even demo) ─────────
+
+namespace {
+template <std::size_t N>
+psio::bounded_string<N> bstr(std::string s)
+{
+   return psio::bounded_string<N>{std::move(s)};
+}
+}  // namespace
+
+// Unbounded shadow types — identical field layout using std::string / vector
+// instead of bounded_string / bounded_list. For formats that don't yet have
+// bounded_* specializations (avro, wit), we measure against the shadow so
+// the size comparison is apples-to-apples: avro/wit would produce the same
+// bytes either way since they can't leverage the bound.
+
+struct UBToken
+{
+   uint16_t    kind;
+   uint32_t    offset;
+   uint32_t    length;
+   std::string text;
+};
+PSIO_REFLECT(UBToken, kind, offset, length, text)
+
+struct UBUserProfile
+{
+   uint64_t                       id;
+   std::string                    name;
+   std::string                    email;
+   std::optional<std::string>     bio;
+   uint32_t                       age;
+   double                         score;
+   std::vector<std::string>       tags;
+   bool                           verified;
+};
+PSIO_REFLECT(UBUserProfile, id, name, email, bio, age, score, tags, verified)
+
+struct UBLineItem
+{
+   std::string product;
+   uint32_t    qty;
+   double      unit_price;
+};
+PSIO_REFLECT(UBLineItem, product, qty, unit_price)
+
+struct UBOrder
+{
+   uint64_t                   id;
+   UBUserProfile              customer;
+   std::vector<UBLineItem>    items;
+   double                     total;
+   std::optional<std::string> note;
+};
+PSIO_REFLECT(UBOrder, id, customer, items, total, note)
+
+struct UBSensorReading
+{
+   uint64_t                   timestamp;
+   std::string                device_id;
+   double                     temp, humidity, pressure;
+   double                     accel_x, accel_y, accel_z;
+   double                     gyro_x, gyro_y, gyro_z;
+   double                     mag_x, mag_y, mag_z;
+   float                      battery;
+   int16_t                    signal_dbm;
+   std::optional<uint32_t>    error_code;
+   std::string                firmware;
+};
+PSIO_REFLECT(UBSensorReading,
+             timestamp, device_id,
+             temp, humidity, pressure,
+             accel_x, accel_y, accel_z,
+             gyro_x, gyro_y, gyro_z,
+             mag_x, mag_y, mag_z,
+             battery, signal_dbm, error_code, firmware)
+
+static double total_from()
+{
+   double t = 0;
+   for (int i = 0; i < 5; ++i) t += (i + 1) * (19.99 + i * 5.0);
+   return t;
+}
+
+BToken make_btoken()
+{
+   return {1u, 10u, 42u, bstr<64>(std::string("user-facing-token-text"))};
+}
+
+BUserProfile make_buser()
+{
+   return {123456789ULL,
+           bstr<64>(std::string("Alice Johnson")),
+           bstr<254>(std::string("alice@example.com")),
+           bstr<1024>(std::string("Software engineer interested in distributed "
+                                   "systems and WebAssembly")),
+           32,
+           98.5,
+           psio::bounded_list<psio::bounded_string<32>, 16>{
+               std::vector<psio::bounded_string<32>>{
+                   bstr<32>(std::string("developer")),
+                   bstr<32>(std::string("wasm")),
+                   bstr<32>(std::string("c++")),
+                   bstr<32>(std::string("open-source"))}},
+           true};
+}
+
+BLineItem make_bline_item(int i)
+{
+   return {bstr<128>(std::string("Product-") + std::to_string(i)),
+           static_cast<uint32_t>(i + 1), 19.99 + i * 5.0};
+}
+
+BOrder make_border()
+{
+   std::vector<BLineItem> items;
+   for (int i = 0; i < 5; ++i)
+      items.push_back(make_bline_item(i));
+   return {42ULL,
+           make_buser(),
+           psio::bounded_list<BLineItem, 100>{std::move(items)},
+           total_from(),
+           std::optional<psio::bounded_string<256>>{
+               bstr<256>(std::string("Priority shipping"))}};
+}
+
+BSensorReading make_bsensor()
+{
+   return {1234567890ULL,
+           bstr<32>(std::string("sensor-abc-42")),
+           23.5, 45.2, 1013.25,
+           0.1, 0.2, 9.81,
+           0.01, 0.02, 0.03,
+           100.1, 200.2, 300.3,
+           3.7f, -85,
+           std::optional<uint32_t>{42u},
+           bstr<16>(std::string("fw-1.2.3"))};
+}
+
+// Shadow constructors — same content as the bounded versions, but in std
+// types so avro/wit can encode them. Wire-size-equivalent for formats that
+// don't leverage the bound.
+UBToken        to_ub(const BToken& b) {
+   return {b.kind, b.offset, b.length, b.text.storage()};
+}
+UBUserProfile  to_ub(const BUserProfile& b) {
+   std::vector<std::string> tags;
+   for (auto& t : b.tags.storage()) tags.push_back(t.storage());
+   return {b.id, b.name.storage(), b.email.storage(),
+           b.bio ? std::optional<std::string>{b.bio->storage()}
+                  : std::optional<std::string>{},
+           b.age, b.score, std::move(tags), b.verified};
+}
+UBLineItem     to_ub(const BLineItem& b) {
+   return {b.product.storage(), b.qty, b.unit_price};
+}
+UBOrder        to_ub(const BOrder& b) {
+   std::vector<UBLineItem> items;
+   for (auto& it : b.items.storage()) items.push_back(to_ub(it));
+   return {b.id, to_ub(b.customer), std::move(items), b.total,
+           b.note ? std::optional<std::string>{b.note->storage()}
+                   : std::optional<std::string>{}};
+}
+UBSensorReading to_ub(const BSensorReading& b) {
+   return {b.timestamp, b.device_id.storage(),
+           b.temp, b.humidity, b.pressure,
+           b.accel_x, b.accel_y, b.accel_z,
+           b.gyro_x, b.gyro_y, b.gyro_z,
+           b.mag_x, b.mag_y, b.mag_z,
+           b.battery, b.signal_dbm, b.error_code,
+           b.firmware.storage()};
+}
+
+void bench_bounded()
+{
+   print_header("Bounded types: pssz auto-select vs frac16 vs ssz");
+
+   auto btok   = make_btoken();
+   auto buser  = make_buser();
+   auto border = make_border();
+   auto bsens  = make_bsensor();
+
+   std::printf("\n  Wire sizes ALL formats (bytes, smallest in brackets):\n");
+   std::printf("    %-15s %6s %6s %6s %7s %6s %6s %6s %6s %10s\n",
+               "Type",
+               "frac32", "frac16", "bin", "bincode", "borsh", "avro",
+               "ssz", "wit", "pssz-auto");
+   std::printf("    %-15s %s\n", "",
+               "(avro/wit measured on std-shadow — identical wire)");
+
+#define BOUND_ROW(name, obj)                                                        \
+   {                                                                                \
+      auto  ub  = to_ub(obj);                                                       \
+      auto f32  = psio::to_frac(obj);                                               \
+      auto f16  = psio::to_frac16(obj);                                             \
+      auto bn   = psio::convert_to_bin(obj);                                        \
+      auto bc   = psio::convert_to_bincode(obj);                                    \
+      auto br   = psio::convert_to_borsh(obj);                                      \
+      auto av   = psio::convert_to_avro(ub);                                        \
+      auto sz   = psio::convert_to_ssz(obj);                                        \
+      auto wt   = psio::wit::pack(ub);                                              \
+      using AutoF = psio::auto_pssz_format_t<decltype(obj)>;                        \
+      auto pa   = psio::convert_to_pssz<AutoF>(obj);                                \
+      const char* nm =                                                              \
+          std::is_same_v<AutoF, psio::frac_format_pssz8>  ? "pssz8"  :              \
+          std::is_same_v<AutoF, psio::frac_format_pssz16> ? "pssz16" : "pssz32";    \
+      std::size_t sizes[] = {f32.size(), f16.size(), bn.size(), bc.size(),          \
+                              br.size(), av.size(), sz.size(), wt.size(),           \
+                              pa.size()};                                           \
+      std::size_t minsz = sizes[0];                                                 \
+      for (auto s : sizes) if (s < minsz) minsz = s;                                \
+      auto fmt = [minsz](std::size_t s) {                                           \
+         char buf[16];                                                              \
+         std::snprintf(buf, sizeof(buf), s == minsz ? "[%4zu]" : " %4zu ", s);      \
+         return std::string(buf);                                                   \
+      };                                                                            \
+      std::printf("    %-15s %6s %6s %6s %7s %6s %6s %6s %6s %5s (%s)\n",           \
+                  name, fmt(f32.size()).c_str(), fmt(f16.size()).c_str(),           \
+                  fmt(bn.size()).c_str(), fmt(bc.size()).c_str(),                   \
+                  fmt(br.size()).c_str(), fmt(av.size()).c_str(),                   \
+                  fmt(sz.size()).c_str(), fmt(wt.size()).c_str(),                   \
+                  fmt(pa.size()).c_str(), nm);                                      \
+      bench("pssz-auto-pack/B" name, pa.size(), [&] {                               \
+         auto r = psio::convert_to_pssz<AutoF>(obj);                                \
+         do_not_optimize(r.data());                                                 \
+         return r;                                                                  \
+      });                                                                           \
+      bench("pssz-auto-unpack/B" name, pa.size(), [&] {                             \
+         auto r = psio::convert_from_pssz<AutoF, decltype(obj)>(pa);                \
+         do_not_optimize(&r);                                                       \
+         return r;                                                                  \
+      });                                                                           \
+      bench("ssz-pack/B" name, sz.size(), [&] {                                     \
+         auto r = psio::convert_to_ssz(obj);                                        \
+         do_not_optimize(r.data());                                                 \
+         return r;                                                                  \
+      });                                                                           \
+      bench("ssz-unpack/B" name, sz.size(), [&] {                                   \
+         auto r = psio::convert_from_ssz<decltype(obj)>(sz);                        \
+         do_not_optimize(&r);                                                       \
+         return r;                                                                  \
+      });                                                                           \
+      bench("frac16-pack/B" name, f16.size(), [&] {                                 \
+         auto r = psio::to_frac16(obj);                                             \
+         do_not_optimize(r.data());                                                 \
+         return r;                                                                  \
+      });                                                                           \
+      bench("frac16-unpack/B" name, f16.size(), [&] {                               \
+         decltype(obj) out;                                                         \
+         (void)psio::from_frac16(out, f16);                                         \
+         do_not_optimize(&out);                                                     \
+         return out;                                                                \
+      });                                                                           \
+   }
+
+   BOUND_ROW("Token",         btok);
+   BOUND_ROW("UserProfile",   buser);
+   BOUND_ROW("Order",         border);
+   BOUND_ROW("SensorReading", bsens);
+#undef BOUND_ROW
+
+   auto find = [](const std::string& n) -> double {
+      for (auto& r : g_results)
+         if (r.name == n) return r.mean_ns;
+      return 0.0;
+   };
+
+   const char* types[] = {"Token", "UserProfile", "Order", "SensorReading"};
+
+   std::printf("\n  -- Pack ns (bounded) --\n");
+   std::printf("  %-16s %10s %10s %12s\n",
+               "Type", "frac16", "ssz", "pssz-auto");
+   for (auto* t : types)
+   {
+      double f16 = find(std::string("frac16-pack/B") + t);
+      double sz  = find(std::string("ssz-pack/B") + t);
+      double pa  = find(std::string("pssz-auto-pack/B") + t);
+      auto fmt = [](double v) {
+         return v == 0.0 ? std::string("    n/a")
+                         : std::to_string(static_cast<int>(v)) + " ns";
+      };
+      std::printf("  %-16s %10s %10s %12s\n", t,
+                  fmt(f16).c_str(), fmt(sz).c_str(), fmt(pa).c_str());
+   }
+
+   std::printf("\n  -- Unpack ns (bounded) --\n");
+   std::printf("  %-16s %10s %10s %12s\n",
+               "Type", "frac16", "ssz", "pssz-auto");
+   for (auto* t : types)
+   {
+      double f16 = find(std::string("frac16-unpack/B") + t);
+      double sz  = find(std::string("ssz-unpack/B") + t);
+      double pa  = find(std::string("pssz-auto-unpack/B") + t);
+      auto fmt = [](double v) {
+         return v == 0.0 ? std::string("    n/a")
+                         : std::to_string(static_cast<int>(v)) + " ns";
+      };
+      std::printf("  %-16s %10s %10s %12s\n", t,
+                  fmt(f16).c_str(), fmt(sz).c_str(), fmt(pa).c_str());
+   }
+}
+
+// ── frac16 + SSZ (Ethereum consensus) + WIT (WebAssembly canonical ABI) ─────
+//
+// Added to the multiformat cross-section so you can compare size and speed
+// on the SAME shapes already benchmarked under fracpack/bincode/borsh/etc.
+// frac16 is fracpack with u16 offsets/sizes (64 KiB records only).
+// SSZ has no std::optional support, so SensorReading is skipped for SSZ.
+
+void bench_ssz_wit()
+{
+   print_header("frac16 + SSZ (eth consensus) + WIT (WASM canonical ABI)");
+
+   auto point  = make_point();
+   auto token  = make_token();
+   auto user   = make_user();
+   auto order  = make_order();
+   auto sensor = make_sensor();
+
+   std::printf("\n  Wire sizes (frac32 | frac16 | bin | ssz | wit | pssz32 | pssz-auto | ratios vs frac32):\n");
+
+#define SSZ_WIT_BENCH(name, obj, has_ssz)                                           \
+   {                                                                                \
+      auto frac_buf   = psio::to_frac(obj);                                         \
+      auto frac16_buf = psio::to_frac16(obj);                                       \
+      auto bin_buf    = psio::convert_to_bin(obj);                                  \
+      auto wit_buf    = psio::wit::pack(obj);                                       \
+      auto pssz32_buf = psio::convert_to_pssz<psio::frac_format_pssz32>(obj);       \
+      using auto_fmt  = psio::auto_pssz_format_t<decltype(obj)>;                    \
+      auto pssz_auto_buf = psio::convert_to_pssz<auto_fmt>(obj);                    \
+      const char* auto_name =                                                       \
+          std::is_same_v<auto_fmt, psio::frac_format_pssz8>  ? "pssz8"  :           \
+          std::is_same_v<auto_fmt, psio::frac_format_pssz16> ? "pssz16" : "pssz32"; \
+      if constexpr (has_ssz)                                                        \
+      {                                                                             \
+         auto ssz_buf = psio::convert_to_ssz(obj);                                  \
+         std::printf("    %-16s %5zu | %5zu | %5zu | %5zu | %5zu | %5zu | %5zu (%s)\n",\
+                     name, frac_buf.size(), frac16_buf.size(), bin_buf.size(),      \
+                     ssz_buf.size(), wit_buf.size(), pssz32_buf.size(),             \
+                     pssz_auto_buf.size(), auto_name);                              \
+         bench("ssz-pack/" name, ssz_buf.size(), [&] {                              \
+            auto r = psio::convert_to_ssz(obj);                                     \
+            do_not_optimize(r.data());                                              \
+            return r;                                                               \
+         });                                                                        \
+         bench("ssz-unpack/" name, ssz_buf.size(), [&] {                            \
+            auto r = psio::convert_from_ssz<decltype(obj)>(ssz_buf);                \
+            do_not_optimize(&r);                                                    \
+            return r;                                                               \
+         });                                                                        \
+      }                                                                             \
+      else                                                                          \
+      {                                                                             \
+         std::printf("    %-16s %5zu | %5zu | %5zu |   n/a | %5zu | %5zu | %5zu (%s)\n",\
+                     name, frac_buf.size(), frac16_buf.size(), bin_buf.size(),      \
+                     wit_buf.size(), pssz32_buf.size(),                             \
+                     pssz_auto_buf.size(), auto_name);                              \
+      }                                                                             \
+      bench("frac16-pack/" name, frac16_buf.size(), [&] {                           \
+         auto r = psio::to_frac16(obj);                                             \
+         do_not_optimize(r.data());                                                 \
+         return r;                                                                  \
+      });                                                                           \
+      bench("frac16-unpack/" name, frac16_buf.size(), [&] {                         \
+         decltype(obj) out;                                                         \
+         (void)psio::from_frac16(out, frac16_buf);                                  \
+         do_not_optimize(&out);                                                     \
+         return out;                                                                \
+      });                                                                           \
+      bench("pssz32-pack/" name, pssz32_buf.size(), [&] {                           \
+         auto r = psio::convert_to_pssz<psio::frac_format_pssz32>(obj);             \
+         do_not_optimize(r.data());                                                 \
+         return r;                                                                  \
+      });                                                                           \
+      bench("pssz32-unpack/" name, pssz32_buf.size(), [&] {                         \
+         auto r = psio::convert_from_pssz<psio::frac_format_pssz32,                 \
+                                          decltype(obj)>(pssz32_buf);               \
+         do_not_optimize(&r);                                                       \
+         return r;                                                                  \
+      });                                                                           \
+      bench("pssz-auto-pack/" name, pssz_auto_buf.size(), [&] {                     \
+         auto r = psio::convert_to_pssz<auto_fmt>(obj);                             \
+         do_not_optimize(r.data());                                                 \
+         return r;                                                                  \
+      });                                                                           \
+      bench("pssz-auto-unpack/" name, pssz_auto_buf.size(), [&] {                   \
+         auto r = psio::convert_from_pssz<auto_fmt, decltype(obj)>(pssz_auto_buf);  \
+         do_not_optimize(&r);                                                       \
+         return r;                                                                  \
+      });                                                                           \
+      bench("wit-pack/" name, wit_buf.size(), [&] {                                 \
+         auto r = psio::wit::pack(obj);                                             \
+         do_not_optimize(r.data());                                                 \
+         return r;                                                                  \
+      });                                                                           \
+      bench("wit-unpack/" name, wit_buf.size(), [&] {                               \
+         auto r = psio::wit::unpack<decltype(obj)>(wit_buf);                        \
+         do_not_optimize(&r);                                                       \
+         return r;                                                                  \
+      });                                                                           \
+   }
+
+   SSZ_WIT_BENCH("BPoint",        point,  true);
+   SSZ_WIT_BENCH("Token",         token,  true);
+   SSZ_WIT_BENCH("UserProfile",   user,   true);
+   SSZ_WIT_BENCH("Order",         order,  true);
+   SSZ_WIT_BENCH("SensorReading", sensor, true);
+
+#undef SSZ_WIT_BENCH
+
+   // Side-by-side across all native psio formats.
+   std::printf("\n  -- Pack ns (frac32 | frac16 | bincode | ssz | wit | pssz32 | pssz-auto) --\n");
+   std::printf("  %-16s %8s %8s %8s %8s %8s %8s %10s\n",
+               "Type (pack)", "frac32", "frac16", "bincode", "ssz", "wit",
+               "pssz32", "pssz-auto");
+
+   auto find = [](const std::string& n) -> double {
+      for (auto& r : g_results)
+         if (r.name == n) return r.mean_ns;
+      return 0.0;
+   };
+
+   const char* types[] = {"BPoint", "Token", "UserProfile", "Order", "SensorReading"};
+   for (auto* t : types)
+   {
+      double f32 = find(std::string("multiformat-pack/")   + t + "/fracpack");
+      double f16 = find(std::string("frac16-pack/")        + t);
+      double bc  = find(std::string("multiformat-pack/")   + t + "/bincode");
+      double sz  = find(std::string("ssz-pack/")           + t);
+      double wt  = find(std::string("wit-pack/")           + t);
+      double p32 = find(std::string("pssz32-pack/")        + t);
+      double pa  = find(std::string("pssz-auto-pack/")     + t);
+      auto fmt = [](double v) {
+         return v == 0.0 ? std::string("    n/a") :
+                           (std::to_string(static_cast<int>(v)) + " ns");
+      };
+      std::printf("  %-16s %8s %8s %8s %8s %8s %8s %10s\n", t,
+                  fmt(f32).c_str(), fmt(f16).c_str(), fmt(bc).c_str(),
+                  fmt(sz).c_str(), fmt(wt).c_str(),
+                  fmt(p32).c_str(), fmt(pa).c_str());
+   }
+
+   std::printf("\n  -- Unpack ns (frac32 | frac16 | bincode | ssz | wit | pssz32 | pssz-auto) --\n");
+   std::printf("  %-16s %8s %8s %8s %8s %8s %8s %10s\n",
+               "Type (unpack)", "frac32", "frac16", "bincode", "ssz", "wit",
+               "pssz32", "pssz-auto");
+   for (auto* t : types)
+   {
+      double f32 = find(std::string("multiformat-unpack/") + t + "/fracpack");
+      double f16 = find(std::string("frac16-unpack/")      + t);
+      double bc  = find(std::string("multiformat-unpack/") + t + "/bincode");
+      double sz  = find(std::string("ssz-unpack/")         + t);
+      double wt  = find(std::string("wit-unpack/")         + t);
+      double p32 = find(std::string("pssz32-unpack/")      + t);
+      double pa  = find(std::string("pssz-auto-unpack/")   + t);
+      auto fmt = [](double v) {
+         return v == 0.0 ? std::string("    n/a") :
+                           (std::to_string(static_cast<int>(v)) + " ns");
+      };
+      std::printf("  %-16s %8s %8s %8s %8s %8s %8s %10s\n", t,
+                  fmt(f32).c_str(), fmt(f16).c_str(), fmt(bc).c_str(),
+                  fmt(sz).c_str(), fmt(wt).c_str(),
+                  fmt(p32).c_str(), fmt(pa).c_str());
+   }
+}
+
+// ── Borsh (NEAR/Solana canonical format) vs Bincode ──────────────────────────
+
+void bench_borsh()
+{
+   print_header("Borsh vs Bincode (NEAR/Solana canonical format)");
+
+   auto point  = make_point();
+   auto token  = make_token();
+   auto user   = make_user();
+   auto order  = make_order();
+   auto sensor = make_sensor();
+
+   std::printf("\n  Wire sizes (bincode | borsh | borsh/bincode ratio):\n");
+
+#define BORSH_BENCH(name, obj)                                                     \
+   {                                                                               \
+      auto bin_buf = psio::convert_to_bincode(obj);                                \
+      auto bor_buf = psio::convert_to_borsh(obj);                                  \
+      std::printf("    %-16s %5zu B | %5zu B | %.2fx\n", name,                     \
+                  bin_buf.size(), bor_buf.size(),                                  \
+                  static_cast<double>(bor_buf.size()) / bin_buf.size());           \
+      bench("borsh-pack/" name, bor_buf.size(), [&] {                              \
+         auto r = psio::convert_to_borsh(obj);                                     \
+         do_not_optimize(r.data());                                                \
+         return r;                                                                 \
+      });                                                                          \
+      bench("borsh-unpack/" name, bor_buf.size(), [&] {                            \
+         auto r = psio::convert_from_borsh<std::decay_t<decltype(obj)>>(bor_buf);  \
+         do_not_optimize(&r);                                                      \
+         return r;                                                                 \
+      });                                                                          \
+   }
+
+   BORSH_BENCH("BPoint", point);
+   BORSH_BENCH("Token", token);
+   BORSH_BENCH("UserProfile", user);
+   BORSH_BENCH("Order", order);
+   BORSH_BENCH("SensorReading", sensor);
+
+#undef BORSH_BENCH
+
+   // Borsh vs Bincode side-by-side summary
+   std::printf("\n  -- Borsh vs Bincode (pack ns / unpack ns) --\n");
+   std::printf("  %-16s %10s %10s %10s %10s\n",
+               "", "bincode-p", "borsh-p", "bincode-u", "borsh-u");
+
+   auto find = [](const std::string& name) -> double {
+      for (auto& r : g_results)
+         if (r.name == name)
+            return r.mean_ns;
+      return 0.0;
+   };
+
+   const char* types[] = {"BPoint", "Token", "UserProfile", "Order", "SensorReading"};
+   for (auto* t : types)
+   {
+      double bcp = find(std::string("multiformat-pack/")   + t + "/bincode");
+      double brp = find(std::string("borsh-pack/")         + t);
+      double bcu = find(std::string("multiformat-unpack/") + t + "/bincode");
+      double bru = find(std::string("borsh-unpack/")       + t);
+      std::printf("  %-16s %7.1f ns %7.1f ns %7.1f ns %7.1f ns\n",
+                  t, bcp, brp, bcu, bru);
+   }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main()
@@ -1916,6 +2522,9 @@ int main()
    bench_pack_vs_json();
    bench_to_key();
    bench_multiformat();
+   bench_borsh();
+   bench_ssz_wit();
+   bench_bounded();
    print_summary();
 
    return 0;

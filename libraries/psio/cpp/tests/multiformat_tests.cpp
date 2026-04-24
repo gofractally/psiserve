@@ -5,6 +5,8 @@
 #include <psio/to_avro.hpp>
 #include <psio/from_bincode.hpp>
 #include <psio/to_bincode.hpp>
+#include <psio/from_borsh.hpp>
+#include <psio/to_borsh.hpp>
 #include <psio/fracpack.hpp>
 
 #include <array>
@@ -22,7 +24,7 @@ struct MfPoint
    int32_t x;
    int32_t y;
 };
-PSIO_REFLECT(MfPoint, x, y)
+PSIO_REFLECT(MfPoint, definitionWillNotChange(), x, y)
 
 inline bool operator==(const MfPoint& a, const MfPoint& b)
 {
@@ -113,6 +115,14 @@ inline bool operator==(const MfWithVariant& a, const MfWithVariant& b)
       type orig = value;                                  \
       auto data = psio::convert_to_bincode(orig);         \
       auto back = psio::convert_from_bincode<type>(data); \
+      REQUIRE(back == orig);                              \
+   }
+
+#define ROUND_TRIP_BORSH(type, value)                      \
+   {                                                      \
+      type orig = value;                                  \
+      auto data = psio::convert_to_borsh(orig);           \
+      auto back = psio::convert_from_borsh<type>(data);   \
       REQUIRE(back == orig);                              \
    }
 
@@ -546,6 +556,175 @@ TEST_CASE("bincode: fixed-length array (no length prefix)", "[bincode]")
    REQUIRE(data.size() == 12);  // 3 * 4 bytes, no length prefix
    auto back = psio::convert_from_bincode<A>(data);
    REQUIRE(back == orig);
+}
+
+// ============================================================================
+//  BORSH FORMAT TESTS
+// ============================================================================
+
+TEST_CASE("borsh: scalar round-trip", "[borsh]")
+{
+   ROUND_TRIP_BORSH(uint8_t, 0);
+   ROUND_TRIP_BORSH(uint8_t, 255);
+   ROUND_TRIP_BORSH(int8_t, -128);
+   ROUND_TRIP_BORSH(int8_t, 127);
+   ROUND_TRIP_BORSH(int32_t, 0);
+   ROUND_TRIP_BORSH(int32_t, -1);
+   ROUND_TRIP_BORSH(int32_t, 2147483647);
+   ROUND_TRIP_BORSH(int32_t, -2147483648);
+   ROUND_TRIP_BORSH(uint32_t, 0);
+   ROUND_TRIP_BORSH(uint32_t, 4294967295u);
+   ROUND_TRIP_BORSH(int64_t, 0);
+   ROUND_TRIP_BORSH(int64_t, -1);
+   ROUND_TRIP_BORSH(uint64_t, 0);
+   ROUND_TRIP_BORSH(uint64_t, 18446744073709551615ull);
+   ROUND_TRIP_BORSH(bool, true);
+   ROUND_TRIP_BORSH(bool, false);
+}
+
+TEST_CASE("borsh: fixed-width encoding verification", "[borsh]")
+{
+   // uint32_t: 4 bytes LE
+   auto d = psio::convert_to_borsh(uint32_t(0x12345678));
+   REQUIRE(d.size() == 4);
+   REQUIRE(static_cast<uint8_t>(d[0]) == 0x78);
+   REQUIRE(static_cast<uint8_t>(d[1]) == 0x56);
+   REQUIRE(static_cast<uint8_t>(d[2]) == 0x34);
+   REQUIRE(static_cast<uint8_t>(d[3]) == 0x12);
+
+   // bool: 1 byte
+   auto bt = psio::convert_to_borsh(true);
+   REQUIRE(bt.size() == 1);
+   REQUIRE(static_cast<uint8_t>(bt[0]) == 0x01);
+
+   auto bf = psio::convert_to_borsh(false);
+   REQUIRE(bf.size() == 1);
+   REQUIRE(static_cast<uint8_t>(bf[0]) == 0x00);
+}
+
+TEST_CASE("borsh: string round-trip with u32 length", "[borsh]")
+{
+   // Empty string: 4-byte u32 length + 0 bytes
+   auto empty = psio::convert_to_borsh(std::string(""));
+   REQUIRE(empty.size() == 4);
+
+   // "hello": 4 bytes length + 5 bytes data (vs bincode's 13)
+   auto hello = psio::convert_to_borsh(std::string("hello"));
+   REQUIRE(hello.size() == 9);
+
+   ROUND_TRIP_BORSH(std::string, "");
+   ROUND_TRIP_BORSH(std::string, "hello");
+   ROUND_TRIP_BORSH(std::string, "The quick brown fox");
+}
+
+TEST_CASE("borsh: vector round-trip with u32 length", "[borsh]")
+{
+   // Empty vector: 4-byte length only
+   auto empty = psio::convert_to_borsh(std::vector<int32_t>{});
+   REQUIRE(empty.size() == 4);
+
+   // 3-element i32 vector: 4 + 12 bytes
+   auto v = psio::convert_to_borsh(std::vector<int32_t>{1, 2, 3});
+   REQUIRE(v.size() == 4 + 12);
+
+   ROUND_TRIP_BORSH(std::vector<int32_t>, (std::vector<int32_t>{}));
+   ROUND_TRIP_BORSH(std::vector<int32_t>, (std::vector<int32_t>{1, 2, 3}));
+   ROUND_TRIP_BORSH(std::vector<std::string>, (std::vector<std::string>{"a", "bb"}));
+}
+
+TEST_CASE("borsh: optional round-trip", "[borsh]")
+{
+   // None: u8(0) = 1 byte
+   auto none = psio::convert_to_borsh(std::optional<int32_t>{});
+   REQUIRE(none.size() == 1);
+   REQUIRE(static_cast<uint8_t>(none[0]) == 0x00);
+
+   // Some(42): u8(1) + i32(42) = 5 bytes
+   auto some = psio::convert_to_borsh(std::optional<int32_t>{42});
+   REQUIRE(some.size() == 5);
+   REQUIRE(static_cast<uint8_t>(some[0]) == 0x01);
+
+   ROUND_TRIP_BORSH(std::optional<int32_t>, std::nullopt);
+   ROUND_TRIP_BORSH(std::optional<int32_t>, 42);
+   ROUND_TRIP_BORSH(std::optional<std::string>, std::nullopt);
+   ROUND_TRIP_BORSH(std::optional<std::string>, std::string("hello"));
+}
+
+TEST_CASE("borsh: struct round-trip", "[borsh]")
+{
+   // Point: 8 bytes (two i32, no headers)
+   auto pd = psio::convert_to_borsh(MfPoint{10, 20});
+   REQUIRE(pd.size() == 8);
+
+   ROUND_TRIP_BORSH(MfPoint, (MfPoint{10, 20}));
+   ROUND_TRIP_BORSH(MfPoint, (MfPoint{-100, 200}));
+   {
+      MfPerson orig{"Alice", 30, true, {"eng", "rust"}, 95};
+      auto     data = psio::convert_to_borsh(orig);
+      auto     back = psio::convert_from_borsh<MfPerson>(data);
+      REQUIRE(back == orig);
+   }
+   {
+      MfPerson orig{"Bob", 25, false, {}, std::nullopt};
+      auto     data = psio::convert_to_borsh(orig);
+      auto     back = psio::convert_from_borsh<MfPerson>(data);
+      REQUIRE(back == orig);
+   }
+}
+
+TEST_CASE("borsh: nested struct round-trip", "[borsh]")
+{
+   MfNested n{MfPoint{1, 2}, {MfPoint{3, 4}, MfPoint{5, 6}}};
+   ROUND_TRIP_BORSH(MfNested, n);
+}
+
+TEST_CASE("borsh: variant round-trip with u8 discriminant", "[borsh]")
+{
+   // int32_t variant: u8(0) + i32(42) = 5 bytes (vs bincode's 8)
+   auto vi = psio::convert_to_borsh(MfVariant(int32_t(42)));
+   REQUIRE(vi.size() == 5);
+   REQUIRE(static_cast<uint8_t>(vi[0]) == 0x00);
+
+   // string variant: u8(1) + u32(5) + "hello" = 10 bytes
+   auto vs = psio::convert_to_borsh(MfVariant(std::string("hello")));
+   REQUIRE(vs.size() == 10);
+   REQUIRE(static_cast<uint8_t>(vs[0]) == 0x01);
+
+   ROUND_TRIP_BORSH(MfVariant, MfVariant(int32_t(42)));
+   ROUND_TRIP_BORSH(MfVariant, MfVariant(std::string("hello")));
+   ROUND_TRIP_BORSH(MfVariant, MfVariant(MfPoint{1, 2}));
+}
+
+TEST_CASE("borsh: tuple round-trip", "[borsh]")
+{
+   using T = std::tuple<int32_t, std::string, bool>;
+   ROUND_TRIP_BORSH(T, (T{42, "hello", true}));
+}
+
+TEST_CASE("borsh: fixed-length array (no length prefix)", "[borsh]")
+{
+   using A = std::array<int32_t, 3>;
+   A    orig{10, 20, 30};
+   auto data = psio::convert_to_borsh(orig);
+   REQUIRE(data.size() == 12);  // 3*4 bytes, no length prefix
+   auto back = psio::convert_from_borsh<A>(data);
+   REQUIRE(back == orig);
+}
+
+// bincode vs borsh wire-size sanity check
+TEST_CASE("borsh vs bincode: wire size differences", "[borsh][cross]")
+{
+   // String "hi": borsh u32 = 4+2 = 6, bincode u64 = 8+2 = 10
+   auto s_borsh   = psio::convert_to_borsh(std::string("hi"));
+   auto s_bincode = psio::convert_to_bincode(std::string("hi"));
+   REQUIRE(s_borsh.size() == 6);
+   REQUIRE(s_bincode.size() == 10);
+
+   // Variant index: borsh u8 = 1, bincode u32 = 4
+   auto v_borsh   = psio::convert_to_borsh(MfVariant(int32_t(0)));
+   auto v_bincode = psio::convert_to_bincode(MfVariant(int32_t(0)));
+   REQUIRE(v_borsh.size() == 5);    // 1 (tag) + 4 (i32)
+   REQUIRE(v_bincode.size() == 8);  // 4 (tag) + 4 (i32)
 }
 
 // ============================================================================
