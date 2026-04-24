@@ -1410,20 +1410,17 @@ namespace psizam::detail {
 
       inline void call(uint32_t index) {
          // Gas metering (Phase 4): body-size proxy + prologue_gas_extra
-         // (heavy-op weights accumulated by the parser for opcodes
-         // outside any loop) for local functions, fixed small charge
-         // for host imports. Matches the JIT's per-function-entry cost
-         // so the interpreter's trap point tracks identically to every
-         // compiled backend.
+         // for local functions, matching the JIT codegens' inline
+         // gas_charge(wasm_body_bytes + prologue_gas_extra) at each
+         // function prologue. Host imports cost 0 — all three JITs use
+         // an inline trampoline dispatch (x86_64::emit_inline_host_call
+         // and equivalents) that doesn't route through a gas site, so
+         // the interpreter stays silent here to agree with them.
          const uint32_t imported = _mod->get_imported_functions_size();
-         int64_t cost;
-         if (index < imported) {
-            cost = 1;
-         } else {
+         if (index >= imported) {
             const auto& fb = _mod->code[index - imported];
-            cost = static_cast<int64_t>(fb.wasm_body_bytes) + fb.prologue_gas_extra;
+            gas_charge(static_cast<int64_t>(fb.wasm_body_bytes) + fb.prologue_gas_extra);
          }
-         gas_charge(cost);
          // TODO validate index is valid
          if (index < _mod->get_imported_functions_size()) {
             const auto& ft = _mod->get_function_type(index);
@@ -1514,7 +1511,17 @@ namespace psizam::detail {
             return;
          }
 
-         // WASM-to-WASM tail call: reuse the activation frame
+         // WASM-to-WASM tail call: reuse the activation frame.
+         // Charge the callee's prologue gas — JIT codegens all emit
+         // gas_charge(wasm_body_bytes + prologue_gas_extra) at the callee's
+         // entry which fires on every tail-call target. Interp was skipping
+         // this (surfaced by fuzz gas oracle — e.g. regression 1510:
+         // interp=112 vs jit=5083).
+         {
+            const uint32_t imported = _mod->get_imported_functions_size();
+            const auto& fb = _mod->code[new_index - imported];
+            gas_charge(static_cast<int64_t>(fb.wasm_body_bytes) + fb.prologue_gas_extra);
+         }
          const func_type& new_ft = _mod->get_function_type(new_index);
          uint32_t new_param_count = new_ft.param_types.size();
 
@@ -1798,6 +1805,25 @@ namespace psizam::detail {
          this->template type_check_args<TC>(_mod->get_function_type(func_index), std::forward<Args>(args)...); // args not modified
          push_args<TC>(std::forward<Args>(args)...);
          push_call<true>(func_index);
+
+         // Entry-function prologue gas — symmetric with call()'s internal
+         // call path above and with every JIT codegen's
+         // emit_gas_charge(wasm_body_bytes + prologue_gas_extra) baked at
+         // the start of each function. Without this, top-level execute()
+         // (used by exported-function calls and execute_start) skipped
+         // the entry function's prologue charge, leaving the interpreter
+         // under-charging by body_bytes relative to every JIT backend
+         // (surfaced by the differential fuzzer's gas oracle — 9690 vs
+         // 15088 on repro 368860, 0 vs 1925 on repro 106113). Host-import
+         // entry points are never gas-charged (JIT inline trampolines don't
+         // charge, so interp agrees).
+         {
+            const uint32_t imported = _mod->get_imported_functions_size();
+            if (func_index >= imported) {
+               const auto& fb = _mod->code[func_index - imported];
+               gas_charge(static_cast<int64_t>(fb.wasm_body_bytes) + fb.prologue_gas_extra);
+            }
+         }
 
          if (func_index < _mod->get_imported_functions_size()) {
             // Dispatch through host_function_table
