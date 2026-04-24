@@ -55,8 +55,18 @@ namespace {
                   c.jit_eh_exnref = c.jit_push_caught_exception(tag_index, payload, payload_count);
                }
 
-               // Copy the jmpbuf before popping (longjmp target)
-               jmp_buf dest;
+               // Copy the jmpbuf before popping (longjmp target).
+               // Must NOT live on this function's stack frame: jit callers
+               // can invoke eh_throw with rsp very close to their rbp (e.g.,
+               // after a setjmp-restore reads a previously-saved slot), so
+               // the C call chain's locals can physically overlap the jit
+               // function's save slots. A stack-local jmp_buf memcpy would
+               // then clobber those slots and corrupt the jit's post-setjmp
+               // `mov [rbp-off], rsp` restore (observed as fuzz mismatch
+               // 106113 — jit2 crashed with rsp=0 at the dispatch-path's
+               // first push because [rbp-eh_rsp_save_offset] was zeroed by
+               // bytes copied from the jmpbuf's sigset padding).
+               static thread_local jmp_buf dest;
                std::memcpy(&dest, &frame.jmpbuf, sizeof(jmp_buf));
 
                // Pop this frame and all its catch entries
