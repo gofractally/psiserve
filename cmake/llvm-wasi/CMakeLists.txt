@@ -81,11 +81,25 @@ set(MIMALLOC_URL
 
 # ---------- download LLVM source ----------
 
-message(STATUS "Downloading LLVM ${LLVM_VERSION} source...")
-FetchContent_Declare(llvm_src
-   URL ${LLVM_URL}
-   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
+# Escape hatch for local fork development: point LLVM_LOCAL_SRC at a
+# directory that already contains the LLVM tree (e.g. a git checkout of
+# the psiserve fork) and FetchContent will use it in-place instead of
+# downloading the tarball. Useful for iterating on fork patches without
+# pushing + re-tagging. Leave empty for the normal URL-based build.
+set(LLVM_LOCAL_SRC "" CACHE PATH "If set, use this llvm-project checkout instead of downloading LLVM_URL")
+if(LLVM_LOCAL_SRC)
+   if(NOT EXISTS "${LLVM_LOCAL_SRC}/llvm/CMakeLists.txt")
+      message(FATAL_ERROR "LLVM_LOCAL_SRC=${LLVM_LOCAL_SRC} does not look like an llvm-project checkout")
+   endif()
+   message(STATUS "Using local LLVM source: ${LLVM_LOCAL_SRC}")
+   FetchContent_Declare(llvm_src SOURCE_DIR "${LLVM_LOCAL_SRC}")
+else()
+   message(STATUS "Downloading LLVM ${LLVM_VERSION} source...")
+   FetchContent_Declare(llvm_src
+      URL ${LLVM_URL}
+      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+   )
+endif()
 FetchContent_MakeAvailable(llvm_src)
 
 set(LLVM_SRC_DIR "${llvm_src_SOURCE_DIR}/llvm")
