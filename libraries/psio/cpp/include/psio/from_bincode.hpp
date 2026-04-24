@@ -1,6 +1,9 @@
 #pragma once
 // Bincode decoding — driven by PSIO_REFLECT, same types, different wire format.
 
+#include <psio/bitset.hpp>
+#include <psio/bounded.hpp>
+#include <psio/ext_int.hpp>
 #include <psio/reflect.hpp>
 #include <psio/stream.hpp>
 #include <array>
@@ -87,6 +90,26 @@ namespace psio
       stream.read(reinterpret_cast<char*>(&val), sizeof(val));
    }
 
+   // ── Extended integer types ────────────────────────────────────────────────
+
+   template <typename S>
+   void from_bincode(unsigned __int128& val, S& stream)
+   {
+      stream.read(reinterpret_cast<char*>(&val), sizeof(val));
+   }
+
+   template <typename S>
+   void from_bincode(__int128& val, S& stream)
+   {
+      stream.read(reinterpret_cast<char*>(&val), sizeof(val));
+   }
+
+   template <typename S>
+   void from_bincode(uint256& val, S& stream)
+   {
+      stream.read(reinterpret_cast<char*>(&val), sizeof(val));
+   }
+
    // Scoped enums
    template <typename T, typename S>
       requires std::is_enum_v<T>
@@ -104,9 +127,64 @@ namespace psio
    {
       uint64_t len;
       stream.read(reinterpret_cast<char*>(&len), sizeof(len));
-      obj.resize(static_cast<size_t>(len));
-      if (len > 0)
-         stream.read(obj.data(), static_cast<size_t>(len));
+      read_string_bulk(obj, stream, static_cast<std::size_t>(len));
+   }
+
+   // ── Bit types ─────────────────────────────────────────────────────────────
+
+   template <std::size_t N, typename S>
+   void from_bincode(bitvector<N>& v, S& stream)
+   {
+      stream.read(reinterpret_cast<char*>(v.data()), bitvector<N>::byte_count);
+   }
+
+   template <std::size_t MaxN, typename S>
+   void from_bincode(bitlist<MaxN>& v, S& stream)
+   {
+      std::uint64_t bit_count = 0;
+      stream.read(reinterpret_cast<char*>(&bit_count), sizeof(bit_count));
+      check(bit_count <= MaxN, "bitlist overflow on decode");
+      std::size_t byte_count = (static_cast<std::size_t>(bit_count) + 7) / 8;
+      std::vector<std::uint8_t> tmp(byte_count);
+      if (byte_count)
+         stream.read(reinterpret_cast<char*>(tmp.data()), byte_count);
+      v.assign_raw(static_cast<std::size_t>(bit_count), tmp.data());
+   }
+
+   template <std::size_t N, typename S>
+   void from_bincode(std::bitset<N>& bs, S& stream)
+   {
+      std::uint8_t buf[(N + 7) / 8];
+      stream.read(reinterpret_cast<char*>(buf), (N + 7) / 8);
+      unpack_bitset_bytes(buf, bs);
+   }
+
+   template <typename S>
+   void from_bincode(std::vector<bool>& v, S& stream)
+   {
+      std::uint64_t bit_count = 0;
+      stream.read(reinterpret_cast<char*>(&bit_count), sizeof(bit_count));
+      std::size_t byte_count = (static_cast<std::size_t>(bit_count) + 7) / 8;
+      std::vector<std::uint8_t> tmp(byte_count);
+      if (byte_count)
+         stream.read(reinterpret_cast<char*>(tmp.data()), byte_count);
+      unpack_vector_bool(tmp.data(), static_cast<std::size_t>(bit_count), v);
+   }
+
+   // ── Bounded collections (validate bound on decode) ────────────────────────
+
+   template <typename T, std::size_t N, typename S>
+   void from_bincode(bounded_list<T, N>& val, S& stream)
+   {
+      from_bincode(val.storage(), stream);
+      check(val.size() <= N, "bounded_list overflow on decode");
+   }
+
+   template <std::size_t N, typename S>
+   void from_bincode(bounded_string<N>& val, S& stream)
+   {
+      from_bincode(val.storage(), stream);
+      check(val.size() <= N, "bounded_string overflow on decode");
    }
 
    // ── Vectors ───────────────────────────────────────────────────────────────
@@ -118,11 +196,7 @@ namespace psio
       stream.read(reinterpret_cast<char*>(&len), sizeof(len));
       if constexpr (has_bitwise_serialization<T>())
       {
-         stream.check_available(static_cast<size_t>(len) * sizeof(T));
-         v.resize(static_cast<size_t>(len));
-         if (len > 0)
-            stream.read(reinterpret_cast<char*>(v.data()),
-                        static_cast<size_t>(len) * sizeof(T));
+         read_vector_bitwise(v, stream, static_cast<std::size_t>(len));
       }
       else
       {

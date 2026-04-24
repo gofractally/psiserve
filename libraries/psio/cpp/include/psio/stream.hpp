@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <psio/check.hpp>
 #include <span>
@@ -54,6 +55,33 @@ namespace psio
       }
    }
 
+   // Opt-in trait for user-defined types that memcpy safely on the wire.
+   // Specialize to std::true_type for types that should participate in
+   // run-batching, vector bulk writes, and the memcpy serialization path.
+   template <typename T>
+   struct is_bitwise_copy : std::false_type
+   {
+   };
+
+   // Forward declaration — the std::array specialization below references
+   // has_bitwise_serialization recursively for its element type.
+   template <typename T>
+   constexpr bool has_bitwise_serialization();
+
+   namespace detail
+   {
+      template <typename T>
+      struct is_std_array_of_bitwise : std::false_type
+      {
+      };
+      template <typename U, std::size_t N>
+      struct is_std_array_of_bitwise<std::array<U, N>>
+          : std::bool_constant<has_bitwise_serialization<U>() &&
+                               sizeof(std::array<U, N>) == N * sizeof(U)>
+      {
+      };
+   }
+
    template <typename T>
    constexpr bool has_bitwise_serialization()
    {
@@ -65,6 +93,16 @@ namespace psio
       {
          static_assert(!std::is_convertible_v<T, std::underlying_type_t<T>>,
                        "Serializing unscoped enum");
+         return true;
+      }
+      else if constexpr (is_bitwise_copy<T>::value)
+      {
+         return true;
+      }
+      else if constexpr (detail::is_std_array_of_bitwise<T>::value)
+      {
+         // std::array<U, N> where U is bitwise-copy and the array has no
+         // trailing padding (sizeof matches N*sizeof(U)) — memcpy-safe.
          return true;
       }
       else
@@ -392,6 +430,68 @@ namespace psio
 
       operator std::span<const char>() const { return {pos, end}; }
    };
+
+   namespace detail
+   {
+      // A stream backed by a contiguous in-memory buffer (input_stream,
+      // check_input_stream). We can fetch the raw pointer and advance
+      // past a read region, enabling bulk-copy fast paths.
+      template <typename S>
+      concept ContiguousInputStream = requires(S& s, std::size_t n) {
+         { s.pos } -> std::convertible_to<const char*>;
+         { s.end } -> std::convertible_to<const char*>;
+         s.check_available(n);
+      };
+   }
+
+   // Bulk-read a vector of trivially-copyable T from a stream.
+   //
+   // The obvious `v.resize(n); stream.read(v.data(), n*sizeof(T))` pays a
+   // hidden zero-init tax: libstdc++'s resize(n) value-initializes every
+   // element before our read overwrites it, doubling the write bandwidth.
+   //
+   // When the stream exposes a contiguous buffer pointer we skip the
+   // resize entirely and use vector::assign(first, last), which goes
+   // through __uninitialized_copy_a → single memcpy. 2× speedup on large
+   // trivially-copyable vectors. See .issues/psio-bounded-and-ext-int-
+   // followups.md §8c for measurements on a 260 MiB Ethereum validator
+   // list.
+   template <typename T, typename S>
+      requires std::is_trivially_copyable_v<T>
+   void read_vector_bitwise(std::vector<T>& v, S& stream, std::size_t n)
+   {
+      if constexpr (detail::ContiguousInputStream<S>)
+      {
+         stream.check_available(n * sizeof(T));
+         const T* first = reinterpret_cast<const T*>(stream.pos);
+         v.assign(first, first + n);
+         stream.pos += n * sizeof(T);
+      }
+      else
+      {
+         v.resize(n);
+         if (n)
+            stream.read(reinterpret_cast<char*>(v.data()), n * sizeof(T));
+      }
+   }
+
+   // std::string overload. Same rationale.
+   template <typename S>
+   void read_string_bulk(std::string& s, S& stream, std::size_t n)
+   {
+      if constexpr (detail::ContiguousInputStream<S>)
+      {
+         stream.check_available(n);
+         s.assign(stream.pos, stream.pos + n);
+         stream.pos += n;
+      }
+      else
+      {
+         s.resize(n);
+         if (n)
+            stream.read(s.data(), n);
+      }
+   }
 
    struct check_input_stream
    {

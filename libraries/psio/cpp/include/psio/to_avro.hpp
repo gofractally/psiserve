@@ -19,6 +19,7 @@
 //
 // The "long" type in Avro is a signed 64-bit zig-zag varint.
 
+#include <psio/bounded.hpp>
 #include <psio/reflect.hpp>
 #include <psio/stream.hpp>
 #include <array>
@@ -171,6 +172,18 @@ namespace psio
       to_avro(std::string_view{s}, stream);
    }
 
+   // ── Bounded containers: same wire as std::string / std::vector, bound is
+   //    enforced on the decode side. Encoding side just delegates.
+
+   template <std::size_t N, typename S>
+   void to_avro(const bounded_string<N>& s, S& stream)
+   {
+      to_avro(s.view(), stream);
+   }
+
+   template <typename T, std::size_t N, typename S>
+   void to_avro(const bounded_list<T, N>& v, S& stream);  // fwd
+
    // ── Arrays (block encoding) ───────────────────────────────────────────────
    //
    // Avro arrays are encoded as one or more blocks. Each block is:
@@ -190,6 +203,12 @@ namespace psio
          }
       }
       avro_long_to_bin(0, stream);  // terminating 0-count block
+   }
+
+   template <typename T, std::size_t N, typename S>
+   void to_avro(const bounded_list<T, N>& v, S& stream)
+   {
+      to_avro(v.storage(), stream);
    }
 
    // ── Fixed-length arrays ───────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 #pragma once
 // Avro binary decoding — driven by PSIO_REFLECT, same types, different wire format.
 
+#include <psio/bounded.hpp>
+#include <psio/check.hpp>
 #include <psio/reflect.hpp>
 #include <psio/stream.hpp>
 #include <array>
@@ -122,9 +124,15 @@ namespace psio
       int64_t len = avro_long_from_bin(stream);
       if (len < 0)
          abort_error(stream_error::overrun);
-      obj.resize(static_cast<size_t>(len));
-      if (len > 0)
-         stream.read(obj.data(), static_cast<size_t>(len));
+      read_string_bulk(obj, stream, static_cast<std::size_t>(len));
+   }
+
+   // Bounded string — same wire as std::string, bound enforced on decode.
+   template <std::size_t N, typename S>
+   void from_avro(bounded_string<N>& obj, S& stream)
+   {
+      from_avro(obj.storage(), stream);
+      check(obj.storage().size() <= N, "avro: bounded_string overflow");
    }
 
    // ── Arrays (block decoding) ───────────────────────────────────────────────
@@ -151,6 +159,13 @@ namespace psio
             from_avro(v.back(), stream);
          }
       }
+   }
+
+   template <typename T, std::size_t N, typename S>
+   void from_avro(bounded_list<T, N>& v, S& stream)
+   {
+      from_avro(v.storage(), stream);
+      check(v.storage().size() <= N, "avro: bounded_list overflow");
    }
 
    // ── Fixed-length arrays ───────────────────────────────────────────────────

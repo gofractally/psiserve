@@ -665,6 +665,22 @@ namespace psio::schema_types
             ctype->children.push_back({.type = &schema->types[nested]});
          }
       }
+      void add_impl(CompiledSchema*    schema,
+                    const AnyType*     type,
+                    const BoundedList& t,
+                    std::vector<const AnyType*>&,
+                    std::vector<const AnyType*>& queue)
+      {
+         // For compiled-schema purposes a BoundedList is a container, same as
+         // List. The bound is metadata for schema emission/validation, not a
+         // layout difference.
+         if (CompiledType* ctype = dfs_terminal(schema, type, CompiledType::container))
+         {
+            const AnyType* nested = t.type->resolve(schema->schema);
+            queue.push_back(nested);
+            ctype->children.push_back({.type = &schema->types[nested]});
+         }
+      }
       void add_impl(CompiledSchema*              schema,
                     const AnyType*               type,
                     const FracPack&              t,
@@ -1463,6 +1479,10 @@ namespace psio::schema_types
    {
       void visitTypes(auto&& f, AnyType& type);
       void visitTypes(auto&& f, AnyType&, List& type)
+      {
+         visitTypes(f, *type.type);
+      }
+      void visitTypes(auto&& f, AnyType&, BoundedList& type)
       {
          visitTypes(f, *type.type);
       }

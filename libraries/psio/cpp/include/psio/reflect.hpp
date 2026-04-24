@@ -730,6 +730,13 @@ namespace psio
 
 #define PSIO_REFLECT_MEMBER_POINTER(r, STRUCT, elem) &STRUCT::PSIO_GET_IDENT(elem)
 
+// Emits `offsetof(STRUCT, field_name),` — used to populate a compile-time
+// array of member offsets. offsetof is a constant expression when STRUCT is
+// standard_layout; gated by static_assert at the reflection site.
+#define PSIO_REFLECT_DATA_MEMBER_OFFSET(r, STRUCT, elem) \
+   offsetof(STRUCT, PSIO_GET_IDENT(elem)),
+
+
 #define PSIO_REFLECT_DATA_MEMBER_NAME(r, STRUCT, elem) BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)),
 
 #define PSIO_REFLECT_MEMBER_FUNCTION_NAME(r, STRUCT, elem) \
@@ -858,6 +865,14 @@ namespace psio
           BOOST_PP_SEQ_FOR_EACH(PSIO_REFLECT_DATA_MEMBER_NAME,                                                    \
                                 ReflectedType,                                                                    \
                                 PSIO_REFLECT_DATA_MEMBERS(__VA_ARGS__))};                                         \
+      /* Compile-time field offsets (via offsetof). Requires standard_layout.                                     \
+         When the struct isn't standard_layout or offsetof isn't a constant                                       \
+         expression, these members are just not referenced — silently skip.  */                                   \
+      static constexpr std::size_t data_member_offsets[] = {                                                      \
+          BOOST_PP_SEQ_FOR_EACH(PSIO_REFLECT_DATA_MEMBER_OFFSET,                                                  \
+                                ReflectedType,                                                                    \
+                                PSIO_REFLECT_DATA_MEMBERS(__VA_ARGS__))};                                         \
+      static constexpr bool has_std_layout = std::is_standard_layout_v<ReflectedType>;                            \
       using member_functions = psio::MemberList<BOOST_PP_IIF(                                                     \
           BOOST_PP_CHECK_EMPTY(PSIO_REFLECT_METHODS(__VA_ARGS__)),                                                \
           PSIO_EMPTY,                                                                                             \

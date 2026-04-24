@@ -50,7 +50,7 @@ namespace psio
 
    // ── Compile-time layout info for a reflected struct ────────────────────────
 
-   template <typename T>
+   template <typename T, typename Format = frac_format_32>
       requires Reflected<T>
    struct frac_layout
    {
@@ -59,13 +59,14 @@ namespace psio
 
       static consteval auto member_fixed_sizes()
       {
-         return apply_members((typename reflect<T>::data_members*)nullptr,
-                              [](auto... members)
-                              {
-                                 return std::array<uint32_t, sizeof...(members)>{
-                                     is_packable<std::remove_cvref_t<
-                                         decltype(std::declval<T>().*members)>>::fixed_size...};
-                              });
+         return apply_members(
+             (typename reflect<T>::data_members*)nullptr,
+             [](auto... members)
+             {
+                return std::array<uint32_t, sizeof...(members)>{
+                    is_packable<std::remove_cvref_t<decltype(std::declval<T>().*members)>,
+                                 Format>::fixed_size...};
+             });
       }
 
       static consteval auto member_is_variable()
@@ -75,8 +76,8 @@ namespace psio
              [](auto... members)
              {
                 return std::array<bool, sizeof...(members)>{
-                    is_packable<std::remove_cvref_t<
-                        decltype(std::declval<T>().*members)>>::is_variable_size...};
+                    is_packable<std::remove_cvref_t<decltype(std::declval<T>().*members)>,
+                                 Format>::is_variable_size...};
              });
       }
 
@@ -107,17 +108,19 @@ namespace psio
       static constexpr auto offsets = compute_offsets();
 
       static constexpr uint32_t total_fixed =
-          is_packable_reflected<T, true>::members_fixed_size;
+          is_packable_reflected<T, true, Format>::members_fixed_size;
 
-      static consteval bool all_4byte_aligned()
+      // SIMD fast-path: all members are same-width fixed slots matching the
+      // format's size_bytes. At frac32 this is the familiar "all u32" shape.
+      static consteval bool all_slot_aligned()
       {
          for (size_t i = 0; i < num_members; ++i)
-            if (fixed_sizes[i] != 4)
+            if (fixed_sizes[i] != Format::size_bytes)
                return false;
          return true;
       }
 
-      static constexpr bool simd_eligible = all_4byte_aligned();
+      static constexpr bool simd_eligible = all_slot_aligned();
    };
 
    // ── Type-level path utilities ──────────────────────────────────────────────
@@ -183,6 +186,23 @@ namespace psio
          std::memcpy(buf + pos, &val, 4);
       }
 
+      // Format-aware offset/size reader. Returns a uint32_t for consistent
+      // arithmetic regardless of whether the stored value is u16 or u32.
+      template <typename Format>
+      inline uint32_t read_size(const char* buf, uint32_t pos)
+      {
+         typename Format::size_type v;
+         std::memcpy(&v, buf + pos, Format::size_bytes);
+         return static_cast<uint32_t>(v);
+      }
+
+      template <typename Format>
+      inline void write_size(char* buf, uint32_t pos, uint32_t val)
+      {
+         typename Format::size_type narrowed = static_cast<typename Format::size_type>(val);
+         std::memcpy(buf + pos, &narrowed, Format::size_bytes);
+      }
+
       inline int32_t splice_buffer(std::vector<char>& buf,
                                    uint32_t           pos,
                                    uint32_t           old_len,
@@ -209,34 +229,36 @@ namespace psio
          return delta;
       }
 
+      template <typename Format>
       inline void patch_offset(char* buf, uint32_t off_pos, uint32_t after_old, int32_t delta)
       {
-         uint32_t val = read_u32(buf, off_pos);
+         uint32_t val = read_size<Format>(buf, off_pos);
          if (val <= 1)
             return;
          uint32_t abs_target = off_pos + val;
          if (abs_target >= after_old)
-            write_u32(buf, off_pos, static_cast<uint32_t>(static_cast<int64_t>(val) + delta));
+            write_size<Format>(buf, off_pos,
+                                static_cast<uint32_t>(static_cast<int64_t>(val) + delta));
       }
 
       // ── packed_size_at: measure packed data size at a buffer position ──
 
-      template <Packable T>
+      template <Packable T, typename Format = frac_format_32>
       uint32_t packed_size_at(const char* buf, uint32_t pos)
       {
-         if constexpr (!is_packable<T>::is_variable_size)
+         if constexpr (!is_packable<T, Format>::is_variable_size)
          {
-            return is_packable<T>::fixed_size;
+            return is_packable<T, Format>::fixed_size;
          }
          else if constexpr (std::is_same_v<T, std::string> ||
                             std::is_same_v<T, std::string_view>)
          {
-            return 4 + read_u32(buf, pos);
+            return Format::size_bytes + read_size<Format>(buf, pos);
          }
          else if constexpr (Reflected<T>)
          {
             // Variable-size struct: walk members to find heap extent
-            using layout     = frac_layout<T>;
+            using layout     = frac_layout<T, Format>;
             uint32_t start   = pos;
 
             uint16_t fixed_size;
@@ -261,21 +283,22 @@ namespace psio
                    auto process = [&](auto member)
                    {
                       using FT = std::remove_cvref_t<decltype(std::declval<T>().*member)>;
-                      if constexpr (is_packable<FT>::is_variable_size)
+                      if constexpr (is_packable<FT, Format>::is_variable_size)
                       {
                          if (fpos < fixed_start + fixed_size)
                          {
-                            uint32_t offset = read_u32(buf, fpos);
+                            uint32_t offset = read_size<Format>(buf, fpos);
                             if (offset > 1)
                             {
                                uint32_t dstart = fpos + offset;
-                               uint32_t dend   = dstart + packed_size_at<FT>(buf, dstart);
+                               uint32_t dend =
+                                   dstart + packed_size_at<FT, Format>(buf, dstart);
                                if (dend > heap_end)
                                   heap_end = dend;
                             }
                          }
                       }
-                      fpos += is_packable<FT>::fixed_size;
+                      fpos += is_packable<FT, Format>::fixed_size;
                    };
                    (process(members), ...);
                 });
@@ -284,8 +307,8 @@ namespace psio
          }
          else
          {
-            // Generic memcpy container: [u32 byte_count][bytes...]
-            return 4 + read_u32(buf, pos);
+            // Generic memcpy container: [size_type byte_count][bytes...]
+            return Format::size_bytes + read_size<Format>(buf, pos);
          }
       }
 
@@ -301,7 +324,7 @@ namespace psio
       // Sets leaf_off_pos and leaf_data_pos.
 
       // Base case: single field index (leaf)
-      template <typename T, size_t FieldIdx>
+      template <typename T, typename Format, size_t FieldIdx>
       void navigate_recording(const char* buf,
                               uint32_t    struct_start,
                               level_info* levels,
@@ -309,7 +332,7 @@ namespace psio
                               uint32_t&   leaf_off_pos,
                               uint32_t&   leaf_data_pos)
       {
-         using layout             = frac_layout<T>;
+         using layout             = frac_layout<T, Format>;
          uint32_t fixed_start     = struct_start + layout::hdr_size;
          levels[depth].fixed_start = fixed_start;
 
@@ -318,7 +341,7 @@ namespace psio
 
          if constexpr (layout::is_variable[FieldIdx])
          {
-            uint32_t offset = read_u32(buf, leaf_off_pos);
+            uint32_t offset = read_size<Format>(buf, leaf_off_pos);
             leaf_data_pos   = leaf_off_pos + offset;
          }
          else
@@ -328,7 +351,7 @@ namespace psio
       }
 
       // Recursive case: follow Head, then navigate deeper
-      template <typename T, size_t HeadIdx, size_t NextIdx, size_t... RestIdx>
+      template <typename T, typename Format, size_t HeadIdx, size_t NextIdx, size_t... RestIdx>
       void navigate_recording(const char* buf,
                               uint32_t    struct_start,
                               level_info* levels,
@@ -336,28 +359,28 @@ namespace psio
                               uint32_t&   leaf_off_pos,
                               uint32_t&   leaf_data_pos)
       {
-         using layout             = frac_layout<T>;
+         using layout             = frac_layout<T, Format>;
          uint32_t fixed_start     = struct_start + layout::hdr_size;
          levels[depth].fixed_start = fixed_start;
 
          constexpr uint32_t rel  = layout::offset_of(HeadIdx);
          uint32_t off_pos        = fixed_start + rel;
-         uint32_t offset         = read_u32(buf, off_pos);
+         uint32_t offset         = read_size<Format>(buf, off_pos);
          uint32_t nested_start   = off_pos + offset;
 
          using nested_type = nth_field_t<T, HeadIdx>;
-         navigate_recording<nested_type, NextIdx, RestIdx...>(
+         navigate_recording<nested_type, Format, NextIdx, RestIdx...>(
              buf, nested_start, levels, depth + 1, leaf_off_pos, leaf_data_pos);
       }
 
       // ── Compile-time patch info ──
 
-      template <typename T, size_t MutatedIndex>
+      template <typename T, size_t MutatedIndex, typename Format = frac_format_32>
       struct sibling_patches
       {
          static consteval auto compute()
          {
-            using layout = frac_layout<T>;
+            using layout = frac_layout<T, Format>;
             size_t count = 0;
             for (size_t i = MutatedIndex + 1; i < layout::num_members; ++i)
                if (layout::is_variable[i])
@@ -378,26 +401,26 @@ namespace psio
       };
 
       // Scalar patch: unrolled at compile time
-      template <typename T, size_t MutatedIndex>
+      template <typename T, size_t MutatedIndex, typename Format = frac_format_32>
       void patch_level_scalar(char*    buf,
                               uint32_t fixed_start,
                               uint32_t after_old,
                               int32_t  delta)
       {
-         using patches = sibling_patches<T, MutatedIndex>;
+         using patches = sibling_patches<T, MutatedIndex, Format>;
          [&]<size_t... I>(std::index_sequence<I...>)
          {
-            (patch_offset(buf, fixed_start + patches::offsets[I], after_old, delta), ...);
+            (patch_offset<Format>(buf, fixed_start + patches::offsets[I], after_old, delta), ...);
          }(std::make_index_sequence<patches::count>{});
       }
 
       // SIMD-friendly batch patch via compile-time mask
-      template <typename T, size_t MutatedIndex>
+      template <typename T, size_t MutatedIndex, typename Format = frac_format_32>
       struct patch_mask
       {
          static consteval auto compute()
          {
-            using layout = frac_layout<T>;
+            using layout = frac_layout<T, Format>;
             std::array<uint32_t, layout::num_members> m{};
             for (size_t i = MutatedIndex + 1; i < layout::num_members; ++i)
                if (layout::is_variable[i])
@@ -407,15 +430,16 @@ namespace psio
          static constexpr auto mask = compute();
       };
 
-      template <typename T, size_t MutatedIndex>
+      template <typename T, size_t MutatedIndex, typename Format = frac_format_32>
       void patch_level_simd(char*    buf,
                             uint32_t fixed_start,
                             int32_t  delta)
       {
-         using layout       = frac_layout<T>;
-         constexpr auto mask = patch_mask<T, MutatedIndex>::mask;
-         uint32_t*      slots = reinterpret_cast<uint32_t*>(buf + fixed_start);
-         uint32_t       udelta = static_cast<uint32_t>(delta);
+         using layout                    = frac_layout<T, Format>;
+         using slot_type                 = typename Format::size_type;
+         constexpr auto mask             = patch_mask<T, MutatedIndex, Format>::mask;
+         slot_type*     slots            = reinterpret_cast<slot_type*>(buf + fixed_start);
+         slot_type      udelta           = static_cast<slot_type>(delta);
 
          // Auto-vectorizable loop with compile-time mask
          for (size_t i = 0; i < layout::num_members; ++i)
@@ -428,55 +452,55 @@ namespace psio
          }
       }
 
-      template <typename T, size_t MutatedIndex>
+      template <typename T, size_t MutatedIndex, typename Format = frac_format_32>
       void patch_level_dispatch(char*    buf,
                                 uint32_t fixed_start,
                                 uint32_t after_old,
                                 int32_t  delta)
       {
-         if constexpr (frac_layout<T>::simd_eligible)
-            patch_level_simd<T, MutatedIndex>(buf, fixed_start, delta);
+         if constexpr (frac_layout<T, Format>::simd_eligible)
+            patch_level_simd<T, MutatedIndex, Format>(buf, fixed_start, delta);
          else
-            patch_level_scalar<T, MutatedIndex>(buf, fixed_start, after_old, delta);
+            patch_level_scalar<T, MutatedIndex, Format>(buf, fixed_start, after_old, delta);
       }
 
       // ── Multi-level patching: recursive from bottom up ──
 
       // Base case: single index
-      template <size_t Depth, typename T, size_t Idx>
+      template <size_t Depth, typename T, typename Format, size_t Idx>
       void patch_all(char*            buf,
                      const level_info* levels,
                      uint32_t         after_old,
                      int32_t          delta)
       {
-         patch_level_dispatch<T, Idx>(buf, levels[Depth].fixed_start, after_old, delta);
+         patch_level_dispatch<T, Idx, Format>(buf, levels[Depth].fixed_start, after_old, delta);
       }
 
       // Recursive: patch deeper levels first, then this level
-      template <size_t Depth, typename T, size_t Head, size_t Next, size_t... Rest>
+      template <size_t Depth, typename T, typename Format, size_t Head, size_t Next, size_t... Rest>
       void patch_all(char*            buf,
                      const level_info* levels,
                      uint32_t         after_old,
                      int32_t          delta)
       {
          using nested = nth_field_t<T, Head>;
-         patch_all<Depth + 1, nested, Next, Rest...>(buf, levels, after_old, delta);
-         patch_level_dispatch<T, Head>(buf, levels[Depth].fixed_start, after_old, delta);
+         patch_all<Depth + 1, nested, Format, Next, Rest...>(buf, levels, after_old, delta);
+         patch_level_dispatch<T, Head, Format>(buf, levels[Depth].fixed_start, after_old, delta);
       }
 
    }  // namespace frac_detail
 
    // ── Forward declarations for proxy types ───────────────────────────────────
 
-   template <typename Root, typename Buffer, size_t... Path>
+   template <typename Root, typename Buffer, typename Format, size_t... Path>
    class frac_proxy_obj;
 
-   template <typename Root, typename FieldType, typename Buffer, size_t... Path>
+   template <typename Root, typename FieldType, typename Buffer, typename Format, size_t... Path>
    class field_handle;
 
    // ── field_handle: read/write handle for a leaf field ───────────────────────
 
-   template <typename Root, typename FieldType, typename Buffer, size_t... Path>
+   template <typename Root, typename FieldType, typename Buffer, typename Format, size_t... Path>
    class field_handle
    {
       Buffer* buf_;
@@ -484,7 +508,7 @@ namespace psio
       static constexpr size_t depth    = sizeof...(Path);
       static constexpr auto   path_arr = std::array<size_t, depth>{Path...};
       static constexpr size_t leaf_idx = last_index<Path...>::value;
-      static constexpr bool   leaf_is_var = is_packable<FieldType>::is_variable_size;
+      static constexpr bool   leaf_is_var = is_packable<FieldType, Format>::is_variable_size;
 
       // Parent type (the struct containing the leaf field)
       using parent_type = path_parent_t<Root, Path...>;
@@ -516,14 +540,16 @@ namespace psio
 
          frac_detail::level_info levels[depth];
          uint32_t                leaf_off_pos, leaf_data_pos;
-         frac_detail::navigate_recording<Root, Path...>(
+         frac_detail::navigate_recording<Root, Format, Path...>(
              data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
 
          if constexpr (leaf_is_var)
          {
-            uint32_t  psize = frac_detail::packed_size_at<FieldType>(data, leaf_data_pos);
+            uint32_t psize =
+                frac_detail::packed_size_at<FieldType, Format>(data, leaf_data_pos);
             FieldType result;
-            from_frac(result, std::span<const char>(data + leaf_data_pos, psize));
+            from_frac<FieldType, Format>(result,
+                                          std::span<const char>(data + leaf_data_pos, psize));
             return result;
          }
          else
@@ -545,11 +571,11 @@ namespace psio
 
          frac_detail::level_info levels[depth];
          uint32_t                leaf_off_pos, leaf_data_pos;
-         frac_detail::navigate_recording<Root, Path...>(
+         frac_detail::navigate_recording<Root, Format, Path...>(
              data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
 
-         uint32_t len = frac_detail::read_u32(data, leaf_data_pos);
-         return {data + leaf_data_pos + 4, len};
+         uint32_t len = frac_detail::read_size<Format>(data, leaf_data_pos);
+         return {data + leaf_data_pos + Format::size_bytes, len};
       }
 
       // ── Zero-copy read for bytes fields ──
@@ -562,60 +588,60 @@ namespace psio
 
          frac_detail::level_info levels[depth];
          uint32_t                leaf_off_pos, leaf_data_pos;
-         frac_detail::navigate_recording<Root, Path...>(
+         frac_detail::navigate_recording<Root, Format, Path...>(
              data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
 
-         uint32_t len = frac_detail::read_u32(data, leaf_data_pos);
-         return {data + leaf_data_pos + 4, len};
+         uint32_t len = frac_detail::read_size<Format>(data, leaf_data_pos);
+         return {data + leaf_data_pos + Format::size_bytes, len};
       }
 
       // ── Zero-copy check for optional fields ──
 
       bool has_value() const
-         requires(is_packable<FieldType>::is_optional)
+         requires(is_packable<FieldType, Format>::is_optional)
       {
          const char* data = buf_data();
 
          frac_detail::level_info levels[depth];
          uint32_t                leaf_off_pos, leaf_data_pos;
-         frac_detail::navigate_recording<Root, Path...>(
+         frac_detail::navigate_recording<Root, Format, Path...>(
              data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
 
-         uint32_t offset = frac_detail::read_u32(data, leaf_off_pos);
-         return offset >= 4;  // 0=elided, 1=None → false; >=4=Some → true
+         uint32_t offset = frac_detail::read_size<Format>(data, leaf_off_pos);
+         return offset >= Format::size_bytes;  // 0/1 → false; >=size_bytes → Some
       }
 
       // ── Zero-copy byte length for variable-size fields ──
 
       uint32_t raw_byte_size() const
-         requires(is_packable<FieldType>::is_variable_size)
+         requires(is_packable<FieldType, Format>::is_variable_size)
       {
          const char* data = buf_data();
 
          frac_detail::level_info levels[depth];
          uint32_t                leaf_off_pos, leaf_data_pos;
-         frac_detail::navigate_recording<Root, Path...>(
+         frac_detail::navigate_recording<Root, Format, Path...>(
              data, 0, levels, 0, leaf_off_pos, leaf_data_pos);
 
-         uint32_t offset = frac_detail::read_u32(data, leaf_off_pos);
-         if (offset < 4)
+         uint32_t offset = frac_detail::read_size<Format>(data, leaf_off_pos);
+         if (offset < Format::size_bytes)
             return 0;
-         return frac_detail::packed_size_at<FieldType>(data, leaf_data_pos);
+         return frac_detail::packed_size_at<FieldType, Format>(data, leaf_data_pos);
       }
 
       // ── Write: fixed-size fields (requires mutable buffer) ──
 
       field_handle& operator=(const FieldType& v)
-         requires(!is_packable<FieldType>::is_variable_size &&
+         requires(!is_packable<FieldType, Format>::is_variable_size &&
                   buf_traits<Buffer>::can_write_fixed)
       {
          frac_detail::level_info levels[depth];
          uint32_t                leaf_off_pos, leaf_data_pos;
-         frac_detail::navigate_recording<Root, Path...>(
+         frac_detail::navigate_recording<Root, Format, Path...>(
              buf_data(), 0, levels, 0, leaf_off_pos, leaf_data_pos);
 
          // For fixed-size types, pack value and overwrite in-place
-         auto packed = to_frac(v);
+         auto packed = to_frac<FieldType, Format>(v);
          std::memcpy(mut_data() + leaf_data_pos, packed.data(), packed.size());
          return *this;
       }
@@ -623,22 +649,22 @@ namespace psio
       // ── Write: variable-size fields (requires splice-capable buffer) ──
 
       field_handle& operator=(const FieldType& v)
-         requires(is_packable<FieldType>::is_variable_size &&
+         requires(is_packable<FieldType, Format>::is_variable_size &&
                   buf_traits<Buffer>::can_splice)
       {
          // Pack the new value
-         auto packed = to_frac(v);
+         auto packed = to_frac<FieldType, Format>(v);
 
          // Navigate to find positions
          frac_detail::level_info levels[depth];
          uint32_t                leaf_off_pos, leaf_data_pos;
-         frac_detail::navigate_recording<Root, Path...>(
+         frac_detail::navigate_recording<Root, Format, Path...>(
              buf_->data(), 0, levels, 0, leaf_off_pos, leaf_data_pos);
 
          // Read current offset to determine state
-         uint32_t offset_val = frac_detail::read_u32(buf_->data(), leaf_off_pos);
+         uint32_t offset_val = frac_detail::read_size<Format>(buf_->data(), leaf_off_pos);
 
-         bool new_is_empty = is_packable<FieldType>::is_empty_container(v);
+         bool new_is_empty = is_packable<FieldType, Format>::is_empty_container(v);
 
          if (offset_val <= 1)
          {
@@ -646,12 +672,12 @@ namespace psio
             if (new_is_empty)
             {
                // Empty → empty: just ensure correct marker
-               if constexpr (is_packable<FieldType>::is_optional)
+               if constexpr (is_packable<FieldType, Format>::is_optional)
                {
                   if (!v.has_value())
-                     frac_detail::write_u32(buf_->data(), leaf_off_pos, 1);
+                     frac_detail::write_size<Format>(buf_->data(), leaf_off_pos, 1);
                   else
-                     frac_detail::write_u32(buf_->data(), leaf_off_pos, 0);
+                     frac_detail::write_size<Format>(buf_->data(), leaf_off_pos, 0);
                }
                return *this;
             }
@@ -660,8 +686,9 @@ namespace psio
             int32_t  delta = frac_detail::splice_buffer(
                  *buf_, insert_pos, 0, packed.data(), static_cast<uint32_t>(packed.size()));
             uint32_t after_old = insert_pos;
-            frac_detail::write_u32(buf_->data(), leaf_off_pos, insert_pos - leaf_off_pos);
-            frac_detail::patch_all<0, Root, Path...>(
+            frac_detail::write_size<Format>(buf_->data(), leaf_off_pos,
+                                              insert_pos - leaf_off_pos);
+            frac_detail::patch_all<0, Root, Format, Path...>(
                 buf_->data(), levels, after_old, delta);
             return *this;
          }
@@ -670,25 +697,25 @@ namespace psio
          if (new_is_empty)
          {
             // Non-empty → empty: remove data and set offset to 0/1
-            uint32_t old_size  = frac_detail::packed_size_at<FieldType>(
-                buf_->data(), leaf_data_pos);
+            uint32_t old_size =
+                frac_detail::packed_size_at<FieldType, Format>(buf_->data(), leaf_data_pos);
             uint32_t after_old = leaf_data_pos + old_size;
             int32_t  delta     = frac_detail::splice_buffer(
                     *buf_, leaf_data_pos, old_size, nullptr, 0);
 
-            if constexpr (is_packable<FieldType>::is_optional)
-               frac_detail::write_u32(buf_->data(), leaf_off_pos, 1);
+            if constexpr (is_packable<FieldType, Format>::is_optional)
+               frac_detail::write_size<Format>(buf_->data(), leaf_off_pos, 1);
             else
-               frac_detail::write_u32(buf_->data(), leaf_off_pos, 0);
+               frac_detail::write_size<Format>(buf_->data(), leaf_off_pos, 0);
 
-            frac_detail::patch_all<0, Root, Path...>(
+            frac_detail::patch_all<0, Root, Format, Path...>(
                 buf_->data(), levels, after_old, delta);
             return *this;
          }
 
          // Non-empty → non-empty: splice to replace
-         uint32_t old_size  = frac_detail::packed_size_at<FieldType>(
-             buf_->data(), leaf_data_pos);
+         uint32_t old_size =
+             frac_detail::packed_size_at<FieldType, Format>(buf_->data(), leaf_data_pos);
          uint32_t after_old = leaf_data_pos + old_size;
          int32_t  delta     = frac_detail::splice_buffer(
                  *buf_, leaf_data_pos, old_size,
@@ -696,7 +723,7 @@ namespace psio
 
          // Leaf offset still points correctly (splice was at its target)
          // Patch sibling offsets at all ancestor levels
-         frac_detail::patch_all<0, Root, Path...>(
+         frac_detail::patch_all<0, Root, Format, Path...>(
              buf_->data(), levels, after_old, delta);
          return *this;
       }
@@ -708,7 +735,7 @@ namespace psio
       // end of the struct's heap region.
       uint32_t find_insert_pos(const frac_detail::level_info* levels) const
       {
-         using layout     = frac_layout<parent_type>;
+         using layout     = frac_layout<parent_type, Format>;
          uint32_t fs      = levels[depth - 1].fixed_start;
          const char* data = buf_->data();
 
@@ -718,7 +745,7 @@ namespace psio
             if (layout::is_variable[i])
             {
                uint32_t off_pos = fs + layout::offsets[i];
-               uint32_t offset  = frac_detail::read_u32(data, off_pos);
+               uint32_t offset  = frac_detail::read_size<Format>(data, off_pos);
                if (offset > 1)
                   return off_pos + offset;
             }
@@ -733,7 +760,7 @@ namespace psio
             if (layout::is_variable[i])
             {
                uint32_t off_pos = fs + layout::offsets[i];
-               uint32_t offset  = frac_detail::read_u32(data, off_pos);
+               uint32_t offset  = frac_detail::read_size<Format>(data, off_pos);
                if (offset > 1)
                {
                   uint32_t dstart = off_pos + offset;
@@ -748,7 +775,7 @@ namespace psio
 
    // ── frac_proxy_obj: the ProxyObject for PSIO_REFLECT's proxy<> ─────────────
 
-   template <typename Root, typename Buffer, size_t... Path>
+   template <typename Root, typename Buffer, typename Format, size_t... Path>
    class frac_proxy_obj
    {
       Buffer* buf_;
@@ -762,17 +789,18 @@ namespace psio
          using field_type = std::remove_cvref_t<decltype(result_of_member(MemberPtr))>;
          constexpr size_t idx = static_cast<size_t>(I);
 
-         if constexpr (Reflected<field_type> && is_packable<field_type>::is_variable_size)
+         if constexpr (Reflected<field_type> &&
+                       is_packable<field_type, Format>::is_variable_size)
          {
             // Nested reflected struct → extend path, return proxy
-            using inner_obj  = frac_proxy_obj<Root, Buffer, Path..., idx>;
+            using inner_obj  = frac_proxy_obj<Root, Buffer, Format, Path..., idx>;
             using proxy_type = typename reflect<field_type>::template proxy<inner_obj>;
             return proxy_type{inner_obj{buf_}};
          }
          else
          {
             // Leaf field → return read/write handle
-            return field_handle<Root, field_type, Buffer, Path..., idx>{buf_};
+            return field_handle<Root, field_type, Buffer, Format, Path..., idx>{buf_};
          }
       }
 
@@ -785,13 +813,15 @@ namespace psio
 
    // ── frac_ref: top-level typed handle over a fracpack buffer ────────────────
 
-   template <typename T, typename Buffer = std::span<const char>>
+   template <typename T,
+             typename Buffer = std::span<const char>,
+             typename Format = frac_format_32>
       requires Reflected<T>
    class frac_ref
    {
       Buffer buf_;
 
-      using proxy_obj_t = frac_proxy_obj<T, Buffer>;
+      using proxy_obj_t = frac_proxy_obj<T, Buffer, Format>;
       using proxy_t     = typename reflect<T>::template proxy<proxy_obj_t>;
 
      public:
@@ -814,15 +844,20 @@ namespace psio
       // Validate
       validation_t validate() const
       {
-         return validate_frac<T>({buf_.data(), buf_.size()});
+         return validate_frac<T, Format>({buf_.data(), buf_.size()});
       }
 
       // Full deserialization
       T unpack() const
       {
-         return from_frac<T>(std::span<const char>{buf_.data(), buf_.size()});
+         return from_frac<T, Format>(std::span<const char>{buf_.data(), buf_.size()});
       }
    };
+
+   // frac16 convenience alias
+   template <typename T, typename Buffer = std::span<const char>>
+      requires Reflected<T>
+   using frac16_ref = frac_ref<T, Buffer, frac_format_16>;
 
    // ── Sorted container helper ─────────────────────────────────────────────────
 
@@ -835,17 +870,27 @@ namespace psio
          return v;
       }
 
+      // Format-aware pointer variant of read_size (no base + pos form).
+      template <typename Format>
+      inline uint32_t read_size_at(const char* p)
+      {
+         typename Format::size_type v;
+         std::memcpy(&v, p, Format::size_bytes);
+         return static_cast<uint32_t>(v);
+      }
+
       // Read a string from a fracpack offset field.
-      // `off_pos` points to the 4-byte relative offset.
+      // `off_pos` points to the relative offset (width = Format::size_bytes).
       // Returns empty view if offset is 0 (elided).
+      template <typename Format = frac_format_32>
       inline std::string_view read_frac_string(const char* off_pos)
       {
-         uint32_t off = read_u32(off_pos);
+         uint32_t off = read_size_at<Format>(off_pos);
          if (off == 0)
             return {};
          const char* str = off_pos + off;
-         uint32_t    len = read_u32(str);
-         return {str + 4, len};
+         uint32_t    len = read_size_at<Format>(str);
+         return {str + Format::size_bytes, len};
       }
    }  // namespace frac_detail
 
@@ -859,7 +904,17 @@ namespace psio
    //   v.tags().contains(42)   // set_view
    // ══════════════════════════════════════════════════════════════════════════
 
-   struct frac;  // Format tag for fracpack wire format
+   // ── Format tags for fracpack views ────────────────────────────────────────
+   //
+   // frac_fmt<Format> is the format tag consumed by view<T, Fmt> / vec_view /
+   // set_view / map_view. `frac` is the frac_format_32 alias (back-compat);
+   // `frac16` is the frac_format_16 alias.
+
+   template <typename Format>
+   struct frac_fmt;
+
+   using frac   = frac_fmt<frac_format_32>;
+   using frac16 = frac_fmt<frac_format_16>;
 
    // ── Type detection traits ─────────────────────────────────────────────────
 
@@ -924,8 +979,8 @@ namespace psio
    // Layout: [u32 byte_count][e0][e1]... for fixed-size elements.
    // ══════════════════════════════════════════════════════════════════════════
 
-   template <typename E>
-   class vec_view<E, frac>
+   template <typename E, typename Format>
+   class vec_view<E, frac_fmt<Format>>
    {
       const char* data_ = nullptr;
 
@@ -938,17 +993,18 @@ namespace psio
       {
          if (!data_)
             return 0;
-         uint32_t byte_count = frac_detail::read_u32(data_);
-         return byte_count / is_packable<E>::fixed_size;
+         uint32_t byte_count = frac_detail::read_size_at<Format>(data_);
+         return byte_count / is_packable<E, Format>::fixed_size;
       }
 
       bool empty() const { return size() == 0; }
 
       auto operator[](uint32_t i) const
       {
-         const char* entry = data_ + 4 + i * is_packable<E>::fixed_size;
+         const char* entry =
+             data_ + Format::size_bytes + i * is_packable<E, Format>::fixed_size;
          if constexpr (std::is_same_v<E, std::string>)
-            return frac_detail::read_frac_string(entry);
+            return frac_detail::read_frac_string<Format>(entry);
          else if constexpr (std::is_same_v<E, bool>)
             return *entry != 0;
          else if constexpr (std::is_enum_v<E>)
@@ -966,13 +1022,13 @@ namespace psio
          }
          else if constexpr (Reflected<E>)
          {
-            if constexpr (is_packable<E>::is_variable_size)
+            if constexpr (is_packable<E, Format>::is_variable_size)
             {
-               uint32_t off = frac_detail::read_u32(entry);
-               return view<E, frac>(entry + off);
+               uint32_t off = frac_detail::read_size_at<Format>(entry);
+               return view<E, frac_fmt<Format>>(entry + off);
             }
             else
-               return view<E, frac>(entry);
+               return view<E, frac_fmt<Format>>(entry);
          }
          else
          {
@@ -998,21 +1054,22 @@ namespace psio
    // Inherits sorted_set_algo for contains(), find(), lower_bound().
    // ══════════════════════════════════════════════════════════════════════════
 
-   template <typename K>
-   class set_view<K, frac> : public sorted_set_algo<set_view<K, frac>>
+   template <typename K, typename Format>
+   class set_view<K, frac_fmt<Format>>
+       : public sorted_set_algo<set_view<K, frac_fmt<Format>>>
    {
-      friend class sorted_set_algo<set_view<K, frac>>;
+      friend class sorted_set_algo<set_view<K, frac_fmt<Format>>>;
 
       const char* data_  = nullptr;
       uint32_t    count_ = 0;
 
-      static constexpr uint32_t entry_sz = is_packable<K>::fixed_size;
+      static constexpr uint32_t entry_sz = is_packable<K, Format>::fixed_size;
 
       auto read_key(uint32_t i) const
       {
-         const char* entry = data_ + 4 + i * entry_sz;
+         const char* entry = data_ + Format::size_bytes + i * entry_sz;
          if constexpr (std::is_same_v<K, std::string>)
-            return frac_detail::read_frac_string(entry);
+            return frac_detail::read_frac_string<Format>(entry);
          else
          {
             K val;
@@ -1024,7 +1081,8 @@ namespace psio
      public:
       set_view() = default;
       explicit set_view(const char* data)
-          : data_(data), count_(data ? frac_detail::read_u32(data) / entry_sz : 0)
+          : data_(data),
+            count_(data ? frac_detail::read_size_at<Format>(data) / entry_sz : 0)
       {
       }
       explicit set_view(std::span<const char> sp)
@@ -1054,23 +1112,24 @@ namespace psio
    // Wire format: indirected pairs with u16 header per entry.
    // ══════════════════════════════════════════════════════════════════════════
 
-   template <typename K, typename V>
-   class map_view<K, V, frac> : public sorted_map_algo<map_view<K, V, frac>>
+   template <typename K, typename V, typename Format>
+   class map_view<K, V, frac_fmt<Format>>
+       : public sorted_map_algo<map_view<K, V, frac_fmt<Format>>>
    {
-      friend class sorted_map_algo<map_view<K, V, frac>>;
+      friend class sorted_map_algo<map_view<K, V, frac_fmt<Format>>>;
 
       const char* data_  = nullptr;
       uint32_t    count_ = 0;
 
-      static constexpr uint32_t key_fixed = is_packable<K>::fixed_size;
-      static constexpr uint32_t val_fixed = is_packable<V>::fixed_size;
+      static constexpr uint32_t key_fixed = is_packable<K, Format>::fixed_size;
+      static constexpr uint32_t val_fixed = is_packable<V, Format>::fixed_size;
 
       // Follow offset at index i to get the pair sub-object's fixed region
       // (skips the u16 members_fixed header)
       const char* pair_fixed(uint32_t i) const
       {
-         const char* off_pos = data_ + 4 + i * 4;
-         uint32_t    off     = frac_detail::read_u32(off_pos);
+         const char* off_pos = data_ + Format::size_bytes + i * Format::size_bytes;
+         uint32_t    off     = frac_detail::read_size_at<Format>(off_pos);
          return off_pos + off + 2;  // skip u16 members_fixed header
       }
 
@@ -1078,7 +1137,7 @@ namespace psio
       {
          const char* pf = pair_fixed(i);
          if constexpr (std::is_same_v<K, std::string>)
-            return frac_detail::read_frac_string(pf);
+            return frac_detail::read_frac_string<Format>(pf);
          else
          {
             K val;
@@ -1091,7 +1150,7 @@ namespace psio
       {
          const char* pf = pair_fixed(i) + key_fixed;
          if constexpr (std::is_same_v<V, std::string>)
-            return frac_detail::read_frac_string(pf);
+            return frac_detail::read_frac_string<Format>(pf);
          else if constexpr (std::is_same_v<V, bool>)
             return *pf != 0;
          else if constexpr (std::is_arithmetic_v<V>)
@@ -1102,13 +1161,13 @@ namespace psio
          }
          else if constexpr (Reflected<V>)
          {
-            if constexpr (is_packable<V>::is_variable_size)
+            if constexpr (is_packable<V, Format>::is_variable_size)
             {
-               uint32_t off = frac_detail::read_u32(pf);
-               return view<V, frac>(pf + off);
+               uint32_t off = frac_detail::read_size_at<Format>(pf);
+               return view<V, frac_fmt<Format>>(pf + off);
             }
             else
-               return view<V, frac>(pf);
+               return view<V, frac_fmt<Format>>(pf);
          }
          else
          {
@@ -1120,7 +1179,8 @@ namespace psio
      public:
       map_view() = default;
       explicit map_view(const char* data)
-          : data_(data), count_(data ? frac_detail::read_u32(data) / 4 : 0)
+          : data_(data),
+            count_(data ? frac_detail::read_size_at<Format>(data) / Format::size_bytes : 0)
       {
       }
       explicit map_view(std::span<const char> sp)
@@ -1188,11 +1248,11 @@ namespace psio
 
    namespace frac_detail
    {
-      template <typename T, size_t N>
+      template <typename T, size_t N, typename Format = frac_format_32>
       auto frac_view_field(const char* struct_start)
       {
          using F      = nth_field_t<T, N>;
-         using layout = frac_layout<T>;
+         using layout = frac_layout<T, Format>;
 
          const char* fixed_start = struct_start + layout::hdr_size;
          const char* field_pos   = fixed_start + layout::offset_of(N);
@@ -1213,19 +1273,19 @@ namespace psio
             return val;
          }
          else if constexpr (std::is_same_v<F, std::string>)
-            return read_frac_string(field_pos);
+            return read_frac_string<Format>(field_pos);
          else if constexpr (is_frac_optional<F>::value)
          {
-            using Inner = typename is_frac_optional<F>::inner_type;
-            uint32_t off;
-            std::memcpy(&off, field_pos, 4);
+            using Inner  = typename is_frac_optional<F>::inner_type;
+            uint32_t off = read_size_at<Format>(field_pos);
             if constexpr (std::is_same_v<Inner, bool>)
-               return off >= 4 ? std::optional<bool>(*(field_pos + off) != 0)
-                               : std::optional<bool>{};
+               return off >= Format::size_bytes
+                          ? std::optional<bool>(*(field_pos + off) != 0)
+                          : std::optional<bool>{};
             else if constexpr (std::is_enum_v<Inner>)
             {
                using U = std::underlying_type_t<Inner>;
-               if (off < 4)
+               if (off < Format::size_bytes)
                   return std::optional<Inner>{};
                U val;
                std::memcpy(&val, field_pos + off, sizeof(U));
@@ -1233,7 +1293,7 @@ namespace psio
             }
             else if constexpr (std::is_arithmetic_v<Inner>)
             {
-               if (off < 4)
+               if (off < Format::size_bytes)
                   return std::optional<Inner>{};
                Inner val;
                std::memcpy(&val, field_pos + off, sizeof(Inner));
@@ -1241,55 +1301,51 @@ namespace psio
             }
             else if constexpr (std::is_same_v<Inner, std::string>)
             {
-               if (off < 4)
+               if (off < Format::size_bytes)
                   return std::string_view{};
                const char* str = field_pos + off;
-               uint32_t    len = read_u32(str);
-               return std::string_view{str + 4, len};
+               uint32_t    len = read_size_at<Format>(str);
+               return std::string_view{str + Format::size_bytes, len};
             }
             else
                static_assert(!sizeof(Inner*), "unsupported optional inner type for frac view");
          }
          else if constexpr (is_frac_set<F>::value)
          {
-            using K = typename is_frac_set<F>::key_type;
-            uint32_t off;
-            std::memcpy(&off, field_pos, 4);
+            using K      = typename is_frac_set<F>::key_type;
+            uint32_t off = read_size_at<Format>(field_pos);
             if (off <= 1)
-               return set_view<K, frac>{};
-            return set_view<K, frac>(field_pos + off);
+               return set_view<K, frac_fmt<Format>>{};
+            return set_view<K, frac_fmt<Format>>(field_pos + off);
          }
          else if constexpr (is_frac_map<F>::value)
          {
-            using K  = typename is_frac_map<F>::key_type;
-            using MV = typename is_frac_map<F>::mapped_type;
-            uint32_t off;
-            std::memcpy(&off, field_pos, 4);
+            using K      = typename is_frac_map<F>::key_type;
+            using MV     = typename is_frac_map<F>::mapped_type;
+            uint32_t off = read_size_at<Format>(field_pos);
             if (off <= 1)
-               return map_view<K, MV, frac>{};
-            return map_view<K, MV, frac>(field_pos + off);
+               return map_view<K, MV, frac_fmt<Format>>{};
+            return map_view<K, MV, frac_fmt<Format>>(field_pos + off);
          }
          else if constexpr (is_frac_vector<F>::value)
          {
-            using E = typename is_frac_vector<F>::value_type;
-            uint32_t off;
-            std::memcpy(&off, field_pos, 4);
+            using E      = typename is_frac_vector<F>::value_type;
+            uint32_t off = read_size_at<Format>(field_pos);
             if (off <= 1)
-               return vec_view<E, frac>{};
-            return vec_view<E, frac>(field_pos + off);
+               return vec_view<E, frac_fmt<Format>>{};
+            return vec_view<E, frac_fmt<Format>>(field_pos + off);
          }
          else if constexpr (Reflected<F>)
          {
-            if constexpr (is_packable<F>::is_variable_size)
+            if constexpr (is_packable<F, Format>::is_variable_size)
             {
-               uint32_t off;
-               std::memcpy(&off, field_pos, 4);
+               uint32_t off = read_size_at<Format>(field_pos);
                if (off <= 1)
-                  return view<F, frac>{};
-               return view<F, frac>(field_pos + off);
+                  return view<F, frac_fmt<Format>>{};
+               return view<F, frac_fmt<Format>>(field_pos + off);
             }
             else
-               return view<F, frac>(field_pos);
+               return view<F, frac_fmt<Format>>(field_pos);
          }
          else
             static_assert(!sizeof(F*), "unsupported field type for frac view");
@@ -1297,12 +1353,15 @@ namespace psio
    }  // namespace frac_detail
 
    // ══════════════════════════════════════════════════════════════════════════
-   // struct frac — fracpack format tag for view<T, frac>
+   // frac_fmt<Format> — fracpack format tag for view<T, Fmt>
    //
    // Satisfies the Format concept: ptr_t, root<T>(), field<T,N>().
+   // `frac = frac_fmt<frac_format_32>` (back-compat) declared up top.
+   // `frac16 = frac_fmt<frac_format_16>` (new).
    // ══════════════════════════════════════════════════════════════════════════
 
-   struct frac
+   template <typename Format>
+   struct frac_fmt
    {
       using ptr_t = const char*;
 
@@ -1315,12 +1374,16 @@ namespace psio
       template <typename T, size_t N>
       static auto field(ptr_t data)
       {
-         return frac_detail::frac_view_field<T, N>(data);
+         return frac_detail::frac_view_field<T, N, Format>(data);
       }
    };
 
    /// frac_view<T> — alias for view<T, frac>
    template <typename T>
    using frac_view = view<T, frac>;
+
+   /// frac16_view<T> — alias for view<T, frac16>
+   template <typename T>
+   using frac16_view = view<T, frac16>;
 
 }  // namespace psio

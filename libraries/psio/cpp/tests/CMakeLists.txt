@@ -1,8 +1,19 @@
 add_executable(psio_tests
    main.cpp
    frac_ref_tests.cpp
+   frac16_tests.cpp
+   frac16_mutation_tests.cpp
+   frac16_fuzz_generated.cpp
+   bin_extensibility_tests.cpp
    json_tests.cpp
    multiformat_tests.cpp
+   ext_int_tests.cpp
+   bounded_tests.cpp
+   schema_bounded_tests.cpp
+   bitset_tests.cpp
+   ssz_tests.cpp
+   pssz_tests.cpp
+   beacon_state_tests.cpp
    view_tests.cpp
    wit_variant_tests.cpp
    capnp_view_tests.cpp

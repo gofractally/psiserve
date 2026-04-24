@@ -26,6 +26,20 @@ if(PSIO_ENABLE_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
 
    add_executable(gen_test_vectors tools/gen_test_vectors.cpp)
    target_link_libraries(gen_test_vectors PRIVATE psio)
+
+   # Cross-validation fixture emitters — each prints hex on stdout
+   # for the Rust side to verify against. Keeps C++ and Rust wire
+   # formats synchronized for SSZ and pSSZ.
+   foreach(xval_tool IN ITEMS
+       emit_xval_fixtures
+       emit_xval_extint
+       emit_xval_arrays
+       emit_xval_bits
+       emit_xval_validator)
+      add_executable(${xval_tool} tools/${xval_tool}.cpp)
+      target_link_libraries(${xval_tool} PRIVATE psio)
+      target_compile_features(${xval_tool} PRIVATE cxx_std_23)
+   endforeach()
 endif()
 
 option(PSIO_ENABLE_BENCHMARKS "Build psio benchmarks" OFF)
@@ -33,6 +47,21 @@ if(PSIO_ENABLE_BENCHMARKS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
    add_executable(psio_bench benchmarks/bench_fracpack.cpp)
    target_link_libraries(psio_bench PRIVATE psio)
    target_compile_options(psio_bench PRIVATE -O2)
+
+   # frac16 size/speed comparison against frac32 baseline.
+   add_executable(psio_bench16 benchmarks/bench_fracpack16.cpp)
+   target_link_libraries(psio_bench16 PRIVATE psio)
+   target_compile_options(psio_bench16 PRIVATE -O2)
+
+   # Shadow-index over pack_bin: vs fracpack view vs full unpack (read-all).
+   add_executable(psio_bench_shadow benchmarks/bench_shadow_index.cpp)
+   target_link_libraries(psio_bench_shadow PRIVATE psio)
+   target_compile_options(psio_bench_shadow PRIVATE -O2)
+
+   # Aggregate perf on 200 fuzz-generated random struct types.
+   add_executable(psio_bench_fuzz benchmarks/bench_fuzz_generated.cpp)
+   target_link_libraries(psio_bench_fuzz PRIVATE psio)
+   target_compile_options(psio_bench_fuzz PRIVATE -O2)
 
    add_executable(psio_bench_zerocomp benchmarks/bench_zero_compress.cpp)
    target_link_libraries(psio_bench_zerocomp PRIVATE psio)
@@ -128,5 +157,66 @@ if(PSIO_ENABLE_BENCHMARKS AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
       message(STATUS "msgpack-cxx found — building psio_bench_msgpack")
    else()
       message(STATUS "msgpack-cxx not found — skipping psio_bench_msgpack")
+   endif()
+
+   # ── SSZ BeaconState benchmark ────────────────────────────────────────────
+   # psio-only build is always present. Optional comparison against sszpp
+   # (OffchainLabs) is gated on PSIO_BENCH_SSZPP + PSIO_SSZPP_DIR.
+
+   add_executable(psio_bench_ssz_beacon benchmarks/bench_ssz_beacon.cpp)
+   target_link_libraries(psio_bench_ssz_beacon PRIVATE psio)
+   target_compile_features(psio_bench_ssz_beacon PRIVATE cxx_std_23)
+   target_compile_options(psio_bench_ssz_beacon PRIVATE -O3)
+
+   # Real current-mainnet (Fulu) BeaconState — 310 MiB load + round-trip.
+   add_executable(psio_bench_modern_state benchmarks/bench_modern_state.cpp)
+   target_link_libraries(psio_bench_modern_state PRIVATE psio)
+   target_compile_features(psio_bench_modern_state PRIVATE cxx_std_23)
+   target_compile_options(psio_bench_modern_state PRIVATE -O3)
+
+   option(PSIO_BENCH_SSZPP "Enable sszpp comparison in psio_bench_ssz_beacon" OFF)
+   set(PSIO_SSZPP_DIR "" CACHE PATH
+       "Path to OffchainLabs/sszpp source tree (headers under lib/)")
+   set(PSIO_INTX_DIR ""  CACHE PATH
+       "Path to chfast/intx source tree (sszpp dependency, headers under include/)")
+   set(PSIO_HASHTREE_DIR "" CACHE PATH
+       "Path to prysmaticlabs/hashtree source tree (sszpp dependency, built under build/)")
+
+   if(PSIO_BENCH_SSZPP)
+      if(NOT PSIO_SSZPP_DIR)
+         message(FATAL_ERROR
+                 "PSIO_BENCH_SSZPP=ON requires -DPSIO_SSZPP_DIR=/path/to/sszpp")
+      endif()
+      if(NOT EXISTS "${PSIO_SSZPP_DIR}/lib/ssz++.hpp")
+         message(WARNING
+                 "PSIO_SSZPP_DIR=${PSIO_SSZPP_DIR} does not contain lib/ssz++.hpp. "
+                 "Verify the sszpp checkout path.")
+      endif()
+      target_include_directories(psio_bench_ssz_beacon PRIVATE
+          "${PSIO_SSZPP_DIR}/lib"
+          "${PSIO_SSZPP_DIR}")
+      if(PSIO_INTX_DIR)
+         target_include_directories(psio_bench_ssz_beacon PRIVATE
+             "${PSIO_INTX_DIR}/include")
+      else()
+         message(FATAL_ERROR
+                 "sszpp depends on chfast/intx; set -DPSIO_INTX_DIR=/path/to/intx")
+      endif()
+      if(PSIO_HASHTREE_DIR)
+         target_include_directories(psio_bench_ssz_beacon PRIVATE
+             "${PSIO_HASHTREE_DIR}/src")
+         target_link_libraries(psio_bench_ssz_beacon PRIVATE
+             "${PSIO_HASHTREE_DIR}/build/lib/libhashtree.a")
+      else()
+         message(FATAL_ERROR
+                 "sszpp depends on prysmaticlabs/hashtree; "
+                 "set -DPSIO_HASHTREE_DIR=/path/to/hashtree (run `make` inside it first)")
+      endif()
+      target_compile_definitions(psio_bench_ssz_beacon PRIVATE PSIO_HAVE_SSZPP=1)
+      message(STATUS "sszpp enabled: ${PSIO_SSZPP_DIR}")
+   else()
+      message(STATUS
+              "sszpp disabled (use -DPSIO_BENCH_SSZPP=ON -DPSIO_SSZPP_DIR=... "
+              "-DPSIO_INTX_DIR=... -DPSIO_HASHTREE_DIR=... to enable)")
    endif()
 endif()

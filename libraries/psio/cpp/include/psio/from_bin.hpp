@@ -2,7 +2,11 @@
 
 #include <optional>
 #include <psio/reflect.hpp>
+#include <psio/bitset.hpp>
+#include <psio/bounded.hpp>
+#include <psio/ext_int.hpp>
 #include <psio/stream.hpp>
+#include <psio/to_bin.hpp>   // for bin_detail traits shared with to_bin
 #include <string_view>
 #include <tuple>
 #include <variant>
@@ -103,6 +107,59 @@ namespace psio
       return sleb_from_bin<int32_t>(stream);
    }
 
+   // ── Bit types ─────────────────────────────────────────────────────────────
+   //
+   // bitvector is auto-handled via has_bitwise_serialization (memcpy path).
+
+   template <std::size_t MaxN, typename S>
+   void from_bin(bitlist<MaxN>& v, S& stream)
+   {
+      std::uint32_t bit_count = 0;
+      varuint32_from_bin(bit_count, stream);
+      check(bit_count <= MaxN, "bitlist overflow on decode");
+      std::size_t byte_count = (static_cast<std::size_t>(bit_count) + 7) / 8;
+      std::vector<std::uint8_t> tmp(byte_count);
+      if (byte_count)
+         stream.read(reinterpret_cast<char*>(tmp.data()), byte_count);
+      v.assign_raw(static_cast<std::size_t>(bit_count), tmp.data());
+   }
+
+   template <std::size_t N, typename S>
+   void from_bin(std::bitset<N>& bs, S& stream)
+   {
+      std::uint8_t buf[(N + 7) / 8];
+      stream.read(reinterpret_cast<char*>(buf), (N + 7) / 8);
+      unpack_bitset_bytes(buf, bs);
+   }
+
+   template <typename S>
+   void from_bin(std::vector<bool>& v, S& stream)
+   {
+      std::uint32_t bit_count = 0;
+      varuint32_from_bin(bit_count, stream);
+      std::size_t byte_count = (static_cast<std::size_t>(bit_count) + 7) / 8;
+      std::vector<std::uint8_t> tmp(byte_count);
+      if (byte_count)
+         stream.read(reinterpret_cast<char*>(tmp.data()), byte_count);
+      unpack_vector_bool(tmp.data(), static_cast<std::size_t>(bit_count), v);
+   }
+
+   // ── Bounded collections (validate bound on decode) ────────────────────────
+
+   template <typename T, std::size_t N, typename S>
+   void from_bin(bounded_list<T, N>& val, S& stream)
+   {
+      from_bin(val.storage(), stream);
+      check(val.size() <= N, "bounded_list overflow on decode");
+   }
+
+   template <std::size_t N, typename S>
+   void from_bin(bounded_string<N>& val, S& stream)
+   {
+      from_bin(val.storage(), stream);
+      check(val.size() <= N, "bounded_string overflow on decode");
+   }
+
    template <typename T, typename S>
    void from_bin(std::vector<T>& v, S& stream)
    {
@@ -110,10 +167,7 @@ namespace psio
       {
          uint32_t size;
          varuint32_from_bin(size, stream);
-         stream.check_available(size * sizeof(T));
-         v.resize(size);
-         if (size)
-            stream.read(reinterpret_cast<char*>(v.data()), size * sizeof(T));
+         read_vector_bitwise(v, stream, static_cast<std::size_t>(size));
       }
       else
       {
@@ -132,8 +186,7 @@ namespace psio
    {
       uint32_t size;
       varuint32_from_bin(size, stream);
-      obj.resize(size);
-      stream.read(obj.data(), obj.size());
+      read_string_bulk(obj, stream, static_cast<std::size_t>(size));
    }
 
    template <typename S>
@@ -220,6 +273,7 @@ namespace psio
       from_bin_tuple<0>(obj, stream);
    }
 
+
    template <typename T, typename S>
    void from_bin(T& obj, S& stream)
    {
@@ -227,10 +281,59 @@ namespace psio
       {
          stream.read(reinterpret_cast<char*>(&obj), sizeof(T));
       }
-      else
+      else if constexpr (bin_detail::is_bitwise_dwnc_struct<T>())
       {
+         // Compile-time verified: layout matches wire, read the whole thing.
+         stream.read(reinterpret_cast<char*>(&obj), sizeof(T));
+      }
+      else if constexpr (reflect<T>::definitionWillNotChange)
+      {
+         // Fixed schema (DWNC): sequential fields, no header.
          psio::apply_members((typename reflect<T>::data_members*)nullptr,
                              [&](auto... member) { (from_bin(obj.*member, stream), ...); });
+      }
+      else
+      {
+         // Extensible schema: [varuint content_size][fields...][unknown ext bytes]
+         std::uint32_t content_size = varuint32_from_bin(stream);
+         if (stream.remaining() < content_size)
+            abort_error(stream_error::overrun);
+         const char* content_end = stream.pos + content_size;
+         const char* saved_end   = stream.end;
+         // Temporarily bound the stream so nested reads can't spill past
+         // this struct's declared end. Restored after walking fields.
+         stream.end = content_end;
+
+         bool eof_hit = stream.pos >= stream.end;
+         psio::apply_members(
+             (typename reflect<T>::data_members*)nullptr,
+             [&](auto... member)
+             {
+                auto process = [&](auto m)
+                {
+                   using FT = std::remove_cvref_t<decltype(obj.*m)>;
+                   if (eof_hit)
+                   {
+                      // Already past the struct content; remaining fields
+                      // must be optional (trimmed or unknown-new).
+                      if constexpr (is_std_optional_v<FT>)
+                         (obj.*m).reset();
+                      else
+                         abort_error(stream_error::underrun);
+                   }
+                   else
+                   {
+                      from_bin(obj.*m, stream);
+                      if (stream.pos >= stream.end)
+                         eof_hit = true;
+                   }
+                };
+                (process(member), ...);
+             });
+
+         // Skip any unknown trailing bytes (newer-schema extension).
+         stream.pos = content_end;
+         stream.end = saved_end;
       }
    }
 

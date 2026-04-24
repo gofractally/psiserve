@@ -359,6 +359,14 @@ namespace psio::schema_types
          {
             return "list<" + inline_any(*l.type) + ">";
          }
+         std::string inline_type(const BoundedList& l)
+         {
+            // WIT has no native bounded-list syntax. Emit as list<T> with a
+            // psio convention comment carrying the bound — consumable by
+            // psio-aware tooling on round-trip.
+            return "list<" + inline_any(*l.type) +
+                   ">/* @psio:max=" + std::to_string(l.maxCount) + " */";
+         }
          std::string inline_type(const Option& o)
          {
             return "option<" + inline_any(*o.type) + ">";

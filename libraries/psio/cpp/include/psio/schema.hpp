@@ -241,6 +241,17 @@ namespace psio
       };
       PSIO_REFLECT_TYPENAME(List)
 
+      // Bounded variable-length list. Same wire semantics as List except the
+      // count is bounded by `maxCount` at the schema level. Emerges from
+      // psio::bounded_list<T, N>. Kept distinct from List so unbounded consumers
+      // (std::vector<T>) retain their transparent JSON round-trip.
+      struct BoundedList
+      {
+         Box<AnyType> type;
+         std::uint64_t maxCount;
+      };
+      PSIO_REFLECT(BoundedList, type, maxCount)
+
       void to_json(const List& type, auto& stream)
       {
          to_json(*type.type, stream);
@@ -408,6 +419,7 @@ namespace psio
          AnyType(Struct type);
          AnyType(Option type);
          AnyType(List type);
+         AnyType(BoundedList type);
          AnyType(Array type);
          AnyType(Variant type);
          AnyType(Tuple type);
@@ -421,6 +433,7 @@ namespace psio
                       Object,
                       Array,
                       List,
+                      BoundedList,
                       Option,
                       Variant,
                       Tuple,
@@ -571,6 +584,7 @@ namespace psio
       inline AnyType::AnyType(Struct type) : value(std::move(type)) {}
       inline AnyType::AnyType(Option type) : value(std::move(type)) {}
       inline AnyType::AnyType(List type) : value(std::move(type)) {}
+      inline AnyType::AnyType(BoundedList type) : value(std::move(type)) {}
       inline AnyType::AnyType(Array type) : value(std::move(type)) {}
       inline AnyType::AnyType(Variant type) : value(std::move(type)) {}
       inline AnyType::AnyType(Tuple type) : value(std::move(type)) {}
@@ -2014,6 +2028,69 @@ namespace psio
                else if constexpr (is_std_vector_v<T>)
                {
                   schema.insert(name, List{insert<typename is_std_vector<T>::value_type>()});
+               }
+               else if constexpr (is_bounded_list_v<T>)
+               {
+                  using E = typename T::value_type;
+                  schema.insert(name,
+                                BoundedList{.type     = insert<E>(),
+                                            .maxCount = T::max_size_v});
+               }
+               else if constexpr (is_bounded_string_v<T>)
+               {
+                  schema.insert(
+                      name,
+                      Custom{.type = BoundedList{.type     = insert<unsigned char>(),
+                                                 .maxCount = T::max_size_v},
+                             .id   = "string"});
+               }
+               else if constexpr (std::is_same_v<T, psio::uint128>)
+               {
+                  schema.insert(name, Int{.bits = 128, .isSigned = false});
+               }
+               else if constexpr (std::is_same_v<T, psio::int128>)
+               {
+                  schema.insert(name, Int{.bits = 128, .isSigned = true});
+               }
+               else if constexpr (std::is_same_v<T, psio::uint256>)
+               {
+                  schema.insert(name, Int{.bits = 256, .isSigned = false});
+               }
+               else if constexpr (is_bitvector_v<T>)
+               {
+                  // SSZ Bitvector[N]: fixed N bits of raw data. Express as a
+                  // fixed-size byte array with a "bitvector" tag.
+                  schema.insert(
+                      name,
+                      Custom{.type = Array{.type = insert<unsigned char>(),
+                                           .len  = T::byte_count},
+                             .id = "bitvector:" + std::to_string(T::size_v)});
+               }
+               else if constexpr (is_bitlist_v<T>)
+               {
+                  // Variable up-to-N bits. Express as BoundedList<u8> with
+                  // maxCount = ceil(N/8) bytes, tagged "bitlist".
+                  constexpr std::size_t max_bytes = (T::max_size_v + 7) / 8;
+                  schema.insert(
+                      name,
+                      Custom{.type     = BoundedList{.type     = insert<unsigned char>(),
+                                                      .maxCount = max_bytes},
+                             .id       = "bitlist:" + std::to_string(T::max_size_v)});
+               }
+               else if constexpr (is_std_bitset_v<T>)
+               {
+                  // std::bitset<N> has identical wire format to bitvector<N>.
+                  constexpr std::size_t nb = (T{}.size() + 7) / 8;
+                  schema.insert(
+                      name,
+                      Custom{.type = Array{.type = insert<unsigned char>(), .len = nb},
+                             .id   = "bitvector:" + std::to_string(T{}.size())});
+               }
+               else if constexpr (std::is_same_v<T, std::vector<bool>>)
+               {
+                  // Unbounded bitlist analogue.
+                  schema.insert(name, Custom{.type = List{insert<unsigned char>()},
+                                             .id   = "bitlist"});
                }
                else if constexpr (is_std_variant_v<T>)
                {

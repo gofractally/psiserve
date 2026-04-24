@@ -16,6 +16,10 @@
 //   - Tuples:     fields concatenated in order
 //   - Arrays:     elements concatenated (no length prefix — length is type)
 
+#include <psio/bitset.hpp>
+#include <psio/bounded.hpp>
+#include <psio/detail/run_detector.hpp>
+#include <psio/ext_int.hpp>
 #include <psio/reflect.hpp>
 #include <psio/stream.hpp>
 #include <array>
@@ -120,6 +124,26 @@ namespace psio
       stream.write(reinterpret_cast<const char*>(&val), sizeof(val));
    }
 
+   // ── Extended integer types (GCC/Clang __int128, psio::uint256) ────────────
+
+   template <typename S>
+   void to_bincode(unsigned __int128 val, S& stream)
+   {
+      stream.write(reinterpret_cast<const char*>(&val), sizeof(val));
+   }
+
+   template <typename S>
+   void to_bincode(__int128 val, S& stream)
+   {
+      stream.write(reinterpret_cast<const char*>(&val), sizeof(val));
+   }
+
+   template <typename S>
+   void to_bincode(const uint256& val, S& stream)
+   {
+      stream.write(reinterpret_cast<const char*>(&val), sizeof(val));
+   }
+
    // Scoped enums: encode as underlying integer type
    template <typename T, typename S>
       requires std::is_enum_v<T>
@@ -143,6 +167,58 @@ namespace psio
    void to_bincode(const std::string& s, S& stream)
    {
       to_bincode(std::string_view{s}, stream);
+   }
+
+   // ── Bit types ─────────────────────────────────────────────────────────────
+
+   template <std::size_t N, typename S>
+   void to_bincode(const bitvector<N>& v, S& stream)
+   {
+      stream.write(reinterpret_cast<const char*>(v.data()), bitvector<N>::byte_count);
+   }
+
+   template <std::size_t MaxN, typename S>
+   void to_bincode(const bitlist<MaxN>& v, S& stream)
+   {
+      std::uint64_t bit_count = v.size();
+      stream.write(reinterpret_cast<const char*>(&bit_count), sizeof(bit_count));
+      auto data = v.bytes();
+      if (!data.empty())
+         stream.write(reinterpret_cast<const char*>(data.data()), data.size());
+   }
+
+   // std::bitset<N>: identical wire format to psio::bitvector<N>.
+   template <std::size_t N, typename S>
+   void to_bincode(const std::bitset<N>& bs, S& stream)
+   {
+      std::uint8_t buf[(N + 7) / 8];
+      pack_bitset_bytes(bs, buf);
+      stream.write(reinterpret_cast<const char*>(buf), (N + 7) / 8);
+   }
+
+   // std::vector<bool>: unbounded bitlist analogue.
+   template <typename S>
+   void to_bincode(const std::vector<bool>& v, S& stream)
+   {
+      std::uint64_t bit_count = v.size();
+      stream.write(reinterpret_cast<const char*>(&bit_count), sizeof(bit_count));
+      auto packed = pack_vector_bool(v);
+      if (!packed.empty())
+         stream.write(reinterpret_cast<const char*>(packed.data()), packed.size());
+   }
+
+   // ── Bounded collections (delegate to std::vector/std::string encoding) ────
+
+   template <typename T, std::size_t N, typename S>
+   void to_bincode(const bounded_list<T, N>& val, S& stream)
+   {
+      to_bincode(val.storage(), stream);
+   }
+
+   template <std::size_t N, typename S>
+   void to_bincode(const bounded_string<N>& val, S& stream)
+   {
+      to_bincode(val.storage(), stream);
    }
 
    // ── Vectors ───────────────────────────────────────────────────────────────
@@ -247,8 +323,21 @@ namespace psio
    template <typename T, typename S>
    void to_bincode(const T& obj, S& stream)
    {
-      psio::apply_members((typename reflect<T>::data_members*)nullptr,
-                          [&](auto... member) { (to_bincode(obj.*member, stream), ...); });
+      if constexpr (run_detail::has_batchable_run<T>())
+      {
+         // Contiguous bitwise fields get batched into a single stream.write;
+         // non-bitwise fields fall through to per-field to_bincode.
+         auto op = [&](auto const& val) { to_bincode(val, stream); };
+         run_detail::walk_with_runs(
+             obj, stream,
+             static_cast<int>(std::tuple_size_v<struct_tuple_t<T>>), op);
+      }
+      else
+      {
+         psio::apply_members(
+             (typename reflect<T>::data_members*)nullptr,
+             [&](auto... member) { (to_bincode(obj.*member, stream), ...); });
+      }
    }
 
    // ── Public API ────────────────────────────────────────────────────────────
