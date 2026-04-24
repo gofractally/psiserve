@@ -13,14 +13,16 @@
 #include <psizam/pzam_metadata.hpp>
 #include <psizam/detail/wasi_host.hpp>
 
+#include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -133,37 +135,54 @@ int pzam_run_main(int argc, char** argv) {
 
    profile.mark("arg parsing + preopen setup");
 
-   // Read the .pzam file
-   std::ifstream pzam_in(pzam_file_path, std::ios::binary | std::ios::ate);
-   if (!pzam_in.is_open()) {
+   // Map the .pzam file read-only. mmap + madvise(WILLNEED) lets the kernel
+   // page it in lazily from the page cache; avoids the std::ifstream::read
+   // copy into a heap vector (which cost ~425ms for a 168 MB file on warm
+   // cache, ~400 MB/s effective) and, on cold cache, overlaps I/O with the
+   // parse/relocate work below.
+   int pzam_fd = ::open(pzam_file_path.c_str(), O_RDONLY | O_CLOEXEC);
+   if (pzam_fd < 0) {
       std::cerr << "Error: cannot open pzam file: " << pzam_file_path << "\n";
       return 1;
    }
-   auto pzam_size = pzam_in.tellg();
-   pzam_in.seekg(0);
-   std::vector<char> pzam_data(pzam_size);
-   pzam_in.read(pzam_data.data(), pzam_size);
-
-   profile.mark("read .pzam file (I/O)");
-
-   // Load and validate .pzam file
-   if (!pzam_validate(pzam_data)) {
-      std::cerr << "Error: invalid .pzam file\n";
+   struct stat st;
+   if (::fstat(pzam_fd, &st) != 0) {
+      perror("[pzam-run] fstat");
+      ::close(pzam_fd);
       return 1;
    }
+   size_t pzam_size = static_cast<size_t>(st.st_size);
+   void* pzam_mapped = ::mmap(nullptr, pzam_size, PROT_READ, MAP_PRIVATE, pzam_fd, 0);
+   if (pzam_mapped == MAP_FAILED) {
+      perror("[pzam-run] mmap");
+      ::close(pzam_fd);
+      return 1;
+   }
+   ::close(pzam_fd);  // mapping survives close
+   ::madvise(pzam_mapped, pzam_size, MADV_WILLNEED);
+   std::span<const char> pzam_bytes(static_cast<const char*>(pzam_mapped), pzam_size);
+
+   profile.mark("mmap .pzam file");
+
+   // Parse the .pzam. from_frac already rejects malformed encodings by
+   // returning an error (we get an exception via abort_error), so we skip
+   // the separate pzam_validate walk that used to precede it — it was a
+   // second full walk over ~168 MB for no extra safety.
    pzam_file pzam;
    try {
-      pzam = pzam_load(pzam_data);
+      pzam = pzam_load(pzam_bytes);
    } catch (const std::exception& e) {
       std::cerr << "Error: failed to parse .pzam file: " << e.what() << "\n";
+      ::munmap(pzam_mapped, pzam_size);
       return 1;
    }
    if (pzam.magic != PZAM_MAGIC) {
       std::cerr << "Error: bad .pzam magic\n";
+      ::munmap(pzam_mapped, pzam_size);
       return 1;
    }
 
-   profile.mark("pzam_validate + pzam_load");
+   profile.mark("pzam_load (from_frac)");
 
    // Find a code section matching this platform's architecture
    auto expected_arch =
