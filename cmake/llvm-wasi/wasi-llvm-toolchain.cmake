@@ -80,7 +80,18 @@ get_filename_component(_COMPAT_DIR "${CMAKE_CURRENT_LIST_DIR}/wasi_compat" ABSOL
 set(_COMMON_FLAGS "--target=${_TARGET} --sysroot=${_WASI_SYSROOT}")
 # Compat headers searched before sysroot
 set(_COMMON_FLAGS "${_COMMON_FLAGS} -isystem ${_COMPAT_DIR}")
-set(_COMMON_FLAGS "${_COMMON_FLAGS} -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_PROCESS_CLOCKS")
+# Emulated signal/mman only. We intentionally do NOT define
+# _WASI_EMULATED_PROCESS_CLOCKS so that <sys/resource.h> emits its #error
+# sentinel at configure time -- that causes CMake's check_symbol_exists
+# for getrusage/getrlimit to fail, which in turn makes HAVE_GETRUSAGE
+# come out unset in config.h. LLVM's Unix/Process.inc then takes the
+# non-rusage fallback path that whitequark's YoWASP patch leaves for
+# wasi (return zero durations). Defining it here used to mask the #error
+# and tricked the configure into thinking getrusage was available, even
+# though wasi-sdk 32's sys/resource.h gates the rusage struct behind
+# __wasilibc_unmodified_upstream which is never set -- producing
+# compile failures.
+set(_COMMON_FLAGS "${_COMMON_FLAGS} -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN")
 set(_COMMON_FLAGS "${_COMMON_FLAGS} -fno-exceptions")
 # LLVM needs to think it's on Unix for Support library OS-specific code paths
 set(_COMMON_FLAGS "${_COMMON_FLAGS} -DLLVM_ON_UNIX=1")
@@ -95,7 +106,7 @@ set(_COMMON_FLAGS "${_COMMON_FLAGS} -DBYTE_ORDER=1234 -DLITTLE_ENDIAN=1234 -DBIG
 set(CMAKE_C_FLAGS_INIT "${_COMMON_FLAGS}")
 set(CMAKE_CXX_FLAGS_INIT "${_COMMON_FLAGS} -isystem ${_CXX_INCLUDE} -stdlib=libc++")
 
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${_CXX_LIB} -L${_RT_LIB} -lc++ -lc++abi -lwasi-emulated-signal -lwasi-emulated-mman -lwasi-emulated-process-clocks")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${_CXX_LIB} -L${_RT_LIB} -lc++ -lc++abi -lwasi-emulated-signal -lwasi-emulated-mman")
 
 # Opt-in link against libwasi_llvm_stubs.a (POSIX stubs for LLVM symbols that
 # wasi-libc doesn't provide: sigaction, getrlimit, getpwuid_r, ...). Used by
