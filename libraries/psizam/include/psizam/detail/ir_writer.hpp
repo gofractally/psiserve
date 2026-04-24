@@ -2941,8 +2941,11 @@ namespace psizam::detail {
             inst.type = types::i32;
             inst.flags = IR_SIDE_EFFECT;
             inst.dest = sjresult;
-            inst.rr.src1 = jmpbuf_vreg;
-            inst.rr.src2 = ir_vreg_none;
+            // ri.src1 = jmpbuf vreg; ri.imm = eh_idx so codegen can pick a
+            // per-try_table save slot instead of sharing one set across
+            // every nested try_table.
+            inst.ri.src1 = jmpbuf_vreg;
+            inst.ri.imm = static_cast<int32_t>(eh_idx);
             _func->emit(inst);
          }
 
