@@ -136,6 +136,17 @@ target_include_directories(psio3_v1_parity_avro_tests PRIVATE
 target_compile_features(psio3_v1_parity_avro_tests PRIVATE cxx_std_23)
 add_test(NAME psio3_v1_parity_avro_tests COMMAND psio3_v1_parity_avro_tests)
 
+# Cross-format v1-oracle tests. Ported in pattern from psio2's
+# v1_oracle_tests.cpp: parallel v1/v3 types with matching shapes, byte
+# equality across every format. Exercises reflected records — coverage
+# the per-format parity tests were missing.
+add_executable(psio3_v1_oracle_tests v1_oracle_tests.cpp main.cpp)
+target_link_libraries(psio3_v1_oracle_tests PRIVATE psio3 psio)
+target_include_directories(psio3_v1_oracle_tests PRIVATE
+   ${PSIO3_CATCH2_INCLUDE})
+target_compile_features(psio3_v1_oracle_tests PRIVATE cxx_std_23)
+add_test(NAME psio3_v1_oracle_tests COMMAND psio3_v1_oracle_tests)
+
 # Flatbuf-lib parity test — only if the Google flatbuffers C++ runtime is
 # available via find_package. Matches the same optional path v1 uses for
 # its flatbuf benchmarks.
