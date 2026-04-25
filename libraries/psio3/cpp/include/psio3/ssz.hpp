@@ -680,6 +680,15 @@ namespace psio3 {
          return out;
       }
 
+      // Forward declaration — used by decode_vector to decode record
+      // elements in-place. Definition appears later in this file.
+      template <Record T, std::size_t... Is>
+      void record_decode_into(std::span<const char> src,
+                              std::size_t            pos,
+                              std::size_t            end,
+                              T&                     out,
+                              std::index_sequence<Is...>);
+
       template <typename T>
       std::vector<T> decode_vector(std::span<const char> src,
                                    std::size_t            pos,
@@ -692,10 +701,36 @@ namespace psio3 {
          {
             const std::size_t esz = fixed_size_of<T>();
             const std::size_t n   = (end - pos) / esz;
-            out.reserve(n);
-            for (std::size_t i = 0; i < n; ++i)
-               out.push_back(
-                  decode_value<T>(src, pos + i * esz, pos + (i + 1) * esz));
+            // Bulk-memcpy fast path for arithmetic elements — wire layout
+            // is the raw little-endian bytes of contiguous storage. assign
+            // with pointer iterators skips the zero-init pass that
+            // resize(n)+memcpy would do (v1 from_ssz.hpp:182-193).
+            if constexpr (std::is_arithmetic_v<T> &&
+                          !std::is_same_v<T, bool>)
+            {
+               const T* first = reinterpret_cast<const T*>(src.data() + pos);
+               out.assign(first, first + n);
+            }
+            else if constexpr (Record<T>)
+            {
+               // In-place decode — resize once (single bulk zero-init)
+               // then write each element directly into its slot. Avoids
+               // the per-element `T tmp{}` + move-construct that
+               // push_back(decode_value<T>(...)) incurs.
+               out.resize(n);
+               using R = ::psio3::reflect<T>;
+               for (std::size_t i = 0; i < n; ++i)
+                  record_decode_into<T>(
+                     src, pos + i * esz, pos + (i + 1) * esz, out[i],
+                     std::make_index_sequence<R::member_count>{});
+            }
+            else
+            {
+               out.reserve(n);
+               for (std::size_t i = 0; i < n; ++i)
+                  out.push_back(
+                     decode_value<T>(src, pos + i * esz, pos + (i + 1) * esz));
+            }
          }
          else
          {
@@ -745,17 +780,19 @@ namespace psio3 {
          return decode_value<T>(src, pos + 1, end);
       }
 
+      // Decode in-place: write fields directly into `out`. Mirrors v1's
+      // from_ssz(T&, ...) path. Used by decode_vector to avoid the
+      // per-element `T tmp{}` + move-construct cost when filling a
+      // pre-resized destination.
       template <Record T, std::size_t... Is>
-      T record_decode(std::span<const char> src,
-                      std::size_t            pos,
-                      std::size_t            end,
-                      std::index_sequence<Is...>)
+      void record_decode_into(std::span<const char> src,
+                              std::size_t            pos,
+                              std::size_t            end,
+                              T&                     out,
+                              std::index_sequence<Is...>)
       {
          using R = ::psio3::reflect<T>;
 
-         // Walk once to collect fixed cursor + offsets of variable fields.
-         // Fields with a member-level presentation override are treated
-         // as variable (heap-slot + offset).
          std::array<std::uint32_t, R::member_count> var_offsets{};
          std::array<bool, R::member_count>          is_var{};
          std::size_t                                 cursor = pos;
@@ -785,12 +822,6 @@ namespace psio3 {
              }()),
             ...);
 
-         // Second pass: decode each field. Fixed fields read directly;
-         // variable fields span [pos + off_i, pos + off_{next_var} or end).
-         T out{};
-
-         // Compute the end of each variable field by finding the next
-         // variable field's start.
          std::array<std::size_t, R::member_count> var_end{};
          {
             std::size_t last_end = end;
@@ -841,7 +872,16 @@ namespace psio3 {
                 }
              }()),
             ...);
+      }
 
+      template <Record T, std::size_t... Is>
+      T record_decode(std::span<const char> src,
+                      std::size_t            pos,
+                      std::size_t            end,
+                      std::index_sequence<Is...> seq)
+      {
+         T out{};
+         record_decode_into<T>(src, pos, end, out, seq);
          return out;
       }
 

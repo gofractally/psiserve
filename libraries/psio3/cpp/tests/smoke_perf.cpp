@@ -224,6 +224,27 @@ int main()
                enc_v1, enc_v3, ratio(enc_v3, enc_v1));
    std::printf("[ssz] dec Header       | %8.1f | %8.1f | %.2fx\n",
                dec_v1, dec_v3, ratio(dec_v3, dec_v1));
+   double val_ssz_v1 = ns_per_iter(ITERS, [&](std::size_t) {
+      psio::ssz_validate<v1::Header>(std::span<const char>{bytes_v1});
+      asm volatile("" : : : "memory");
+   });
+   double val_ssz_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::ssz{},
+                                             std::span<const char>{bytes_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_ssz_v1 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio::ssz_size(h1);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   double size_ssz_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::ssz{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[ssz] val Header       | %8.1f | %8.1f | %.2fx\n",
+               val_ssz_v1, val_ssz_v3, ratio(val_ssz_v3, val_ssz_v1));
+   std::printf("[ssz] size Header      | %8.1f | %8.1f | %.2fx\n",
+               size_ssz_v1, size_ssz_v3, ratio(size_ssz_v3, size_ssz_v1));
 
    // ── pSSZ Header (v3 auto-picks W; v1 uses pssz32) ─────────────────
    double enc_pssz_v1 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -253,6 +274,25 @@ int main()
    std::printf("[pssz]   dec Header    | %8.1f | %8.1f | %.2fx\n",
                dec_pssz_v1, dec_pssz_v3,
                ratio(dec_pssz_v3, dec_pssz_v1));
+   // v1 has no free pssz_validate function — v3 only.
+   double val_pssz_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::pssz{},
+                                             std::span<const char>{bytes_pssz_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_pssz_v1 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio::pssz_size<psio::frac_format_pssz32>(h1);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   double size_pssz_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::pssz{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[pssz]   val Header    | %8s | %8.1f |  —  \n",
+               "n/a", val_pssz_v3);
+   std::printf("[pssz]   size Header   | %8.1f | %8.1f | %.2fx\n",
+               size_pssz_v1, size_pssz_v3,
+               ratio(size_pssz_v3, size_pssz_v1));
 
    // ── fracpack Header ────────────────────────────────────────────────
    double enc_frac_v1 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -282,6 +322,26 @@ int main()
    std::printf("[frac32] dec Header    | %8.1f | %8.1f | %.2fx\n",
                dec_frac_v1, dec_frac_v3,
                ratio(dec_frac_v3, dec_frac_v1));
+   // v1 has no free fracpack_validate; v1 from_frac returns a bool but
+   // also performs decode work — not a validate-only path.
+   double val_frac_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::frac32{},
+                                             std::span<const char>{bytes_frac_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_frac_v1 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio::fracpack_size(h1);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   double size_frac_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::frac32{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[frac32] val Header    | %8s | %8.1f |  —  \n",
+               "n/a", val_frac_v3);
+   std::printf("[frac32] size Header   | %8.1f | %8.1f | %.2fx\n",
+               size_frac_v1, size_frac_v3,
+               ratio(size_frac_v3, size_frac_v1));
 
    // ── bin Header ─────────────────────────────────────────────────────
    double enc_bin_v1 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -308,13 +368,28 @@ int main()
    std::printf("[bin] dec Header       | %8.1f | %8.1f | %.2fx\n",
                dec_bin_v1, dec_bin_v3, ratio(dec_bin_v3, dec_bin_v1));
 
-   // Packsize-only — isolates the size walk from the encode write.
+   // v1 has no free bin_validate; v3 only.
+   double val_bin_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::bin{},
+                                             std::span<const char>{bytes_bin_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   // v1 size walk uses a thread-local cache; v3 has the same shape via size_of.
+   double size_bin_v1 = ns_per_iter(ITERS, [&](std::size_t) {
+      static thread_local psio::bin_detail::bin_size_cache cache;
+      cache.slots.clear();
+      cache.consumed = 0;
+      auto n = psio::compute_bin_size(h1, cache);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
    double size_bin_v3 = ns_per_iter(ITERS, [&](std::size_t) {
       auto n = psio3::size_of(psio3::bin{}, h3);
       asm volatile("" : : "r,m"(n) : "memory");
    });
-   std::printf("[bin] size Header      | %8s | %8.1f |  —  \n",
-               "n/a", size_bin_v3);
+   std::printf("[bin] val Header       | %8s | %8.1f |  —  \n",
+               "n/a", val_bin_v3);
+   std::printf("[bin] size Header      | %8.1f | %8.1f | %.2fx\n",
+               size_bin_v1, size_bin_v3, ratio(size_bin_v3, size_bin_v1));
 
    // ── Nested workload: BeaconState with 256 Validators ────────────────
    //
@@ -342,45 +417,273 @@ int main()
 
    std::printf("\n-- BeaconState (256 validators, fully-fixed Validator) --\n");
 
-#define BS_BENCH(LABEL, V1_EXPR, V3_EXPR)                               \
-   {                                                                    \
-      double v1_t = ns_per_iter(ITERS, [&](std::size_t) {               \
-         auto out = (V1_EXPR);                                          \
-         asm volatile("" : : "r,m"(out.data()) : "memory");             \
-      });                                                               \
-      double v3_t = ns_per_iter(ITERS, [&](std::size_t) {               \
-         auto out = (V3_EXPR);                                          \
-         asm volatile("" : : "r,m"(out.data()) : "memory");             \
-      });                                                               \
-      std::printf("[%s] enc BeaconState | %8.1f | %8.1f | %.2fx\n",     \
-                  LABEL, v1_t, v3_t, ratio(v3_t, v1_t));                \
-   }
-   BS_BENCH("bin",     psio::convert_to_bin(state1),
-                        psio3::encode(psio3::bin{}, state3))
-   BS_BENCH("borsh",   psio::convert_to_borsh(state1),
-                        psio3::encode(psio3::borsh{}, state3))
-   BS_BENCH("bincode", psio::convert_to_bincode(state1),
-                        psio3::encode(psio3::bincode{}, state3))
-#undef BS_BENCH
+   // Pre-compute encoded buffers for decode/validate.
+   auto bs_ssz_v1     = psio::convert_to_ssz(state1);
+   auto bs_ssz_v3     = psio3::encode(psio3::ssz{}, state3);
+   auto bs_pssz_v1    = psio::convert_to_pssz<psio::frac_format_pssz32>(state1);
+   auto bs_pssz_v3    = psio3::encode(psio3::pssz{}, state3);
+   auto bs_frac_v1    = psio::convert_to_frac(state1);
+   auto bs_frac_v3    = psio3::encode(psio3::frac32{}, state3);
+   auto bs_bin_v1     = psio::convert_to_bin(state1);
+   auto bs_bin_v3     = psio3::encode(psio3::bin{}, state3);
+   auto bs_borsh_v1   = psio::convert_to_borsh(state1);
+   auto bs_borsh_v3   = psio3::encode(psio3::borsh{}, state3);
+   auto bs_bincode_v1 = psio::convert_to_bincode(state1);
+   auto bs_bincode_v3 = psio3::encode(psio3::bincode{}, state3);
 
-   double size_bs_bin_v3 = ns_per_iter(ITERS, [&](std::size_t) {
-      auto n = psio3::size_of(psio3::bin{}, state3);
-      asm volatile("" : : "r,m"(n) : "memory");
-   });
-   double size_bs_borsh_v3 = ns_per_iter(ITERS, [&](std::size_t) {
-      auto n = psio3::size_of(psio3::borsh{}, state3);
-      asm volatile("" : : "r,m"(n) : "memory");
-   });
-   double size_bs_bc_v3 = ns_per_iter(ITERS, [&](std::size_t) {
-      auto n = psio3::size_of(psio3::bincode{}, state3);
-      asm volatile("" : : "r,m"(n) : "memory");
-   });
-   std::printf("[bin]     size BS      | %8s | %8.1f |  —  \n", "n/a",
-               size_bs_bin_v3);
-   std::printf("[borsh]   size BS      | %8s | %8.1f |  —  \n", "n/a",
-               size_bs_borsh_v3);
-   std::printf("[bincode] size BS      | %8s | %8.1f |  —  \n", "n/a",
-               size_bs_bc_v3);
+   // ssz: v1 has size + validate
+   {
+      double v1_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio::convert_from_ssz<v1::BeaconState>(bs_ssz_v1);
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio3::decode<v3::BeaconState>(psio3::ssz{},
+                                                   std::span<const char>{bs_ssz_v3});
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v1_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio::convert_to_ssz(state1);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v3_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio3::encode(psio3::ssz{}, state3);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v1_val = ns_per_iter(ITERS, [&](std::size_t) {
+         psio::ssz_validate<v1::BeaconState>(std::span<const char>{bs_ssz_v1});
+      });
+      double v3_val = ns_per_iter(ITERS, [&](std::size_t) {
+         auto st = psio3::validate<v3::BeaconState>(psio3::ssz{},
+                                                     std::span<const char>{bs_ssz_v3});
+         asm volatile("" : : "r,m"(st) : "memory");
+      });
+      double v1_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio::ssz_size(state1);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      double v3_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio3::size_of(psio3::ssz{}, state3);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      std::printf("[ssz]     enc BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_enc, v3_enc, ratio(v3_enc, v1_enc));
+      std::printf("[ssz]     dec BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_dec, v3_dec, ratio(v3_dec, v1_dec));
+      std::printf("[ssz]     val BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_val, v3_val, ratio(v3_val, v1_val));
+      std::printf("[ssz]     size BS    | %8.1f | %8.1f | %.2fx\n",
+                  v1_sz, v3_sz, ratio(v3_sz, v1_sz));
+   }
+
+   // pssz: v1 has size only
+   {
+      double v1_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio::convert_to_pssz<psio::frac_format_pssz32>(state1);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v3_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio3::encode(psio3::pssz{}, state3);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v1_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         v1::BeaconState v;
+         psio::convert_from_pssz<psio::frac_format_pssz32, v1::BeaconState>(
+            v, bs_pssz_v1);
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio3::decode<v3::BeaconState>(psio3::pssz{},
+                                                   std::span<const char>{bs_pssz_v3});
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_val = ns_per_iter(ITERS, [&](std::size_t) {
+         auto st = psio3::validate<v3::BeaconState>(psio3::pssz{},
+                                                     std::span<const char>{bs_pssz_v3});
+         asm volatile("" : : "r,m"(st) : "memory");
+      });
+      double v1_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio::pssz_size<psio::frac_format_pssz32>(state1);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      double v3_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio3::size_of(psio3::pssz{}, state3);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      std::printf("[pssz]    enc BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_enc, v3_enc, ratio(v3_enc, v1_enc));
+      std::printf("[pssz]    dec BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_dec, v3_dec, ratio(v3_dec, v1_dec));
+      std::printf("[pssz]    val BS     | %8s | %8.1f |  —  \n",
+                  "n/a", v3_val);
+      std::printf("[pssz]    size BS    | %8.1f | %8.1f | %.2fx\n",
+                  v1_sz, v3_sz, ratio(v3_sz, v1_sz));
+   }
+
+   // frac32: v1 has size only
+   {
+      double v1_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio::convert_to_frac(state1);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v3_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio3::encode(psio3::frac32{}, state3);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v1_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         v1::BeaconState v;
+         auto ok = psio::from_frac<v1::BeaconState>(v, bs_frac_v1);
+         (void)ok;
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio3::decode<v3::BeaconState>(psio3::frac32{},
+                                                   std::span<const char>{bs_frac_v3});
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_val = ns_per_iter(ITERS, [&](std::size_t) {
+         auto st = psio3::validate<v3::BeaconState>(psio3::frac32{},
+                                                     std::span<const char>{bs_frac_v3});
+         asm volatile("" : : "r,m"(st) : "memory");
+      });
+      double v1_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio::fracpack_size(state1);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      double v3_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio3::size_of(psio3::frac32{}, state3);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      std::printf("[frac32]  enc BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_enc, v3_enc, ratio(v3_enc, v1_enc));
+      std::printf("[frac32]  dec BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_dec, v3_dec, ratio(v3_dec, v1_dec));
+      std::printf("[frac32]  val BS     | %8s | %8.1f |  —  \n",
+                  "n/a", v3_val);
+      std::printf("[frac32]  size BS    | %8.1f | %8.1f | %.2fx\n",
+                  v1_sz, v3_sz, ratio(v3_sz, v1_sz));
+   }
+
+   // bin: v1 has size only
+   {
+      double v1_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio::convert_to_bin(state1);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v3_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio3::encode(psio3::bin{}, state3);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v1_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio::convert_from_bin<v1::BeaconState>(bs_bin_v1);
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio3::decode<v3::BeaconState>(psio3::bin{},
+                                                   std::span<const char>{bs_bin_v3});
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_val = ns_per_iter(ITERS, [&](std::size_t) {
+         auto st = psio3::validate<v3::BeaconState>(psio3::bin{},
+                                                     std::span<const char>{bs_bin_v3});
+         asm volatile("" : : "r,m"(st) : "memory");
+      });
+      double v1_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         static thread_local psio::bin_detail::bin_size_cache cache;
+         cache.slots.clear();
+         cache.consumed = 0;
+         auto n = psio::compute_bin_size(state1, cache);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      double v3_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio3::size_of(psio3::bin{}, state3);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      std::printf("[bin]     enc BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_enc, v3_enc, ratio(v3_enc, v1_enc));
+      std::printf("[bin]     dec BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_dec, v3_dec, ratio(v3_dec, v1_dec));
+      std::printf("[bin]     val BS     | %8s | %8.1f |  —  \n",
+                  "n/a", v3_val);
+      std::printf("[bin]     size BS    | %8.1f | %8.1f | %.2fx\n",
+                  v1_sz, v3_sz, ratio(v3_sz, v1_sz));
+   }
+
+   // borsh: v3-only validate + size
+   {
+      double v1_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio::convert_to_borsh(state1);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v3_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio3::encode(psio3::borsh{}, state3);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v1_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio::convert_from_borsh<v1::BeaconState>(bs_borsh_v1);
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio3::decode<v3::BeaconState>(psio3::borsh{},
+                                                   std::span<const char>{bs_borsh_v3});
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_val = ns_per_iter(ITERS, [&](std::size_t) {
+         auto st = psio3::validate<v3::BeaconState>(psio3::borsh{},
+                                                     std::span<const char>{bs_borsh_v3});
+         asm volatile("" : : "r,m"(st) : "memory");
+      });
+      double v3_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio3::size_of(psio3::borsh{}, state3);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      std::printf("[borsh]   enc BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_enc, v3_enc, ratio(v3_enc, v1_enc));
+      std::printf("[borsh]   dec BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_dec, v3_dec, ratio(v3_dec, v1_dec));
+      std::printf("[borsh]   val BS     | %8s | %8.1f |  —  \n",
+                  "n/a", v3_val);
+      std::printf("[borsh]   size BS    | %8s | %8.1f |  —  \n",
+                  "n/a", v3_sz);
+   }
+
+   // bincode: v3-only validate + size
+   {
+      double v1_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio::convert_to_bincode(state1);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v3_enc = ns_per_iter(ITERS, [&](std::size_t) {
+         auto out = psio3::encode(psio3::bincode{}, state3);
+         asm volatile("" : : "r,m"(out.data()) : "memory");
+      });
+      double v1_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio::convert_from_bincode<v1::BeaconState>(bs_bincode_v1);
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_dec = ns_per_iter(ITERS, [&](std::size_t) {
+         auto v = psio3::decode<v3::BeaconState>(psio3::bincode{},
+                                                   std::span<const char>{bs_bincode_v3});
+         asm volatile("" : : "r,m"(v.slot) : "memory");
+      });
+      double v3_val = ns_per_iter(ITERS, [&](std::size_t) {
+         auto st = psio3::validate<v3::BeaconState>(psio3::bincode{},
+                                                     std::span<const char>{bs_bincode_v3});
+         asm volatile("" : : "r,m"(st) : "memory");
+      });
+      double v3_sz = ns_per_iter(ITERS, [&](std::size_t) {
+         auto n = psio3::size_of(psio3::bincode{}, state3);
+         asm volatile("" : : "r,m"(n) : "memory");
+      });
+      std::printf("[bincode] enc BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_enc, v3_enc, ratio(v3_enc, v1_enc));
+      std::printf("[bincode] dec BS     | %8.1f | %8.1f | %.2fx\n",
+                  v1_dec, v3_dec, ratio(v3_dec, v1_dec));
+      std::printf("[bincode] val BS     | %8s | %8.1f |  —  \n",
+                  "n/a", v3_val);
+      std::printf("[bincode] size BS    | %8s | %8.1f |  —  \n",
+                  "n/a", v3_sz);
+   }
 
    // ── borsh Header ───────────────────────────────────────────────────
    double enc_borsh_v1 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -408,6 +711,19 @@ int main()
    std::printf("[borsh] dec Header     | %8.1f | %8.1f | %.2fx\n",
                dec_borsh_v1, dec_borsh_v3,
                ratio(dec_borsh_v3, dec_borsh_v1));
+   double val_borsh_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::borsh{},
+                                             std::span<const char>{bytes_borsh_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_borsh_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::borsh{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[borsh] val Header     | %8s | %8.1f |  —  \n",
+               "n/a", val_borsh_v3);
+   std::printf("[borsh] size Header    | %8s | %8.1f |  —  \n",
+               "n/a", size_borsh_v3);
 
    // ── bincode Header ─────────────────────────────────────────────────
    double enc_bc_v1 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -433,6 +749,19 @@ int main()
                enc_bc_v1, enc_bc_v3, ratio(enc_bc_v3, enc_bc_v1));
    std::printf("[bincode] dec Header   | %8.1f | %8.1f | %.2fx\n",
                dec_bc_v1, dec_bc_v3, ratio(dec_bc_v3, dec_bc_v1));
+   double val_bc_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::bincode{},
+                                             std::span<const char>{bytes_bc_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_bc_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::bincode{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[bincode] val Header   | %8s | %8.1f |  —  \n",
+               "n/a", val_bc_v3);
+   std::printf("[bincode] size Header  | %8s | %8.1f |  —  \n",
+               "n/a", size_bc_v3);
 
    // ── avro Header ────────────────────────────────────────────────────
    double enc_avro_v1 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -460,6 +789,19 @@ int main()
    std::printf("[avro] dec Header      | %8.1f | %8.1f | %.2fx\n",
                dec_avro_v1, dec_avro_v3,
                ratio(dec_avro_v3, dec_avro_v1));
+   double val_avro_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::avro{},
+                                             std::span<const char>{bytes_avro_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_avro_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::avro{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[avro] val Header      | %8s | %8.1f |  —  \n",
+               "n/a", val_avro_v3);
+   std::printf("[avro] size Header     | %8s | %8.1f |  —  \n",
+               "n/a", size_avro_v3);
 
    // ── flatbuf native Header (v3 only — v1 uses different API shape) ─
    double enc_fb_v3 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -476,6 +818,19 @@ int main()
                enc_fb_v3);
    std::printf("[flatbuf] dec Header   |    (n/a) | %8.1f |  —  \n",
                dec_fb_v3);
+   double val_fb_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::flatbuf{},
+                                             std::span<const char>{bytes_fb_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_fb_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::flatbuf{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[flatbuf] val Header   |    (n/a) | %8.1f |  —  \n",
+               val_fb_v3);
+   std::printf("[flatbuf] size Header  |    (n/a) | %8.1f |  —  \n",
+               size_fb_v3);
 
    // ── capnp Header ───────────────────────────────────────────────────
    double enc_cp_v1 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -501,6 +856,19 @@ int main()
                enc_cp_v1, enc_cp_v3, ratio(enc_cp_v3, enc_cp_v1));
    std::printf("[capnp] dec Header     | %8.1f | %8.1f | %.2fx\n",
                dec_cp_v1, dec_cp_v3, ratio(dec_cp_v3, dec_cp_v1));
+   double val_cp_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::capnp{},
+                                             std::span<const char>{bytes_cp_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_cp_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::capnp{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[capnp] val Header     | %8s | %8.1f |  —  \n",
+               "n/a", val_cp_v3);
+   std::printf("[capnp] size Header    | %8s | %8.1f |  —  \n",
+               "n/a", size_cp_v3);
 
    // ── wit Header ─────────────────────────────────────────────────────
    double enc_wit_v1 = ns_per_iter(ITERS, [&](std::size_t) {
@@ -526,6 +894,19 @@ int main()
                enc_wit_v1, enc_wit_v3, ratio(enc_wit_v3, enc_wit_v1));
    std::printf("[wit] dec Header       | %8.1f | %8.1f | %.2fx\n",
                dec_wit_v1, dec_wit_v3, ratio(dec_wit_v3, dec_wit_v1));
+   double val_wit_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto st = psio3::validate<v3::Header>(psio3::wit{},
+                                             std::span<const char>{bytes_wit_v3});
+      asm volatile("" : : "r,m"(st) : "memory");
+   });
+   double size_wit_v3 = ns_per_iter(ITERS, [&](std::size_t) {
+      auto n = psio3::size_of(psio3::wit{}, h3);
+      asm volatile("" : : "r,m"(n) : "memory");
+   });
+   std::printf("[wit] val Header       | %8s | %8.1f |  —  \n",
+               "n/a", val_wit_v3);
+   std::printf("[wit] size Header      | %8s | %8.1f |  —  \n",
+               "n/a", size_wit_v3);
 
    // ── Size comparison ────────────────────────────────────────────────
    std::printf("\nwire size (bytes)      | v1 | v3\n");

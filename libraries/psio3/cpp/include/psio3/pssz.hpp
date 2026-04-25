@@ -636,6 +636,13 @@ namespace psio3 {
          return out;
       }
 
+      // Forward declaration — used by decode_vector to decode record
+      // elements in-place. Definition appears later in this file.
+      template <std::size_t W, Record T, std::size_t... Is>
+      void record_decode_into(std::span<const char> src, std::size_t pos,
+                              std::size_t end, T& out,
+                              std::index_sequence<Is...>);
+
       template <std::size_t W, typename T>
       std::vector<T> decode_vector(std::span<const char> src, std::size_t pos,
                                    std::size_t end)
@@ -647,10 +654,33 @@ namespace psio3 {
          {
             const std::size_t esz = fixed_size_of<T>();
             const std::size_t n   = (end - pos) / esz;
-            out.reserve(n);
-            for (std::size_t i = 0; i < n; ++i)
-               out.push_back(decode_value<W, T>(src, pos + i * esz,
-                                                 pos + (i + 1) * esz));
+            // Bulk-memcpy fast path for arithmetic elements — mirrors the
+            // ssz fast path; pssz uses the same raw-bytes fixed-element
+            // layout as ssz, only offsets differ in width.
+            if constexpr (std::is_arithmetic_v<T> &&
+                          !std::is_same_v<T, bool>)
+            {
+               const T* first = reinterpret_cast<const T*>(src.data() + pos);
+               out.assign(first, first + n);
+            }
+            else if constexpr (Record<T>)
+            {
+               // In-place decode — single bulk zero-init via resize, then
+               // write directly into each slot. Mirrors the ssz path.
+               out.resize(n);
+               using R = ::psio3::reflect<T>;
+               for (std::size_t i = 0; i < n; ++i)
+                  record_decode_into<W, T>(
+                     src, pos + i * esz, pos + (i + 1) * esz, out[i],
+                     std::make_index_sequence<R::member_count>{});
+            }
+            else
+            {
+               out.reserve(n);
+               for (std::size_t i = 0; i < n; ++i)
+                  out.push_back(decode_value<W, T>(src, pos + i * esz,
+                                                    pos + (i + 1) * esz));
+            }
          }
          else
          {
@@ -673,9 +703,13 @@ namespace psio3 {
          return out;
       }
 
+      // Decode in-place: write fields directly into `out`. Used by
+      // decode_vector to avoid the per-element `T tmp{}` + move-construct
+      // when filling a pre-resized destination.
       template <std::size_t W, Record T, std::size_t... Is>
-      T record_decode(std::span<const char> src, std::size_t pos,
-                      std::size_t end, std::index_sequence<Is...>)
+      void record_decode_into(std::span<const char> src, std::size_t pos,
+                              std::size_t end, T& out,
+                              std::index_sequence<Is...>)
       {
          using R = ::psio3::reflect<T>;
 
@@ -704,8 +738,6 @@ namespace psio3 {
                 }
              }()),
             ...);
-
-         T out{};
 
          std::array<std::size_t, R::member_count> var_end{};
          {
@@ -757,6 +789,14 @@ namespace psio3 {
                 }
              }()),
             ...);
+      }
+
+      template <std::size_t W, Record T, std::size_t... Is>
+      T record_decode(std::span<const char> src, std::size_t pos,
+                      std::size_t end, std::index_sequence<Is...> seq)
+      {
+         T out{};
+         record_decode_into<W, T>(src, pos, end, out, seq);
          return out;
       }
 

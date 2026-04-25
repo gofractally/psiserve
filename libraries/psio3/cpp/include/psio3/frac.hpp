@@ -802,6 +802,110 @@ namespace psio3 {
       T decode_value(std::span<const char> src, std::size_t pos,
                      std::size_t end);
 
+      // Read a record's [u16 header][fixed_region][heap] frame directly
+      // into `out`. Mirrors v1's from_frac path that takes T& by reference.
+      // Used by decode_record_with_header (returning T) and decode_vector
+      // (filling pre-resized slots without per-element move-construct).
+      template <std::size_t W, Record T>
+      void decode_record_with_header_into(std::span<const char> src,
+                                          std::size_t            pos,
+                                          std::size_t            end,
+                                          T&                     out)
+      {
+         using R = ::psio3::reflect<T>;
+         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            // Read u16 header (fixed_region size). Matches v1.
+            const std::uint32_t fixed_region = read_word<2>(src, pos);
+            const std::size_t   fixed_start  = pos + 2;
+            const std::size_t   fixed_end    = fixed_start + fixed_region;
+            (void)fixed_end;
+            std::size_t cursor = fixed_start;
+            (
+               ([&]
+                {
+                   using F = typename R::template member_type<Is>;
+                   auto& fref = out.*(R::template member_pointer<Is>);
+                   using eff =
+                      typename ::psio3::effective_annotations_for<
+                         T, F,
+                         R::template member_pointer<Is>>::value_t;
+                   constexpr bool override_v =
+                      ::psio3::has_as_override_v<eff>;
+
+                   if constexpr (!override_v && is_fixed_v<F>)
+                   {
+                      if constexpr (Record<F>)
+                      {
+                         fref = decode_record_fixed_inline<W, F>(
+                            src, cursor);
+                      }
+                      else
+                      {
+                         fref = decode_value<W, F>(
+                            src, cursor, cursor + fixed_size_of<F>());
+                      }
+                      cursor += fixed_size_of<F>();
+                   }
+                   else
+                   {
+                      const std::size_t   slot_pos = cursor;
+                      const std::uint32_t slot     = read_word<W>(src, slot_pos);
+                      cursor += W;
+
+                      if constexpr (override_v)
+                      {
+                         using Tag = ::psio3::adapter_tag_of_t<eff>;
+                         using Proj = ::psio3::adapter<
+                            std::remove_cvref_t<F>, Tag>;
+                         const std::size_t payload_pos = slot_pos + slot;
+                         fref = Proj::decode(std::span<const char>(
+                            src.data() + payload_pos,
+                            end - payload_pos));
+                         return;
+                      }
+
+                      if constexpr (is_std_optional_v<F>)
+                      {
+                         using V = typename F::value_type;
+                         if (slot == 1) { fref = std::optional<V>{}; return; }
+                         if (slot == 0)
+                         {
+                            if constexpr (is_std_vector_v<V> ||
+                                          std::is_same_v<V, std::string>)
+                               fref = std::optional<V>{V{}};
+                            else
+                               fref = std::optional<V>{};
+                            return;
+                         }
+                         const std::size_t payload_pos = slot_pos + slot;
+                         fref = std::optional<V>{
+                            decode_value<W, V>(src, payload_pos, end)};
+                         return;
+                      }
+
+                      if (slot == 0)
+                      {
+                         fref = F{};
+                         return;
+                      }
+                      const std::size_t payload_pos = slot_pos + slot;
+                      fref = decode_value<W, F>(src, payload_pos, end);
+                   }
+                }()),
+               ...);
+         }(std::make_index_sequence<R::member_count>{});
+      }
+
+      template <std::size_t W, Record T>
+      T decode_record_with_header(std::span<const char> src,
+                                  std::size_t            pos,
+                                  std::size_t            end)
+      {
+         T out{};
+         decode_record_with_header_into<W, T>(src, pos, end, out);
+         return out;
+      }
+
       template <std::size_t W, typename T, std::size_t N>
       std::array<T, N> decode_array(std::span<const char> src, std::size_t pos,
                                     std::size_t end)
@@ -850,11 +954,27 @@ namespace psio3 {
          {
             const std::size_t   esz = fixed_size_of<T>();
             const std::uint32_t n   = byte_count / esz;
-            out.reserve(n);
-            for (std::uint32_t i = 0; i < n; ++i)
+            if constexpr (Record<T>)
             {
-               out.push_back(decode_value<W, T>(src, cursor, cursor + esz));
-               cursor += esz;
+               // In-place decode — single bulk zero-init via resize, then
+               // write directly into each slot. Avoids the per-element
+               // `T tmp{}` + move-construct that push_back incurs.
+               out.resize(n);
+               for (std::uint32_t i = 0; i < n; ++i)
+               {
+                  decode_record_with_header_into<W, T>(
+                     src, cursor, cursor + esz, out[i]);
+                  cursor += esz;
+               }
+            }
+            else
+            {
+               out.reserve(n);
+               for (std::uint32_t i = 0; i < n; ++i)
+               {
+                  out.push_back(decode_value<W, T>(src, cursor, cursor + esz));
+                  cursor += esz;
+               }
             }
          }
          else
@@ -1012,106 +1132,7 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
-            using R = ::psio3::reflect<T>;
-            return [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-               // Read u16 header (fixed_region size). Matches v1.
-               const std::uint32_t fixed_region = read_word<2>(src, pos);
-               const std::size_t   fixed_start  = pos + 2;
-               const std::size_t   fixed_end    = fixed_start + fixed_region;
-               T out{};
-               std::size_t cursor = fixed_start;
-               (
-                  ([&]
-                   {
-                      using F = typename R::template member_type<Is>;
-                      auto& fref = out.*(R::template member_pointer<Is>);
-                      using eff =
-                         typename ::psio3::effective_annotations_for<
-                            T, F,
-                            R::template member_pointer<Is>>::value_t;
-                      constexpr bool override_v =
-                         ::psio3::has_as_override_v<eff>;
-
-                      if constexpr (!override_v && is_fixed_v<F>)
-                      {
-                         if constexpr (Record<F>)
-                         {
-                            // Mirror of encode: nested fixed record is
-                            // inlined, no u16 header. Walk the fixed
-                            // region directly.
-                            fref = decode_record_fixed_inline<W, F>(
-                               src, cursor);
-                         }
-                         else
-                         {
-                            fref = decode_value<W, F>(
-                               src, cursor, cursor + fixed_size_of<F>());
-                         }
-                         cursor += fixed_size_of<F>();
-                      }
-                      else
-                      {
-                         // Variable (or override) field: W-byte slot
-                         // holds pointer-relative offset (or 0 = empty,
-                         // 1 = None for optional).
-                         const std::size_t   slot_pos = cursor;
-                         const std::uint32_t slot     = read_word<W>(src, slot_pos);
-                         cursor += W;
-
-                         if constexpr (override_v)
-                         {
-                            using Tag = ::psio3::adapter_tag_of_t<eff>;
-                            using Proj = ::psio3::adapter<
-                               std::remove_cvref_t<F>, Tag>;
-                            // Override payload has no framing at the
-                            // record level — the slot points at raw
-                            // adapter bytes that run to the end of
-                            // the buffer (MVP: adapter-encoded
-                            // members must be last variable field or
-                            // fit their own self-delimited encoding).
-                            const std::size_t payload_pos =
-                               slot_pos + slot;
-                            fref = Proj::decode(std::span<const char>(
-                               src.data() + payload_pos,
-                               end - payload_pos));
-                            return;
-                         }
-
-                         if constexpr (is_std_optional_v<F>)
-                         {
-                            using V = typename F::value_type;
-                            if (slot == 1) { fref = std::optional<V>{}; return; }
-                            if (slot == 0)
-                            {
-                               if constexpr (is_std_vector_v<V> ||
-                                             std::is_same_v<V, std::string>)
-                                  fref = std::optional<V>{V{}};
-                               else
-                                  fref = std::optional<V>{};
-                               return;
-                            }
-                            const std::size_t payload_pos = slot_pos + slot;
-                            fref = std::optional<V>{
-                               decode_value<W, V>(src, payload_pos, end)};
-                            return;
-                         }
-
-                         // Plain variable container / nested variable
-                         // record. slot==0 means empty; any other value
-                         // is the pointer-relative offset to the payload.
-                         if (slot == 0)
-                         {
-                            fref = F{};
-                            return;
-                         }
-                         const std::size_t payload_pos = slot_pos + slot;
-                         fref =
-                            decode_value<W, F>(src, payload_pos, end);
-                      }
-                   }()),
-                  ...);
-               return out;
-            }(std::make_index_sequence<R::member_count>{});
+            return decode_record_with_header<W, T>(src, pos, end);
          }
          else
          {

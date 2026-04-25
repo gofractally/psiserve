@@ -489,11 +489,26 @@ namespace psio3 {
             using E             = typename T::value_type;
             const std::uint32_t n = read_u32(src, pos);
             pos += 4;
-            std::vector<E> out;
-            out.reserve(n);
-            for (std::uint32_t i = 0; i < n; ++i)
-               out.push_back(decode_value<E>(src, pos));
-            return out;
+            // Bulk-memcpy fast path for arithmetic elements — wire layout
+            // is contiguous little-endian raw bytes, same as the element's
+            // memory representation. assign(p, p+n) avoids resize's
+            // zero-init pass and the per-element decode_value call.
+            if constexpr (std::is_arithmetic_v<E> &&
+                          !std::is_same_v<E, bool>)
+            {
+               const E* first = reinterpret_cast<const E*>(src.data() + pos);
+               std::vector<E> out(first, first + n);
+               pos += n * sizeof(E);
+               return out;
+            }
+            else
+            {
+               std::vector<E> out;
+               out.reserve(n);
+               for (std::uint32_t i = 0; i < n; ++i)
+                  out.push_back(decode_value<E>(src, pos));
+               return out;
+            }
          }
          else if constexpr (std::is_same_v<T, std::string>)
          {
