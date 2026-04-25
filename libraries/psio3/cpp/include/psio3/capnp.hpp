@@ -36,6 +36,7 @@
 #include <psio3/format_tag_base.hpp>
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
+#include <psio3/validate_strict_walker.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1228,8 +1229,22 @@ namespace psio3 {
       tag_invoke(decltype(::psio3::validate_strict<T>), capnp, T*,
                  std::span<const char> bytes) noexcept
       {
-         return tag_invoke(::psio3::validate<T>, capnp{}, (T*)nullptr,
-                           bytes);
+         if (!detail::capnp_impl::validate_message(bytes.data(),
+                                                   bytes.size()))
+            return codec_fail("capnp: invalid message", 0, "capnp");
+         try
+         {
+            using namespace detail::capnp_impl;
+            T    out{};
+            auto p = root_of<T>(bytes.data());
+            unpack_struct<T>(p, out);
+            return ::psio3::validate_specs_on_value(out);
+         }
+         catch (...)
+         {
+            return codec_fail(
+               "capnp: decode failed during validate_strict", 0, "capnp");
+         }
       }
 
       template <typename T>

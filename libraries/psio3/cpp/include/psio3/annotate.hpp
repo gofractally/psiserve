@@ -314,6 +314,28 @@ namespace psio3 {
       constexpr bool operator==(const sorted_spec&) const = default;
    };
 
+   // element_spec<S> — apply spec S to every element of an annotated
+   // sequence. Lets users say "every element of this vec<string> must
+   // be valid UTF-8" without inventing a wrapper type:
+   //   PSIO3_FIELD_ATTRS(T, names,
+   //       psio3::element_spec{psio3::utf8_spec{}})
+   //
+   // The child spec's own applies_to must be compatible with the
+   // sequence's element type — checked indirectly by the validator
+   // dispatching to ChildSpec::validate(element_span).
+   template <typename ChildSpec>
+   struct element_spec
+   {
+      using spec_category = runtime_spec_tag;
+      using applies_to    = shape_set<VariableSequenceShape, FixedSequenceShape>;
+
+      ChildSpec child{};
+
+      constexpr bool operator==(const element_spec&) const = default;
+   };
+   template <typename C>
+   element_spec(C) -> element_spec<C>;
+
    template <typename T>
    struct default_value_spec
    {

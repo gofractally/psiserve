@@ -28,19 +28,18 @@
 //   - std::vector<E> → if E is Reflected, recurse on each element
 //   - std::optional<E> → recurse on the value when present
 //   - std::variant<Es...> → recurse on the active alternative
+//   - element_spec<ChildSpec> on a sequence field → run the child
+//     spec's (span)-validate on every element (today: std::string
+//     elements; arithmetic / nested-record elements are recursed
+//     by the structural walker, separate from element_spec)
 //   - Specs without a (span)-validate member are ignored (open SFINAE)
 //
 // Out of scope (follow-ups):
 //   - Specs that need a typed interface (sorted_spec on vec<u32>,
 //     length_bound size-only checks). The (span) signature doesn't
 //     fit those well; a typed-validate sibling will land separately.
-//   - Element-level specs on vector<string> — there's no annotation
-//     syntax for "every element of this vector satisfies utf8_spec"
-//     today; the spec attaches to the vector field which has shape
-//     VariableSequence (not ByteString), so the applies_to check
-//     rejects it at compile time. A wrapper-typed annotation
-//     (utf8_string<N> on the element) is the path forward.
 
+#include <psio3/annotate.hpp>   // element_spec
 #include <psio3/error.hpp>
 #include <psio3/reflect.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
@@ -101,6 +100,32 @@ namespace psio3 {
 
       template <typename S>
       inline constexpr bool has_span_validate_v = has_span_validate<S>::value;
+
+      // Detect element_spec<C> entries in an annotation tuple.
+      template <typename S>
+      struct is_element_spec : std::false_type {};
+      template <typename C>
+      struct is_element_spec<::psio3::element_spec<C>> : std::true_type
+      {
+         using child_type = C;
+      };
+
+      // Get the byte view of a single element for an element_spec
+      // child validator. Today: std::string. Other element types
+      // fall through and the walker just skips the (span)-only spec
+      // — recursion still picks up nested records.
+      template <typename E>
+      inline std::span<const char> element_byte_view(const E& e) noexcept
+      {
+         if constexpr (std::is_same_v<E, std::string>)
+            return std::span<const char>{e.data(), e.size()};
+         else
+            return {};
+      }
+
+      template <typename E>
+      inline constexpr bool element_has_byte_view_v =
+         std::is_same_v<E, std::string>;
 
       // Run every spec's validate(span) on `bytes`. Returns first failure.
       template <typename Tuple>
@@ -208,7 +233,46 @@ namespace psio3 {
                return st;
          }
 
-         // (2) Recurse into structural carriers. Specs on inner record
+         // (2) For sequence fields, run any element_spec<C> annotations
+         // by invoking C::validate(element_bytes) on each element.
+         if constexpr (is_std_vector<F>::value)
+         {
+            using E = typename F::value_type;
+            codec_status err = codec_ok();
+            std::apply(
+               [&](const auto&... specs) {
+                  (
+                     ([&]() {
+                        if (!err.ok())
+                           return;
+                        using S = std::remove_cvref_t<decltype(specs)>;
+                        if constexpr (is_element_spec<S>::value)
+                        {
+                           using C = typename is_element_spec<S>::child_type;
+                           if constexpr (has_span_validate_v<C> &&
+                                         element_has_byte_view_v<E>)
+                           {
+                              for (const auto& e : field_val)
+                              {
+                                 auto bv = element_byte_view<E>(e);
+                                 codec_status s = C::validate(bv);
+                                 if (!s.ok())
+                                 {
+                                    err = s;
+                                    return;
+                                 }
+                              }
+                           }
+                        }
+                     }()),
+                     ...);
+               },
+               annotations);
+            if (!err.ok())
+               return err;
+         }
+
+         // (3) Recurse into structural carriers. Specs on inner record
          // fields get checked when validate_specs_on_value processes
          // them.
          return recurse_into<F>(field_val);

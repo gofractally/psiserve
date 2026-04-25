@@ -28,6 +28,7 @@
 #include <psio3/format_tag_base.hpp>
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
+#include <psio3/validate_strict_walker.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -966,8 +967,28 @@ namespace psio3 {
       tag_invoke(decltype(::psio3::validate_strict<T>), wit, T*,
                  std::span<const char> bytes) noexcept
       {
-         return tag_invoke(::psio3::validate<T>, wit{}, (T*)nullptr,
-                           bytes);
+         using namespace detail::wit_impl;
+         bool ok;
+         if constexpr (detail::wit_impl::Record<T>)
+            ok = validate_record<T>(bytes, 0);
+         else
+            ok = validate_leaf<T>(bytes, 0);
+         if (!ok)
+            return codec_fail("wit: invalid buffer", 0, "wit");
+         try
+         {
+            T out{};
+            if constexpr (detail::wit_impl::Record<T>)
+               lift_record<T>(bytes, 0, out);
+            else
+               lift_leaf<T>(bytes, 0, out);
+            return ::psio3::validate_specs_on_value(out);
+         }
+         catch (...)
+         {
+            return codec_fail(
+               "wit: decode failed during validate_strict", 0, "wit");
+         }
       }
 
       template <typename T>
