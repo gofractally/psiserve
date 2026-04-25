@@ -1,11 +1,15 @@
-# psio3 benchmarks — format-by-format perf parity against v1 lands
-# starting Phase 6. Phase 0 scaffold: empty subdir (nothing to build).
+# psio3 benchmarks — cross-library perf + wire-size harness.
 #
-# Pattern reused by each bench:
+# Shape library (shapes.hpp) defines parallel PSIO_REFLECT / PSIO3_REFLECT
+# structs at each size tier; harness.hpp is the timing + report utility
+# layer; each bench_*.cpp links psio (v1) + psio3 into the same binary
+# so encodings can be compared byte-for-byte and timed in one pass.
 #
-#   add_executable(psio3_bench_<name> bench_<name>.cpp)
-#   target_link_libraries(psio3_bench_<name> PRIVATE psio3)
-#
-# The v1 bench harness under libraries/psio/cpp/benchmarks/ is NOT
-# linked here — v1 benches stay on v1; v3 benches run the same
-# workloads through psio3. CI compares medians.
+# Competitor adapters (libcapnp, libflatbuffers, msgpack-c, protobuf,
+# sszpp) are optional find_package-gated additions in follow-ups.
+
+add_executable(psio3_bench_perf_report bench_perf_report.cpp)
+target_link_libraries(psio3_bench_perf_report PRIVATE psio3 psio)
+target_include_directories(psio3_bench_perf_report PRIVATE
+   ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(psio3_bench_perf_report PRIVATE cxx_std_23)
