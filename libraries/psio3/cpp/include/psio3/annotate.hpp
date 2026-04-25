@@ -511,6 +511,19 @@ namespace psio3 {
    inline constexpr bool has_spec_v<Wanted, std::tuple<Ts...>> =
        (std::is_same_v<std::remove_cvref_t<Ts>, Wanted> || ...);
 
+   // ── is_dwnc — "does this type carry definition_will_not_change?" ──────
+   //
+   // Formats consult this to opt into wire-format shortcuts that are
+   // only safe when the user has promised the type's layout won't
+   // change (no new fields appended, no field types widened). Today
+   // pssz uses it to skip the u{W} fixed_size header; frac uses it to
+   // skip the u16 fixed_region header; similar fast paths in other
+   // formats follow the same pattern.
+   template <typename T>
+   inline constexpr bool is_dwnc_v = has_spec_v<
+      ::psio3::definition_will_not_change,
+      std::remove_cvref_t<decltype(annotate<type<T>{}>)>>;
+
 }  // namespace psio3
 
 // ── Composition helpers ─────────────────────────────────────────────────

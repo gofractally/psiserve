@@ -141,9 +141,16 @@ namespace psio3 {
       inline constexpr bool has_binary_adapter_v =
          ::psio3::has_adapter_v<T, ::psio3::binary_category>;
 
+      // A Record is pssz-fixed iff it is DWNC AND all fields are fixed.
+      // DWNC skips the u{W} header, so a DWNC all-fixed record is
+      // truly constant-size on the wire. Non-DWNC records carry the
+      // header and (in a future trailing-pruning implementation)
+      // variable-size fixed regions, so they go through the record
+      // encode path rather than being inlined as fixed.
       template <Record T>
          requires(!has_binary_adapter_v<T>)
-      struct is_fixed<T> : std::bool_constant<record_all_fixed<T>()>
+      struct is_fixed<T>
+         : std::bool_constant<::psio3::is_dwnc_v<T> && record_all_fixed<T>()>
       {
       };
 
@@ -303,6 +310,9 @@ namespace psio3 {
             using R = ::psio3::reflect<T>;
             return [&]<std::size_t... Is>(std::index_sequence<Is...>) noexcept {
                std::size_t total = 0;
+               // u{W} fixed_size header — DWNC types skip it.
+               if constexpr (!::psio3::is_dwnc_v<T>)
+                  total += W;
                (
                   ([&]
                    {
@@ -480,7 +490,6 @@ namespace psio3 {
          {
             using R = ::psio3::reflect<T>;
             [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-               const std::size_t container_start = s.size();
                std::size_t       fixed_region    = 0;
                (
                   ([&]
@@ -499,6 +508,22 @@ namespace psio3 {
                    }()),
                   ...);
 
+               // u{W} fixed_size header — fracpack's forward-compat
+               // slot. DWNC types skip it (matches v1 pssz: the header
+               // width is header_bytes == W). Non-DWNC records always
+               // carry the header so a newer decoder with more fields
+               // knows how many bytes of fixed region were actually
+               // written.
+               if constexpr (!::psio3::is_dwnc_v<T>)
+               {
+                  using O = typename width_info<W>::offset_t;
+                  O hdr   = static_cast<O>(fixed_region);
+                  const std::size_t hp = s.size();
+                  s.resize(hp + W);
+                  std::memcpy(s.data() + hp, &hdr, W);
+               }
+
+               const std::size_t container_start = s.size();
                s.resize(container_start + fixed_region, 0);
                std::size_t fixed_cursor = container_start;
 
@@ -714,9 +739,16 @@ namespace psio3 {
       {
          using R = ::psio3::reflect<T>;
 
+         // Non-DWNC records carry a u{W} fixed_size header; skip it
+         // before reading the fixed region. Offsets inside the record
+         // are relative to the container_start — the byte after the
+         // header — so the rest of the walker uses that.
+         const std::size_t container_start =
+            ::psio3::is_dwnc_v<T> ? pos : pos + W;
+
          std::array<std::uint32_t, R::member_count> var_offsets{};
          std::array<bool, R::member_count>          is_var{};
-         std::size_t                                 cursor = pos;
+         std::size_t                                 cursor = container_start;
          (
             ([&]
              {
@@ -748,12 +780,12 @@ namespace psio3 {
                if (is_var[i])
                {
                   var_end[i] = last_end;
-                  last_end   = pos + var_offsets[i];
+                  last_end   = container_start + var_offsets[i];
                }
             }
          }
 
-         std::size_t fixed_cursor = pos;
+         std::size_t fixed_cursor = container_start;
          (
             ([&]
              {
@@ -773,7 +805,7 @@ namespace psio3 {
                 }
                 else
                 {
-                   const std::size_t beg = pos + var_offsets[Is];
+                   const std::size_t beg = container_start + var_offsets[Is];
                    if constexpr (override_v)
                    {
                       using Tag = ::psio3::adapter_tag_of_t<eff>;

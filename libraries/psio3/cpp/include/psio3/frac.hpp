@@ -628,10 +628,14 @@ namespace psio3 {
                   ...);
 
                // [u16 header] — v1 default header width is always 2
-               // bytes regardless of offset width W. Wider headers
-               // (u32 / u64) are a follow-up for types with
-               // PSIO_FRAC_MAX_FIXED_SIZE commitments beyond 64 KiB.
-               append_word<2>(s, fixed_region);
+               // bytes regardless of offset width W. DWNC types skip
+               // the header entirely (matches psio/fracpack.hpp:2023):
+               // the layout is frozen, so no forward-compat slot is
+               // needed. Wider headers (u32 / u64) are a follow-up
+               // for types with PSIO_FRAC_MAX_FIXED_SIZE commitments
+               // beyond 64 KiB.
+               if constexpr (!::psio3::is_dwnc_v<T>)
+                  append_word<2>(s, fixed_region);
 
                const std::size_t fixed_start = s.size();
                s.resize(fixed_start + fixed_region, 0);
@@ -815,11 +819,20 @@ namespace psio3 {
       {
          using R = ::psio3::reflect<T>;
          [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-            // Read u16 header (fixed_region size). Matches v1.
-            const std::uint32_t fixed_region = read_word<2>(src, pos);
-            const std::size_t   fixed_start  = pos + 2;
-            const std::size_t   fixed_end    = fixed_start + fixed_region;
-            (void)fixed_end;
+            // Read u16 header (fixed_region size) unless T is DWNC —
+            // DWNC types emit no header, so the fixed region starts
+            // at `pos` directly. fixed_region value is unused (only
+            // meaningful for trailing-field synthesis, not yet in v3).
+            std::size_t fixed_start;
+            if constexpr (::psio3::is_dwnc_v<T>)
+            {
+               fixed_start = pos;
+            }
+            else
+            {
+               (void)read_word<2>(src, pos);
+               fixed_start = pos + 2;
+            }
             std::size_t cursor = fixed_start;
             (
                ([&]
@@ -1293,7 +1306,9 @@ namespace psio3 {
                   ...);
             }(std::make_index_sequence<R::member_count>{});
 
-            return 2 /* u16 header */ + fixed_region + heap;
+            constexpr std::size_t header_bytes =
+               ::psio3::is_dwnc_v<T> ? std::size_t{0} : std::size_t{2};
+            return header_bytes + fixed_region + heap;
          }
          else
          {
@@ -1323,10 +1338,14 @@ namespace psio3 {
                       : codec_fail("frac: vector length prefix truncated",
                                    static_cast<std::uint32_t>(pos), "frac");
          else if constexpr (Record<T>)
-            return (end - pos) >= W
+         {
+            if constexpr (::psio3::is_dwnc_v<T>)
+               return codec_ok();
+            return (end - pos) >= 2
                       ? codec_ok()
                       : codec_fail("frac: record header truncated",
                                    static_cast<std::uint32_t>(pos), "frac");
+         }
          else
             return codec_ok();
       }
