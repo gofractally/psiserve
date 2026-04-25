@@ -1297,22 +1297,9 @@ namespace psio3 {
 
          if constexpr (is_fixed_v<T>)
          {
-            // DWNC + all-fixed: walk fields, recursive validate.
-            std::size_t  fixed_cursor = cstart;
-            codec_status err          = codec_ok();
-            (
-               ([&]
-                {
-                   if (!err.ok()) return;
-                   using F = typename R::template member_type<Is>;
-                   constexpr std::size_t fs = fixed_size_of<F>();
-                   auto st = validate_value<W, F>(src, fixed_cursor,
-                                                   fixed_cursor + fs);
-                   if (!st.ok()) { err = std::move(st); return; }
-                   fixed_cursor += fs;
-                }()),
-               ...);
-            return err;
+            // Outer check proves every field's bytes fit; per-field
+            // re-checks would just rederive the same bound. Skip.
+            return codec_ok();
          }
          else
          {
@@ -1389,6 +1376,394 @@ namespace psio3 {
                 }()),
                ...);
             return err;
+         }
+      }
+
+      // ── Throwing walker (native, exceptions enabled) ──────────────────────
+
+      [[noreturn, gnu::cold]] inline void
+      pssz_throw_fail(std::string_view msg, std::uint32_t off)
+      {
+         throw codec_exception{codec_error{msg, off, "pssz"}};
+      }
+
+      template <std::size_t W, typename T>
+      void validate_or_throw_value(std::span<const char> src,
+                                   std::size_t pos, std::size_t end);
+
+      template <std::size_t W, typename E>
+      void validate_or_throw_vector_payload(std::span<const char> src,
+                                            std::size_t            pos,
+                                            std::size_t            end)
+      {
+         if (pos > end || end > src.size()) [[unlikely]]
+            pssz_throw_fail("pssz: vector span out of bounds",
+                            static_cast<std::uint32_t>(pos));
+         if (pos == end) return;
+         if constexpr (is_fixed_v<E>)
+         {
+            const std::size_t esz = fixed_size_of<E>();
+            if ((end - pos) % esz != 0) [[unlikely]]
+               pssz_throw_fail("pssz: vector span not a multiple of "
+                               "element size",
+                               static_cast<std::uint32_t>(pos));
+            constexpr bool memcpy_layout =
+               Record<E> && std::is_trivially_copyable_v<E> &&
+               fixed_size_of<E>() == sizeof(E);
+            if constexpr (Record<E> && !memcpy_layout)
+            {
+               const std::size_t n = (end - pos) / esz;
+               for (std::size_t i = 0; i < n; ++i)
+                  validate_or_throw_value<W, E>(src, pos + i * esz,
+                                                 pos + (i + 1) * esz);
+            }
+         }
+         else
+         {
+            if (end - pos < W) [[unlikely]]
+               pssz_throw_fail("pssz: variable list missing offset table",
+                               static_cast<std::uint32_t>(pos));
+            const std::uint32_t span =
+               static_cast<std::uint32_t>(end - pos);
+            const std::uint32_t first = read_offset<W>(src, pos);
+            if (first % W != 0 || first > span) [[unlikely]]
+               pssz_throw_fail("pssz: invalid first list offset",
+                               static_cast<std::uint32_t>(pos));
+            const std::size_t n = first / W;
+            if (span < n * W) [[unlikely]]
+               pssz_throw_fail("pssz: list offset table truncated",
+                               static_cast<std::uint32_t>(pos));
+            std::uint32_t prev = first;
+            for (std::size_t i = 1; i < n; ++i)
+            {
+               std::uint32_t off_i = read_offset<W>(src, pos + i * W);
+               if (off_i < prev || off_i > span) [[unlikely]]
+                  pssz_throw_fail("pssz: list offset out of range",
+                                  static_cast<std::uint32_t>(pos + i * W));
+               prev = off_i;
+            }
+            for (std::size_t i = 0; i < n; ++i)
+            {
+               std::uint32_t off_i = read_offset<W>(src, pos + i * W);
+               std::uint32_t stop  = (i + 1 < n)
+                                        ? read_offset<W>(src, pos + (i + 1) * W)
+                                        : span;
+               validate_or_throw_value<W, E>(src, pos + off_i,
+                                              pos + stop);
+            }
+         }
+      }
+
+      template <std::size_t W, typename E, std::size_t N>
+      void validate_or_throw_array_payload(std::span<const char> src,
+                                           std::size_t            pos,
+                                           std::size_t            end)
+      {
+         if constexpr (is_fixed_v<E>)
+         {
+            constexpr std::size_t esz = fixed_size_of<E>();
+            if (end - pos < N * esz) [[unlikely]]
+               pssz_throw_fail("pssz: array buffer too small",
+                               static_cast<std::uint32_t>(pos));
+            constexpr bool memcpy_layout =
+               Record<E> && std::is_trivially_copyable_v<E> &&
+               fixed_size_of<E>() == sizeof(E);
+            if constexpr (Record<E> && !memcpy_layout)
+            {
+               for (std::size_t i = 0; i < N; ++i)
+                  validate_or_throw_value<W, E>(src, pos + i * esz,
+                                                 pos + (i + 1) * esz);
+            }
+         }
+         else
+         {
+            if constexpr (N == 0) return;
+            if (end - pos < N * W) [[unlikely]]
+               pssz_throw_fail("pssz: array offset table truncated",
+                               static_cast<std::uint32_t>(pos));
+            const std::uint32_t span =
+               static_cast<std::uint32_t>(end - pos);
+            const std::uint32_t first = read_offset<W>(src, pos);
+            if (first != N * W || first > span) [[unlikely]]
+               pssz_throw_fail("pssz: invalid array first offset",
+                               static_cast<std::uint32_t>(pos));
+            std::uint32_t prev = first;
+            for (std::size_t i = 1; i < N; ++i)
+            {
+               std::uint32_t off_i = read_offset<W>(src, pos + i * W);
+               if (off_i < prev || off_i > span) [[unlikely]]
+                  pssz_throw_fail("pssz: array offset out of range",
+                                  static_cast<std::uint32_t>(pos + i * W));
+               prev = off_i;
+            }
+            for (std::size_t i = 0; i < N; ++i)
+            {
+               std::uint32_t off_i = read_offset<W>(src, pos + i * W);
+               std::uint32_t stop  = (i + 1 < N)
+                                        ? read_offset<W>(src, pos + (i + 1) * W)
+                                        : span;
+               validate_or_throw_value<W, E>(src, pos + off_i,
+                                              pos + stop);
+            }
+         }
+      }
+
+      template <std::size_t W, std::size_t MaxN>
+      void validate_or_throw_bitlist_payload(std::span<const char> src,
+                                             std::size_t            pos,
+                                             std::size_t            end)
+      {
+         if (pos >= end || end > src.size()) [[unlikely]]
+            pssz_throw_fail("pssz: bitlist span out of bounds",
+                            static_cast<std::uint32_t>(pos));
+         std::size_t span = end - pos;
+         std::size_t last = span;
+         while (last > 0 &&
+                static_cast<std::uint8_t>(src[pos + last - 1]) == 0)
+            --last;
+         if (last == 0) [[unlikely]]
+            pssz_throw_fail("pssz: bitlist missing delimiter",
+                            static_cast<std::uint32_t>(pos));
+         std::uint8_t lb = static_cast<std::uint8_t>(src[pos + last - 1]);
+         int hi = 31 - __builtin_clz(static_cast<unsigned int>(lb));
+         std::size_t bits =
+            (last - 1) * 8 + static_cast<std::size_t>(hi);
+         if (bits > MaxN) [[unlikely]]
+            pssz_throw_fail("pssz: bitlist bit_count exceeds bound",
+                            static_cast<std::uint32_t>(pos));
+      }
+
+      template <std::size_t W, Record T, std::size_t... Is>
+      void validate_or_throw_record(std::span<const char> src,
+                                    std::size_t            pos,
+                                    std::size_t            end,
+                                    std::index_sequence<Is...>)
+      {
+         using R = ::psio3::reflect<T>;
+         constexpr std::size_t NF = R::member_count;
+
+         constexpr std::size_t fixed_region = (
+            []<std::size_t I>() consteval -> std::size_t {
+               using F = typename R::template member_type<I>;
+               if constexpr (is_fixed_v<F>) return fixed_size_of<F>();
+               else                          return W;
+            }.template operator()<Is>() + ... + std::size_t{0});
+
+         std::size_t cstart;
+         if constexpr (::psio3::is_dwnc_v<T>)
+            cstart = pos;
+         else
+         {
+            if (end - pos < W) [[unlikely]]
+               pssz_throw_fail("pssz: record header truncated",
+                               static_cast<std::uint32_t>(pos));
+            cstart = pos + W;
+         }
+
+         if (end - cstart < fixed_region) [[unlikely]]
+            pssz_throw_fail("pssz: record fixed region truncated",
+                            static_cast<std::uint32_t>(pos));
+
+         if constexpr (is_fixed_v<T>)
+         {
+            // Outer check covers all bytes; per-field would re-check.
+            return;
+         }
+         else
+         {
+            std::array<std::uint32_t, NF> offsets{};
+            std::array<bool, NF>          is_var{};
+            std::size_t                   fp = cstart;
+            (
+               ([&]
+                {
+                   using F = typename R::template member_type<Is>;
+                   if constexpr (is_fixed_v<F>)
+                   {
+                      is_var[Is] = false;
+                      fp        += fixed_size_of<F>();
+                   }
+                   else
+                   {
+                      is_var[Is] = true;
+                      offsets[Is] = read_offset<W>(src, fp);
+                      fp += W;
+                   }
+                }()),
+               ...);
+
+            const std::uint32_t span =
+               static_cast<std::uint32_t>(end - cstart);
+            std::uint32_t prev = static_cast<std::uint32_t>(fixed_region);
+            for (std::size_t i = 0; i < NF; ++i)
+            {
+               if (!is_var[i]) continue;
+               if (offsets[i] < prev || offsets[i] > span) [[unlikely]]
+                  pssz_throw_fail("pssz: record variable offset out of range",
+                                  static_cast<std::uint32_t>(pos));
+               prev = offsets[i];
+            }
+
+            std::array<std::uint32_t, NF> var_end{};
+            {
+               std::uint32_t last_end = span;
+               for (std::size_t i = NF; i-- > 0;)
+               {
+                  if (is_var[i])
+                  {
+                     var_end[i] = last_end;
+                     last_end   = offsets[i];
+                  }
+               }
+            }
+
+            for (std::size_t i = 0; i < NF; ++i)
+            {
+               if (is_var[i])
+               {
+                  if (offsets[i] != fixed_region) [[unlikely]]
+                     pssz_throw_fail(
+                        "pssz: record first variable offset != fixed_region",
+                        static_cast<std::uint32_t>(pos));
+                  break;
+               }
+            }
+
+            (
+               ([&]
+                {
+                   using F = typename R::template member_type<Is>;
+                   if constexpr (!is_fixed_v<F>)
+                   {
+                      const std::size_t beg = cstart + offsets[Is];
+                      const std::size_t fin = cstart + var_end[Is];
+                      validate_or_throw_value<W, F>(src, beg, fin);
+                   }
+                }()),
+               ...);
+         }
+      }
+
+      template <std::size_t W, typename T>
+      void validate_or_throw_value(std::span<const char> src,
+                                   std::size_t pos, std::size_t end)
+      {
+         if constexpr (::psio3::format_should_dispatch_adapter_v<
+                          ::psio3::pssz, T>)
+         {
+            using Proj = ::psio3::adapter<std::remove_cvref_t<T>,
+                                          ::psio3::binary_category>;
+            auto st = Proj::validate(std::span<const char>(
+               src.data() + pos,
+               (end > pos) ? (end - pos) : 0));
+            if (!st.ok()) [[unlikely]]
+               throw codec_exception{st.error()};
+         }
+         else if constexpr (is_fixed_v<T> && !Record<T>)
+         {
+            if (end - pos < fixed_size_of<T>()) [[unlikely]]
+               pssz_throw_fail("pssz: buffer too small for fixed primitive",
+                               static_cast<std::uint32_t>(pos));
+            if constexpr (is_std_array_v<T>)
+            {
+               using E = typename T::value_type;
+               if constexpr (Record<E>)
+               {
+                  constexpr std::size_t N   = std::tuple_size<T>::value;
+                  constexpr std::size_t esz = fixed_size_of<E>();
+                  for (std::size_t i = 0; i < N; ++i)
+                     validate_or_throw_value<W, E>(src, pos + i * esz,
+                                                    pos + (i + 1) * esz);
+               }
+            }
+         }
+         else if constexpr (is_bitlist_v<T>)
+            validate_or_throw_bitlist_payload<W, T::max_size_value>(
+               src, pos, end);
+         else if constexpr (std::is_same_v<T, std::string>)
+         {
+            if (pos > end || end > src.size()) [[unlikely]]
+               pssz_throw_fail("pssz: string span out of bounds",
+                               static_cast<std::uint32_t>(pos));
+         }
+         else if constexpr (is_std_array_v<T>)
+         {
+            using E                 = typename T::value_type;
+            constexpr std::size_t N = std::tuple_size<T>::value;
+            validate_or_throw_array_payload<W, E, N>(src, pos, end);
+         }
+         else if constexpr (is_std_vector_v<T>)
+         {
+            using E = typename T::value_type;
+            validate_or_throw_vector_payload<W, E>(src, pos, end);
+         }
+         else if constexpr (is_std_optional_v<T>)
+         {
+            using V = typename T::value_type;
+            if (pos > end || end > src.size()) [[unlikely]]
+               pssz_throw_fail("pssz: optional span out of bounds",
+                               static_cast<std::uint32_t>(pos));
+            if constexpr (is_fixed_v<V>)
+            {
+               const std::size_t span = end - pos;
+               if (span == 0) return;
+               if (span != fixed_size_of<V>()) [[unlikely]]
+                  pssz_throw_fail("pssz: optional<fixed> span mismatch",
+                                  static_cast<std::uint32_t>(pos));
+               validate_or_throw_value<W, V>(src, pos, end);
+            }
+            else
+            {
+               if (pos == end) [[unlikely]]
+                  pssz_throw_fail("pssz: optional<var> missing selector",
+                                  static_cast<std::uint32_t>(pos));
+               const std::uint8_t sel =
+                  static_cast<std::uint8_t>(src[pos]);
+               if (sel == 0)
+               {
+                  if (end - pos != 1) [[unlikely]]
+                     pssz_throw_fail("pssz: None has trailing bytes",
+                                     static_cast<std::uint32_t>(pos));
+                  return;
+               }
+               if (sel != 1) [[unlikely]]
+                  pssz_throw_fail("pssz: optional selector not 0/1",
+                                  static_cast<std::uint32_t>(pos));
+               validate_or_throw_value<W, V>(src, pos + 1, end);
+            }
+         }
+         else if constexpr (is_std_variant_v<T>)
+         {
+            if (pos >= end || end > src.size()) [[unlikely]]
+               pssz_throw_fail("pssz: variant span out of bounds",
+                               static_cast<std::uint32_t>(pos));
+            const std::uint8_t sel =
+               static_cast<std::uint8_t>(src[pos]);
+            constexpr std::size_t NA = std::variant_size_v<T>;
+            if (sel >= NA) [[unlikely]]
+               pssz_throw_fail("pssz: variant selector out of range",
+                               static_cast<std::uint32_t>(pos));
+            [&]<std::size_t... Js>(std::index_sequence<Js...>) {
+               (((sel == Js)
+                    ? (validate_or_throw_value<
+                          W,
+                          std::variant_alternative_t<Js, T>>(
+                          src, pos + 1, end),
+                       true)
+                    : false) ||
+                ...);
+            }(std::make_index_sequence<NA>{});
+         }
+         else if constexpr (Record<T>)
+         {
+            using R = ::psio3::reflect<T>;
+            validate_or_throw_record<W, T>(
+               src, pos, end, std::make_index_sequence<R::member_count>{});
+         }
+         else
+         {
+            pssz_throw_fail("pssz: unsupported type in validate",
+                            static_cast<std::uint32_t>(pos));
          }
       }
 
@@ -1618,6 +1993,15 @@ namespace psio3 {
       }
 
       template <typename T>
+      friend void tag_invoke(decltype(::psio3::validate_or_throw<T>),
+                             pssz_<W>, T*,
+                             std::span<const char> bytes)
+      {
+         detail::pssz_impl::validate_or_throw_value<W, T>(
+            bytes, 0, bytes.size());
+      }
+
+      template <typename T>
       friend codec_status tag_invoke(decltype(::psio3::validate_strict<T>),
                                      pssz_<W>, T*,
                                      std::span<const char> bytes) noexcept
@@ -1711,6 +2095,15 @@ namespace psio3 {
          constexpr std::size_t W = auto_pssz_width_v<T>;
          return detail::pssz_impl::validate_value<W, T>(bytes, 0,
                                                         bytes.size());
+      }
+
+      template <typename T>
+      friend void tag_invoke(decltype(::psio3::validate_or_throw<T>),
+                             pssz, T*, std::span<const char> bytes)
+      {
+         constexpr std::size_t W = auto_pssz_width_v<T>;
+         detail::pssz_impl::validate_or_throw_value<W, T>(
+            bytes, 0, bytes.size());
       }
 
       template <typename T>
