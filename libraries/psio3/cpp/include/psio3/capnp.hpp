@@ -6,10 +6,16 @@
 // set both support. Single-segment flat-array messages only, no packed
 // encoding, no far pointers — matching capnp's messageToFlatArray output.
 //
-// MVP scope (Phase 14):
+// Supported shapes:
 //   - primitives (arithmetic + bool), enums
 //   - std::string (capnp Text: u8 list with trailing NUL)
-//   - std::vector of: arithmetic / bool / enum / string / nested tables
+//   - std::vector / std::array of: arithmetic / bool / enum / string /
+//     nested tables
+//   - std::optional<T> as a record field (null ptr = None,
+//     list<T> length-1 = Some)
+//   - std::variant<Ts...> as a record field — pointer slot to a
+//     sub-struct {u16 tag, ptr per alt}; live alt is encoded into
+//     its slot via the same length-1-list wrapper used for optional
 //   - reflected records (root or nested, recursive)
 //
 // Wire reference: https://capnproto.org/encoding.html. Field layout
@@ -18,9 +24,12 @@
 // slots), which produces the same offsets the upstream capnp compiler
 // emits for sequentially-numbered ordinals.
 //
-// Not supported in this MVP: std::variant (unions), std::optional,
-// std::array, per-field binary_format adapters. These land in a
-// follow-up once the psio3 annotation surface is complete.
+// Not yet supported: std::tuple (no native capnp counterpart),
+// per-field binary_format adapter overrides, top-level adapter
+// dispatch. variant uses the length-1-list wrapper convention rather
+// than capnp's native union encoding (which would require slot-allocator
+// awareness of the discriminant + shared per-alt storage); native
+// unions are a follow-up.
 
 #include <psio3/cpo.hpp>
 #include <psio3/error.hpp>
@@ -33,9 +42,11 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace psio3 {
@@ -66,6 +77,19 @@ namespace psio3 {
          using element_type             = E;
          static constexpr std::size_t n = N;
       };
+
+      template <typename T>
+      struct is_optional : std::false_type {};
+      template <typename E>
+      struct is_optional<std::optional<E>> : std::true_type
+      {
+         using element_type = E;
+      };
+
+      template <typename T>
+      struct is_variant : std::false_type {};
+      template <typename... Ts>
+      struct is_variant<std::variant<Ts...>> : std::true_type {};
 
       template <typename T>
       concept Record = ::psio3::Reflected<T> && !std::is_enum_v<T>;
@@ -640,6 +664,49 @@ namespace psio3 {
             {
                pack_arr(buf, ptrs_start + loc.offset, field_val);
             }
+            else if constexpr (is_optional<F>::value)
+            {
+               // None → null pointer (slot left zero by alloc()).
+               // Some(x) → list<T> with one element. Reuses the
+               // pack_sequence<T> machinery; works uniformly across
+               // primitives, strings, lists, and nested records.
+               if (field_val.has_value())
+               {
+                  using E = typename is_optional<F>::element_type;
+                  pack_sequence<E>(buf, ptrs_start + loc.offset,
+                                    &(*field_val), 1);
+               }
+            }
+            else if constexpr (is_variant<F>::value)
+            {
+               // variant<T0, T1, ..., TN-1> → pointer to a sub-struct
+               // with 1 data word (u16 tag at byte 0) and N pointer
+               // slots. Each alt is encoded into its slot via the
+               // pack_sequence<A>(..., 1) wrapper, so primitives are
+               // wrapped in a length-1 list and pointer types
+               // (string/vec/record) get a direct pointer.
+               constexpr std::size_t N    = std::variant_size_v<F>;
+               constexpr uint16_t    dw   = 1;
+               constexpr uint16_t    pc   = static_cast<uint16_t>(N);
+               uint32_t sub_data = buf.alloc(dw + pc);
+               uint32_t sub_ptrs = sub_data + dw;
+               buf.write_struct_ptr(ptrs_start + loc.offset, sub_data,
+                                     dw, pc);
+               // Tag at byte 0 of sub-struct's data word.
+               uint16_t tag = static_cast<uint16_t>(field_val.index());
+               buf.write_field(sub_data, 0, tag);
+               // Live alt → pack_sequence<A>(sub_ptrs[idx], &alt, 1).
+               std::visit(
+                  [&](const auto& alt) {
+                     using A = std::remove_cvref_t<decltype(alt)>;
+                     pack_sequence<A>(buf,
+                                       sub_ptrs +
+                                          static_cast<uint32_t>(
+                                             field_val.index()),
+                                       &alt, 1);
+                  },
+                  field_val);
+            }
             else if constexpr (Record<F>)
             {
                using FL = capnp_layout<F>;
@@ -813,6 +880,63 @@ namespace psio3 {
                using E    = typename is_array<F>::element_type;
                constexpr std::size_t N = is_array<F>::n;
                field_ref = unpack_arr<E, N>(resolve_list_ptr(slot));
+            }
+            else if constexpr (is_optional<F>::value)
+            {
+               // Wire form: null pointer = None; non-null = list<E> of
+               // length 1. Anything other than count 0 or 1 is treated
+               // as None to keep the codec total — strict validation
+               // can flag the malformed case separately.
+               using E = typename is_optional<F>::element_type;
+               auto info = resolve_list_ptr(slot);
+               if (!info.data || info.count == 0)
+                  field_ref = std::nullopt;
+               else
+               {
+                  E tmp{};
+                  unpack_sequence<E>(info, &tmp, 1);
+                  field_ref = std::move(tmp);
+               }
+            }
+            else if constexpr (is_variant<F>::value)
+            {
+               // Resolve the sub-struct, read u16 tag from data word,
+               // then unpack_sequence<A>(slot, &tmp, 1) the active
+               // alt.
+               constexpr std::size_t N = std::variant_size_v<F>;
+               auto sub = resolve_struct_ptr(slot);
+               if (sub == nullptr)
+               {
+                  field_ref = F{};  // default-init: alt 0
+                  return;
+               }
+               uint16_t tag = 0;
+               std::memcpy(&tag, sub.data, 2);
+               const uint32_t idx = static_cast<uint32_t>(tag);
+               if (idx >= N)
+               {
+                  field_ref = F{};
+                  return;
+               }
+               const uint8_t* alt_slot =
+                  ptr_section(sub) + idx * 8;
+               [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+                  ((idx == Is
+                       ? (field_ref =
+                             F{std::in_place_index<Is>,
+                                ([&] {
+                                   using A =
+                                      std::variant_alternative_t<Is, F>;
+                                   A    tmp{};
+                                   auto info =
+                                      resolve_list_ptr(alt_slot);
+                                   unpack_sequence<A>(info, &tmp, 1);
+                                   return tmp;
+                                }())},
+                          true)
+                       : false) ||
+                   ...);
+               }(std::make_index_sequence<N>{});
             }
             else if constexpr (Record<F>)
             {
