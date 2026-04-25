@@ -86,6 +86,60 @@ namespace psio3 {
          return v;
       }
 
+      // ── varuint32 ────────────────────────────────────────────────────────
+      //
+      // The EOSIO bin wire format uses LEB128-style varuint32 everywhere a
+      // length / count / index is emitted: string size, vector size,
+      // variant index, bitlist bit count, record content_size prefix.
+      // Each byte carries 7 payload bits; the MSB is the continuation flag.
+      // Max 5 bytes for a full u32 (5 × 7 = 35 bits).
+
+      constexpr std::size_t varuint32_size(std::uint32_t v) noexcept
+      {
+         std::size_t n = 1;
+         while (v >= 0x80)
+         {
+            v >>= 7;
+            ++n;
+         }
+         return n;
+      }
+
+      template <typename Sink>
+      void write_varuint32(Sink& s, std::uint32_t v) noexcept
+      {
+         while (v >= 0x80)
+         {
+            const unsigned char b = static_cast<unsigned char>((v & 0x7F) | 0x80);
+            s.write(reinterpret_cast<const char*>(&b), 1);
+            v >>= 7;
+         }
+         const unsigned char b = static_cast<unsigned char>(v);
+         s.write(reinterpret_cast<const char*>(&b), 1);
+      }
+
+      // Read varuint32 from `src` at `pos`, advancing pos. Returns 0 on
+      // malformed input — callers that care (validate) should bounds-check
+      // `pos` separately.
+      inline std::uint32_t
+      read_varuint32(std::span<const char> src, std::size_t& pos) noexcept
+      {
+         std::uint32_t v     = 0;
+         unsigned      shift = 0;
+         while (pos < src.size())
+         {
+            const unsigned char b =
+               static_cast<unsigned char>(src[pos++]);
+            v |= static_cast<std::uint32_t>(b & 0x7F) << shift;
+            if ((b & 0x80) == 0)
+               return v;
+            shift += 7;
+            if (shift >= 32)
+               return v;  // malformed — stop accumulating
+         }
+         return v;
+      }
+
       // Sinks that only count bytes (psio3::size_stream) skip the actual
       // adapter encode in the dispatch path and just advance by the
       // adapter's packsize. Other sinks encode into a scratch vector
@@ -146,6 +200,11 @@ namespace psio3 {
             return false;
          else if constexpr (Record<T>)
          {
+            // Non-DWNC records carry a varuint content_size prefix
+            // (runtime-sized) so they are not fully fixed regardless
+            // of field types. Only DWNC all-fixed records are.
+            if constexpr (!::psio3::is_dwnc_v<T>)
+               return false;
             using R  = ::psio3::reflect<T>;
             bool all = true;
             [&]<std::size_t... Is>(std::index_sequence<Is...>) {
@@ -164,7 +223,7 @@ namespace psio3 {
       {
          if constexpr (::psio3::format_should_dispatch_adapter_v<
                           ::psio3::bin, T>)
-            return 4;  // u32 length prefix; payload is variable
+            return 0;  // varuint length prefix + variable payload
          else if constexpr (std::is_same_v<T, bool>)
             return 1;
          else if constexpr (std::is_same_v<T, ::psio3::uint256>)
@@ -180,17 +239,22 @@ namespace psio3 {
          else if constexpr (is_bitvector<T>::value)
             return (T::size_value + 7) / 8;
          else if constexpr (std::is_same_v<T, std::string>)
-            return 4;
+            return 0;  // varuint length — contributed at runtime
          else if constexpr (is_std_vector<T>::value)
-            return 4;
+            return 0;  // varuint length — contributed at runtime
          else if constexpr (is_std_optional<T>::value)
             return 1;
          else if constexpr (is_std_variant<T>::value)
-            return 4;
+            return 0;  // varuint index — contributed at runtime
          else if constexpr (is_bitlist<T>::value)
-            return 4;
+            return 0;  // varuint bit_count — contributed at runtime
          else if constexpr (Record<T>)
          {
+            // DWNC all-fixed records sum their children; everything else
+            // (non-DWNC records, records with variable fields) is
+            // accounted for at runtime in variable_contrib.
+            if constexpr (!::psio3::is_dwnc_v<T>)
+               return 0;
             std::size_t total = 0;
             using R           = ::psio3::reflect<T>;
             [&]<std::size_t... Is>(std::index_sequence<Is...>) {
@@ -214,22 +278,25 @@ namespace psio3 {
          {
             using Proj = ::psio3::adapter<std::remove_cvref_t<T>,
                                           ::psio3::binary_category>;
-            return Proj::packsize(v);
+            const auto n = Proj::packsize(v);
+            return varuint32_size(static_cast<std::uint32_t>(n)) + n;
          }
          else if constexpr (std::is_same_v<T, std::string>)
-            return v.size();
+            return varuint32_size(static_cast<std::uint32_t>(v.size())) +
+                   v.size();
          else if constexpr (is_std_vector<T>::value)
          {
-            using E = typename T::value_type;
+            using E           = typename T::value_type;
+            std::size_t total = varuint32_size(
+               static_cast<std::uint32_t>(v.size()));
             if constexpr (fully_fixed<E>())
-               return v.size() * fixed_contrib<E>();
+               total += v.size() * fixed_contrib<E>();
             else
             {
-               std::size_t total = 0;
                for (const auto& x : v)
                   total += fixed_contrib<E>() + variable_contrib(x);
-               return total;
             }
+            return total;
          }
          else if constexpr (is_std_array<T>::value)
          {
@@ -254,29 +321,38 @@ namespace psio3 {
                [&](const auto& alt)
                {
                   using A = std::remove_cvref_t<decltype(alt)>;
-                  total   = fixed_contrib<A>() + variable_contrib(alt);
+                  total   = varuint32_size(
+                              static_cast<std::uint32_t>(v.index())) +
+                          fixed_contrib<A>() + variable_contrib(alt);
                },
                v);
             return total;
          }
          else if constexpr (is_bitlist<T>::value)
-            return v.bytes().size();
+            return varuint32_size(
+                      static_cast<std::uint32_t>(v.size())) +
+                   v.bytes().size();
          else if constexpr (Record<T>)
          {
             using R           = ::psio3::reflect<T>;
-            std::size_t total = 0;
+            std::size_t body  = 0;
             [&]<std::size_t... Is>(std::index_sequence<Is...>) {
                (
                   ([&]
                    {
                       using F = typename R::template member_type<Is>;
+                      body += fixed_contrib<F>();
                       if constexpr (!fully_fixed<F>())
-                         total += variable_contrib(
+                         body += variable_contrib(
                             v.*(R::template member_pointer<Is>));
                    }()),
                   ...);
             }(std::make_index_sequence<R::member_count>{});
-            return total;
+            // Non-DWNC records wrap `body` in a varuint content_size
+            // prefix; DWNC records concatenate directly.
+            if constexpr (!::psio3::is_dwnc_v<T>)
+               return varuint32_size(static_cast<std::uint32_t>(body)) + body;
+            return body;
          }
          else
             return 0;
@@ -306,14 +382,15 @@ namespace psio3 {
                                           ::psio3::binary_category>;
             if constexpr (sink_counts_only_v<Sink>)
             {
-               s.put(std::uint32_t{0});
-               s.write(nullptr, Proj::packsize(v));
+               const auto n = Proj::packsize(v);
+               s.write(nullptr,
+                       varuint32_size(static_cast<std::uint32_t>(n)) + n);
             }
             else
             {
                std::vector<char> tmp;
                Proj::encode(v, tmp);
-               s.put(static_cast<std::uint32_t>(tmp.size()));
+               write_varuint32(s, static_cast<std::uint32_t>(tmp.size()));
                s.write(tmp.data(), tmp.size());
             }
             return;
@@ -343,7 +420,7 @@ namespace psio3 {
          else if constexpr (is_std_vector<T>::value)
          {
             using E = typename T::value_type;
-            s.put(static_cast<std::uint32_t>(v.size()));
+            write_varuint32(s, static_cast<std::uint32_t>(v.size()));
             if constexpr (std::is_arithmetic_v<E> &&
                           !std::is_same_v<E, bool>)
             {
@@ -358,7 +435,7 @@ namespace psio3 {
          }
          else if constexpr (std::is_same_v<T, std::string>)
          {
-            s.put(static_cast<std::uint32_t>(v.size()));
+            write_varuint32(s, static_cast<std::uint32_t>(v.size()));
             if (!v.empty())
                s.write(v.data(), v.size());
          }
@@ -371,7 +448,7 @@ namespace psio3 {
          }
          else if constexpr (is_std_variant<T>::value)
          {
-            s.put(static_cast<std::uint32_t>(v.index()));
+            write_varuint32(s, static_cast<std::uint32_t>(v.index()));
             std::visit([&](const auto& alt) { write_value(alt, s); }, v);
          }
          else if constexpr (is_bitvector<T>::value)
@@ -382,7 +459,7 @@ namespace psio3 {
          }
          else if constexpr (is_bitlist<T>::value)
          {
-            s.put(static_cast<std::uint32_t>(v.size()));
+            write_varuint32(s, static_cast<std::uint32_t>(v.size()));
             auto bytes = v.bytes();
             if (!bytes.empty())
                s.write(bytes.data(), bytes.size());
@@ -390,42 +467,66 @@ namespace psio3 {
          else if constexpr (Record<T>)
          {
             using R = ::psio3::reflect<T>;
-            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-               (
-                  ([&]
-                   {
-                      using F = typename R::template member_type<Is>;
-                      const auto& fref =
-                         v.*(R::template member_pointer<Is>);
-                      using eff =
-                         typename ::psio3::effective_annotations_for<
-                            T, F,
-                            R::template member_pointer<Is>>::value_t;
-                      if constexpr (::psio3::has_as_override_v<eff>)
+            auto write_body = [&](auto& sink) {
+               [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+                  (
+                     ([&]
                       {
-                         using Tag = ::psio3::adapter_tag_of_t<eff>;
-                         using Proj = ::psio3::adapter<
-                            std::remove_cvref_t<F>, Tag>;
-                         if constexpr (sink_counts_only_v<Sink>)
+                         using F = typename R::template member_type<Is>;
+                         const auto& fref =
+                            v.*(R::template member_pointer<Is>);
+                         using eff =
+                            typename ::psio3::effective_annotations_for<
+                               T, F,
+                               R::template member_pointer<Is>>::value_t;
+                         if constexpr (::psio3::has_as_override_v<eff>)
                          {
-                            s.put(std::uint32_t{0});
-                            s.write(nullptr, Proj::packsize(fref));
+                            using Tag = ::psio3::adapter_tag_of_t<eff>;
+                            using Proj = ::psio3::adapter<
+                               std::remove_cvref_t<F>, Tag>;
+                            if constexpr (sink_counts_only_v<
+                                            std::decay_t<decltype(sink)>>)
+                            {
+                               const auto n = Proj::packsize(fref);
+                               sink.write(
+                                  nullptr,
+                                  varuint32_size(
+                                     static_cast<std::uint32_t>(n)) +
+                                     n);
+                            }
+                            else
+                            {
+                               std::vector<char> tmp;
+                               Proj::encode(fref, tmp);
+                               write_varuint32(
+                                  sink,
+                                  static_cast<std::uint32_t>(tmp.size()));
+                               sink.write(tmp.data(), tmp.size());
+                            }
                          }
                          else
                          {
-                            std::vector<char> tmp;
-                            Proj::encode(fref, tmp);
-                            s.put(static_cast<std::uint32_t>(tmp.size()));
-                            s.write(tmp.data(), tmp.size());
+                            write_value(fref, sink);
                          }
-                      }
-                      else
-                      {
-                         write_value(fref, s);
-                      }
-                   }()),
-                  ...);
-            }(std::make_index_sequence<R::member_count>{});
+                      }()),
+                     ...);
+               }(std::make_index_sequence<R::member_count>{});
+            };
+            if constexpr (::psio3::is_dwnc_v<T>)
+            {
+               // DWNC: no extensibility prefix, fields concatenate.
+               write_body(s);
+            }
+            else
+            {
+               // Non-DWNC: wrap body in varuint content_size prefix.
+               // Measure first via size_stream, then emit.
+               ::psio3::size_stream ss;
+               write_body(ss);
+               write_varuint32(s,
+                                static_cast<std::uint32_t>(ss.size));
+               write_body(s);
+            }
          }
          else
          {
@@ -488,8 +589,7 @@ namespace psio3 {
          else if constexpr (is_std_vector<T>::value)
          {
             using E             = typename T::value_type;
-            const std::uint32_t n = read_u32(src, pos);
-            pos += 4;
+            const std::uint32_t n = read_varuint32(src, pos);
             // Bulk-memcpy fast path for arithmetic elements — wire layout
             // is contiguous little-endian raw bytes, same as the element's
             // memory representation. assign(p, p+n) avoids resize's
@@ -513,8 +613,7 @@ namespace psio3 {
          }
          else if constexpr (std::is_same_v<T, std::string>)
          {
-            const std::uint32_t n = read_u32(src, pos);
-            pos += 4;
+            const std::uint32_t n = read_varuint32(src, pos);
             std::string out(src.data() + pos, src.data() + pos + n);
             pos += n;
             return out;
@@ -529,8 +628,8 @@ namespace psio3 {
          }
          else if constexpr (is_std_variant<T>::value)
          {
-            const auto idx = static_cast<std::size_t>(read_u32(src, pos));
-            pos += 4;
+            const auto idx =
+               static_cast<std::size_t>(read_varuint32(src, pos));
             T out;
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
             {
@@ -559,8 +658,7 @@ namespace psio3 {
          }
          else if constexpr (is_bitlist<T>::value)
          {
-            const std::uint32_t bit_count = read_u32(src, pos);
-            pos += 4;
+            const std::uint32_t bit_count = read_varuint32(src, pos);
             T                 out;
             const std::size_t byte_count = (bit_count + 7) / 8;
             auto&             bits       = out.storage();
@@ -578,6 +676,17 @@ namespace psio3 {
          {
             using R = ::psio3::reflect<T>;
             T       out{};
+            // Non-DWNC records carry a varuint content_size prefix. Read
+            // and skip it — we trust it as the extent for extensibility
+            // tolerance (decoders that know fewer fields than the writer
+            // can stop reading, decoders that know more can synthesize
+            // defaults past content_end). Trailing-pruning /
+            // synthesis is a follow-up; for now we just parse the
+            // prefix and walk the known fields.
+            if constexpr (!::psio3::is_dwnc_v<T>)
+            {
+               (void)read_varuint32(src, pos);
+            }
             [&]<std::size_t... Is>(std::index_sequence<Is...>) {
                (
                   ([&]
@@ -594,8 +703,8 @@ namespace psio3 {
                          using Tag = ::psio3::adapter_tag_of_t<eff>;
                          using Proj = ::psio3::adapter<
                             std::remove_cvref_t<F>, Tag>;
-                         const std::uint32_t n = read_u32(src, pos);
-                         pos += 4;
+                         const std::uint32_t n =
+                            read_varuint32(src, pos);
                          fref = Proj::decode(
                             std::span<const char>(src.data() + pos, n));
                          pos += n;
