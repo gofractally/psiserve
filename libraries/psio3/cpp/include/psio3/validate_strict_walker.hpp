@@ -22,30 +22,68 @@
 // than from the wire (the spec interpretation only depends on the
 // payload bytes, not framing).
 //
-// Scope of v1:
-//   - Top-level fields of T whose type is std::string (the common
-//     ByteString shape carrier). Spec validate receives the string
-//     bytes via std::span<const char>{s.data(), s.size()}.
-//   - Specs whose validate signature is `(span<const char>) noexcept`.
+// Coverage:
+//   - std::string fields → spec.validate({s.data(), s.size()})
+//   - Reflected (record) fields → recurse
+//   - std::vector<E> → if E is Reflected, recurse on each element
+//   - std::optional<E> → recurse on the value when present
+//   - std::variant<Es...> → recurse on the active alternative
+//   - Specs without a (span)-validate member are ignored (open SFINAE)
+//
 // Out of scope (follow-ups):
-//   - Recursing into nested records, vectors of strings, optionals.
-//   - sorted_spec / length_bound semantic validation (these benefit
-//     from typed access, which the (span) signature doesn't allow).
+//   - Specs that need a typed interface (sorted_spec on vec<u32>,
+//     length_bound size-only checks). The (span) signature doesn't
+//     fit those well; a typed-validate sibling will land separately.
+//   - Element-level specs on vector<string> — there's no annotation
+//     syntax for "every element of this vector satisfies utf8_spec"
+//     today; the spec attaches to the vector field which has shape
+//     VariableSequence (not ByteString), so the applies_to check
+//     rejects it at compile time. A wrapper-typed annotation
+//     (utf8_string<N> on the element) is the path forward.
 
 #include <psio3/error.hpp>
 #include <psio3/reflect.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
+#include <vector>
 
 namespace psio3 {
 
+   // Forward declaration so detail helpers can recurse into Records.
+   template <typename T>
+   [[nodiscard]] inline codec_status
+   validate_specs_on_value(const T& value) noexcept;
+
    namespace detail::vstrict {
+
+      template <typename T>
+      struct is_std_vector : std::false_type {};
+      template <typename E, typename A>
+      struct is_std_vector<std::vector<E, A>> : std::true_type
+      {
+         using element_type = E;
+      };
+
+      template <typename T>
+      struct is_std_optional : std::false_type {};
+      template <typename E>
+      struct is_std_optional<std::optional<E>> : std::true_type
+      {
+         using element_type = E;
+      };
+
+      template <typename T>
+      struct is_std_variant : std::false_type {};
+      template <typename... Ts>
+      struct is_std_variant<std::variant<Ts...>> : std::true_type {};
 
       // SFINAE: does S have a static validate(span<const char>) member
       // returning codec_status?
@@ -90,8 +128,66 @@ namespace psio3 {
          return err;
       }
 
-      // Per-field handler: extracts the field's payload bytes for the
-      // shapes we currently support, then runs the spec set against them.
+      // Recurse into a value that may itself contain reflected records,
+      // vectors-of-records, optionals, or variants. Specs annotated on
+      // the *containing field* are NOT processed here — that's the
+      // caller's job. This handler only walks structure to find more
+      // record fields whose own annotations need checking.
+      template <typename V>
+      codec_status recurse_into(const V& value) noexcept
+      {
+         using U = std::remove_cvref_t<V>;
+         if constexpr (::psio3::Reflected<U>)
+         {
+            return ::psio3::validate_specs_on_value(value);
+         }
+         else if constexpr (is_std_vector<U>::value)
+         {
+            using E = typename U::value_type;
+            if constexpr (::psio3::Reflected<E> ||
+                          is_std_vector<E>::value ||
+                          is_std_optional<E>::value ||
+                          is_std_variant<E>::value)
+            {
+               for (const auto& e : value)
+               {
+                  auto st = recurse_into<E>(e);
+                  if (!st.ok())
+                     return st;
+               }
+            }
+            return codec_ok();
+         }
+         else if constexpr (is_std_optional<U>::value)
+         {
+            if (value.has_value())
+            {
+               using E = typename U::value_type;
+               return recurse_into<E>(*value);
+            }
+            return codec_ok();
+         }
+         else if constexpr (is_std_variant<U>::value)
+         {
+            codec_status err = codec_ok();
+            std::visit(
+               [&](const auto& alt) {
+                  using A = std::remove_cvref_t<decltype(alt)>;
+                  err     = recurse_into<A>(alt);
+               },
+               value);
+            return err;
+         }
+         else
+         {
+            (void)value;
+            return codec_ok();
+         }
+      }
+
+      // Per-field handler: runs (span)-validate specs on the field's
+      // payload bytes (today: std::string), then recurses into the
+      // field structure to pick up nested records.
       template <typename T, std::size_t I>
       codec_status validate_field(const T& value) noexcept
       {
@@ -103,42 +199,50 @@ namespace psio3 {
 
          const F& field_val = value.*MemPtr;
 
+         // (1) Run any (span)-validate specs against this field's bytes.
          if constexpr (std::is_same_v<F, std::string>)
          {
             std::span<const char> bytes{field_val.data(), field_val.size()};
-            return run_specs(bytes, annotations);
+            auto st = run_specs(bytes, annotations);
+            if (!st.ok())
+               return st;
          }
-         else
-         {
-            // Other shapes (vec<u8>, nested records, vec<string>) are
-            // not yet covered — design §5.3.3 v1 scope is ByteString
-            // payloads, which all encode the same way regardless of
-            // format. Returning ok keeps validate_strict total.
-            (void)field_val;
-            return codec_ok();
-         }
+
+         // (2) Recurse into structural carriers. Specs on inner record
+         // fields get checked when validate_specs_on_value processes
+         // them.
+         return recurse_into<F>(field_val);
       }
 
    }  // namespace detail::vstrict
 
-   // Public entry point: walk every reflected field of `value` and run
-   // each spec's `validate(span)` against the field's payload bytes.
+   // Public entry point: walk every reflected field of `value`, run
+   // each spec's `validate(span)` against the field's payload bytes,
+   // and recurse into nested records / vectors / optionals / variants.
    // Returns the first failure, or codec_ok() if everything passes.
    template <typename T>
    [[nodiscard]] inline codec_status
    validate_specs_on_value(const T& value) noexcept
    {
-      using R                 = ::psio3::reflect<T>;
-      constexpr std::size_t N = R::member_count;
-      return [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-         codec_status err = codec_ok();
-         ((err.ok()
-              ? (err = detail::vstrict::validate_field<T, Is>(value),
-                 void())
-              : void()),
-          ...);
-         return err;
-      }(std::make_index_sequence<N>{});
+      if constexpr (!::psio3::Reflected<T>)
+      {
+         (void)value;
+         return codec_ok();
+      }
+      else
+      {
+         using R                 = ::psio3::reflect<T>;
+         constexpr std::size_t N = R::member_count;
+         return [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            codec_status err = codec_ok();
+            ((err.ok()
+                 ? (err = detail::vstrict::validate_field<T, Is>(value),
+                    void())
+                 : void()),
+             ...);
+            return err;
+         }(std::make_index_sequence<N>{});
+      }
    }
 
 }  // namespace psio3
