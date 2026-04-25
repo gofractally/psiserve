@@ -340,6 +340,55 @@ namespace psio3 {
       template <typename T>
       T decode_value(std::span<const char> src, std::size_t& pos);
 
+      // In-place decode helper. Same trick as borsh — std::string and
+      // bulk-memcpy std::vector benefit from `.assign(...)` straight
+      // into the destination, avoiding the temp + move-assign that
+      // shows up as ~10-20 % decode regression on Order / Record-style
+      // shapes vs v1.
+      template <typename T>
+      void decode_into(std::span<const char> src, std::size_t& pos,
+                       T& out)
+      {
+         if constexpr (std::is_same_v<T, std::string>)
+         {
+            const std::uint64_t n = read_u64(src, pos);
+            pos += 8;
+            out.assign(src.data() + pos,
+                       src.data() + pos + static_cast<std::size_t>(n));
+            pos += static_cast<std::size_t>(n);
+         }
+         else if constexpr (is_std_vector<T>::value)
+         {
+            using E               = typename T::value_type;
+            const std::uint64_t n = read_u64(src, pos);
+            pos += 8;
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               Record<E> && ::psio3::is_dwnc_v<E> && fully_fixed<E>() &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_contrib<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
+            {
+               const E* first =
+                  reinterpret_cast<const E*>(src.data() + pos);
+               out.assign(first, first + n);
+               pos += sizeof(E) * n;
+            }
+            else
+            {
+               out.clear();
+               out.reserve(static_cast<std::size_t>(n));
+               for (std::uint64_t i = 0; i < n; ++i)
+                  out.push_back(decode_value<E>(src, pos));
+            }
+         }
+         else
+         {
+            out = decode_value<T>(src, pos);
+         }
+      }
+
       template <typename T>
       T decode_value(std::span<const char> src, std::size_t& pos)
       {
@@ -493,11 +542,11 @@ namespace psio3 {
             }
             using R = ::psio3::reflect<T>;
             T       out{};
+            // In-place field decode — see decode_into rationale above.
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
             {
-               (((out.*(R::template member_pointer<Is>)) =
-                    decode_value<typename R::template member_type<Is>>(src,
-                                                                         pos)),
+               (decode_into<typename R::template member_type<Is>>(
+                    src, pos, out.*(R::template member_pointer<Is>)),
                 ...);
             }(std::make_index_sequence<R::member_count>{});
             return out;

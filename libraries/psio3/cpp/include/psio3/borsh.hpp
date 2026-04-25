@@ -348,6 +348,58 @@ namespace psio3 {
       template <typename T>
       T decode_value(std::span<const char> src, std::size_t& pos);
 
+      // In-place decode helper. v1's `from_borsh(T&, stream)` reads
+      // straight into existing storage; v3's `decode_value<T>` returns
+      // by value and the caller move-assigns. The move + temp's
+      // destructor add ~1 ns per std::string field and compound on
+      // records with several variable-length fields. decode_into
+      // matches v1's in-place algorithm: for std::string and bulk-
+      // memcpy std::vector it allocates directly into `out`. Other
+      // types fall back to assigning from decode_value (the move is
+      // cheap for arithmetic / fixed types).
+      template <typename T>
+      void decode_into(std::span<const char> src, std::size_t& pos,
+                       T& out)
+      {
+         if constexpr (std::is_same_v<T, std::string>)
+         {
+            const std::uint32_t n = read_u32(src, pos);
+            pos += 4;
+            out.assign(src.data() + pos, src.data() + pos + n);
+            pos += n;
+         }
+         else if constexpr (is_std_vector<T>::value)
+         {
+            using E               = typename T::value_type;
+            const std::uint32_t n = read_u32(src, pos);
+            pos += 4;
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               Record<E> && ::psio3::is_dwnc_v<E> && fully_fixed<E>() &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_contrib<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
+            {
+               const E* first =
+                  reinterpret_cast<const E*>(src.data() + pos);
+               out.assign(first, first + n);
+               pos += sizeof(E) * n;
+            }
+            else
+            {
+               out.clear();
+               out.reserve(n);
+               for (std::uint32_t i = 0; i < n; ++i)
+                  out.push_back(decode_value<E>(src, pos));
+            }
+         }
+         else
+         {
+            out = decode_value<T>(src, pos);
+         }
+      }
+
       template <typename T>
       T decode_value(std::span<const char> src, std::size_t& pos)
       {
@@ -501,11 +553,13 @@ namespace psio3 {
             }
             using R = ::psio3::reflect<T>;
             T       out{};
+            // In-place decode each field — avoids the move-assign +
+            // temp-destructor cost on std::string / std::vector
+            // fields. Mirrors v1's `from_borsh(T&, stream)` walker.
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
             {
-               (((out.*(R::template member_pointer<Is>)) =
-                    decode_value<typename R::template member_type<Is>>(src,
-                                                                         pos)),
+               (decode_into<typename R::template member_type<Is>>(
+                    src, pos, out.*(R::template member_pointer<Is>)),
                 ...);
             }(std::make_index_sequence<R::member_count>{});
             return out;

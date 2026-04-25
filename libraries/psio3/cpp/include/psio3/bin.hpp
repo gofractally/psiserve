@@ -592,6 +592,50 @@ namespace psio3 {
       template <typename T>
       T decode_value(std::span<const char> src, std::size_t& pos);
 
+      // In-place decode helper. Same trick as borsh / bincode: skip
+      // the temp + move-assign on std::string and bulk-memcpy
+      // std::vector fields by writing straight into the destination.
+      template <typename T>
+      void decode_into(std::span<const char> src, std::size_t& pos,
+                       T& out)
+      {
+         if constexpr (std::is_same_v<T, std::string>)
+         {
+            const std::uint32_t n = read_varuint32(src, pos);
+            out.assign(src.data() + pos, src.data() + pos + n);
+            pos += n;
+         }
+         else if constexpr (is_std_vector<T>::value)
+         {
+            using E               = typename T::value_type;
+            const std::uint32_t n = read_varuint32(src, pos);
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               Record<E> && ::psio3::is_dwnc_v<E> && fully_fixed<E>() &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_contrib<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
+            {
+               const E* first =
+                  reinterpret_cast<const E*>(src.data() + pos);
+               out.assign(first, first + n);
+               pos += sizeof(E) * n;
+            }
+            else
+            {
+               out.clear();
+               out.reserve(n);
+               for (std::uint32_t i = 0; i < n; ++i)
+                  out.push_back(decode_value<E>(src, pos));
+            }
+         }
+         else
+         {
+            out = decode_value<T>(src, pos);
+         }
+      }
+
       template <typename T>
       T decode_value(std::span<const char> src, std::size_t& pos)
       {
@@ -786,7 +830,7 @@ namespace psio3 {
                       }
                       else
                       {
-                         fref = decode_value<F>(src, pos);
+                         decode_into<F>(src, pos, fref);
                       }
                    }()),
                   ...);
