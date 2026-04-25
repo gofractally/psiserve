@@ -293,6 +293,50 @@ namespace psio3 {
       T decode_value(std::span<const char> src, std::size_t pos,
                      std::size_t end);
 
+      // In-place variable-field decode. Same trick as bin / borsh —
+      // for std::string and bulk-memcpy std::vector, allocate
+      // straight into the destination; for everything else, fall back
+      // to the by-value decode_value + move-assign.
+      template <std::size_t W, typename T>
+      void decode_into(std::span<const char> src, std::size_t pos,
+                       std::size_t end, T& out)
+      {
+         if constexpr (std::is_same_v<T, std::string>)
+         {
+            const std::uint32_t n = read_word<W>(src, pos);
+            out.assign(src.data() + pos + W,
+                       src.data() + pos + W + n);
+         }
+         else if constexpr (is_std_vector_v<T>)
+         {
+            using E = typename T::value_type;
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               is_fixed_v<E> && Record<E> &&
+               ::psio3::is_dwnc_v<E> &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_size_of<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
+            {
+               const std::uint32_t byte_count = read_word<W>(src, pos);
+               const std::size_t   elem_count =
+                  static_cast<std::size_t>(byte_count) / sizeof(E);
+               const E* first = reinterpret_cast<const E*>(
+                  src.data() + pos + W);
+               out.assign(first, first + elem_count);
+            }
+            else
+            {
+               out = decode_value<W, T>(src, pos, end);
+            }
+         }
+         else
+         {
+            out = decode_value<W, T>(src, pos, end);
+         }
+      }
+
       // Mirror of encode_record_fixed_inline for the read path.
       template <std::size_t W, Record T>
       T decode_record_fixed_inline(std::span<const char> src,
@@ -907,8 +951,8 @@ namespace psio3 {
                             return;
                          }
                          const std::size_t payload_pos = slot_pos + slot;
-                         fref = std::optional<V>{
-                            decode_value<W, V>(src, payload_pos, end)};
+                         fref.emplace();
+                         decode_into<W, V>(src, payload_pos, end, *fref);
                          return;
                       }
 
@@ -918,7 +962,7 @@ namespace psio3 {
                          return;
                       }
                       const std::size_t payload_pos = slot_pos + slot;
-                      fref = decode_value<W, F>(src, payload_pos, end);
+                      decode_into<W, F>(src, payload_pos, end, fref);
                    }
                 }()),
                ...);

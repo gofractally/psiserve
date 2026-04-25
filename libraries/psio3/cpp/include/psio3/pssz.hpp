@@ -658,6 +658,45 @@ namespace psio3 {
       T decode_value(std::span<const char> src, std::size_t pos,
                      std::size_t end);
 
+      // In-place decode for std::string and bulk-memcpy std::vector.
+      // Avoids the temp + move-assign overhead for these field types
+      // when called from the Record walker. Falls back to
+      // decode_value for other types.
+      template <std::size_t W, typename T>
+      void decode_into(std::span<const char> src, std::size_t pos,
+                       std::size_t end, T& out)
+      {
+         if constexpr (std::is_same_v<T, std::string>)
+         {
+            // pSSZ string: raw bytes from pos to end (no length).
+            out.assign(src.data() + pos, src.data() + end);
+         }
+         else if constexpr (is_std_vector_v<T>)
+         {
+            using E = typename T::value_type;
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               Record<E> && std::is_trivially_copyable_v<E> &&
+               is_fixed_v<E> && fixed_size_of<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
+            {
+               const std::size_t n = (end - pos) / sizeof(E);
+               const E*          first =
+                  reinterpret_cast<const E*>(src.data() + pos);
+               out.assign(first, first + n);
+            }
+            else
+            {
+               out = decode_value<W, T>(src, pos, end);
+            }
+         }
+         else
+         {
+            out = decode_value<W, T>(src, pos, end);
+         }
+      }
+
       template <std::size_t W, typename T>
          requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
       T decode_arith(std::span<const char> src, std::size_t pos)
@@ -852,7 +891,7 @@ namespace psio3 {
                    }
                    else
                    {
-                      fref = decode_value<W, F>(src, beg, var_end[Is]);
+                      decode_into<W, F>(src, beg, var_end[Is], fref);
                    }
                    fixed_cursor += W;
                 }

@@ -685,6 +685,46 @@ namespace psio3 {
                      std::size_t            pos,
                      std::size_t            end);
 
+      // In-place decode for std::string and bulk-memcpy std::vector
+      // variable-field paths. Avoids the temp + move-assign overhead
+      // that shows as a 1.10–1.30x decode regression vs v1 on
+      // record-with-string shapes.
+      template <typename T>
+      void decode_into(std::span<const char> src, std::size_t pos,
+                       std::size_t end, T& out)
+      {
+         if constexpr (std::is_same_v<T, std::string>)
+         {
+            // SSZ string: raw bytes, length = end - pos.
+            out.assign(src.data() + pos, src.data() + end);
+         }
+         else if constexpr (is_std_vector_v<T>)
+         {
+            using E = typename T::value_type;
+            if constexpr (is_fixed_v<E>)
+            {
+               constexpr bool is_arith =
+                  std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+               constexpr bool is_memcpy_record =
+                  Record<E> && std::is_trivially_copyable_v<E> &&
+                  fixed_size_of<E>() == sizeof(E);
+               if constexpr (is_arith || is_memcpy_record)
+               {
+                  const std::size_t n = (end - pos) / sizeof(E);
+                  const E*          first =
+                     reinterpret_cast<const E*>(src.data() + pos);
+                  out.assign(first, first + n);
+                  return;
+               }
+            }
+            out = decode_value<T>(src, pos, end);
+         }
+         else
+         {
+            out = decode_value<T>(src, pos, end);
+         }
+      }
+
       template <typename T>
          requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
       T decode_arith(std::span<const char> src, std::size_t pos)
@@ -916,7 +956,7 @@ namespace psio3 {
                    }
                    else
                    {
-                      fref = decode_value<F>(src, beg, var_end[Is]);
+                      decode_into<F>(src, beg, var_end[Is], fref);
                    }
                    fixed_cursor += 4;
                 }
