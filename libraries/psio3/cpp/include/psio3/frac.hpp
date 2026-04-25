@@ -586,6 +586,16 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // Memcpy fast path for DWNC packed memcpy-layout records.
+            // No header for DWNC; wire bytes == memory bytes.
+            if constexpr (::psio3::is_dwnc_v<T> &&
+                          std::is_trivially_copyable_v<T> &&
+                          is_fixed_v<T>)
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+            {
+               append_bytes(s, &v, sizeof(T));
+               return;
+            }
             // v1 fracpack record wire format:
             //   [u{W} header = fixed_region size]
             //   [fixed_region: for each field in source order]
@@ -1165,6 +1175,17 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // Memcpy fast path for DWNC packed memcpy-layout records.
+            // No u16 header for DWNC, so wire == sizeof(T) bytes.
+            if constexpr (::psio3::is_dwnc_v<T> &&
+                          std::is_trivially_copyable_v<T> &&
+                          is_fixed_v<T>)
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+            {
+               T out;
+               std::memcpy(&out, src.data() + pos, sizeof(T));
+               return out;
+            }
             return decode_record_with_header<W, T>(src, pos, end);
          }
          else

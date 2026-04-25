@@ -492,6 +492,19 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // Memcpy fast path for DWNC packed memcpy-layout records:
+            // wire bytes match memory bytes exactly, no u{W} header.
+            // (For non-DWNC records the u{W} header forces the
+            // walker; for DWNC + padded records the walker is also
+            // needed because layout doesn't match.)
+            if constexpr (::psio3::is_dwnc_v<T> &&
+                          std::is_trivially_copyable_v<T> &&
+                          is_fixed_v<T>)
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+            {
+               append_bytes(s, &v, sizeof(T));
+               return;
+            }
             using R = ::psio3::reflect<T>;
             [&]<std::size_t... Is>(std::index_sequence<Is...>) {
                std::size_t       fixed_region    = 0;
@@ -956,6 +969,18 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // Memcpy fast path for DWNC packed memcpy-layout records
+            // (where wire bytes match memory bytes). Single-record
+            // decode hits this; vec<E> already had its own bulk path.
+            if constexpr (::psio3::is_dwnc_v<T> &&
+                          std::is_trivially_copyable_v<T> &&
+                          is_fixed_v<T>)
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+            {
+               T out;
+               std::memcpy(&out, src.data() + pos, sizeof(T));
+               return out;
+            }
             using R = ::psio3::reflect<T>;
             return record_decode<W, T>(
                src, pos, end, std::make_index_sequence<R::member_count>{});

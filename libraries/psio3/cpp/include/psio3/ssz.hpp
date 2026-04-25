@@ -526,6 +526,19 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // Memcpy fast path for trivially-copyable records whose
+            // memory layout matches the wire (sizeof(T) ==
+            // fixed_size_of<T>()). Nested-constexpr to avoid evaluating
+            // fixed_size_of<T> for non-fixed types (it can hit the
+            // std::array branch which depends on tuple_size<T>).
+            if constexpr (std::is_trivially_copyable_v<T> && is_fixed_v<T>)
+            {
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+               {
+                  append_bytes(s, &v, sizeof(T));
+                  return;
+               }
+            }
             using R = ::psio3::reflect<T>;
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
             {
@@ -1009,6 +1022,18 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // Memcpy fast path for trivially-copyable records whose
+            // memory layout matches the wire. Nested if-constexpr so
+            // fixed_size_of<T> isn't evaluated when T is not is_fixed.
+            if constexpr (std::is_trivially_copyable_v<T> && is_fixed_v<T>)
+            {
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+               {
+                  T out;
+                  std::memcpy(&out, src.data() + pos, sizeof(T));
+                  return out;
+               }
+            }
             using R = ::psio3::reflect<T>;
             return record_decode<T>(src, pos, end,
                                     std::make_index_sequence<R::member_count>{});
