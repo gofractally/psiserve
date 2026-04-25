@@ -21,6 +21,7 @@
 #include <psio3/format_tag_base.hpp>
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
+#include <psio3/stream.hpp>
 #include <psio3/wrappers.hpp>
 
 #include <array>
@@ -68,9 +69,8 @@ namespace psio3 {
       template <std::size_t N>
       struct is_bitlist<::psio3::bitlist<N>> : std::true_type {};
 
-      using sink_t = std::vector<char>;
-
-      inline void write_long(sink_t& s, std::int64_t v)
+      template <typename Sink>
+      inline void write_long(Sink& s, std::int64_t v)
       {
          std::uint64_t zz = (static_cast<std::uint64_t>(v) << 1) ^
                             static_cast<std::uint64_t>(v >> 63);
@@ -79,7 +79,7 @@ namespace psio3 {
             std::uint8_t b = zz & 0x7f;
             zz >>= 7;
             b |= ((zz > 0) << 7);
-            s.push_back(static_cast<char>(b));
+            s.write(static_cast<char>(b));
          } while (zz);
       }
 
@@ -98,38 +98,30 @@ namespace psio3 {
          return static_cast<std::int64_t>((r >> 1) ^ (~(r & 1) + 1));
       }
 
-      template <typename T>
-      void encode_value(const T& v, sink_t& s)
+      template <typename T, typename Sink>
+      void encode_value(const T& v, Sink& s)
       {
          if constexpr (std::is_same_v<T, bool>)
-            s.push_back(v ? '\x01' : '\x00');
+            s.write(v ? '\x01' : '\x00');
          else if constexpr (std::is_same_v<T, ::psio3::uint256>)
          {
             // Treat as Avro "fixed" 32-byte field — raw LE bytes,
             // no varint. Matches v1 ext-int behavior in multiformat
             // tests.
-            s.insert(s.end(),
-                     reinterpret_cast<const char*>(v.limb),
-                     reinterpret_cast<const char*>(v.limb) + 32);
+            s.write(v.limb, 32);
          }
          else if constexpr (std::is_same_v<T, ::psio3::uint128> ||
                             std::is_same_v<T, ::psio3::int128>)
          {
-            s.insert(s.end(),
-                     reinterpret_cast<const char*>(&v),
-                     reinterpret_cast<const char*>(&v) + 16);
+            s.write(&v, 16);
          }
          else if constexpr (std::is_same_v<T, float>)
          {
-            char buf[4];
-            std::memcpy(buf, &v, 4);
-            s.insert(s.end(), buf, buf + 4);
+            s.write(&v, 4);
          }
          else if constexpr (std::is_same_v<T, double>)
          {
-            char buf[8];
-            std::memcpy(buf, &v, 8);
-            s.insert(s.end(), buf, buf + 8);
+            s.write(&v, 8);
          }
          else if constexpr (std::is_enum_v<T>)
          {
@@ -146,9 +138,7 @@ namespace psio3 {
             using E = typename T::value_type;
             if constexpr (sizeof(E) == 1 && std::is_arithmetic_v<E>)
             {
-               s.insert(s.end(),
-                        reinterpret_cast<const char*>(v.data()),
-                        reinterpret_cast<const char*>(v.data()) + v.size());
+               s.write(v.data(), v.size());
             }
             else
             {
@@ -174,7 +164,7 @@ namespace psio3 {
          else if constexpr (std::is_same_v<T, std::string>)
          {
             write_long(s, static_cast<std::int64_t>(v.size()));
-            s.insert(s.end(), v.data(), v.data() + v.size());
+            s.write(v.data(), v.size());
          }
          else if constexpr (is_std_optional<T>::value)
          {
@@ -199,9 +189,7 @@ namespace psio3 {
             // Avro fixed: raw N bytes (no length prefix).
             constexpr std::size_t nbytes = (T::size_value + 7) / 8;
             if constexpr (nbytes > 0)
-               s.insert(s.end(),
-                        reinterpret_cast<const char*>(v.data()),
-                        reinterpret_cast<const char*>(v.data()) + nbytes);
+               s.write(v.data(), nbytes);
          }
          else if constexpr (is_bitlist<T>::value)
          {
@@ -209,10 +197,7 @@ namespace psio3 {
             write_long(s, static_cast<std::int64_t>(v.size()));
             auto bytes = v.bytes();
             if (!bytes.empty())
-               s.insert(s.end(),
-                        reinterpret_cast<const char*>(bytes.data()),
-                        reinterpret_cast<const char*>(bytes.data()) +
-                           bytes.size());
+               s.write(bytes.data(), bytes.size());
          }
          else if constexpr (Record<T>)
          {
@@ -421,15 +406,25 @@ namespace psio3 {
       friend void tag_invoke(decltype(::psio3::encode), avro, const T& v,
                              std::vector<char>& sink)
       {
-         detail::avro_impl::encode_value(v, sink);
+         // Two-pass: size_stream first, then fast_buf_stream into a
+         // pre-sized buffer — mirrors v1's convert_to_avro algorithm.
+         ::psio3::size_stream ss;
+         detail::avro_impl::encode_value(v, ss);
+         const std::size_t orig = sink.size();
+         sink.resize(orig + ss.size);
+         ::psio3::fast_buf_stream fbs(sink.data() + orig, ss.size);
+         detail::avro_impl::encode_value(v, fbs);
       }
 
       template <typename T>
       friend std::vector<char> tag_invoke(decltype(::psio3::encode), avro,
                                           const T& v)
       {
-         std::vector<char> out;
-         detail::avro_impl::encode_value(v, out);
+         ::psio3::size_stream ss;
+         detail::avro_impl::encode_value(v, ss);
+         std::vector<char> out(ss.size);
+         ::psio3::fast_buf_stream fbs(out.data(), ss.size);
+         detail::avro_impl::encode_value(v, fbs);
          return out;
       }
 
@@ -445,9 +440,9 @@ namespace psio3 {
       friend std::size_t tag_invoke(decltype(::psio3::size_of), avro,
                                     const T& v)
       {
-         std::vector<char> tmp;
-         detail::avro_impl::encode_value(v, tmp);
-         return tmp.size();
+         ::psio3::size_stream ss;
+         detail::avro_impl::encode_value(v, ss);
+         return ss.size;
       }
 
       template <typename T>
