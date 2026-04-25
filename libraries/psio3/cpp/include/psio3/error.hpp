@@ -6,15 +6,34 @@
 // Every other operation (encode, decode, size, make_boxed, view
 // accessors) is `noexcept` and assumes its input has been validated.
 //
-// Return type: `[[nodiscard]] psio3::codec_status` — a lightweight
-// result type the compiler refuses to let users silently drop. Under
-// `-Werror=unused-result` (enabled on the psio3 target) this makes
-// "did you validate?" a compile-time invariant. The same API works
-// with `-fno-exceptions`; only the opt-in `.or_throw()` helper
-// disappears.
+// Return type: `[[nodiscard]] psio3::codec_status` — a single-pointer
+// move-only handle. Null pointer = OK; non-null = points to a heap-
+// allocated `codec_error` payload. The OK path (the overwhelmingly
+// common case) is one register-sized return; the error path costs a
+// `make_unique<codec_error>`.
+//
+// Why a pointer instead of an inline 40-byte struct: every validate
+// call had to zero-init two string_views + a uint32 + a bool and
+// return ~48 bytes via 2-3 register stores, even on success. On
+// fixed-shape validate paths (where the entire body collapses to
+// "check span >= N") the return-value initialization was the same
+// order of magnitude as the validate work itself. The pointer
+// representation makes "no error" the natural default — ABIs return
+// `nullptr` in a single register.
+//
+// Trade-off: codec_status is now move-only. The error payload is on
+// the heap, which means codec_fail can throw bad_alloc. That's
+// considered acceptable: the slow path is already the slow path, and
+// running out of memory while reporting an error is unrecoverable
+// either way.
+//
+// `[[nodiscard]]` at the class level + -Werror=unused-result keeps
+// the "did you check the status?" invariant.
 
 #include <cstdint>
+#include <memory>
 #include <string_view>
+#include <utility>
 
 #if defined(PSIO3_EXCEPTIONS_ENABLED) && PSIO3_EXCEPTIONS_ENABLED
 #include <stdexcept>
@@ -23,7 +42,8 @@
 
 namespace psio3 {
 
-   // Structured error payload. No allocation — static strings only.
+   // Structured error payload. No allocation inside the payload itself —
+   // string_views must point to static storage (string literals).
    struct codec_error
    {
       std::string_view what{};          // static message, e.g. "offset out of range"
@@ -54,54 +74,55 @@ namespace psio3 {
 
    // ── codec_status ──────────────────────────────────────────────────────
    //
-   // Semantics:
-   //   - ok() / operator bool() → true if no error
-   //   - error()                 → access the codec_error (only when !ok)
-   //   - or_throw()              → throw codec_exception if error (only
-   //                               under PSIO3_EXCEPTIONS_ENABLED)
-   //
-   // [[nodiscard]] at the class level + -Werror=unused-result in CI
-   // means unchecked statuses fail to compile.
+   // Move-only. Holds either nullptr (OK) or a unique_ptr to a heap
+   // `codec_error`. The fast path is a single null pointer return.
+
    class [[nodiscard]] codec_status
    {
-      codec_error err_{};
-      bool        has_err_ = false;
+      std::unique_ptr<codec_error> err_;
 
     public:
-      constexpr codec_status() noexcept = default;
+      // Default → OK (null pointer, no allocation).
+      codec_status() noexcept = default;
 
-      // Error constructor. Use the out-of-class `codec_fail()` factory
-      // for readability.
-      constexpr explicit codec_status(codec_error e) noexcept
-         : err_(e), has_err_(true) {}
+      // Error path. Allocates the payload. Use `codec_fail()` factory
+      // for readability; this constructor is the implementation hook.
+      explicit codec_status(codec_error e)
+         : err_(std::make_unique<codec_error>(e)) {}
 
-      constexpr bool ok() const noexcept { return !has_err_; }
-      constexpr explicit operator bool() const noexcept { return ok(); }
+      codec_status(codec_status&&) noexcept            = default;
+      codec_status& operator=(codec_status&&) noexcept = default;
+      codec_status(const codec_status&)                = delete;
+      codec_status& operator=(const codec_status&)     = delete;
+
+      bool ok() const noexcept { return err_ == nullptr; }
+      explicit operator bool() const noexcept { return ok(); }
 
       // Valid only when !ok(). UB to call otherwise — callers gate on
       // ok() / operator bool first.
-      constexpr const codec_error& error() const noexcept { return err_; }
+      const codec_error& error() const noexcept { return *err_; }
 
 #if defined(PSIO3_EXCEPTIONS_ENABLED) && PSIO3_EXCEPTIONS_ENABLED
       // Opt-in exception path. Users who WANT exceptions call .or_throw()
       // explicitly; nothing in the library throws without being asked.
       void or_throw() const
       {
-         if (has_err_) throw codec_exception{err_};
+         if (err_) throw codec_exception{*err_};
       }
 #endif
    };
 
    // Factory for the error path — reads cleaner than
    // `codec_status{codec_error{...}}`.
-   constexpr codec_status codec_fail(std::string_view what,
-                                     std::uint32_t    byte_offset,
-                                     std::string_view format_name) noexcept
+   inline codec_status codec_fail(std::string_view what,
+                                  std::uint32_t    byte_offset,
+                                  std::string_view format_name)
    {
       return codec_status{codec_error{what, byte_offset, format_name}};
    }
 
-   // Factory for success.
-   constexpr codec_status codec_ok() noexcept { return codec_status{}; }
+   // Factory for success. Returns a default-constructed (null) status —
+   // one register-sized return.
+   inline codec_status codec_ok() noexcept { return codec_status{}; }
 
 }  // namespace psio3
