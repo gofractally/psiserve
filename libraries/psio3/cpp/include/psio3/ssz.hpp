@@ -542,25 +542,25 @@ namespace psio3 {
             using R = ::psio3::reflect<T>;
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
             {
+               // fixed_region is a compile-time constant for any
+               // reflected T — sum of fixed field sizes + 4 per
+               // variable field. Hoist to constexpr so the resize
+               // call uses a single immediate.
+               constexpr std::size_t fixed_region = (
+                  []<std::size_t I>() consteval -> std::size_t {
+                     using F = typename R::template member_type<I>;
+                     using eff =
+                        typename ::psio3::effective_annotations_for<
+                           T, F,
+                           R::template member_pointer<I>>::value_t;
+                     constexpr bool override_v =
+                        ::psio3::has_as_override_v<eff>;
+                     if constexpr (!override_v && is_fixed_v<F>)
+                        return fixed_size_of<F>();
+                     else
+                        return 4;
+                  }.template operator()<Is>() + ... + std::size_t{0});
                const std::size_t container_start = s.size();
-               std::size_t       fixed_region    = 0;
-               (
-                  ([&]
-                   {
-                      using F = typename R::template member_type<Is>;
-                      using eff =
-                         typename ::psio3::effective_annotations_for<
-                            T, F,
-                            R::template member_pointer<Is>>::value_t;
-                      constexpr bool override_v =
-                         ::psio3::has_as_override_v<eff>;
-                      if constexpr (!override_v && is_fixed_v<F>)
-                         fixed_region += fixed_size_of<F>();
-                      else
-                         fixed_region += 4;  // offset slot
-                   }()),
-                  ...);
-
                s.resize(container_start + fixed_region, 0);
                std::size_t fixed_cursor = container_start;
 
