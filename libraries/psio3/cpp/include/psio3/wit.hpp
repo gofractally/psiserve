@@ -7,20 +7,21 @@
 // and lists as (u32 ptr, u32 len) pointing into the same buffer.
 // Deterministic — same value always produces the same bytes.
 //
-// MVP scope (Phase 14):
+// Supported shapes:
 //   - primitives (arithmetic + bool), enums
 //   - std::string (UTF-8, no trailing NUL)
-//   - std::vector of: arithmetic / bool / enum / string / nested records
+//   - std::vector / std::array of any supported leaf
+//   - std::optional, std::variant, std::tuple
 //   - reflected records (root or nested, recursive)
 //
 // Wire reference:
 // https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md
 //
-// Not supported in this MVP: std::variant, std::optional, std::tuple,
-// std::expected, std::array, resources (own<T>/borrow<T>). These land
-// in a follow-up once the psio3 annotation + shape-wrapper surface is
-// complete. Attempting to encode an unsupported shape is a compile
-// error — the Record concept guards the tag_invoke entry points.
+// Not supported: std::expected, resources (own<T>/borrow<T>) — the
+// resource model requires a runtime ownership story that doesn't fit
+// a pure serialization library. Attempting to encode an unsupported
+// shape is a compile error — the Root concept guards the tag_invoke
+// entry points.
 
 #include <psio3/cpo.hpp>
 #include <psio3/error.hpp>
@@ -32,9 +33,12 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace psio3 {
@@ -63,7 +67,45 @@ namespace psio3 {
       };
 
       template <typename T>
+      struct is_optional : std::false_type {};
+      template <typename E>
+      struct is_optional<std::optional<E>> : std::true_type
+      {
+         using element_type = E;
+      };
+
+      template <typename T>
+      struct is_variant : std::false_type {};
+      template <typename... Ts>
+      struct is_variant<std::variant<Ts...>> : std::true_type {};
+
+      template <typename T>
+      struct is_tuple : std::false_type {};
+      template <typename... Ts>
+      struct is_tuple<std::tuple<Ts...>> : std::true_type {};
+
+      template <typename T>
       concept Record = ::psio3::Reflected<T> && !std::is_enum_v<T>;
+
+      // What can appear at the root of a wit-encoded buffer. Records
+      // are the common case; the canonical ABI also permits standalone
+      // option / variant / tuple at function boundaries.
+      template <typename T>
+      concept Root = Record<T> || is_optional<T>::value ||
+                     is_variant<T>::value || is_tuple<T>::value;
+
+      // Discriminant width for a variant of N cases — Component Model
+      // canonical ABI: u8 for ≤256 cases, u16 for ≤65536, else u32.
+      consteval uint32_t discriminant_size(std::size_t n_cases)
+      {
+         if (n_cases <= (1u << 8))  return 1;
+         if (n_cases <= (1u << 16)) return 2;
+         return 4;
+      }
+      consteval uint32_t discriminant_align(std::size_t n_cases)
+      {
+         return discriminant_size(n_cases);
+      }
 
       // Leaf = anything that fits in fixed-size cell (including string/vec
       // which have (ptr, len) as their fixed portion).
@@ -117,6 +159,35 @@ namespace psio3 {
                ((m = std::max(
                     m,
                     canonical_align<typename R::template member_type<Is>>())),
+                ...);
+               return m;
+            }(std::make_index_sequence<N>{});
+         }
+         else if constexpr (is_optional<U>::value)
+         {
+            using E = typename is_optional<U>::element_type;
+            return std::max<uint32_t>(1, canonical_align<E>());
+         }
+         else if constexpr (is_variant<U>::value)
+         {
+            constexpr std::size_t N = std::variant_size_v<U>;
+            return [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t m = discriminant_align(N);
+               ((m = std::max(
+                    m,
+                    canonical_align<std::variant_alternative_t<Is, U>>())),
+                ...);
+               return m;
+            }(std::make_index_sequence<N>{});
+         }
+         else if constexpr (is_tuple<U>::value)
+         {
+            constexpr std::size_t N = std::tuple_size_v<U>;
+            return [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               uint32_t m = 1;
+               ((m = std::max(
+                    m,
+                    canonical_align<std::tuple_element_t<Is, U>>())),
                 ...);
                return m;
             }(std::make_index_sequence<N>{});
@@ -176,10 +247,108 @@ namespace psio3 {
             }(std::make_index_sequence<N>{});
             return (size + max_align - 1) & ~(max_align - 1);
          }
+         else if constexpr (is_optional<U>::value)
+         {
+            // Component Model: option<T> = variant<unit, T>. Disc=u8,
+            // payload at align(T). Total padded to align(option).
+            using E                = typename is_optional<U>::element_type;
+            constexpr uint32_t a   = canonical_align<U>();
+            constexpr uint32_t ea  = canonical_align<E>();
+            constexpr uint32_t es  = canonical_size<E>();
+            constexpr uint32_t off = (1u + ea - 1u) & ~(ea - 1u);
+            constexpr uint32_t sz  = off + es;
+            return (sz + a - 1u) & ~(a - 1u);
+         }
+         else if constexpr (is_variant<U>::value)
+         {
+            // Component Model: variant<Ts...>. disc + padding to
+            // max_alt_align + max(size(Ti)). Padded to align(variant).
+            constexpr std::size_t N = std::variant_size_v<U>;
+            constexpr uint32_t  ds  = discriminant_size(N);
+            constexpr uint32_t  a   = canonical_align<U>();
+            uint32_t max_alt_size  = 0;
+            uint32_t max_alt_align = 1;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               auto process = [&]<std::size_t I>() {
+                  using A = std::variant_alternative_t<I, U>;
+                  max_alt_size  = std::max(max_alt_size,  canonical_size<A>());
+                  max_alt_align = std::max(max_alt_align, canonical_align<A>());
+               };
+               (process.template operator()<Is>(), ...);
+            }(std::make_index_sequence<N>{});
+            uint32_t off = (ds + max_alt_align - 1u) & ~(max_alt_align - 1u);
+            uint32_t sz  = off + max_alt_size;
+            return (sz + a - 1u) & ~(a - 1u);
+         }
+         else if constexpr (is_tuple<U>::value)
+         {
+            // Component Model: tuple<Ts...> = same as record's canonical
+            // ABI — fields sequentially with alignment.
+            constexpr std::size_t N = std::tuple_size_v<U>;
+            uint32_t size = 0;
+            uint32_t max_align = 1;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               auto process = [&]<std::size_t I>() {
+                  using FT              = std::tuple_element_t<I, U>;
+                  constexpr uint32_t fa = canonical_align<FT>();
+                  constexpr uint32_t fs = canonical_size<FT>();
+                  max_align             = std::max(max_align, fa);
+                  size                  = ((size + fa - 1) & ~(fa - 1)) + fs;
+               };
+               (process.template operator()<Is>(), ...);
+            }(std::make_index_sequence<N>{});
+            return (size + max_align - 1) & ~(max_align - 1);
+         }
          else
          {
             static_assert(!sizeof(U*), "wit: unsupported type");
          }
+      }
+
+      // Offset of the payload byte within an option<T> (after disc + pad).
+      template <typename T>
+      consteval uint32_t optional_payload_offset()
+      {
+         using E               = typename is_optional<T>::element_type;
+         constexpr uint32_t ea = canonical_align<E>();
+         return (1u + ea - 1u) & ~(ea - 1u);
+      }
+
+      // Offset of the payload byte within a variant<Ts...>.
+      template <typename T>
+      consteval uint32_t variant_payload_offset()
+      {
+         constexpr std::size_t N  = std::variant_size_v<T>;
+         constexpr uint32_t    ds = discriminant_size(N);
+         uint32_t max_alt_align = 1;
+         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            ((max_alt_align = std::max(
+                 max_alt_align,
+                 canonical_align<std::variant_alternative_t<Is, T>>())),
+             ...);
+         }(std::make_index_sequence<N>{});
+         return (ds + max_alt_align - 1u) & ~(max_alt_align - 1u);
+      }
+
+      // Offset of tuple element I.
+      template <typename T, std::size_t I>
+      consteval uint32_t tuple_field_offset()
+      {
+         uint32_t offset = 0;
+         [&]<std::size_t... Js>(std::index_sequence<Js...>) {
+            auto add = [&]<std::size_t J>() {
+               using FT              = std::tuple_element_t<J, T>;
+               constexpr uint32_t fa = canonical_align<FT>();
+               constexpr uint32_t fs = canonical_size<FT>();
+               offset                = (offset + fa - 1) & ~(fa - 1);
+               offset += fs;
+            };
+            (add.template operator()<Js>(), ...);
+         }(std::make_index_sequence<I>{});
+         using FT_I              = std::tuple_element_t<I, T>;
+         constexpr uint32_t fa_i = canonical_align<FT_I>();
+         offset                  = (offset + fa_i - 1) & ~(fa_i - 1);
+         return offset;
       }
 
       template <typename T, std::size_t I>
@@ -253,6 +422,24 @@ namespace psio3 {
                ((total += variable_tail_bytes(
                     value.*(R::template member_pointer<Is>))),
                 ...);
+            }(std::make_index_sequence<N>{});
+            return total;
+         }
+         else if constexpr (is_optional<U>::value)
+         {
+            return value.has_value() ? variable_tail_bytes(*value) : 0;
+         }
+         else if constexpr (is_variant<U>::value)
+         {
+            return std::visit(
+               [](const auto& v) { return variable_tail_bytes(v); }, value);
+         }
+         else if constexpr (is_tuple<U>::value)
+         {
+            constexpr std::size_t N = std::tuple_size_v<U>;
+            uint32_t total = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               ((total += variable_tail_bytes(std::get<Is>(value))), ...);
             }(std::make_index_sequence<N>{});
             return total;
          }
@@ -374,6 +561,52 @@ namespace psio3 {
          {
             lower_record<U>(buf, at, value);
          }
+         else if constexpr (is_optional<U>::value)
+         {
+            using E              = typename is_optional<U>::element_type;
+            uint8_t disc         = value.has_value() ? 1 : 0;
+            std::memcpy(buf.data(at), &disc, 1);
+            constexpr uint32_t off = optional_payload_offset<U>();
+            // Payload slot is always present (size is fixed). Zero-fill
+            // when None to keep wire deterministic — encoders should
+            // never emit uninitialized payload bytes.
+            if (value.has_value())
+               lower_leaf<E>(buf, at + off, *value);
+            else
+            {
+               constexpr uint32_t es = canonical_size<E>();
+               std::memset(buf.data(at + off), 0, es);
+            }
+         }
+         else if constexpr (is_variant<U>::value)
+         {
+            constexpr std::size_t N  = std::variant_size_v<U>;
+            constexpr uint32_t    ds = discriminant_size(N);
+            // Write discriminant (1/2/4 bytes, little-endian).
+            uint32_t idx = static_cast<uint32_t>(value.index());
+            std::memcpy(buf.data(at), &idx, ds);
+            // Zero-fill the payload slot first so unused alt bytes are
+            // deterministic, then write the live alternative.
+            constexpr uint32_t off  = variant_payload_offset<U>();
+            constexpr uint32_t total = canonical_size<U>();
+            std::memset(buf.data(at + off), 0, total - off);
+            std::visit(
+               [&](const auto& alt) {
+                  using A = std::remove_cvref_t<decltype(alt)>;
+                  lower_leaf<A>(buf, at + off, alt);
+               },
+               value);
+         }
+         else if constexpr (is_tuple<U>::value)
+         {
+            constexpr std::size_t N = std::tuple_size_v<U>;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               (lower_leaf<std::tuple_element_t<Is, U>>(
+                    buf, at + tuple_field_offset<U, Is>(),
+                    std::get<Is>(value)),
+                ...);
+            }(std::make_index_sequence<N>{});
+         }
          else
          {
             static_assert(!sizeof(U*), "wit: unsupported leaf");
@@ -470,6 +703,52 @@ namespace psio3 {
          {
             lift_record<U>(buf, at, out);
          }
+         else if constexpr (is_optional<U>::value)
+         {
+            using E      = typename is_optional<U>::element_type;
+            uint8_t disc = static_cast<uint8_t>(buf[at]);
+            if (disc == 0)
+               out = std::nullopt;
+            else
+            {
+               constexpr uint32_t off = optional_payload_offset<U>();
+               E inner{};
+               lift_leaf<E>(buf, at + off, inner);
+               out = std::move(inner);
+            }
+         }
+         else if constexpr (is_variant<U>::value)
+         {
+            constexpr std::size_t N  = std::variant_size_v<U>;
+            constexpr uint32_t    ds = discriminant_size(N);
+            uint32_t idx = 0;
+            std::memcpy(&idx, buf.data() + at, ds);
+            constexpr uint32_t off = variant_payload_offset<U>();
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               ((idx == Is
+                    ? (out = U{std::in_place_index<Is>,
+                                ([&] {
+                                    using A =
+                                       std::variant_alternative_t<Is, U>;
+                                    A tmp{};
+                                    lift_leaf<A>(buf, at + off, tmp);
+                                    return tmp;
+                                 }())},
+                       true)
+                    : false) ||
+                ...);
+            }(std::make_index_sequence<N>{});
+         }
+         else if constexpr (is_tuple<U>::value)
+         {
+            constexpr std::size_t N = std::tuple_size_v<U>;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               (lift_leaf<std::tuple_element_t<Is, U>>(
+                    buf, at + tuple_field_offset<U, Is>(),
+                    std::get<Is>(out)),
+                ...);
+            }(std::make_index_sequence<N>{});
+         }
          else
          {
             static_assert(!sizeof(U*), "wit: unsupported leaf");
@@ -562,6 +841,57 @@ namespace psio3 {
          {
             return validate_record<U>(buf, at);
          }
+         else if constexpr (is_optional<U>::value)
+         {
+            constexpr uint32_t total = canonical_size<U>();
+            if (static_cast<std::size_t>(at) + total > buf.size())
+               return false;
+            uint8_t disc = static_cast<uint8_t>(buf[at]);
+            if (disc > 1)
+               return false;  // option discriminant is 0 or 1 only
+            if (disc == 1)
+            {
+               using E = typename is_optional<U>::element_type;
+               constexpr uint32_t off = optional_payload_offset<U>();
+               return validate_leaf<E>(buf, at + off);
+            }
+            return true;
+         }
+         else if constexpr (is_variant<U>::value)
+         {
+            constexpr std::size_t N  = std::variant_size_v<U>;
+            constexpr uint32_t    ds = discriminant_size(N);
+            constexpr uint32_t total = canonical_size<U>();
+            if (static_cast<std::size_t>(at) + total > buf.size())
+               return false;
+            uint32_t idx = 0;
+            std::memcpy(&idx, buf.data() + at, ds);
+            if (idx >= N)
+               return false;
+            constexpr uint32_t off = variant_payload_offset<U>();
+            bool ok = false;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               ((idx == Is
+                    ? (ok = validate_leaf<std::variant_alternative_t<Is, U>>(
+                              buf, at + off),
+                       true)
+                    : false) ||
+                ...);
+            }(std::make_index_sequence<N>{});
+            return ok;
+         }
+         else if constexpr (is_tuple<U>::value)
+         {
+            constexpr std::size_t N = std::tuple_size_v<U>;
+            bool ok = true;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               ((ok = ok &&
+                      validate_leaf<std::tuple_element_t<Is, U>>(
+                          buf, at + tuple_field_offset<U, Is>())),
+                ...);
+            }(std::make_index_sequence<N>{});
+            return ok;
+         }
          else
          {
             static_assert(!sizeof(U*), "wit: unsupported type");
@@ -577,30 +907,36 @@ namespace psio3 {
       using preferred_presentation_category = ::psio3::binary_category;
 
       template <typename T>
-         requires detail::wit_impl::Record<T>
+         requires detail::wit_impl::Root<T>
       friend std::vector<char> tag_invoke(decltype(::psio3::encode), wit,
                                           const T& v)
       {
          using namespace detail::wit_impl;
          bump_buf buf(packed_size_of(v));
          uint32_t root = buf.alloc(canonical_align<T>(), canonical_size<T>());
-         lower_record<T>(buf, root, v);
+         if constexpr (detail::wit_impl::Record<T>)
+            lower_record<T>(buf, root, v);
+         else
+            lower_leaf<T>(buf, root, v);
          return buf.finish();
       }
 
       template <typename T>
-         requires detail::wit_impl::Record<T>
+         requires detail::wit_impl::Root<T>
       friend T tag_invoke(decltype(::psio3::decode<T>), wit, T*,
                           std::span<const char> bytes)
       {
          using namespace detail::wit_impl;
          T out{};
-         lift_record<T>(bytes, 0, out);
+         if constexpr (detail::wit_impl::Record<T>)
+            lift_record<T>(bytes, 0, out);
+         else
+            lift_leaf<T>(bytes, 0, out);
          return out;
       }
 
       template <typename T>
-         requires detail::wit_impl::Record<T>
+         requires detail::wit_impl::Root<T>
       friend std::size_t tag_invoke(decltype(::psio3::size_of), wit,
                                     const T& v)
       {
@@ -608,18 +944,24 @@ namespace psio3 {
       }
 
       template <typename T>
-         requires detail::wit_impl::Record<T>
+         requires detail::wit_impl::Root<T>
       friend codec_status tag_invoke(decltype(::psio3::validate<T>), wit,
                                      T*,
                                      std::span<const char> bytes) noexcept
       {
-         if (!detail::wit_impl::validate_record<T>(bytes, 0))
+         using namespace detail::wit_impl;
+         bool ok;
+         if constexpr (detail::wit_impl::Record<T>)
+            ok = validate_record<T>(bytes, 0);
+         else
+            ok = validate_leaf<T>(bytes, 0);
+         if (!ok)
             return codec_fail("wit: invalid buffer", 0, "wit");
          return codec_ok();
       }
 
       template <typename T>
-         requires detail::wit_impl::Record<T>
+         requires detail::wit_impl::Root<T>
       friend codec_status
       tag_invoke(decltype(::psio3::validate_strict<T>), wit, T*,
                  std::span<const char> bytes) noexcept
@@ -629,14 +971,17 @@ namespace psio3 {
       }
 
       template <typename T>
-         requires detail::wit_impl::Record<T>
+         requires detail::wit_impl::Root<T>
       friend std::unique_ptr<T>
       tag_invoke(decltype(::psio3::make_boxed<T>), wit, T*,
                  std::span<const char> bytes) noexcept
       {
          using namespace detail::wit_impl;
          auto v = std::make_unique<T>();
-         lift_record<T>(bytes, 0, *v);
+         if constexpr (detail::wit_impl::Record<T>)
+            lift_record<T>(bytes, 0, *v);
+         else
+            lift_leaf<T>(bytes, 0, *v);
          return v;
       }
    };
