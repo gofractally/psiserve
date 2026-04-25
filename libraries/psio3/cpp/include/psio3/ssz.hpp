@@ -435,13 +435,18 @@ namespace psio3 {
             using E = typename T::value_type;
             if constexpr (is_fixed_v<E>)
             {
-               // Bulk-memcpy fast path for arithmetic elements — the
-               // wire layout is just the raw little-endian bytes of
-               // the vector's contiguous storage. Matches v1's
-               // ssz_memcpy_ok_v path; without this psio3 was ~9x
-               // slower than v1 on a 512-element vector<u32>.
-               if constexpr (std::is_arithmetic_v<E> &&
-                             !std::is_same_v<E, bool>)
+               // Bulk-memcpy fast path covers two cases:
+               //   (a) arithmetic primitives — raw LE bytes
+               //   (b) trivially-copyable records with sizeof(E) ==
+               //       fixed_size_of<E>() — packed memory == wire
+               // Matches v1's ssz_memcpy_ok_v path. Big win on
+               // vec<Validator>×N workloads.
+               constexpr bool is_arith =
+                  std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+               constexpr bool is_memcpy_record =
+                  Record<E> && std::is_trivially_copyable_v<E> &&
+                  fixed_size_of<E>() == sizeof(E);
+               if constexpr (is_arith || is_memcpy_record)
                {
                   if (!v.empty())
                      append_bytes(s, v.data(), v.size() * sizeof(E));
@@ -702,12 +707,17 @@ namespace psio3 {
          {
             const std::size_t esz = fixed_size_of<T>();
             const std::size_t n   = (end - pos) / esz;
-            // Bulk-memcpy fast path for arithmetic elements — wire layout
-            // is the raw little-endian bytes of contiguous storage. assign
-            // with pointer iterators skips the zero-init pass that
-            // resize(n)+memcpy would do (v1 from_ssz.hpp:182-193).
-            if constexpr (std::is_arithmetic_v<T> &&
-                          !std::is_same_v<T, bool>)
+            // Bulk-memcpy fast path covers both arithmetic primitives AND
+            // DWNC packed records whose memory layout matches the wire
+            // layout (sizeof(T) == fixed_size_of<T>() and trivially-
+            // copyable). assign(p, p+n) lowers to a single memcpy of
+            // n*sizeof(T) bytes, skipping the resize+zero-init pass.
+            constexpr bool is_arith =
+               std::is_arithmetic_v<T> && !std::is_same_v<T, bool>;
+            constexpr bool is_memcpy_record =
+               Record<T> && std::is_trivially_copyable_v<T> &&
+               fixed_size_of<T>() == sizeof(T);
+            if constexpr (is_arith || is_memcpy_record)
             {
                const T* first = reinterpret_cast<const T*>(src.data() + pos);
                out.assign(first, first + n);

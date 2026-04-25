@@ -402,9 +402,13 @@ namespace psio3 {
             using E = typename T::value_type;
             if constexpr (is_fixed_v<E>)
             {
-               // Bulk memcpy for arithmetic — matches SSZ fast path.
-               if constexpr (std::is_arithmetic_v<E> &&
-                             !std::is_same_v<E, bool>)
+               // Bulk memcpy for arithmetic OR memcpy-layout records.
+               constexpr bool is_arith =
+                  std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+               constexpr bool is_memcpy_record =
+                  Record<E> && std::is_trivially_copyable_v<E> &&
+                  fixed_size_of<E>() == sizeof(E);
+               if constexpr (is_arith || is_memcpy_record)
                {
                   if (!v.empty())
                      append_bytes(s, v.data(), v.size() * sizeof(E));
@@ -680,11 +684,14 @@ namespace psio3 {
          {
             const std::size_t esz = fixed_size_of<T>();
             const std::size_t n   = (end - pos) / esz;
-            // Bulk-memcpy fast path for arithmetic elements — mirrors the
-            // ssz fast path; pssz uses the same raw-bytes fixed-element
-            // layout as ssz, only offsets differ in width.
-            if constexpr (std::is_arithmetic_v<T> &&
-                          !std::is_same_v<T, bool>)
+            // Bulk-memcpy fast path covers arithmetic primitives AND
+            // memcpy-layout DWNC packed records (sizeof matches wire).
+            constexpr bool is_arith =
+               std::is_arithmetic_v<T> && !std::is_same_v<T, bool>;
+            constexpr bool is_memcpy_record =
+               Record<T> && std::is_trivially_copyable_v<T> &&
+               fixed_size_of<T>() == sizeof(T);
+            if constexpr (is_arith || is_memcpy_record)
             {
                const T* first = reinterpret_cast<const T*>(src.data() + pos);
                out.assign(first, first + n);

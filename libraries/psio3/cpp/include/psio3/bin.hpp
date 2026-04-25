@@ -175,6 +175,9 @@ namespace psio3 {
       std::size_t variable_contrib(const T& v);
 
       template <typename T>
+      std::size_t record_body_size(const T& v);
+
+      template <typename T>
       consteval bool fully_fixed();
 
       template <typename T>
@@ -334,28 +337,41 @@ namespace psio3 {
                    v.bytes().size();
          else if constexpr (Record<T>)
          {
-            using R           = ::psio3::reflect<T>;
-            std::size_t body  = 0;
-            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-               (
-                  ([&]
-                   {
-                      using F = typename R::template member_type<Is>;
-                      body += fixed_contrib<F>();
-                      if constexpr (!fully_fixed<F>())
-                         body += variable_contrib(
-                            v.*(R::template member_pointer<Is>));
-                   }()),
-                  ...);
-            }(std::make_index_sequence<R::member_count>{});
-            // Non-DWNC records wrap `body` in a varuint content_size
-            // prefix; DWNC records concatenate directly.
+            // Two-step: compute body, wrap with varuint prefix when
+            // non-DWNC. record_body_size is shared with the encode
+            // path so the size walk happens exactly once per
+            // non-DWNC record.
+            const std::size_t body = record_body_size(v);
             if constexpr (!::psio3::is_dwnc_v<T>)
                return varuint32_size(static_cast<std::uint32_t>(body)) + body;
             return body;
          }
          else
             return 0;
+      }
+
+      // Body size of a reflected record — sum of per-field wire bytes,
+      // no varuint content_size prefix. The caller adds the prefix for
+      // non-DWNC records. Shared between variable_contrib<Record> and
+      // the encode path so the size walk happens once.
+      template <typename T>
+      std::size_t record_body_size(const T& v)
+      {
+         using R           = ::psio3::reflect<T>;
+         std::size_t body  = 0;
+         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            (
+               ([&]
+                {
+                   using F = typename R::template member_type<Is>;
+                   body += fixed_contrib<F>();
+                   if constexpr (!fully_fixed<F>())
+                      body += variable_contrib(
+                         v.*(R::template member_pointer<Is>));
+                }()),
+               ...);
+         }(std::make_index_sequence<R::member_count>{});
+         return body;
       }
 
       template <typename T>
@@ -421,11 +437,23 @@ namespace psio3 {
          {
             using E = typename T::value_type;
             write_varuint32(s, static_cast<std::uint32_t>(v.size()));
-            if constexpr (std::is_arithmetic_v<E> &&
-                          !std::is_same_v<E, bool>)
+            // Bulk write covers arithmetic primitives AND DWNC packed
+            // records whose memory layout matches the wire layout.
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               Record<E> && ::psio3::is_dwnc_v<E> && fully_fixed<E>() &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_contrib<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
             {
                if (!v.empty())
-                  s.write(v.data(), v.size() * sizeof(E));
+               {
+                  if constexpr (sink_counts_only_v<Sink>)
+                     s.write(nullptr, v.size() * sizeof(E));
+                  else
+                     s.write(v.data(), v.size() * sizeof(E));
+               }
             }
             else
             {
@@ -466,6 +494,25 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // ── Memcpy fast path for DWNC packed records ─────────────
+            //
+            // When the record is DWNC + all fields fully-fixed +
+            // sizeof(T) == sum-of-field-sizes (i.e. user used
+            // __attribute__((packed)) or got lucky with field order),
+            // the in-memory bytes ARE the wire bytes. Skip the per-
+            // field walker and emit one struct-wide memcpy. Mirrors
+            // v1 bin's pack_bin_write_all batching for bitwise runs;
+            // big win at vector-of-record scale (ValidatorList × 100).
+            if constexpr (::psio3::is_dwnc_v<T> && fully_fixed<T>() &&
+                          std::is_trivially_copyable_v<T> &&
+                          fixed_contrib<T>() == sizeof(T))
+            {
+               if constexpr (sink_counts_only_v<Sink>)
+                  s.write(nullptr, sizeof(T));
+               else
+                  s.write(reinterpret_cast<const char*>(&v), sizeof(T));
+               return;
+            }
             using R = ::psio3::reflect<T>;
             auto write_body = [&](auto& sink) {
                [&]<std::size_t... Is>(std::index_sequence<Is...>) {
@@ -520,12 +567,18 @@ namespace psio3 {
             else
             {
                // Non-DWNC: wrap body in varuint content_size prefix.
-               // Measure first via size_stream, then emit.
-               ::psio3::size_stream ss;
-               write_body(ss);
-               write_varuint32(s,
-                                static_cast<std::uint32_t>(ss.size));
-               write_body(s);
+               // Compute body size analytically via record_body_size
+               // (same walk variable_contrib does) so we can emit the
+               // prefix without a duplicate size_stream pass over the
+               // body. Mirrors v1 bin's bin_size_cache pattern: one
+               // size walk total per non-DWNC record, not two.
+               const std::size_t body_size = record_body_size(v);
+               write_varuint32(
+                  s, static_cast<std::uint32_t>(body_size));
+               if constexpr (sink_counts_only_v<Sink>)
+                  s.write(nullptr, body_size);
+               else
+                  write_body(s);
             }
          }
          else
@@ -590,12 +643,21 @@ namespace psio3 {
          {
             using E             = typename T::value_type;
             const std::uint32_t n = read_varuint32(src, pos);
-            // Bulk-memcpy fast path for arithmetic elements — wire layout
-            // is contiguous little-endian raw bytes, same as the element's
-            // memory representation. assign(p, p+n) avoids resize's
+            // Bulk-memcpy fast path covers two cases:
+            //   (a) arithmetic elements (raw LE primitives)
+            //   (b) DWNC packed records whose memory layout matches the
+            //       wire layout exactly (sizeof(E) == sum-of-fields and
+            //       trivially-copyable). vector<Validator>×100 hits this.
+            // assign(p, p+n) lowers to a single memcpy of n*sizeof(E)
+            // bytes for trivially-copyable E, avoiding both resize's
             // zero-init pass and the per-element decode_value call.
-            if constexpr (std::is_arithmetic_v<E> &&
-                          !std::is_same_v<E, bool>)
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               Record<E> && ::psio3::is_dwnc_v<E> && fully_fixed<E>() &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_contrib<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
             {
                const E* first = reinterpret_cast<const E*>(src.data() + pos);
                std::vector<E> out(first, first + n);
@@ -675,6 +737,19 @@ namespace psio3 {
          else if constexpr (Record<T>)
          {
             using R = ::psio3::reflect<T>;
+            // ── Memcpy fast path for DWNC packed records ─────────────
+            // Mirror of the encode side. When wire layout matches
+            // memory layout exactly, one memcpy beats nine per-field
+            // reads.
+            if constexpr (::psio3::is_dwnc_v<T> && fully_fixed<T>() &&
+                          std::is_trivially_copyable_v<T> &&
+                          fixed_contrib<T>() == sizeof(T))
+            {
+               T out;
+               std::memcpy(&out, src.data() + pos, sizeof(T));
+               pos += sizeof(T);
+               return out;
+            }
             T       out{};
             // Non-DWNC records carry a varuint content_size prefix. Read
             // and skip it — we trust it as the extent for extensibility

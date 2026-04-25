@@ -452,10 +452,18 @@ namespace psio3 {
          {
             // v1 wire: [W-byte byte_count][element bytes concatenated].
             // Byte count, NOT element count. For arithmetic T this is
-            // one memcpy of v.size()*sizeof(E) bytes.
+            // one memcpy of v.size()*sizeof(E) bytes — likewise for
+            // DWNC packed records whose memory layout matches the wire
+            // (sizeof(E) == fixed_size_of<E>(), trivially-copyable).
             using E = typename T::value_type;
-            if constexpr (std::is_arithmetic_v<E> &&
-                          !std::is_same_v<E, bool>)
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               is_fixed_v<E> && Record<E> &&
+               ::psio3::is_dwnc_v<E> &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_size_of<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
             {
                append_word<W>(s, v.size() * sizeof(E));
                if (!v.empty())
@@ -463,8 +471,8 @@ namespace psio3 {
             }
             else
             {
-               // Fixed non-arithmetic element (bool, nested fixed record):
-               // still byte-count prefix over the packed content.
+               // Fixed non-arithmetic element (bool, non-DWNC fixed
+               // record): still byte-count prefix over packed content.
                static_assert(is_fixed_v<E>,
                              "psio3::frac: vector<variable-element> not "
                              "yet supported (needs offset-table walker)");
@@ -957,12 +965,23 @@ namespace psio3 {
          const std::uint32_t byte_count = read_word<W>(src, pos);
          std::size_t         cursor     = pos + W;
          std::vector<T>      out;
-         if constexpr (std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
+         constexpr bool is_arith =
+            std::is_arithmetic_v<T> && !std::is_same_v<T, bool>;
+         // Memcpy fast path covers DWNC packed records too: with DWNC
+         // there's no per-element u16 header, so wire size = sizeof(T)
+         // when sizeof matches the field-sum. vec<Validator>×N hits this.
+         constexpr bool is_memcpy_record =
+            is_fixed_v<T> && Record<T> && ::psio3::is_dwnc_v<T> &&
+            std::is_trivially_copyable_v<T> &&
+            fixed_size_of<T>() == sizeof(T);
+         if constexpr (is_arith || is_memcpy_record)
          {
-            const std::uint32_t n = byte_count / sizeof(T);
-            out.resize(n);
-            if (n > 0)
-               std::memcpy(out.data(), src.data() + cursor, n * sizeof(T));
+            // assign(p, p+n) avoids resize's value-init pass — for
+            // trivially-copyable T it lowers to a single memcpy.
+            const std::uint32_t n =
+               byte_count / static_cast<std::uint32_t>(sizeof(T));
+            const T* first = reinterpret_cast<const T*>(src.data() + cursor);
+            out.assign(first, first + n);
          }
          else if constexpr (is_fixed_v<T>)
          {
