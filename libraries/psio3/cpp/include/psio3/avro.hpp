@@ -217,6 +217,26 @@ namespace psio3 {
       template <typename T>
       T decode_value(std::span<const char> src, std::size_t& pos);
 
+      // In-place decode for std::string. Avro encodes string as
+      // varint(length) + bytes; assigning straight into the
+      // destination saves the temp + move-assign cost.
+      template <typename T>
+      void decode_into(std::span<const char> src, std::size_t& pos,
+                       T& out)
+      {
+         if constexpr (std::is_same_v<T, std::string>)
+         {
+            const std::int64_t n = read_long(src, pos);
+            const std::size_t  sn = static_cast<std::size_t>(n);
+            out.assign(src.data() + pos, src.data() + pos + sn);
+            pos += sn;
+         }
+         else
+         {
+            out = decode_value<T>(src, pos);
+         }
+      }
+
       template <typename T>
       T decode_value(std::span<const char> src, std::size_t& pos)
       {
@@ -382,9 +402,8 @@ namespace psio3 {
             T       out{};
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
             {
-               (((out.*(R::template member_pointer<Is>)) =
-                    decode_value<typename R::template member_type<Is>>(src,
-                                                                         pos)),
+               (decode_into<typename R::template member_type<Is>>(
+                    src, pos, out.*(R::template member_pointer<Is>)),
                 ...);
             }(std::make_index_sequence<R::member_count>{});
             return out;
