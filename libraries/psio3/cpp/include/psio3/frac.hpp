@@ -30,6 +30,7 @@
 #include <psio3/format_tag_base.hpp>
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
+#include <psio3/stream.hpp>
 #include <psio3/validate_strict_walker.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
 
@@ -254,12 +255,12 @@ namespace psio3 {
 
       using sink_t = std::vector<char>;
 
-      template <std::size_t W>
-      void write_word(sink_t& s, std::size_t pos, std::size_t value)
+      template <std::size_t W, typename Sink>
+      void write_word(Sink& s, std::size_t pos, std::size_t value)
       {
          using O = typename width_info<W>::word_t;
          O ov   = static_cast<O>(value);
-         std::memcpy(s.data() + pos, &ov, W);
+         s.rewrite(pos, &ov, W);
       }
 
       template <std::size_t W>
@@ -271,23 +272,12 @@ namespace psio3 {
          return static_cast<std::uint32_t>(v);
       }
 
-      // Resize+memcpy beats insert(end, …) on a pre-reserved vector —
-      // same win as in ssz.hpp / pssz.hpp.
-      template <std::size_t W>
-      void append_word(sink_t& s, std::size_t value)
+      template <std::size_t W, typename Sink>
+      void append_word(Sink& s, std::size_t value)
       {
-         using O              = typename width_info<W>::word_t;
-         O                 ov = static_cast<O>(value);
-         const std::size_t at = s.size();
-         s.resize(at + W);
-         std::memcpy(s.data() + at, &ov, W);
-      }
-
-      inline void append_bytes(sink_t& s, const void* p, std::size_t n)
-      {
-         const std::size_t at = s.size();
-         s.resize(at + n);
-         std::memcpy(s.data() + at, p, n);
+         using O = typename width_info<W>::word_t;
+         O ov   = static_cast<O>(value);
+         s.write(&ov, W);
       }
 
       // ── Encoding ──────────────────────────────────────────────────────────
@@ -296,8 +286,8 @@ namespace psio3 {
       // emit a [u{W} header][fixed_region][heap] triple where the header
       // carries the fixed_region size for forward-compatibility.
 
-      template <std::size_t W, typename T>
-      void encode_value(const T& v, sink_t& s);
+      template <std::size_t W, typename T, typename Sink>
+      void encode_value(const T& v, Sink& s);
 
       template <std::size_t W, typename T>
       T decode_value(std::span<const char> src, std::size_t pos,
@@ -337,8 +327,8 @@ namespace psio3 {
       // or heap frame. Used when a fixed record appears as a field of
       // a parent record: v1 fracpack inlines the bytes directly; the
       // nested record has no independent encoding unit.
-      template <std::size_t W, Record T>
-      void encode_record_fixed_inline(const T& v, sink_t& s,
+      template <std::size_t W, Record T, typename Sink>
+      void encode_record_fixed_inline(const T& v, Sink& s,
                                       std::size_t cursor)
       {
          using R = ::psio3::reflect<T>;
@@ -353,33 +343,35 @@ namespace psio3 {
                  const auto& fref =
                     v.*(R::template member_pointer<Is>);
                  if constexpr (std::is_same_v<F, bool>)
-                    s[cursor] = fref ? '\x01' : '\x00';
+                 {
+                    char b = fref ? '\x01' : '\x00';
+                    s.rewrite(cursor, &b, 1);
+                 }
                  else if constexpr (std::is_same_v<F, ::psio3::uint256>)
-                    std::memcpy(s.data() + cursor, fref.limb, 32);
+                    s.rewrite(cursor, fref.limb, 32);
                  else if constexpr (std::is_same_v<F, ::psio3::uint128> ||
                                     std::is_same_v<F, ::psio3::int128>)
-                    std::memcpy(s.data() + cursor, &fref, 16);
+                    s.rewrite(cursor, &fref, 16);
                  else if constexpr (std::is_arithmetic_v<F>)
-                    std::memcpy(s.data() + cursor, &fref, sizeof(F));
+                    s.rewrite(cursor, &fref, sizeof(F));
                  else if constexpr (is_bitvector<F>::value)
                  {
                     constexpr std::size_t n = (F::size_value + 7) / 8;
                     if constexpr (n > 0)
-                       std::memcpy(s.data() + cursor, fref.data(), n);
+                       s.rewrite(cursor, fref.data(), n);
                  }
                  else if constexpr (is_std_array_v<F>)
                  {
                     using E = typename F::value_type;
                     if constexpr (std::is_arithmetic_v<E> &&
                                   !std::is_same_v<E, bool>)
-                       std::memcpy(s.data() + cursor, fref.data(),
-                                   fixed_size_of<F>());
+                       s.rewrite(cursor, fref.data(), fixed_size_of<F>());
                     else
                     {
                        sink_t tmp;
-                       encode_value<W>(fref, tmp);
-                       std::memcpy(s.data() + cursor, tmp.data(),
-                                   tmp.size());
+                       ::psio3::vector_stream vs{tmp};
+                       encode_value<W>(fref, vs);
+                       s.rewrite(cursor, tmp.data(), tmp.size());
                     }
                  }
                  else if constexpr (Record<F>)
@@ -387,9 +379,9 @@ namespace psio3 {
                  else
                  {
                     sink_t tmp;
-                    encode_value<W>(fref, tmp);
-                    std::memcpy(s.data() + cursor, tmp.data(),
-                                tmp.size());
+                    ::psio3::vector_stream vs{tmp};
+                    encode_value<W>(fref, vs);
+                    s.rewrite(cursor, tmp.data(), tmp.size());
                  }
                  cursor += fixed_size_of<F>();
               }()),
@@ -397,36 +389,34 @@ namespace psio3 {
          }(std::make_index_sequence<R::member_count>{});
       }
 
-      template <std::size_t W, typename T>
-      void encode_value(const T& v, sink_t& s)
+      template <std::size_t W, typename T, typename Sink>
+      void encode_value(const T& v, Sink& s)
       {
          // Adapter check — if the type registered a binary
          // adapter that isn't a self-delegation back to this frac_<W>
-         // instance, write its opaque bytes. Frac's variable-payload
-         // framing is added by the caller's own walk (we only emit the
-         // payload here; the outer record / vector field slot
-         // length-prefixes it). When frac is called at the top level
-         // (buffer<T, frac>) there is no outer framing — the adapter
-         // bytes are the whole wire form, which is the documented
-         // behavior.
+         // instance, write its opaque bytes. Adapter encode methods
+         // assume a vector<char>-like sink; route through a temp
+         // vector for non-vector sinks.
          if constexpr (::psio3::format_should_dispatch_adapter_v<
                           ::psio3::frac_<W>, T>)
          {
             using Proj = ::psio3::adapter<std::remove_cvref_t<T>,
                                              ::psio3::binary_category>;
-            Proj::encode(v, s);
+            sink_t tmp;
+            Proj::encode(v, tmp);
+            s.write(tmp.data(), tmp.size());
             return;
          }
 
          if constexpr (std::is_same_v<T, bool>)
-            s.push_back(v ? '\x01' : '\x00');
+            s.write(v ? '\x01' : '\x00');
          else if constexpr (std::is_same_v<T, ::psio3::uint256>)
-            append_bytes(s, v.limb, 32);
+            s.write(v.limb, 32);
          else if constexpr (std::is_same_v<T, ::psio3::uint128> ||
                             std::is_same_v<T, ::psio3::int128>)
-            append_bytes(s, &v, 16);
+            s.write(&v, 16);
          else if constexpr (std::is_arithmetic_v<T>)
-            append_bytes(s, &v, sizeof(T));
+            s.put(v);
          else if constexpr (is_std_array_v<T>)
          {
             using E = typename T::value_type;
@@ -440,11 +430,11 @@ namespace psio3 {
                // Array of variable: length-prefixed payloads.
                for (const auto& x : v)
                {
-                  const std::size_t len_pos = s.size();
-                  s.resize(s.size() + W, 0);
-                  const std::size_t start = s.size();
+                  const std::size_t len_pos = s.written();
+                  s.skip(static_cast<std::int32_t>(W));
+                  const std::size_t start = s.written();
                   encode_value<W>(x, s);
-                  write_word<W>(s, len_pos, s.size() - start);
+                  write_word<W>(s, len_pos, s.written() - start);
                }
             }
          }
@@ -467,7 +457,7 @@ namespace psio3 {
             {
                append_word<W>(s, v.size() * sizeof(E));
                if (!v.empty())
-                  append_bytes(s, v.data(), v.size() * sizeof(E));
+                  s.write(v.data(), v.size() * sizeof(E));
             }
             else
             {
@@ -476,12 +466,12 @@ namespace psio3 {
                static_assert(is_fixed_v<E>,
                              "psio3::frac: vector<variable-element> not "
                              "yet supported (needs offset-table walker)");
-               const std::size_t lenpos = s.size();
-               s.resize(s.size() + W, 0);
-               const std::size_t start = s.size();
+               const std::size_t lenpos = s.written();
+               s.skip(static_cast<std::int32_t>(W));
+               const std::size_t start = s.written();
                for (const auto& x : v)
                   encode_value<W>(x, s);
-               write_word<W>(s, lenpos, s.size() - start);
+               write_word<W>(s, lenpos, s.written() - start);
             }
          }
          else if constexpr (std::is_same_v<T, std::string>)
@@ -489,7 +479,7 @@ namespace psio3 {
             // v1 wire: [W-byte byte_count][bytes].
             append_word<W>(s, v.size());
             if (!v.empty())
-               append_bytes(s, v.data(), v.size());
+               s.write(v.data(), v.size());
          }
          else if constexpr (is_std_optional_v<T>)
          {
@@ -498,12 +488,9 @@ namespace psio3 {
             //   None    → the W-byte slot holds the sentinel value `1`.
             //   Some(x) → the slot holds a pointer-relative offset
             //             (heap_pos − slot_pos); payload x follows.
-            //
-            // The slot is written first as 1 (placeholder); on Some we
-            // rewrite it with the actual offset and then append x's pack.
             using V                  = typename T::value_type;
-            const std::size_t slot   = s.size();
-            s.resize(s.size() + W, 0);
+            const std::size_t slot   = s.written();
+            s.skip(static_cast<std::int32_t>(W));
             if (!v.has_value())
             {
                write_word<W>(s, slot, 1);
@@ -522,7 +509,7 @@ namespace psio3 {
                }
                else
                {
-                  const std::size_t heap = s.size();
+                  const std::size_t heap = s.written();
                   write_word<W>(s, slot, heap - slot);
                   encode_value<W>(*v, s);
                }
@@ -535,24 +522,22 @@ namespace psio3 {
             //                                   bit reserved (≤ 128 alts)
             //   [u{W} size]                   — byte length of payload
             //   [payload bytes]               — encoded alternative
-            //
-            // See libraries/psio/cpp/include/psio/fracpack.hpp:1952.
             static_assert(std::variant_size_v<T> < 128,
                           "fracpack variant tag high bit is reserved");
-            s.push_back(static_cast<char>(v.index()));
-            const std::size_t size_pos = s.size();
-            s.resize(s.size() + W, 0);
-            const std::size_t content_pos = s.size();
+            s.write(static_cast<char>(v.index()));
+            const std::size_t size_pos = s.written();
+            s.skip(static_cast<std::int32_t>(W));
+            const std::size_t content_pos = s.written();
             std::visit(
                [&](const auto& alt) { encode_value<W>(alt, s); }, v);
-            write_word<W>(s, size_pos, s.size() - content_pos);
+            write_word<W>(s, size_pos, s.written() - content_pos);
          }
          else if constexpr (is_bitvector<T>::value)
          {
             // Fixed — raw ceil(N/8) bytes.
             constexpr std::size_t nbytes = (T::size_value + 7) / 8;
             if constexpr (nbytes > 0)
-               append_bytes(s, v.data(), nbytes);
+               s.write(v.data(), nbytes);
          }
          else if constexpr (is_bitlist<T>::value)
          {
@@ -563,26 +548,26 @@ namespace psio3 {
             if constexpr (LB == 1)
             {
                auto len8 = static_cast<std::uint8_t>(bit_count);
-               append_bytes(s, &len8, 1);
+               s.write(&len8, 1);
             }
             else if constexpr (LB == 2)
             {
                auto len16 = static_cast<std::uint16_t>(bit_count);
-               append_bytes(s, &len16, 2);
+               s.write(&len16, 2);
             }
             else if constexpr (LB == 4)
             {
                auto len32 = static_cast<std::uint32_t>(bit_count);
-               append_bytes(s, &len32, 4);
+               s.write(&len32, 4);
             }
             else
             {
                auto len64 = static_cast<std::uint64_t>(bit_count);
-               append_bytes(s, &len64, 8);
+               s.write(&len64, 8);
             }
             auto bytes = v.bytes();
             if (!bytes.empty())
-               append_bytes(s, bytes.data(), bytes.size());
+               s.write(bytes.data(), bytes.size());
          }
          else if constexpr (Record<T>)
          {
@@ -593,7 +578,7 @@ namespace psio3 {
                           is_fixed_v<T>)
                if constexpr (fixed_size_of<T>() == sizeof(T))
             {
-               append_bytes(s, &v, sizeof(T));
+               s.write(&v, sizeof(T));
                return;
             }
             // v1 fracpack record wire format:
@@ -655,14 +640,14 @@ namespace psio3 {
                if constexpr (!::psio3::is_dwnc_v<T>)
                   append_word<2>(s, fixed_region);
 
-               const std::size_t fixed_start = s.size();
-               s.resize(fixed_start + fixed_region, 0);
+               const std::size_t fixed_start = s.written();
+               s.skip(static_cast<std::int32_t>(fixed_region));
 
                // Phase 2: embedded_fixed_pack — inline fixed fields;
                // write initial slot placeholder for variable fields.
                // Placeholder is 1 for std::optional (matches v1's None
                // sentinel), 0 for other variable types (v1 default
-               // placeholder).
+               // placeholder, written below in the heap phase).
                std::array<std::size_t, R::member_count> slot_pos{};
                std::size_t cursor = fixed_start;
                (
@@ -681,23 +666,25 @@ namespace psio3 {
                          // vector allocation used by v1's embedded_
                          // fixed_pack generic path.
                          if constexpr (std::is_same_v<F, bool>)
-                            s[cursor] = fref ? '\x01' : '\x00';
+                         {
+                            char b = fref ? '\x01' : '\x00';
+                            s.rewrite(cursor, &b, 1);
+                         }
                          else if constexpr (std::is_arithmetic_v<F>)
-                            std::memcpy(s.data() + cursor, &fref,
-                                        sizeof(F));
+                            s.rewrite(cursor, &fref, sizeof(F));
                          else if constexpr (is_std_array_v<F>)
                          {
                             using E = typename F::value_type;
                             if constexpr (std::is_arithmetic_v<E> &&
                                           !std::is_same_v<E, bool>)
-                               std::memcpy(s.data() + cursor, fref.data(),
-                                           fixed_size_of<F>());
+                               s.rewrite(cursor, fref.data(),
+                                         fixed_size_of<F>());
                             else
                             {
                                sink_t tmp;
-                               encode_value<W>(fref, tmp);
-                               std::memcpy(s.data() + cursor, tmp.data(),
-                                           tmp.size());
+                               ::psio3::vector_stream vs{tmp};
+                               encode_value<W>(fref, vs);
+                               s.rewrite(cursor, tmp.data(), tmp.size());
                             }
                          }
                          else if constexpr (Record<F>)
@@ -706,19 +693,16 @@ namespace psio3 {
                             // INLINED into the parent's fixed_region —
                             // no own u16 header, no heap (a fixed
                             // record has no variable fields by
-                            // definition). Writing via encode_value
-                            // would emit a header + heap framing,
-                            // overflowing the slot. Walk fields
-                            // directly instead.
-                            encode_record_fixed_inline<W>(fref,
-                                                          s, cursor);
+                            // definition).
+                            encode_record_fixed_inline<W>(fref, s,
+                                                          cursor);
                          }
                          else
                          {
                             sink_t tmp;
-                            encode_value<W>(fref, tmp);
-                            std::memcpy(s.data() + cursor, tmp.data(),
-                                        tmp.size());
+                            ::psio3::vector_stream vs{tmp};
+                            encode_value<W>(fref, vs);
+                            s.rewrite(cursor, tmp.data(), tmp.size());
                          }
                          slot_pos[Is] = 0;  // not a slot
                          cursor += fixed_size_of<F>();
@@ -728,12 +712,23 @@ namespace psio3 {
                          // Variable field: record slot position; seed
                          // with 1 if optional-None, 0 otherwise.
                          // (Phase 3 overwrites with actual offset on Some
-                         // / non-empty; leaves as-is for None / empty.)
+                         // / non-empty; leaves as-is for None / empty —
+                         // 0 is the default since we used s.skip which
+                         // for fast_buf_stream leaves the buffer's
+                         // existing zero-fill from the top-level
+                         // resize. For vector_stream skip resizes with
+                         // value-init zero.)
                          slot_pos[Is] = cursor;
                          if constexpr (is_std_optional_v<F>)
                          {
                             if (!fref.has_value())
                                write_word<W>(s, cursor, 1);
+                            else
+                               write_word<W>(s, cursor, 0);
+                         }
+                         else
+                         {
+                            write_word<W>(s, cursor, 0);
                          }
                          cursor += W;
                       }
@@ -761,7 +756,7 @@ namespace psio3 {
                       // (adapters have no notion of empty / None).
                       if constexpr (override_v)
                       {
-                         const std::size_t heap = s.size();
+                         const std::size_t heap = s.written();
                          write_word<W>(s, slot_pos[Is],
                                        heap - slot_pos[Is]);
                          using eff = typename ::psio3::
@@ -771,7 +766,9 @@ namespace psio3 {
                          using Tag  = ::psio3::adapter_tag_of_t<eff>;
                          using Proj = ::psio3::adapter<
                             std::remove_cvref_t<F>, Tag>;
-                         Proj::encode(fref, s);
+                         sink_t tmp;
+                         Proj::encode(fref, tmp);
+                         s.write(tmp.data(), tmp.size());
                          return;
                       }
 
@@ -788,7 +785,7 @@ namespace psio3 {
                                        std::is_same_v<V, std::string>)
                             empty = (*fref).empty();
                          if (empty) return;
-                         const std::size_t heap = s.size();
+                         const std::size_t heap = s.written();
                          write_word<W>(s, slot_pos[Is],
                                        heap - slot_pos[Is]);
                          encode_value<W>(*fref, s);
@@ -804,7 +801,7 @@ namespace psio3 {
                          empty = fref.empty();
                       if (empty) return;
 
-                      const std::size_t heap = s.size();
+                      const std::size_t heap = s.written();
                       write_word<W>(s, slot_pos[Is],
                                     heap - slot_pos[Is]);
                       encode_value<W>(fref, s);
@@ -1216,9 +1213,20 @@ namespace psio3 {
                                           ::psio3::binary_category>;
             return Proj::packsize(v);
          }
-         else if constexpr (is_fixed_v<T>)
+         else if constexpr (is_fixed_v<T> && !Record<T>)
          {
+            // Non-record fixed types: wire == fixed_size_of (no header).
             return fixed_size_of<T>();
+         }
+         else if constexpr (is_fixed_v<T> && Record<T>)
+         {
+            // Fixed record: fixed_region + (u16 header iff non-DWNC).
+            // Falls through to the Record branch below which adds the
+            // header. Special-case here because the catch-all is_fixed
+            // shortcut above would skip the header.
+            constexpr std::size_t header_bytes =
+               ::psio3::is_dwnc_v<T> ? std::size_t{0} : std::size_t{2};
+            return header_bytes + fixed_size_of<T>();
          }
          else if constexpr (std::is_same_v<T, std::string>)
          {
@@ -1405,20 +1413,21 @@ namespace psio3 {
       friend void tag_invoke(decltype(::psio3::encode), frac_<W>,
                              const T& v, std::vector<char>& sink)
       {
-         detail::frac_impl::encode_value<W>(v, sink);
+         const std::size_t total = detail::frac_impl::size_of_v<W>(v);
+         const std::size_t orig  = sink.size();
+         sink.resize(orig + total);
+         ::psio3::fast_buf_stream fbs(sink.data() + orig, total);
+         detail::frac_impl::encode_value<W>(v, fbs);
       }
 
       template <typename T>
       friend std::vector<char> tag_invoke(decltype(::psio3::encode),
                                           frac_<W>, const T& v)
       {
-         // Pre-size from the real packsize walker (no longer a
-         // produce-then-measure). With resize-backed append_bytes,
-         // every byte lands via direct memcpy — no reallocations
-         // during the three-phase pack.
-         std::vector<char> out;
-         out.reserve(detail::frac_impl::size_of_v<W>(v));
-         detail::frac_impl::encode_value<W>(v, out);
+         const std::size_t total = detail::frac_impl::size_of_v<W>(v);
+         std::vector<char> out(total);
+         ::psio3::fast_buf_stream fbs(out.data(), total);
+         detail::frac_impl::encode_value<W>(v, fbs);
          return out;
       }
 
