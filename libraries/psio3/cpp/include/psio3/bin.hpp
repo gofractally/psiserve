@@ -18,6 +18,7 @@
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
 #include <psio3/stream.hpp>
+#include <psio3/validate_strict_walker.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
 
 #include <array>
@@ -672,6 +673,20 @@ namespace psio3 {
       {
          if (bytes.empty())
             return codec_fail("bin: empty buffer", 0, "bin");
+         if constexpr (::psio3::Reflected<T>)
+         {
+            try
+            {
+               std::size_t pos = 0;
+               T decoded = detail::bin_impl::decode_value<T>(bytes, pos);
+               return ::psio3::validate_specs_on_value(decoded);
+            }
+            catch (...)
+            {
+               return codec_fail(
+                  "bin: decode failed during validate_strict", 0, "bin");
+            }
+         }
          return codec_ok();
       }
 

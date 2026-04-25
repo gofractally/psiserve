@@ -35,6 +35,7 @@
 #include <psio3/adapter.hpp>
 #include <psio3/max_size.hpp>
 #include <psio3/reflect.hpp>
+#include <psio3/validate_strict_walker.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
 
 #include <array>
@@ -1088,8 +1089,26 @@ namespace psio3 {
                                      pssz_<W>, T*,
                                      std::span<const char> bytes) noexcept
       {
-         return detail::pssz_impl::validate_value<W, T>(bytes, 0,
-                                                        bytes.size());
+         auto st = detail::pssz_impl::validate_value<W, T>(bytes, 0,
+                                                            bytes.size());
+         if (!st.ok())
+            return st;
+         if constexpr (::psio3::Reflected<T>)
+         {
+            try
+            {
+               T decoded = detail::pssz_impl::decode_value<W, T>(
+                  bytes, 0, bytes.size());
+               return ::psio3::validate_specs_on_value(decoded);
+            }
+            catch (...)
+            {
+               return codec_fail(
+                  "pssz: decode failed during validate_strict", 0,
+                  "pssz");
+            }
+         }
+         return st;
       }
 
       template <typename T>
@@ -1161,8 +1180,26 @@ namespace psio3 {
                                      std::span<const char> bytes) noexcept
       {
          constexpr std::size_t W = auto_pssz_width_v<T>;
-         return detail::pssz_impl::validate_value<W, T>(bytes, 0,
-                                                        bytes.size());
+         auto st = detail::pssz_impl::validate_value<W, T>(bytes, 0,
+                                                            bytes.size());
+         if (!st.ok())
+            return st;
+         if constexpr (::psio3::Reflected<T>)
+         {
+            try
+            {
+               T decoded = detail::pssz_impl::decode_value<W, T>(
+                  bytes, 0, bytes.size());
+               return ::psio3::validate_specs_on_value(decoded);
+            }
+            catch (...)
+            {
+               return codec_fail(
+                  "pssz: decode failed during validate_strict", 0,
+                  "pssz");
+            }
+         }
+         return st;
       }
 
       template <typename T>

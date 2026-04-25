@@ -33,12 +33,15 @@
 //   psio3::find_spec<Spec>(anns)        → std::optional<Spec>
 //   psio3::has_spec_v<Spec, Tuple>      → bool
 
+#include <psio3/error.hpp>
 #include <psio3/reflect.hpp>
 
 #include <boost/preprocessor.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -196,6 +199,75 @@ namespace psio3 {
       std::uint32_t field_num = 0;
 
       constexpr bool operator==(const utf8_spec&) const = default;
+
+      // Semantic validator (design §5.3.3) — invoked by validate_strict
+      // on the field's payload bytes (the string contents). Walks the
+      // span checking valid UTF-8 byte sequences and (when set) the
+      // max byte-length cap.
+      [[nodiscard]] static codec_status
+      validate(std::span<const char> bytes) noexcept
+      {
+         // Note: max is captured here as a per-field annotation, but
+         // since validate is a static member it can't see the instance.
+         // Instance-level max is enforced via length_bound in v3; this
+         // static check covers shape-only well-formedness. The const
+         // 0 is a sentinel — wire length is whatever the field claims.
+         const auto* p   = reinterpret_cast<const unsigned char*>(bytes.data());
+         const auto  n   = bytes.size();
+         std::size_t i   = 0;
+         while (i < n)
+         {
+            unsigned char b = p[i];
+            std::size_t   take;
+            if (b < 0x80)
+               take = 1;
+            else if ((b & 0xE0) == 0xC0)
+               take = 2;
+            else if ((b & 0xF0) == 0xE0)
+               take = 3;
+            else if ((b & 0xF8) == 0xF0)
+               take = 4;
+            else
+               return codec_fail("utf8_spec: invalid leading byte",
+                                  static_cast<std::uint32_t>(i),
+                                  "utf8_spec");
+            if (i + take > n)
+               return codec_fail("utf8_spec: truncated sequence",
+                                  static_cast<std::uint32_t>(i),
+                                  "utf8_spec");
+            for (std::size_t k = 1; k < take; ++k)
+            {
+               if ((p[i + k] & 0xC0) != 0x80)
+                  return codec_fail("utf8_spec: bad continuation",
+                                     static_cast<std::uint32_t>(i + k),
+                                     "utf8_spec");
+            }
+            // Reject overlong + surrogate forms by computing the codepoint
+            // and verifying it's in the canonical range for `take`.
+            std::uint32_t cp = 0;
+            if (take == 1)
+               cp = b;
+            else if (take == 2)
+               cp = ((b & 0x1F) << 6) | (p[i + 1] & 0x3F);
+            else if (take == 3)
+               cp = ((b & 0x0F) << 12) | ((p[i + 1] & 0x3F) << 6) |
+                    (p[i + 2] & 0x3F);
+            else
+               cp = ((b & 0x07) << 18) | ((p[i + 1] & 0x3F) << 12) |
+                    ((p[i + 2] & 0x3F) << 6) | (p[i + 3] & 0x3F);
+            const std::uint32_t min_cp[5] = {0, 0, 0x80, 0x800, 0x10000};
+            if (cp < min_cp[take])
+               return codec_fail("utf8_spec: overlong encoding",
+                                  static_cast<std::uint32_t>(i),
+                                  "utf8_spec");
+            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+               return codec_fail("utf8_spec: codepoint out of range",
+                                  static_cast<std::uint32_t>(i),
+                                  "utf8_spec");
+            i += take;
+         }
+         return codec_ok();
+      }
    };
 
    struct hex_spec
@@ -207,6 +279,28 @@ namespace psio3 {
       std::uint32_t field_num = 0;
 
       constexpr bool operator==(const hex_spec&) const = default;
+
+      // Semantic validator — every byte must be a hex digit. Length
+      // parity (even) is also required since hex strings encode pairs.
+      [[nodiscard]] static codec_status
+      validate(std::span<const char> bytes) noexcept
+      {
+         if ((bytes.size() & 1u) != 0u)
+            return codec_fail("hex_spec: odd-length hex string", 0,
+                               "hex_spec");
+         for (std::size_t i = 0; i < bytes.size(); ++i)
+         {
+            const auto c = static_cast<unsigned char>(bytes[i]);
+            const bool ok = (c >= '0' && c <= '9') ||
+                            (c >= 'a' && c <= 'f') ||
+                            (c >= 'A' && c <= 'F');
+            if (!ok)
+               return codec_fail("hex_spec: non-hex character",
+                                  static_cast<std::uint32_t>(i),
+                                  "hex_spec");
+         }
+         return codec_ok();
+      }
    };
 
    struct sorted_spec

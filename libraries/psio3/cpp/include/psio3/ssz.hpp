@@ -33,6 +33,7 @@
 #include <psio3/format_tag_base.hpp>
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
+#include <psio3/validate_strict_walker.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
 
 #include <array>
@@ -1220,17 +1221,41 @@ namespace psio3 {
          return detail::ssz_impl::validate_value<T>(bytes, 0, bytes.size());
       }
 
-      // ── validate_strict — phase-6 MVP aliases structural ───────────────
+      // ── validate_strict — structural + spec-carried semantic checks ──
       //
-      // Semantic (spec-carried) checks that depend on annotations land in
-      // the dynamic / schema phase. Until then strict delegates.
+      // Design §5.3.3 / §5.4: structural validate first, then walk each
+      // reflected field invoking any `static codec_status validate(span)`
+      // members on the field's effective annotations. First failure
+      // wins. Spec set is open — third-party spec types in user code
+      // are picked up by the SFINAE-driven walker.
       template <typename T>
       friend codec_status tag_invoke(decltype(::psio3::validate_strict<T>),
                                      ssz,
                                      T*,
                                      std::span<const char> bytes) noexcept
       {
-         return detail::ssz_impl::validate_value<T>(bytes, 0, bytes.size());
+         auto st =
+            detail::ssz_impl::validate_value<T>(bytes, 0, bytes.size());
+         if (!st.ok())
+            return st;
+         if constexpr (::psio3::Reflected<T>)
+         {
+            try
+            {
+               T decoded = detail::ssz_impl::decode_value<T>(bytes, 0,
+                                                              bytes.size());
+               return ::psio3::validate_specs_on_value(decoded);
+            }
+            catch (...)
+            {
+               return codec_fail(
+                  "ssz: decode failed during validate_strict", 0, "ssz");
+            }
+         }
+         else
+         {
+            return st;
+         }
       }
 
       // ── make_boxed — default decode + std::make_unique ─────────────────

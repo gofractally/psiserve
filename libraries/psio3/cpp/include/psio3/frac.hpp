@@ -30,6 +30,7 @@
 #include <psio3/format_tag_base.hpp>
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
+#include <psio3/validate_strict_walker.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
 
 #include <array>
@@ -1390,8 +1391,26 @@ namespace psio3 {
                                      frac_<W>, T*,
                                      std::span<const char> bytes) noexcept
       {
-         return detail::frac_impl::validate_value<W, T>(bytes, 0,
-                                                         bytes.size());
+         auto st = detail::frac_impl::validate_value<W, T>(bytes, 0,
+                                                            bytes.size());
+         if (!st.ok())
+            return st;
+         if constexpr (::psio3::Reflected<T>)
+         {
+            try
+            {
+               T decoded = detail::frac_impl::decode_value<W, T>(
+                  bytes, 0, bytes.size());
+               return ::psio3::validate_specs_on_value(decoded);
+            }
+            catch (...)
+            {
+               return codec_fail(
+                  "frac: decode failed during validate_strict", 0,
+                  "frac");
+            }
+         }
+         return st;
       }
 
       template <typename T>
