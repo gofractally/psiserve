@@ -264,8 +264,15 @@ namespace psio3 {
          {
             using E = typename T::value_type;
             s.put(static_cast<std::uint64_t>(v.size()));
-            if constexpr (std::is_arithmetic_v<E> &&
-                          !std::is_same_v<E, bool>)
+            // Bulk-memcpy fast path covers arithmetic primitives AND
+            // DWNC packed records.
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               Record<E> && ::psio3::is_dwnc_v<E> && fully_fixed<E>() &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_contrib<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
             {
                if (!v.empty())
                   s.write(v.data(), sizeof(E) * v.size());
@@ -309,6 +316,14 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // Memcpy fast path for DWNC packed records.
+            if constexpr (::psio3::is_dwnc_v<T> && fully_fixed<T>() &&
+                          std::is_trivially_copyable_v<T> &&
+                          fixed_contrib<T>() == sizeof(T))
+            {
+               s.write(reinterpret_cast<const char*>(&v), sizeof(T));
+               return;
+            }
             using R = ::psio3::reflect<T>;
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
             {
@@ -376,15 +391,20 @@ namespace psio3 {
             const std::uint64_t n = read_u64(src, pos);
             pos += 8;
             std::vector<E> out;
-            if constexpr (std::is_arithmetic_v<E> &&
-                          !std::is_same_v<E, bool>)
+            // Bulk-memcpy fast path covers arithmetic OR DWNC packed
+            // memcpy-layout records.
+            constexpr bool is_arith =
+               std::is_arithmetic_v<E> && !std::is_same_v<E, bool>;
+            constexpr bool is_memcpy_record =
+               Record<E> && ::psio3::is_dwnc_v<E> && fully_fixed<E>() &&
+               std::is_trivially_copyable_v<E> &&
+               fixed_contrib<E>() == sizeof(E);
+            if constexpr (is_arith || is_memcpy_record)
             {
-               out.resize(n);
-               if (n)
-               {
-                  std::memcpy(out.data(), src.data() + pos, sizeof(E) * n);
-                  pos += sizeof(E) * n;
-               }
+               const E* first =
+                  reinterpret_cast<const E*>(src.data() + pos);
+               out.assign(first, first + n);
+               pos += sizeof(E) * n;
             }
             else
             {
@@ -461,6 +481,16 @@ namespace psio3 {
          }
          else if constexpr (Record<T>)
          {
+            // Memcpy fast path for DWNC packed records.
+            if constexpr (::psio3::is_dwnc_v<T> && fully_fixed<T>() &&
+                          std::is_trivially_copyable_v<T> &&
+                          fixed_contrib<T>() == sizeof(T))
+            {
+               T out;
+               std::memcpy(&out, src.data() + pos, sizeof(T));
+               pos += sizeof(T);
+               return out;
+            }
             using R = ::psio3::reflect<T>;
             T       out{};
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
