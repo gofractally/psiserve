@@ -33,6 +33,7 @@
 #include <psio3/format_tag_base.hpp>
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
+#include <psio3/stream.hpp>
 #include <psio3/validate_strict_walker.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
 
@@ -260,7 +261,8 @@ namespace psio3 {
          }
          else if constexpr (is_std_optional<T>::value)
          {
-            return v.has_value() ? size_of_v(*v) : 0;
+            // SSZ optional = Union[null, T]: 1-byte selector + payload.
+            return 1 + (v.has_value() ? size_of_v(*v) : 0);
          }
          else if constexpr (is_bitlist_v<T>)
          {
@@ -311,18 +313,6 @@ namespace psio3 {
 
       using sink_t = std::vector<char>;
 
-      // Resize-then-memcpy is faster than `insert(end, ptr, ptr+n)` when
-      // the vector is pre-reserved: skips iterator-validity checks and
-      // the hint-is-at-end branch that std::vector::insert walks through.
-      // For ssz encode with size_of_v()-reserved output, every
-      // append_bytes call becomes bump-size + direct memcpy.
-      inline void append_bytes(sink_t& s, const void* p, std::size_t n)
-      {
-         const std::size_t at = s.size();
-         s.resize(at + n);
-         std::memcpy(s.data() + at, p, n);
-      }
-
       // Trait helpers for the single-dispatcher encode_value.
       template <typename T>
       struct is_std_array : std::false_type
@@ -365,39 +355,48 @@ namespace psio3 {
       // Single dispatcher — the only encode_value template. All per-type
       // logic is gated by `if constexpr` so name lookup at template-parse
       // time only needs to find this function, not per-type overloads.
-      template <typename T>
-      void encode_value(const T& v, sink_t& s)
+      //
+      // Sink-templated: callers pass either ::psio3::size_stream (size
+      // probe) or ::psio3::fast_buf_stream (write into a pre-sized
+      // buffer). Top-level tag_invoke runs both passes — same code,
+      // mirrors v1's convert_to_ssz pattern.
+      template <typename T, typename Sink>
+      void encode_value(const T& v, Sink& s)
       {
          // Adapter dispatch — projected types emit their opaque
          // bytes; SSZ's container walkers treat the result as a
          // variable-size payload (offset-addressed) through the same
-         // heap mechanism they use for strings and vectors. Skip
-         // self-delegating adapters.
+         // heap mechanism they use for strings and vectors. Adapters
+         // assume a vector<char>-like sink, so we route through a
+         // temp vector and then forward the bytes through the
+         // Sink-uniform write interface.
          if constexpr (::psio3::format_should_dispatch_adapter_v<
                           ::psio3::ssz, T>)
          {
             using Proj = ::psio3::adapter<std::remove_cvref_t<T>,
                                              ::psio3::binary_category>;
-            Proj::encode(v, s);
+            sink_t tmp;
+            Proj::encode(v, tmp);
+            s.write(tmp.data(), tmp.size());
             return;
          }
 
          if constexpr (std::is_same_v<T, bool>)
          {
-            s.push_back(v ? '\x01' : '\x00');
+            s.write(v ? '\x01' : '\x00');
          }
          else if constexpr (std::is_same_v<T, ::psio3::uint256>)
          {
-            append_bytes(s, v.limb, 32);
+            s.write(v.limb, 32);
          }
          else if constexpr (std::is_same_v<T, ::psio3::uint128> ||
                             std::is_same_v<T, ::psio3::int128>)
          {
-            append_bytes(s, &v, 16);
+            s.write(&v, 16);
          }
          else if constexpr (std::is_arithmetic_v<T>)
          {
-            append_bytes(s, &v, sizeof(T));
+            s.put(v);
          }
          else if constexpr (is_std_array_v<T>)
          {
@@ -409,7 +408,7 @@ namespace psio3 {
                              !std::is_same_v<E, bool>)
                {
                   if constexpr (N > 0)
-                     append_bytes(s, v.data(), N * sizeof(E));
+                     s.write(v.data(), N * sizeof(E));
                }
                else
                {
@@ -419,13 +418,13 @@ namespace psio3 {
             }
             else
             {
-               const std::size_t table_index = s.size();
-               s.resize(s.size() + N * 4, 0);
+               const std::size_t table_index = s.written();
+               s.skip(static_cast<std::int32_t>(N * 4));
                for (std::size_t i = 0; i < N; ++i)
                {
                   const std::uint32_t rel =
-                     static_cast<std::uint32_t>(s.size() - table_index);
-                  std::memcpy(s.data() + table_index + i * 4, &rel, 4);
+                     static_cast<std::uint32_t>(s.written() - table_index);
+                  s.rewrite(table_index + i * 4, &rel, 4);
                   encode_value(v[i], s);
                }
             }
@@ -449,7 +448,7 @@ namespace psio3 {
                if constexpr (is_arith || is_memcpy_record)
                {
                   if (!v.empty())
-                     append_bytes(s, v.data(), v.size() * sizeof(E));
+                     s.write(v.data(), v.size() * sizeof(E));
                }
                else
                {
@@ -460,20 +459,20 @@ namespace psio3 {
             else
             {
                const std::size_t n           = v.size();
-               const std::size_t table_index = s.size();
-               s.resize(s.size() + n * 4, 0);
+               const std::size_t table_index = s.written();
+               s.skip(static_cast<std::int32_t>(n * 4));
                for (std::size_t i = 0; i < n; ++i)
                {
                   const std::uint32_t rel =
-                     static_cast<std::uint32_t>(s.size() - table_index);
-                  std::memcpy(s.data() + table_index + i * 4, &rel, 4);
+                     static_cast<std::uint32_t>(s.written() - table_index);
+                  s.rewrite(table_index + i * 4, &rel, 4);
                   encode_value(v[i], s);
                }
             }
          }
          else if constexpr (std::is_same_v<T, std::string>)
          {
-            append_bytes(s, v.data(), v.size());
+            s.write(v.data(), v.size());
          }
          else if constexpr (is_std_optional_v<T>)
          {
@@ -483,12 +482,12 @@ namespace psio3 {
             // Matches v1 wire format (canonical SSZ Union).
             if (v.has_value())
             {
-               s.push_back('\x01');
+               s.write('\x01');
                encode_value(*v, s);
             }
             else
             {
-               s.push_back('\x00');
+               s.write('\x00');
             }
          }
          else if constexpr (is_bitvector_v<T>)
@@ -497,22 +496,38 @@ namespace psio3 {
             // bitvector storage already matches the wire layout.
             constexpr std::size_t nbytes = (T::size_value + 7) / 8;
             if constexpr (nbytes > 0)
-               append_bytes(s, v.data(), nbytes);
+               s.write(v.data(), nbytes);
          }
          else if constexpr (is_bitlist_v<T>)
          {
             // SSZ bitlist: data bits + trailing '1' delimiter at the
             // bit_count-th position. Total = (bit_count + 8) / 8.
+            // Stage in a stack/heap buffer so we can write through
+            // the sink with a single write call (works for both
+            // size_stream and fast_buf_stream).
             const std::size_t bit_count   = v.size();
             const std::size_t total_bytes = (bit_count + 8) / 8;
-            const std::size_t at          = s.size();
-            s.resize(at + total_bytes, 0);
+            constexpr std::size_t kStack  = 256;
+            char              stack_buf[kStack];
+            std::vector<char> heap_buf;
+            char*             p;
+            if (total_bytes <= kStack)
+            {
+               p = stack_buf;
+               std::memset(p, 0, total_bytes);
+            }
+            else
+            {
+               heap_buf.assign(total_bytes, 0);
+               p = heap_buf.data();
+            }
             auto bytes = v.bytes();
             if (!bytes.empty())
-               std::memcpy(s.data() + at, bytes.data(),
+               std::memcpy(p, bytes.data(),
                            std::min(bytes.size(), total_bytes));
-            s[at + (bit_count >> 3)] |=
+            p[bit_count >> 3] |=
                static_cast<char>(1u << (bit_count & 7u));
+            s.write(p, total_bytes);
          }
          else if constexpr (is_std_variant_v<T>)
          {
@@ -521,7 +536,7 @@ namespace psio3 {
             // offset table (see record walker, variable-field branch).
             static_assert(std::variant_size_v<T> <= 256,
                           "ssz variant selector is u8 (≤ 256 alternatives)");
-            s.push_back(static_cast<char>(v.index()));
+            s.write(static_cast<char>(v.index()));
             std::visit([&](const auto& alt) { encode_value(alt, s); }, v);
          }
          else if constexpr (Record<T>)
@@ -535,7 +550,7 @@ namespace psio3 {
             {
                if constexpr (fixed_size_of<T>() == sizeof(T))
                {
-                  append_bytes(s, &v, sizeof(T));
+                  s.write(&v, sizeof(T));
                   return;
                }
             }
@@ -544,8 +559,7 @@ namespace psio3 {
             {
                // fixed_region is a compile-time constant for any
                // reflected T — sum of fixed field sizes + 4 per
-               // variable field. Hoist to constexpr so the resize
-               // call uses a single immediate.
+               // variable field. Hoist to constexpr.
                constexpr std::size_t fixed_region = (
                   []<std::size_t I>() consteval -> std::size_t {
                      using F = typename R::template member_type<I>;
@@ -560,8 +574,12 @@ namespace psio3 {
                      else
                         return 4;
                   }.template operator()<Is>() + ... + std::size_t{0});
-               const std::size_t container_start = s.size();
-               s.resize(container_start + fixed_region, 0);
+               const std::size_t container_start = s.written();
+               // Reserve the fixed region — for size_stream this is
+               // size += fixed_region; for fast_buf_stream this is
+               // pos += fixed_region (no zero-fill — every byte is
+               // written via rewrite below).
+               s.skip(static_cast<std::int32_t>(fixed_region));
                std::size_t fixed_cursor = container_start;
 
                (
@@ -579,58 +597,66 @@ namespace psio3 {
 
                       if constexpr (!override_v && is_fixed_v<F>)
                       {
-                         // Fast paths that bypass the tmp-vector alloc.
+                         // Encode the fixed field through a tiny temp
+                         // sub-stream that wraps the same Sink with
+                         // its position pinned at fixed_cursor. For
+                         // size_stream this collapses to no-op writes;
+                         // for fast_buf_stream the rewrites land at
+                         // begin + fixed_cursor.
                          if constexpr (std::is_same_v<F, bool>)
                          {
-                            s[fixed_cursor] = fref ? '\x01' : '\x00';
+                            char b = fref ? '\x01' : '\x00';
+                            s.rewrite(fixed_cursor, &b, 1);
                          }
                          else if constexpr (std::is_arithmetic_v<F>)
                          {
-                            std::memcpy(s.data() + fixed_cursor, &fref,
-                                        sizeof(F));
+                            s.rewrite(fixed_cursor, &fref, sizeof(F));
                          }
                          else if constexpr (is_std_array_v<F>)
                          {
-                            // std::array — second level of dispatch, so
-                            // F::value_type is only named when F is
-                            // actually a std::array.
                             using E = typename F::value_type;
                             if constexpr (std::is_arithmetic_v<E> &&
                                           !std::is_same_v<E, bool>)
                             {
-                               std::memcpy(s.data() + fixed_cursor,
-                                           fref.data(), fixed_size_of<F>());
+                               s.rewrite(fixed_cursor, fref.data(),
+                                         fixed_size_of<F>());
                             }
                             else
                             {
+                               // Nested non-arithmetic array: encode
+                               // into a temp vector then rewrite.
                                sink_t tmp;
-                               encode_value(fref, tmp);
-                               std::memcpy(s.data() + fixed_cursor,
-                                           tmp.data(), tmp.size());
+                               ::psio3::vector_stream vs{tmp};
+                               encode_value(fref, vs);
+                               s.rewrite(fixed_cursor, tmp.data(),
+                                         tmp.size());
                             }
                          }
                          else
                          {
                             // Fallback for nested fixed records.
                             sink_t tmp;
-                            encode_value(fref, tmp);
-                            std::memcpy(s.data() + fixed_cursor, tmp.data(),
-                                        tmp.size());
+                            ::psio3::vector_stream vs{tmp};
+                            encode_value(fref, vs);
+                            s.rewrite(fixed_cursor, tmp.data(),
+                                      tmp.size());
                          }
                          fixed_cursor += fixed_size_of<F>();
                       }
                       else
                       {
                          const std::uint32_t rel = static_cast<std::uint32_t>(
-                            s.size() - container_start);
-                         std::memcpy(s.data() + fixed_cursor, &rel, 4);
+                            s.written() - container_start);
+                         s.rewrite(fixed_cursor, &rel, 4);
                          fixed_cursor += 4;
                          if constexpr (override_v)
                          {
                             using Tag = ::psio3::adapter_tag_of_t<eff>;
                             using Proj = ::psio3::adapter<
                                std::remove_cvref_t<F>, Tag>;
-                            Proj::encode(fref, s);
+                            sink_t tmp;
+                            Proj::encode(fref, tmp);
+                            s.write(tmp.data(), tmp.size());
                          }
                          else
                          {
@@ -1195,13 +1221,28 @@ namespace psio3 {
       using preferred_presentation_category = ::psio3::binary_category;
 
       // ── encode ─────────────────────────────────────────────────────────
+      //
+      // Two-pass: size_of_v computes the byte total (O(variable-field
+      // count) for containers, O(1) for fixed types), then a single
+      // resize + fast_buf_stream walk writes the bytes. Mirrors v1's
+      // `convert_to_ssz` algorithm — eliminates the per-record resize
+      // + zero-init that the prior single-pass vector_stream walker
+      // accumulated on nested mixed records.
       template <typename T>
       friend void tag_invoke(decltype(::psio3::encode),
                              ssz,
                              const T&              v,
                              std::vector<char>&    sink)
       {
-         detail::ssz_impl::encode_value(v, sink);
+         std::size_t total;
+         if constexpr (detail::ssz_impl::is_fixed_v<T>)
+            total = detail::ssz_impl::fixed_size_of<T>();
+         else
+            total = detail::ssz_impl::size_of_v(v);
+         const std::size_t orig = sink.size();
+         sink.resize(orig + total);
+         ::psio3::fast_buf_stream fbs(sink.data() + orig, total);
+         detail::ssz_impl::encode_value(v, fbs);
       }
 
       template <typename T>
@@ -1209,18 +1250,14 @@ namespace psio3 {
                                           ssz,
                                           const T& v)
       {
-         // Pre-size the output buffer to match v1's `convert_to_ssz`:
-         // ssz_size is O(1) for fixed types and O(variable-field count)
-         // for containers, so the probe cost is dwarfed by the savings
-         // from skipping mid-encode reallocations. Without this the
-         // encode path was ~1.5x slower than v1 on the mixed-record
-         // workload; with it, parity is within ±5%.
-         std::vector<char> out;
+         std::size_t total;
          if constexpr (detail::ssz_impl::is_fixed_v<T>)
-            out.reserve(detail::ssz_impl::fixed_size_of<T>());
+            total = detail::ssz_impl::fixed_size_of<T>();
          else
-            out.reserve(detail::ssz_impl::size_of_v(v));
-         detail::ssz_impl::encode_value(v, out);
+            total = detail::ssz_impl::size_of_v(v);
+         std::vector<char> out(total);
+         ::psio3::fast_buf_stream fbs(out.data(), total);
+         detail::ssz_impl::encode_value(v, fbs);
          return out;
       }
 

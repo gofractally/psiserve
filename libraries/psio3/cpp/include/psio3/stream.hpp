@@ -295,6 +295,11 @@ namespace psio3 {
          rewrite(offset, &v, sizeof(T));
       }
 
+      // Reserve `n` bytes at the current end. The bytes are
+      // value-initialized (zero) so callers can subsequently
+      // `rewrite()` over them or leave them as zero placeholders.
+      void skip(std::int32_t n) { data.resize(data.size() + n); }
+
       std::size_t written() const noexcept { return data.size(); }
    };
 
