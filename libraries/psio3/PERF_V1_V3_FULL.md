@@ -1,167 +1,167 @@
-| shape | format | library | enc ns | dec ns | val ns | size ns | wire |
-|---|---|---|---:|---:|---:|---:|---:|
-| Point | ssz | v1 |    9.6 |    0.2 |    n/a |    0.2 | 8B |
-| Point | ssz | v3 |    9.8 |    0.2 |    0.8 |    0.2 | 8B |
-| Point | ssz | **v3/v1** | 1.02x | 1.00x |   —   | 1.00x | 1.00x |
-| Point | pssz32 | v1 |   10.4 |    0.4 |    n/a |    0.2 | 8B |
-| Point | pssz32 | v3 |    9.7 |    0.2 |    0.4 |    0.2 | 8B |
-| Point | pssz32 | **v3/v1** | 0.93x | 0.62x |   —   | 1.00x | 1.00x |
-| Point | pssz-auto | v1 |   10.4 |    0.4 |    n/a |    0.2 | 8B |
-| Point | pssz-auto | v3 |    8.8 |    0.2 |    0.3 |    0.2 | 8B |
-| Point | pssz-auto | **v3/v1** | 0.85x | 0.62x |   —   | 1.00x | 1.00x |
-| Point | frac32 | v1 |    8.9 |    0.3 |    n/a |    0.2 | 8B |
-| Point | frac32 | v3 |    8.8 |    0.2 |    0.3 |    0.2 | 8B |
-| Point | frac32 | **v3/v1** | 0.99x | 0.83x |   —   | 1.00x | 1.00x |
-| Point | bin | v1 |    8.8 |    0.2 |    n/a |    n/a | 8B |
-| Point | bin | v3 |    8.6 |    0.2 |    0.5 |    0.2 | 8B |
-| Point | bin | **v3/v1** | 0.97x | 0.80x |   —   |   —   | 1.00x |
-| Point | borsh | v1 |    8.6 |    0.3 |    n/a |    n/a | 8B |
-| Point | borsh | v3 |    8.6 |    0.2 |    0.5 |    0.2 | 8B |
-| Point | borsh | **v3/v1** | 0.99x | 0.83x |   —   |   —   | 1.00x |
-| Point | bincode | v1 |    8.6 |    0.3 |    n/a |    n/a | 8B |
-| Point | bincode | v3 |    8.6 |    0.2 |    0.6 |    0.2 | 8B |
-| Point | bincode | **v3/v1** | 0.99x | 0.83x |   —   |   —   | 1.00x |
-| Point | avro | v1 |   12.2 |    0.7 |    n/a |    n/a | 3B |
-| Point | avro | v3 |   10.9 |    0.9 |    0.6 |    0.5 | 3B |
-| Point | avro | **v3/v1** | 0.90x | 1.36x |   —   |   —   | 1.00x |
-| NameRecord | ssz | v1 |    8.6 |    0.2 |    n/a |    0.2 | 16B |
-| NameRecord | ssz | v3 |    8.7 |    0.2 |    0.5 |    0.2 | 16B |
-| NameRecord | ssz | **v3/v1** | 1.01x | 1.00x |   —   | 1.25x | 1.00x |
-| NameRecord | pssz32 | v1 |    8.8 |    0.3 |    n/a |    0.2 | 16B |
-| NameRecord | pssz32 | v3 |    7.9 |    0.2 |    0.3 |    0.2 | 16B |
-| NameRecord | pssz32 | **v3/v1** | 0.89x | 0.71x |   —   | 1.00x | 1.00x |
-| NameRecord | pssz-auto | v1 |    8.6 |    0.3 |    n/a |    0.2 | 16B |
-| NameRecord | pssz-auto | v3 |    7.9 |    0.2 |    0.3 |    0.2 | 16B |
-| NameRecord | pssz-auto | **v3/v1** | 0.92x | 0.83x |   —   | 1.00x | 1.00x |
-| NameRecord | frac32 | v1 |    7.9 |    0.3 |    n/a |    0.2 | 16B |
-| NameRecord | frac32 | v3 |    7.6 |    0.2 |    0.3 |    0.2 | 16B |
-| NameRecord | frac32 | **v3/v1** | 0.96x | 0.83x |   —   | 1.00x | 1.00x |
-| NameRecord | bin | v1 |    7.8 |    0.2 |    n/a |    n/a | 16B |
-| NameRecord | bin | v3 |    7.8 |    0.2 |    0.5 |    0.2 | 16B |
-| NameRecord | bin | **v3/v1** | 0.99x | 1.25x |   —   |   —   | 1.00x |
-| NameRecord | borsh | v1 |    7.8 |    0.3 |    n/a |    n/a | 16B |
-| NameRecord | borsh | v3 |    7.8 |    0.2 |    0.4 |    0.2 | 16B |
-| NameRecord | borsh | **v3/v1** | 1.00x | 0.83x |   —   |   —   | 1.00x |
-| NameRecord | bincode | v1 |    8.1 |    0.3 |    n/a |    n/a | 16B |
-| NameRecord | bincode | v3 |    7.8 |    0.2 |    0.5 |    0.2 | 16B |
-| NameRecord | bincode | **v3/v1** | 0.96x | 0.71x |   —   |   —   | 1.00x |
-| NameRecord | avro | v1 |   15.4 |    2.1 |    n/a |    n/a | 12B |
-| NameRecord | avro | v3 |   15.6 |    3.0 |    0.4 |    3.2 | 12B |
-| NameRecord | avro | **v3/v1** | 1.01x | 1.42x |   —   |   —   | 1.00x |
-| FlatRecord | ssz | v1 |   16.8 |   13.5 |    0.1 |    0.2 | 32B |
-| FlatRecord | ssz | v3 |   15.8 |   11.5 |    0.5 |    0.2 | 32B |
-| FlatRecord | ssz | **v3/v1** | 0.94x | 0.85x | 4.50x | 1.00x | 1.00x |
-| FlatRecord | pssz32 | v1 |   17.4 |   13.8 |    n/a |    0.2 | 36B |
-| FlatRecord | pssz32 | v3 |   15.7 |   11.8 |    0.3 |    0.2 | 36B |
-| FlatRecord | pssz32 | **v3/v1** | 0.90x | 0.85x |   —   | 1.00x | 1.00x |
-| FlatRecord | pssz-auto | v1 |   16.1 |   13.7 |    n/a |    0.2 | 36B |
-| FlatRecord | pssz-auto | v3 |   16.2 |   11.2 |    0.3 |    0.2 | 36B |
-| FlatRecord | pssz-auto | **v3/v1** | 1.01x | 0.81x |   —   | 1.00x | 1.00x |
-| FlatRecord | frac32 | v1 |   16.6 |   14.8 |    n/a |    0.3 | 42B |
-| FlatRecord | frac32 | v3 |   14.9 |   11.8 |    0.3 |    0.2 | 42B |
-| FlatRecord | frac32 | **v3/v1** | 0.90x | 0.80x |   —   | 0.83x | 1.00x |
-| FlatRecord | bin | v1 |   22.6 |   13.2 |    n/a |    n/a | 27B |
-| FlatRecord | bin | v3 |   16.2 |   12.3 |    0.3 |    0.8 | 27B |
-| FlatRecord | bin | **v3/v1** | 0.72x | 0.93x |   —   |   —   | 1.00x |
-| FlatRecord | borsh | v1 |   15.9 |   11.5 |    n/a |    n/a | 32B |
-| FlatRecord | borsh | v3 |   14.5 |   11.6 |    0.5 |    0.2 | 32B |
-| FlatRecord | borsh | **v3/v1** | 0.91x | 1.00x |   —   |   —   | 1.00x |
-| FlatRecord | bincode | v1 |   17.6 |   11.9 |    n/a |    n/a | 40B |
-| FlatRecord | bincode | v3 |   16.1 |   11.9 |    0.4 |    0.2 | 40B |
-| FlatRecord | bincode | **v3/v1** | 0.92x | 1.00x |   —   |   —   | 1.00x |
-| FlatRecord | avro | v1 |   17.6 |   44.4 |    n/a |    n/a | 18B |
-| FlatRecord | avro | v3 |   17.7 |   15.3 |    0.6 |    2.0 | 18B |
-| FlatRecord | avro | **v3/v1** | 1.01x | 0.34x |   —   |   —   | 1.00x |
-| Record | ssz | v1 |   18.4 |   15.4 |    n/a |    0.2 | 39B |
-| Record | ssz | v3 |   17.1 |   13.3 |    0.4 |    0.2 | 39B |
-| Record | ssz | **v3/v1** | 0.93x | 0.86x |   —   | 0.80x | 1.00x |
-| Record | pssz32 | v1 |   18.4 |   13.4 |    n/a |    0.2 | 42B |
-| Record | pssz32 | v3 |   14.1 |   13.4 |    0.4 |    0.2 | 42B |
-| Record | pssz32 | **v3/v1** | 0.76x | 1.00x |   —   | 0.80x | 1.00x |
-| Record | pssz-auto | v1 |   17.4 |   14.9 |    n/a |    0.2 | 42B |
-| Record | pssz-auto | v3 |   17.4 |   13.9 |    0.4 |    0.5 | 42B |
-| Record | pssz-auto | **v3/v1** | 1.00x | 0.93x |   —   | 1.80x | 1.00x |
-| Record | frac32 | v1 |   20.1 |   15.8 |    n/a |    0.4 | 48B |
-| Record | frac32 | v3 |   22.9 |   13.0 |    0.3 |    0.3 | 48B |
-| Record | frac32 | **v3/v1** | 1.14x | 0.83x |   —   | 0.87x | 1.00x |
-| Record | bin | v1 |   23.5 |   14.1 |    n/a |    n/a | 30B |
-| Record | bin | v3 |   17.8 |   13.3 |    0.5 |    0.9 | 30B |
-| Record | bin | **v3/v1** | 0.76x | 0.95x |   —   |   —   | 1.00x |
-| Record | borsh | v1 |   16.9 |   12.2 |    n/a |    n/a | 35B |
-| Record | borsh | v3 |   15.6 |   11.9 |    0.4 |    0.2 | 35B |
-| Record | borsh | **v3/v1** | 0.92x | 0.98x |   —   |   —   | 1.00x |
-| Record | bincode | v1 |   17.3 |   12.9 |    n/a |    n/a | 43B |
-| Record | bincode | v3 |   16.4 |   13.2 |    0.4 |    0.2 | 43B |
-| Record | bincode | **v3/v1** | 0.95x | 1.02x |   —   |   —   | 1.00x |
-| Record | avro | v1 |   25.8 |   47.9 |    n/a |    n/a | 24B |
-| Record | avro | v3 |   21.5 |   17.5 |    0.5 |    3.7 | 24B |
-| Record | avro | **v3/v1** | 0.83x | 0.37x |   —   |   —   | 1.00x |
-| Validator | ssz | v1 |    8.4 |    1.6 |    n/a |    0.2 | 65B |
-| Validator | ssz | v3 |    8.4 |    0.8 |    0.4 |    0.2 | 65B |
-| Validator | ssz | **v3/v1** | 1.00x | 0.48x |   —   | 1.00x | 1.00x |
-| Validator | pssz32 | v1 |    9.0 |    1.6 |    n/a |    0.2 | 65B |
-| Validator | pssz32 | v3 |    8.6 |    0.8 |    0.5 |    0.2 | 65B |
-| Validator | pssz32 | **v3/v1** | 0.96x | 0.48x |   —   | 1.00x | 1.00x |
-| Validator | pssz-auto | v1 |    9.5 |    1.6 |    n/a |    0.2 | 65B |
-| Validator | pssz-auto | v3 |    8.8 |    0.8 |    0.5 |    0.2 | 65B |
-| Validator | pssz-auto | **v3/v1** | 0.92x | 0.52x |   —   | 1.00x | 1.00x |
-| Validator | frac32 | v1 |    9.1 |    1.6 |    n/a |    0.2 | 65B |
-| Validator | frac32 | v3 |    9.1 |    0.8 |    0.5 |    0.2 | 65B |
-| Validator | frac32 | **v3/v1** | 1.00x | 0.48x |   —   | 1.00x | 1.00x |
-| Validator | bin | v1 |    9.6 |    1.6 |    n/a |    n/a | 65B |
-| Validator | bin | v3 |    9.1 |    0.8 |    0.5 |    0.2 | 65B |
-| Validator | bin | **v3/v1** | 0.95x | 0.48x |   —   |   —   | 1.00x |
-| Validator | borsh | v1 |    9.1 |    2.5 |    n/a |    n/a | 65B |
-| Validator | borsh | v3 |    9.1 |    0.8 |    0.5 |    0.2 | 65B |
-| Validator | borsh | **v3/v1** | 1.00x | 0.32x |   —   |   —   | 1.00x |
-| Validator | bincode | v1 |    9.1 |    2.5 |    n/a |    n/a | 65B |
-| Validator | bincode | v3 |    9.1 |    0.8 |    0.5 |    0.2 | 65B |
-| Validator | bincode | **v3/v1** | 1.00x | 0.32x |   —   |   —   | 1.00x |
-| Validator | avro | v1 |   22.2 |    4.9 |    n/a |    n/a | 23B |
-| Validator | avro | v3 |   20.9 |    6.2 |    0.5 |    4.2 | 23B |
-| Validator | avro | **v3/v1** | 0.94x | 1.27x |   —   |   —   | 1.00x |
-| Order | ssz | v1 |   38.0 |   67.5 |    n/a |    1.5 | 179B |
-| Order | ssz | v3 |   25.4 |   74.5 |    0.5 |    0.9 | 179B |
-| Order | ssz | **v3/v1** | 0.67x | 1.10x |   —   | 0.63x | 1.00x |
-| Order | pssz32 | v1 |   36.2 |   72.3 |    n/a |    1.1 | 199B |
-| Order | pssz32 | v3 |   24.4 |   73.3 |    0.3 |    1.1 | 199B |
-| Order | pssz32 | **v3/v1** | 0.68x | 1.01x |   —   | 0.91x | 1.00x |
-| Order | pssz-auto | v1 |   36.5 |   67.1 |    n/a |    1.1 | 199B |
-| Order | pssz-auto | v3 |   24.1 |   70.8 |    0.3 |    1.0 | 199B |
-| Order | pssz-auto | **v3/v1** | 0.66x | 1.05x |   —   | 0.87x | 1.00x |
-| Order | bin | v1 |   47.5 |   63.6 |    n/a |    n/a | 148B |
-| Order | bin | v3 |   35.3 |   57.8 |    0.5 |    3.5 | 148B |
-| Order | bin | **v3/v1** | 0.74x | 0.91x |   —   |   —   | 1.00x |
-| Order | borsh | v1 |   24.4 |   50.5 |    n/a |    n/a | 163B |
-| Order | borsh | v3 |   22.2 |   57.0 |    0.5 |    1.1 | 163B |
-| Order | borsh | **v3/v1** | 0.91x | 1.13x |   —   |   —   | 1.00x |
-| Order | bincode | v1 |   24.1 |   50.5 |    n/a |    n/a | 191B |
-| Order | bincode | v3 |   21.3 |   57.0 |    0.4 |    1.1 | 191B |
-| Order | bincode | **v3/v1** | 0.89x | 1.13x |   —   |   —   | 1.00x |
-| Order | avro | v1 |   39.6 |   83.5 |    n/a |    n/a | 120B |
-| Order | avro | v3 |   27.1 |   60.9 |    0.4 |    2.6 | 120B |
-| Order | avro | **v3/v1** | 0.69x | 0.73x |   —   |   —   | 1.00x |
-| ValidatorList | ssz | v1 |  119.0 |   72.0 |    0.1 |    0.2 | 6.4K |
-| ValidatorList | ssz | v3 |  109.7 |   69.0 |    0.4 |    0.2 | 6.4K |
-| ValidatorList | ssz | **v3/v1** | 0.92x | 0.96x | 4.00x | 1.00x | 1.00x |
-| ValidatorList | pssz32 | v1 |  156.9 |  151.7 |    n/a |    0.2 | 6.4K |
-| ValidatorList | pssz32 | v3 |  116.3 |   69.7 |    0.3 |    0.2 | 6.4K |
-| ValidatorList | pssz32 | **v3/v1** | 0.74x | 0.46x |   —   | 1.00x | 1.00x |
-| ValidatorList | pssz-auto | v1 |  155.7 |  151.1 |    n/a |    0.2 | 6.4K |
-| ValidatorList | pssz-auto | v3 |  113.4 |   71.1 |    0.3 |    0.2 | 6.4K |
-| ValidatorList | pssz-auto | **v3/v1** | 0.73x | 0.47x |   —   | 1.00x | 1.00x |
-| ValidatorList | frac32 | v1 |  117.5 |   70.5 |    n/a |    0.2 | 6.4K |
-| ValidatorList | frac32 | v3 |  118.8 |   73.3 |    0.3 |    0.2 | 6.4K |
-| ValidatorList | frac32 | **v3/v1** | 1.01x | 1.04x |   —   | 1.00x | 1.00x |
-| ValidatorList | bin | v1 |  189.3 |  137.7 |    n/a |    n/a | 6.4K |
-| ValidatorList | bin | v3 |  119.5 |   93.0 |    0.4 |    0.7 | 6.4K |
-| ValidatorList | bin | **v3/v1** | 0.63x | 0.68x |   —   |   —   | 1.00x |
-| ValidatorList | borsh | v1 |  135.7 |  203.2 |    n/a |    n/a | 6.4K |
-| ValidatorList | borsh | v3 |  115.8 |   72.7 |    0.5 |    0.2 | 6.4K |
-| ValidatorList | borsh | **v3/v1** | 0.85x | 0.36x |   —   |   —   | 1.00x |
-| ValidatorList | bincode | v1 |  142.1 |  210.8 |    n/a |    n/a | 6.4K |
-| ValidatorList | bincode | v3 |  121.0 |   75.0 |    0.5 |    0.2 | 6.4K |
-| ValidatorList | bincode | **v3/v1** | 0.85x | 0.36x |   —   |   —   | 1.00x |
-| ValidatorList | avro | v1 |   4.8k |   1.0k |    n/a |    n/a | 2.6K |
-| ValidatorList | avro | v3 |   1.1k |  792.5 |    0.4 |  550.0 | 2.6K |
-| ValidatorList | avro | **v3/v1** | 0.23x | 0.76x |   —   |   —   | 1.00x |
+| shape | format | library | enc ns | dec ns | val ns | size ns | enc cv | dec cv | wire |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Point | ssz | v1 |   11.7 |   0.26 |    n/a |   0.22 |  2.3% | 14.5% | 8B |
+| Point | ssz | v3 |   8.48 |   0.23 |   0.46 |   0.22 |  1.7% |  1.0% | 8B |
+| Point | ssz | **v3/v1** | 0.73x | 0.90x |   —   | 1.00x |  2.8% | 14.5% | 1.00x |
+| Point | pssz32 | v1 |   11.8 |   0.31 |    n/a |   0.22 |  1.1% |  7.3% | 8B |
+| Point | pssz32 | v3 |   8.11 |   0.22 |   0.36 |   0.22 |  1.2% |  3.1% | 8B |
+| Point | pssz32 | **v3/v1** | 0.69x | 0.71x |   —   | 1.00x |  1.7% |  7.9% | 1.00x |
+| Point | pssz-auto | v1 |   11.5 |   0.31 |    n/a |   0.22 |  1.5% |  1.1% | 8B |
+| Point | pssz-auto | v3 |   8.04 |   0.22 |   0.36 |   0.22 |  2.5% |  1.6% | 8B |
+| Point | pssz-auto | **v3/v1** | 0.70x | 0.72x |   —   | 1.00x |  3.0% |  2.0% | 1.00x |
+| Point | frac32 | v1 |   8.23 |   0.29 |    n/a |   0.22 |  1.9% |  2.0% | 8B |
+| Point | frac32 | v3 |   8.22 |   0.23 |   0.35 |   0.22 |  2.2% |  1.2% | 8B |
+| Point | frac32 | **v3/v1** | 1.00x | 0.78x |   —   | 0.99x |  2.9% |  2.4% | 1.00x |
+| Point | bin | v1 |   11.9 |   0.23 |    n/a |    n/a |  1.4% |  1.5% | 8B |
+| Point | bin | v3 |   8.18 |   0.22 |   0.44 |   0.22 |  1.6% |  3.2% | 8B |
+| Point | bin | **v3/v1** | 0.69x | 0.94x |   —   |   —   |  2.1% |  3.5% | 1.00x |
+| Point | borsh | v1 |   11.9 |   0.30 |    n/a |    n/a |  0.9% |  0.7% | 8B |
+| Point | borsh | v3 |   8.16 |   0.23 |   0.43 |   0.22 |  2.0% |  2.6% | 8B |
+| Point | borsh | **v3/v1** | 0.69x | 0.75x |   —   |   —   |  2.1% |  2.7% | 1.00x |
+| Point | bincode | v1 |   11.8 |   0.31 |    n/a |    n/a |  1.3% |  1.2% | 8B |
+| Point | bincode | v3 |   8.31 |   0.22 |   0.44 |   0.22 |  2.0% |  2.0% | 8B |
+| Point | bincode | **v3/v1** | 0.70x | 0.71x |   —   |   —   |  2.4% |  2.3% | 1.00x |
+| Point | avro | v1 |   12.9 |   2.06 |    n/a |    n/a |  1.2% |  7.1% | 3B |
+| Point | avro | v3 |   10.3 |   0.93 |   0.58 |   0.50 |  2.0% |  0.7% | 3B |
+| Point | avro | **v3/v1** | 0.80x | 0.45x |   —   |   —   |  2.3% |  7.1% | 1.00x |
+| NameRecord | ssz | v1 |   12.1 |   0.34 |    n/a |   0.22 |  2.0% |  1.5% | 16B |
+| NameRecord | ssz | v3 |   8.12 |   0.22 |   0.46 |   0.22 |  1.3% |  2.7% | 16B |
+| NameRecord | ssz | **v3/v1** | 0.67x | 0.64x |   —   | 1.00x |  2.4% |  3.1% | 1.00x |
+| NameRecord | pssz32 | v1 |   12.1 |   0.37 |    n/a |   0.22 |  1.4% |  0.8% | 16B |
+| NameRecord | pssz32 | v3 |   8.31 |   0.22 |   0.36 |   0.22 |  3.5% |  2.4% | 16B |
+| NameRecord | pssz32 | **v3/v1** | 0.69x | 0.58x |   —   | 1.00x |  3.8% |  2.5% | 1.00x |
+| NameRecord | pssz-auto | v1 |   12.0 |   0.37 |    n/a |   0.22 |  2.7% |  0.7% | 16B |
+| NameRecord | pssz-auto | v3 |   8.27 |   0.22 |   0.37 |   0.22 |  1.7% |  2.9% | 16B |
+| NameRecord | pssz-auto | **v3/v1** | 0.69x | 0.59x |   —   | 1.00x |  3.2% |  3.0% | 1.00x |
+| NameRecord | frac32 | v1 |   8.37 |   0.37 |    n/a |   0.22 |  2.5% |  1.1% | 16B |
+| NameRecord | frac32 | v3 |   8.23 |   0.22 |   0.36 |   0.22 |  3.8% |  3.3% | 16B |
+| NameRecord | frac32 | **v3/v1** | 0.98x | 0.59x |   —   | 1.00x |  4.6% |  3.5% | 1.00x |
+| NameRecord | bin | v1 |   12.0 |   0.27 |    n/a |    n/a |  1.2% |  0.6% | 16B |
+| NameRecord | bin | v3 |   8.30 |   0.22 |   0.44 |   0.22 |  1.4% |  1.1% | 16B |
+| NameRecord | bin | **v3/v1** | 0.69x | 0.83x |   —   |   —   |  1.8% |  1.3% | 1.00x |
+| NameRecord | borsh | v1 |   11.5 |   0.35 |    n/a |    n/a |  2.5% |  0.9% | 16B |
+| NameRecord | borsh | v3 |   8.09 |   0.23 |   0.45 |   0.22 |  2.4% |  0.6% | 16B |
+| NameRecord | borsh | **v3/v1** | 0.70x | 0.67x |   —   |   —   |  3.5% |  1.1% | 1.00x |
+| NameRecord | bincode | v1 |   12.0 |   0.35 |    n/a |    n/a |  3.0% |  0.7% | 16B |
+| NameRecord | bincode | v3 |   8.07 |   0.23 |   0.44 |   0.22 |  1.8% |  1.7% | 16B |
+| NameRecord | bincode | **v3/v1** | 0.67x | 0.66x |   —   |   —   |  3.5% |  1.9% | 1.00x |
+| NameRecord | avro | v1 |   28.0 |   3.52 |    n/a |    n/a |  1.7% |  1.5% | 12B |
+| NameRecord | avro | v3 |   15.0 |   3.48 |   0.44 |   2.53 |  3.0% |  4.1% | 12B |
+| NameRecord | avro | **v3/v1** | 0.54x | 0.99x |   —   |   —   |  3.5% |  4.4% | 1.00x |
+| FlatRecord | ssz | v1 |   19.3 |   13.6 |   0.11 |   0.23 |  2.9% |  1.9% | 32B |
+| FlatRecord | ssz | v3 |   16.8 |   13.0 |   0.36 |   0.23 |  1.2% |  2.9% | 32B |
+| FlatRecord | ssz | **v3/v1** | 0.87x | 0.95x | 3.29x | 1.00x |  3.1% |  3.4% | 1.00x |
+| FlatRecord | pssz32 | v1 |   19.4 |   13.9 |    n/a |   0.22 |  1.9% |  1.6% | 36B |
+| FlatRecord | pssz32 | v3 |   16.1 |   13.4 |   0.36 |   0.23 |  1.4% |  2.5% | 36B |
+| FlatRecord | pssz32 | **v3/v1** | 0.83x | 0.97x |   —   | 1.03x |  2.4% |  2.9% | 1.00x |
+| FlatRecord | pssz-auto | v1 |   19.3 |   14.1 |    n/a |   0.24 |  1.5% |  0.7% | 36B |
+| FlatRecord | pssz-auto | v3 |   15.8 |   13.4 |   0.37 |   0.24 |  2.9% |  3.8% | 36B |
+| FlatRecord | pssz-auto | **v3/v1** | 0.82x | 0.95x |   —   | 1.00x |  3.3% |  3.9% | 1.00x |
+| FlatRecord | frac32 | v1 |   21.8 |   15.1 |    n/a |   0.40 |  2.4% |  4.8% | 42B |
+| FlatRecord | frac32 | v3 |   16.4 |   13.5 |   0.37 |   0.29 |  1.8% |  0.7% | 42B |
+| FlatRecord | frac32 | **v3/v1** | 0.75x | 0.89x |   —   | 0.74x |  3.0% |  4.8% | 1.00x |
+| FlatRecord | bin | v1 |   25.3 |   18.8 |    n/a |    n/a |  1.7% |  0.7% | 27B |
+| FlatRecord | bin | v3 |   17.6 |   14.2 |   0.34 |   0.69 |  1.6% |  1.1% | 27B |
+| FlatRecord | bin | **v3/v1** | 0.70x | 0.75x |   —   |   —   |  2.4% |  1.3% | 1.00x |
+| FlatRecord | borsh | v1 |   20.6 |   13.4 |    n/a |    n/a |  1.8% |  1.7% | 32B |
+| FlatRecord | borsh | v3 |   16.4 |   12.7 |   0.46 |   0.23 |  1.7% |  2.2% | 32B |
+| FlatRecord | borsh | **v3/v1** | 0.80x | 0.95x |   —   |   —   |  2.5% |  2.8% | 1.00x |
+| FlatRecord | bincode | v1 |   21.2 |   13.6 |    n/a |    n/a |  1.9% |  2.5% | 40B |
+| FlatRecord | bincode | v3 |   17.7 |   13.5 |   0.46 |   0.23 |  2.6% |  2.4% | 40B |
+| FlatRecord | bincode | **v3/v1** | 0.84x | 0.99x |   —   |   —   |  3.2% |  3.5% | 1.00x |
+| FlatRecord | avro | v1 |   38.1 |   53.0 |    n/a |    n/a |  0.4% |  1.2% | 18B |
+| FlatRecord | avro | v3 |   17.9 |   16.1 |   0.56 |   1.92 |  2.0% |  1.8% | 18B |
+| FlatRecord | avro | **v3/v1** | 0.47x | 0.30x |   —   |   —   |  2.0% |  2.1% | 1.00x |
+| Record | ssz | v1 |   22.2 |   15.6 |    n/a |   0.31 |  0.7% |  1.0% | 39B |
+| Record | ssz | v3 |   18.4 |   14.6 |   0.36 |   0.31 |  1.4% |  1.1% | 39B |
+| Record | ssz | **v3/v1** | 0.83x | 0.94x |   —   | 1.01x |  1.5% |  1.5% | 1.00x |
+| Record | pssz32 | v1 |   21.3 |   15.2 |    n/a |   0.27 |  1.2% |  1.5% | 42B |
+| Record | pssz32 | v3 |   17.4 |   15.1 |   0.35 |   0.28 |  2.6% |  1.4% | 42B |
+| Record | pssz32 | **v3/v1** | 0.82x | 1.00x |   —   | 1.05x |  2.8% |  2.0% | 1.00x |
+| Record | pssz-auto | v1 |   21.6 |   15.5 |    n/a |   0.27 |  3.6% |  3.4% | 42B |
+| Record | pssz-auto | v3 |   16.8 |   14.9 |   0.37 |   0.28 |  2.5% |  2.6% | 42B |
+| Record | pssz-auto | **v3/v1** | 0.78x | 0.96x |   —   | 1.06x |  4.4% |  4.3% | 1.00x |
+| Record | frac32 | v1 |   26.1 |   16.4 |    n/a |   0.47 |  1.4% |  1.6% | 48B |
+| Record | frac32 | v3 |   19.3 |   14.1 |   0.36 |   0.37 |  1.4% |  0.9% | 48B |
+| Record | frac32 | **v3/v1** | 0.74x | 0.86x |   —   | 0.79x |  2.0% |  1.8% | 1.00x |
+| Record | bin | v1 |   27.0 |   19.8 |    n/a |    n/a |  0.8% |  0.9% | 30B |
+| Record | bin | v3 |   18.7 |   15.0 |   0.35 |   0.70 |  2.0% |  1.5% | 30B |
+| Record | bin | **v3/v1** | 0.69x | 0.76x |   —   |   —   |  2.1% |  1.8% | 1.00x |
+| Record | borsh | v1 |   22.5 |   14.8 |    n/a |    n/a |  2.7% |  1.9% | 35B |
+| Record | borsh | v3 |   17.3 |   14.3 |   0.35 |   0.27 |  1.8% |  1.1% | 35B |
+| Record | borsh | **v3/v1** | 0.77x | 0.97x |   —   |   —   |  3.3% |  2.2% | 1.00x |
+| Record | bincode | v1 |   22.0 |   14.4 |    n/a |    n/a |  1.6% |  0.9% | 43B |
+| Record | bincode | v3 |   17.8 |   14.3 |   0.34 |   0.27 |  1.3% |  1.8% | 43B |
+| Record | bincode | **v3/v1** | 0.81x | 0.99x |   —   |   —   |  2.1% |  2.1% | 1.00x |
+| Record | avro | v1 |   67.4 |   56.9 |    n/a |    n/a |  0.5% |  1.8% | 24B |
+| Record | avro | v3 |   23.4 |   19.3 |   0.55 |   3.65 |  1.1% |  2.1% | 24B |
+| Record | avro | **v3/v1** | 0.35x | 0.34x |   —   |   —   |  1.2% |  2.8% | 1.00x |
+| Validator | ssz | v1 |   12.5 |   1.60 |    n/a |   0.22 |  2.2% |  1.3% | 65B |
+| Validator | ssz | v3 |   9.08 |   0.79 |   0.46 |   0.23 |  3.7% |  1.9% | 65B |
+| Validator | ssz | **v3/v1** | 0.73x | 0.49x |   —   | 1.04x |  4.3% |  2.3% | 1.00x |
+| Validator | pssz32 | v1 |   12.4 |   1.59 |    n/a |   0.22 |  3.1% |  0.8% | 65B |
+| Validator | pssz32 | v3 |   9.14 |   0.80 |   0.36 |   0.22 |  0.8% |  1.7% | 65B |
+| Validator | pssz32 | **v3/v1** | 0.74x | 0.50x |   —   | 1.00x |  3.2% |  1.9% | 1.00x |
+| Validator | pssz-auto | v1 |   12.6 |   1.60 |    n/a |   0.22 |  3.4% |  1.1% | 65B |
+| Validator | pssz-auto | v3 |   9.12 |   0.79 |   0.36 |   0.22 |  0.9% |  1.5% | 65B |
+| Validator | pssz-auto | **v3/v1** | 0.72x | 0.50x |   —   | 1.00x |  3.5% |  1.8% | 1.00x |
+| Validator | frac32 | v1 |   9.11 |   1.59 |    n/a |   0.22 |  1.5% |  0.8% | 65B |
+| Validator | frac32 | v3 |   9.09 |   0.80 |   0.36 |   0.22 |  1.0% |  1.2% | 65B |
+| Validator | frac32 | **v3/v1** | 1.00x | 0.50x |   —   | 1.00x |  1.8% |  1.4% | 1.00x |
+| Validator | bin | v1 |   12.4 |   1.60 |    n/a |    n/a |  2.3% |  1.0% | 65B |
+| Validator | bin | v3 |   9.13 |   0.80 |   0.44 |   0.22 |  1.9% |  1.2% | 65B |
+| Validator | bin | **v3/v1** | 0.74x | 0.50x |   —   |   —   |  2.9% |  1.6% | 1.00x |
+| Validator | borsh | v1 |   12.8 |   2.48 |    n/a |    n/a |  1.5% |  0.4% | 65B |
+| Validator | borsh | v3 |   9.10 |   0.79 |   0.44 |   0.22 |  1.8% |  2.4% | 65B |
+| Validator | borsh | **v3/v1** | 0.71x | 0.32x |   —   |   —   |  2.4% |  2.5% | 1.00x |
+| Validator | bincode | v1 |   12.8 |   2.48 |    n/a |    n/a |  1.6% |  1.0% | 65B |
+| Validator | bincode | v3 |   9.06 |   0.80 |   0.44 |   0.22 |  1.5% |  1.3% | 65B |
+| Validator | bincode | **v3/v1** | 0.71x | 0.32x |   —   |   —   |  2.2% |  1.6% | 1.00x |
+| Validator | avro | v1 |   53.5 |   17.0 |    n/a |    n/a |  1.5% |  1.3% | 23B |
+| Validator | avro | v3 |   22.2 |   6.80 |   0.33 |   4.58 |  1.4% |  1.8% | 23B |
+| Validator | avro | **v3/v1** | 0.41x | 0.40x |   —   |   —   |  2.1% |  2.2% | 1.00x |
+| Order | ssz | v1 |   40.1 |   74.7 |    n/a |   1.60 |  0.6% |  2.0% | 179B |
+| Order | ssz | v3 |   25.1 |   73.3 |   0.38 |   1.16 |  0.7% |  2.3% | 179B |
+| Order | ssz | **v3/v1** | 0.63x | 0.98x |   —   | 0.72x |  0.9% |  3.1% | 1.00x |
+| Order | pssz32 | v1 |   43.8 |   73.9 |    n/a |   1.16 |  1.2% |  1.3% | 199B |
+| Order | pssz32 | v3 |   25.4 |   74.0 |   0.35 |   1.02 |  1.2% |  1.7% | 199B |
+| Order | pssz32 | **v3/v1** | 0.58x | 1.00x |   —   | 0.88x |  1.7% |  2.1% | 1.00x |
+| Order | pssz-auto | v1 |   43.7 |   75.2 |    n/a |   1.16 |  0.9% |  1.2% | 199B |
+| Order | pssz-auto | v3 |   25.7 |   74.2 |   0.36 |   1.01 |  1.0% |  1.4% | 199B |
+| Order | pssz-auto | **v3/v1** | 0.59x | 0.99x |   —   | 0.88x |  1.4% |  1.8% | 1.00x |
+| Order | bin | v1 |   50.3 |   85.9 |    n/a |    n/a |  0.8% |  0.9% | 148B |
+| Order | bin | v3 |   35.5 |   73.8 |   0.43 |   2.55 |  1.4% |  0.9% | 148B |
+| Order | bin | **v3/v1** | 0.71x | 0.86x |   —   |   —   |  1.6% |  1.3% | 1.00x |
+| Order | borsh | v1 |   42.9 |   67.1 |    n/a |    n/a |  2.7% |  1.8% | 163B |
+| Order | borsh | v3 |   23.3 |   66.9 |   0.36 |   1.16 |  5.1% |  2.4% | 163B |
+| Order | borsh | **v3/v1** | 0.54x | 1.00x |   —   |   —   |  5.7% |  3.0% | 1.00x |
+| Order | bincode | v1 |   37.1 |   66.0 |    n/a |    n/a |  1.6% |  2.3% | 191B |
+| Order | bincode | v3 |   22.9 |   66.4 |   0.47 |   1.16 |  3.7% |  1.2% | 191B |
+| Order | bincode | **v3/v1** | 0.62x | 1.01x |   —   |   —   |  4.0% |  2.6% | 1.00x |
+| Order | avro | v1 |   65.1 |   98.0 |    n/a |    n/a |  0.9% |  1.2% | 120B |
+| Order | avro | v3 |   27.4 |   73.4 |   0.55 |   2.86 |  1.3% |  0.9% | 120B |
+| Order | avro | **v3/v1** | 0.42x | 0.75x |   —   |   —   |  1.6% |  1.5% | 1.00x |
+| ValidatorList | ssz | v1 |  131.3 |   80.0 |   0.11 |   0.22 | 11.9% |  7.6% | 6.4K |
+| ValidatorList | ssz | v3 |  125.2 |   83.9 |   0.36 |   0.23 | 10.9% |  5.5% | 6.4K |
+| ValidatorList | ssz | **v3/v1** | 0.95x | 1.05x | 3.18x | 1.02x | 16.1% |  9.4% | 1.00x |
+| ValidatorList | pssz32 | v1 |  179.7 |  152.2 |    n/a |   0.22 |  5.0% |  6.5% | 6.4K |
+| ValidatorList | pssz32 | v3 |  123.3 |   78.6 |   0.37 |   0.23 | 17.3% |  8.6% | 6.4K |
+| ValidatorList | pssz32 | **v3/v1** | 0.69x | 0.52x |   —   | 1.05x | 18.0% | 10.8% | 1.00x |
+| ValidatorList | pssz-auto | v1 |  170.4 |  151.9 |    n/a |   0.22 |  5.8% |  3.3% | 6.4K |
+| ValidatorList | pssz-auto | v3 |  120.2 |   81.0 |   0.37 |   0.23 | 11.1% |  7.6% | 6.4K |
+| ValidatorList | pssz-auto | **v3/v1** | 0.71x | 0.53x |   —   | 1.05x | 12.5% |  8.3% | 1.00x |
+| ValidatorList | frac32 | v1 |  130.4 |   78.2 |    n/a |   0.22 |  9.6% | 10.7% | 6.4K |
+| ValidatorList | frac32 | v3 |  124.3 |   84.7 |   0.36 |   0.22 |  7.2% |  6.0% | 6.4K |
+| ValidatorList | frac32 | **v3/v1** | 0.95x | 1.08x |   —   | 0.99x | 12.0% | 12.2% | 1.00x |
+| ValidatorList | bin | v1 |  211.4 |  158.7 |    n/a |    n/a |  4.8% |  4.5% | 6.4K |
+| ValidatorList | bin | v3 |  124.4 |   80.9 |   0.33 |   0.68 |  6.6% | 16.1% | 6.4K |
+| ValidatorList | bin | **v3/v1** | 0.59x | 0.51x |   —   |   —   |  8.2% | 16.7% | 1.00x |
+| ValidatorList | borsh | v1 |  149.3 |   1.3k |    n/a |    n/a |  4.9% |  0.3% | 6.4K |
+| ValidatorList | borsh | v3 |  124.7 |   79.7 |   0.45 |   0.22 | 12.0% | 11.5% | 6.4K |
+| ValidatorList | borsh | **v3/v1** | 0.84x | 0.06x |   —   |   —   | 12.9% | 11.5% | 1.00x |
+| ValidatorList | bincode | v1 |  148.6 |   1.3k |    n/a |    n/a |  8.4% |  0.3% | 6.4K |
+| ValidatorList | bincode | v3 |  131.9 |   90.2 |   0.46 |   0.23 | 24.6% | 14.5% | 6.4K |
+| ValidatorList | bincode | **v3/v1** | 0.89x | 0.07x |   —   |   —   | 26.0% | 14.5% | 1.00x |
+| ValidatorList | avro | v1 |   5.0k |   2.3k |    n/a |    n/a |  0.3% |  0.5% | 2.6K |
+| ValidatorList | avro | v3 |   1.2k |  815.8 |   0.58 |  601.2 | 10.8% | 10.1% | 2.6K |
+| ValidatorList | avro | **v3/v1** | 0.24x | 0.35x |   —   |   —   | 10.8% | 10.2% | 1.00x |

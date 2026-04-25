@@ -814,13 +814,32 @@ namespace psio3 {
             std::vector<std::uint32_t> offsets(n);
             for (std::size_t i = 0; i < n; ++i)
                offsets[i] = read_offset<W>(src, pos + i * W);
-            out.reserve(n);
-            for (std::size_t i = 0; i < n; ++i)
+            if constexpr (Record<T>)
             {
-               const std::size_t beg = pos + offsets[i];
-               const std::size_t fin =
-                  (i + 1 < n) ? (pos + offsets[i + 1]) : end;
-               out.push_back(decode_value<W, T>(src, beg, fin));
+               // In-place: resize then walk each element directly into
+               // its slot, avoiding push_back's move-construct.
+               out.resize(n);
+               using R = ::psio3::reflect<T>;
+               for (std::size_t i = 0; i < n; ++i)
+               {
+                  const std::size_t beg = pos + offsets[i];
+                  const std::size_t fin =
+                     (i + 1 < n) ? (pos + offsets[i + 1]) : end;
+                  record_decode_into<W, T>(
+                     src, beg, fin, out[i],
+                     std::make_index_sequence<R::member_count>{});
+               }
+            }
+            else
+            {
+               out.reserve(n);
+               for (std::size_t i = 0; i < n; ++i)
+               {
+                  const std::size_t beg = pos + offsets[i];
+                  const std::size_t fin =
+                     (i + 1 < n) ? (pos + offsets[i + 1]) : end;
+                  out.push_back(decode_value<W, T>(src, beg, fin));
+               }
             }
          }
          return out;
