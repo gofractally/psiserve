@@ -658,6 +658,11 @@ namespace psio3 {
       T decode_value(std::span<const char> src, std::size_t pos,
                      std::size_t end);
 
+      template <std::size_t W, Record T, std::size_t... Is>
+      void record_decode_into(std::span<const char> src, std::size_t pos,
+                              std::size_t end, T& out,
+                              std::index_sequence<Is...>);
+
       // In-place decode for std::string and bulk-memcpy std::vector.
       // Avoids the temp + move-assign overhead for these field types
       // when called from the Record walker. Falls back to
@@ -690,6 +695,23 @@ namespace psio3 {
             {
                out = decode_value<W, T>(src, pos, end);
             }
+         }
+         else if constexpr (Record<T>)
+         {
+            // Memcpy fast path mirrors decode_value's, but writes
+            // directly into `out` instead of returning a fresh T.
+            if constexpr (::psio3::is_dwnc_v<T> &&
+                          std::is_trivially_copyable_v<T> &&
+                          is_fixed_v<T>)
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+            {
+               std::memcpy(&out, src.data() + pos, sizeof(T));
+               return;
+            }
+            using R = ::psio3::reflect<T>;
+            record_decode_into<W, T>(
+               src, pos, end, out,
+               std::make_index_sequence<R::member_count>{});
          }
          else
          {

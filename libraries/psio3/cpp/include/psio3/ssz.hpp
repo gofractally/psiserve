@@ -685,10 +685,18 @@ namespace psio3 {
                      std::size_t            pos,
                      std::size_t            end);
 
-      // In-place decode for std::string and bulk-memcpy std::vector
-      // variable-field paths. Avoids the temp + move-assign overhead
-      // that shows as a 1.10–1.30x decode regression vs v1 on
-      // record-with-string shapes.
+      template <Record T, std::size_t... Is>
+      void record_decode_into(std::span<const char> src,
+                              std::size_t            pos,
+                              std::size_t            end,
+                              T&                     out,
+                              std::index_sequence<Is...>);
+
+      // In-place decode for std::string, bulk-memcpy std::vector,
+      // and nested Records. Records dispatch to record_decode_into
+      // directly, avoiding the temp + move-assign on every nested
+      // record field — material on shapes like Order which has a
+      // nested UserProfile with two strings.
       template <typename T>
       void decode_into(std::span<const char> src, std::size_t pos,
                        std::size_t end, T& out)
@@ -718,6 +726,22 @@ namespace psio3 {
                }
             }
             out = decode_value<T>(src, pos, end);
+         }
+         else if constexpr (Record<T>)
+         {
+            // Memcpy fast path mirrors decode_value's; for non-memcpy
+            // records, dispatch straight to the in-place walker.
+            if constexpr (std::is_trivially_copyable_v<T> &&
+                          is_fixed_v<T>)
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+            {
+               std::memcpy(&out, src.data() + pos, sizeof(T));
+               return;
+            }
+            using R = ::psio3::reflect<T>;
+            record_decode_into<T>(
+               src, pos, end, out,
+               std::make_index_sequence<R::member_count>{});
          }
          else
          {

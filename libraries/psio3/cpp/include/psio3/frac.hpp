@@ -293,10 +293,16 @@ namespace psio3 {
       T decode_value(std::span<const char> src, std::size_t pos,
                      std::size_t end);
 
-      // In-place variable-field decode. Same trick as bin / borsh —
-      // for std::string and bulk-memcpy std::vector, allocate
-      // straight into the destination; for everything else, fall back
-      // to the by-value decode_value + move-assign.
+      template <std::size_t W, Record T>
+      void decode_record_with_header_into(std::span<const char> src,
+                                          std::size_t            pos,
+                                          std::size_t            end,
+                                          T&                     out);
+
+      // In-place variable-field decode. For std::string,
+      // bulk-memcpy std::vector, and nested Records, write directly
+      // into `out`; for everything else fall back to decode_value +
+      // move-assign.
       template <std::size_t W, typename T>
       void decode_into(std::span<const char> src, std::size_t pos,
                        std::size_t end, T& out)
@@ -330,6 +336,20 @@ namespace psio3 {
             {
                out = decode_value<W, T>(src, pos, end);
             }
+         }
+         else if constexpr (Record<T>)
+         {
+            // Memcpy fast path mirrors decode_value's, then defer to
+            // the in-place header walker for the general case.
+            if constexpr (::psio3::is_dwnc_v<T> &&
+                          std::is_trivially_copyable_v<T> &&
+                          is_fixed_v<T>)
+               if constexpr (fixed_size_of<T>() == sizeof(T))
+            {
+               std::memcpy(&out, src.data() + pos, sizeof(T));
+               return;
+            }
+            decode_record_with_header_into<W, T>(src, pos, end, out);
          }
          else
          {

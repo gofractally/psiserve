@@ -75,8 +75,11 @@ struct v1_ssz_validate_supports<V1Record> : std::false_type {};
 
 namespace {
 
+   // kIters is now a hint only — the harness auto-tunes the actual
+   // iter count per call so each trial runs ~50 ms. Sub-ns ops get
+   // millions of iters; multi-microsecond ops drop to a few hundred.
    constexpr std::size_t kIters  = 20'000;
-   constexpr int         kTrials = 5;
+   constexpr int         kTrials = 7;
 
    template <typename Bytes>
    std::span<const char> cview(const Bytes& b)
@@ -116,6 +119,8 @@ namespace {
       }
       r.enc_ns_min  = t_enc.min_ns;
       r.dec_ns_min  = t_dec.min_ns;
+      r.enc_cv_pct  = t_enc.min_ns > 0.0 ? t_enc.stddev_ns / t_enc.min_ns * 100.0 : 0.0;
+      r.dec_cv_pct  = t_dec.min_ns > 0.0 ? t_dec.stddev_ns / t_dec.min_ns * 100.0 : 0.0;
       r.size_ns_min = t_sz.min_ns;
       return r;
    }
@@ -142,6 +147,8 @@ namespace {
       }, kTrials);
       r.enc_ns_min  = t_enc.min_ns;
       r.dec_ns_min  = t_dec.min_ns;
+      r.enc_cv_pct  = t_enc.min_ns > 0.0 ? t_enc.stddev_ns / t_enc.min_ns * 100.0 : 0.0;
+      r.dec_cv_pct  = t_dec.min_ns > 0.0 ? t_dec.stddev_ns / t_dec.min_ns * 100.0 : 0.0;
       r.size_ns_min = t_sz.min_ns;
       return r;
    }
@@ -167,6 +174,8 @@ namespace {
       }, kTrials);
       r.enc_ns_min  = t_enc.min_ns;
       r.dec_ns_min  = t_dec.min_ns;
+      r.enc_cv_pct  = t_enc.min_ns > 0.0 ? t_enc.stddev_ns / t_enc.min_ns * 100.0 : 0.0;
+      r.dec_cv_pct  = t_dec.min_ns > 0.0 ? t_dec.stddev_ns / t_dec.min_ns * 100.0 : 0.0;
       r.size_ns_min = t_sz.min_ns;
       return r;
    }
@@ -187,6 +196,8 @@ namespace {
       }, kTrials);
       r.enc_ns_min = t_enc.min_ns;
       r.dec_ns_min = t_dec.min_ns;
+      r.enc_cv_pct = t_enc.min_ns > 0.0 ? t_enc.stddev_ns / t_enc.min_ns * 100.0 : 0.0;
+      r.dec_cv_pct = t_dec.min_ns > 0.0 ? t_dec.stddev_ns / t_dec.min_ns * 100.0 : 0.0;
       return r;
    }
 
@@ -206,6 +217,8 @@ namespace {
       }, kTrials);
       r.enc_ns_min = t_enc.min_ns;
       r.dec_ns_min = t_dec.min_ns;
+      r.enc_cv_pct = t_enc.min_ns > 0.0 ? t_enc.stddev_ns / t_enc.min_ns * 100.0 : 0.0;
+      r.dec_cv_pct = t_dec.min_ns > 0.0 ? t_dec.stddev_ns / t_dec.min_ns * 100.0 : 0.0;
       return r;
    }
 
@@ -225,6 +238,8 @@ namespace {
       }, kTrials);
       r.enc_ns_min = t_enc.min_ns;
       r.dec_ns_min = t_dec.min_ns;
+      r.enc_cv_pct = t_enc.min_ns > 0.0 ? t_enc.stddev_ns / t_enc.min_ns * 100.0 : 0.0;
+      r.dec_cv_pct = t_dec.min_ns > 0.0 ? t_dec.stddev_ns / t_dec.min_ns * 100.0 : 0.0;
       return r;
    }
 
@@ -244,6 +259,8 @@ namespace {
       }, kTrials);
       r.enc_ns_min = t_enc.min_ns;
       r.dec_ns_min = t_dec.min_ns;
+      r.enc_cv_pct = t_enc.min_ns > 0.0 ? t_enc.stddev_ns / t_enc.min_ns * 100.0 : 0.0;
+      r.dec_cv_pct = t_dec.min_ns > 0.0 ? t_dec.stddev_ns / t_dec.min_ns * 100.0 : 0.0;
       return r;
    }
 
@@ -288,6 +305,8 @@ namespace {
       }, kTrials);
       r.enc_ns_min  = t_enc.min_ns;
       r.dec_ns_min  = t_dec.min_ns;
+      r.enc_cv_pct  = t_enc.min_ns > 0.0 ? t_enc.stddev_ns / t_enc.min_ns * 100.0 : 0.0;
+      r.dec_cv_pct  = t_dec.min_ns > 0.0 ? t_dec.stddev_ns / t_dec.min_ns * 100.0 : 0.0;
       r.size_ns_min = t_sz.min_ns;
       r.val_ns_min  = t_val.min_ns;
       return r;
