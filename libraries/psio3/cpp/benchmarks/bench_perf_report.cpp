@@ -113,7 +113,15 @@ namespace {
       if constexpr (v1_ssz_validate_supports<T>::value)
       {
          auto t_val = ns_per_iter(kIters, [&](std::size_t) {
+            // psio::ssz_validate is `void`. Without an input or
+            // memory-clobber barrier, the optimizer inlines it,
+            // const-folds the loop-invariant input, proves no throw
+            // can fire, and elides the entire body — yielding ~0.1 ns
+            // "validate" times that don't reflect actual work. The
+            // pre-call clobber forces a real call each iteration.
+            asm volatile("" : : "r"(bytes.data()) : "memory");
             psio::ssz_validate<T>(std::span<const char>{bytes});
+            asm volatile("" : : : "memory");
          }, kTrials);
          r.val_ns_min = t_val.min_ns;
       }
