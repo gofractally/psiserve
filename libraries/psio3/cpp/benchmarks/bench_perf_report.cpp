@@ -87,6 +87,36 @@ namespace {
       return {b.data(), b.size()};
    }
 
+   // ── Validate timing shims ─────────────────────────────────────────
+   //
+   // validate is the hardest CPO to time honestly. Its body has no
+   // observable effect when input is valid (just a sequence of
+   // range-checks that fall through), so once the compiler inlines
+   // the call the entire body collapses to nothing — yielding "0.1
+   // ns" measurements that don't reflect work.
+   //
+   // [[gnu::noinline]] forces a real call. The barrier asm volatile
+   // makes `bytes` look modified to the optimizer so it can't hoist.
+   // The captured return (codec_status / void via dummy) is escaped
+   // so the call site can't be elided.
+   //
+   // We pay the call/return overhead consistently for both v1 and v3,
+   // so the comparison is honest — both bear the same noise floor.
+
+   template <typename T>
+   [[gnu::noinline]] static void v1_ssz_validate_call(
+      std::span<const char> b)
+   {
+      psio::ssz_validate<T>(b);
+   }
+
+   template <typename Fmt, typename T>
+   [[gnu::noinline]] static psio3::codec_status v3_validate_call(
+      Fmt fmt, std::span<const char> b)
+   {
+      return psio3::validate<T>(fmt, b);
+   }
+
    // ── v1 format oracles ─────────────────────────────────────────────
    //
    // Each *_v1 helper returns a result_row with timings + wire bytes.
@@ -113,14 +143,8 @@ namespace {
       if constexpr (v1_ssz_validate_supports<T>::value)
       {
          auto t_val = ns_per_iter(kIters, [&](std::size_t) {
-            // psio::ssz_validate is `void`. Without an input or
-            // memory-clobber barrier, the optimizer inlines it,
-            // const-folds the loop-invariant input, proves no throw
-            // can fire, and elides the entire body — yielding ~0.1 ns
-            // "validate" times that don't reflect actual work. The
-            // pre-call clobber forces a real call each iteration.
             asm volatile("" : : "r"(bytes.data()) : "memory");
-            psio::ssz_validate<T>(std::span<const char>{bytes});
+            v1_ssz_validate_call<T>(std::span<const char>{bytes});
             asm volatile("" : : : "memory");
          }, kTrials);
          r.val_ns_min = t_val.min_ns;
@@ -308,7 +332,8 @@ namespace {
          asm volatile("" : : "r,m"(n) : "memory");
       }, kTrials);
       auto t_val = ns_per_iter(kIters, [&](std::size_t) {
-         auto st = psio3::validate<T>(fmt, cview(bytes));
+         asm volatile("" : : "r"(bytes.data()) : "memory");
+         auto st = v3_validate_call<Fmt, T>(fmt, cview(bytes));
          asm volatile("" : : "r,m"(st) : "memory");
       }, kTrials);
       r.enc_ns_min  = t_enc.min_ns;
