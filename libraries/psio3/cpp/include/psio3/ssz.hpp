@@ -1488,6 +1488,390 @@ namespace psio3 {
          return codec_ok();
       }
 
+      // ── Throwing walker (native, exceptions enabled) ──────────────────────
+      //
+      // Mirrors validate_value<T> shape-for-shape but raises
+      // codec_exception on failure and returns void on success. The
+      // [[noreturn, gnu::cold]] failure helper lets the optimizer keep
+      // the "no throw reachable" success path on the hot icache line
+      // and elide the rest, matching v1's success-path cost on shapes
+      // where range-propagation can prove all checks pass.
+
+      [[noreturn, gnu::cold]] inline void
+      ssz_throw_fail(std::string_view msg, std::uint32_t off)
+      {
+         throw codec_exception{codec_error{msg, off, "ssz"}};
+      }
+
+      template <typename T>
+      void validate_or_throw_value(std::span<const char> src,
+                                   std::size_t            pos,
+                                   std::size_t            end);
+
+      template <typename E>
+      void validate_or_throw_vector_payload(std::span<const char> src,
+                                            std::size_t            pos,
+                                            std::size_t            end)
+      {
+         if (pos > end || end > src.size()) [[unlikely]]
+            ssz_throw_fail("ssz: vector span out of bounds",
+                           static_cast<std::uint32_t>(pos));
+         if (pos == end) return;
+
+         if constexpr (is_fixed_v<E>)
+         {
+            const std::size_t esz = fixed_size_of<E>();
+            if ((end - pos) % esz != 0) [[unlikely]]
+               ssz_throw_fail("ssz: vector span not a multiple of "
+                              "element size",
+                              static_cast<std::uint32_t>(pos));
+            constexpr bool memcpy_layout =
+               Record<E> && std::is_trivially_copyable_v<E> &&
+               fixed_size_of<E>() == sizeof(E);
+            if constexpr (Record<E> && !memcpy_layout)
+            {
+               const std::size_t n = (end - pos) / esz;
+               for (std::size_t i = 0; i < n; ++i)
+                  validate_or_throw_value<E>(src, pos + i * esz,
+                                              pos + (i + 1) * esz);
+            }
+         }
+         else
+         {
+            if (end - pos < 4) [[unlikely]]
+               ssz_throw_fail("ssz: variable list missing offset table",
+                              static_cast<std::uint32_t>(pos));
+            std::uint32_t first = 0;
+            std::memcpy(&first, src.data() + pos, 4);
+            const std::uint32_t span =
+               static_cast<std::uint32_t>(end - pos);
+            if (first % 4 != 0 || first > span) [[unlikely]]
+               ssz_throw_fail("ssz: invalid first list offset",
+                              static_cast<std::uint32_t>(pos));
+            const std::size_t n = first / 4;
+            if (span < n * 4) [[unlikely]]
+               ssz_throw_fail("ssz: list offset table truncated",
+                              static_cast<std::uint32_t>(pos));
+            std::uint32_t prev = first;
+            for (std::size_t i = 1; i < n; ++i)
+            {
+               std::uint32_t off_i = 0;
+               std::memcpy(&off_i, src.data() + pos + i * 4, 4);
+               if (off_i < prev || off_i > span) [[unlikely]]
+                  ssz_throw_fail("ssz: list offset out of range",
+                                 static_cast<std::uint32_t>(pos + i * 4));
+               prev = off_i;
+            }
+            for (std::size_t i = 0; i < n; ++i)
+            {
+               std::uint32_t off_i = 0, stop = span;
+               std::memcpy(&off_i, src.data() + pos + i * 4, 4);
+               if (i + 1 < n)
+                  std::memcpy(&stop, src.data() + pos + (i + 1) * 4, 4);
+               validate_or_throw_value<E>(src, pos + off_i, pos + stop);
+            }
+         }
+      }
+
+      template <typename E, std::size_t N>
+      void validate_or_throw_array_payload(std::span<const char> src,
+                                           std::size_t            pos,
+                                           std::size_t            end)
+      {
+         if constexpr (is_fixed_v<E>)
+         {
+            constexpr std::size_t esz = fixed_size_of<E>();
+            if (end - pos < N * esz) [[unlikely]]
+               ssz_throw_fail("ssz: array buffer too small",
+                              static_cast<std::uint32_t>(pos));
+            constexpr bool memcpy_layout =
+               Record<E> && std::is_trivially_copyable_v<E> &&
+               fixed_size_of<E>() == sizeof(E);
+            if constexpr (Record<E> && !memcpy_layout)
+            {
+               for (std::size_t i = 0; i < N; ++i)
+                  validate_or_throw_value<E>(src, pos + i * esz,
+                                              pos + (i + 1) * esz);
+            }
+         }
+         else
+         {
+            if constexpr (N == 0) return;
+            if (end - pos < N * 4) [[unlikely]]
+               ssz_throw_fail("ssz: array offset table truncated",
+                              static_cast<std::uint32_t>(pos));
+            const std::uint32_t span =
+               static_cast<std::uint32_t>(end - pos);
+            std::uint32_t first = 0;
+            std::memcpy(&first, src.data() + pos, 4);
+            if (first != N * 4 || first > span) [[unlikely]]
+               ssz_throw_fail("ssz: invalid array first offset",
+                              static_cast<std::uint32_t>(pos));
+            std::uint32_t prev = first;
+            for (std::size_t i = 1; i < N; ++i)
+            {
+               std::uint32_t off_i = 0;
+               std::memcpy(&off_i, src.data() + pos + i * 4, 4);
+               if (off_i < prev || off_i > span) [[unlikely]]
+                  ssz_throw_fail("ssz: array offset out of range",
+                                 static_cast<std::uint32_t>(pos + i * 4));
+               prev = off_i;
+            }
+            for (std::size_t i = 0; i < N; ++i)
+            {
+               std::uint32_t off_i = 0, stop = span;
+               std::memcpy(&off_i, src.data() + pos + i * 4, 4);
+               if (i + 1 < N)
+                  std::memcpy(&stop, src.data() + pos + (i + 1) * 4, 4);
+               validate_or_throw_value<E>(src, pos + off_i, pos + stop);
+            }
+         }
+      }
+
+      template <std::size_t MaxN>
+      void validate_or_throw_bitlist_payload(std::span<const char> src,
+                                             std::size_t            pos,
+                                             std::size_t            end)
+      {
+         if (pos >= end || end > src.size()) [[unlikely]]
+            ssz_throw_fail("ssz: bitlist span out of bounds",
+                           static_cast<std::uint32_t>(pos));
+         std::size_t span = end - pos;
+         std::size_t last = span;
+         while (last > 0 &&
+                static_cast<std::uint8_t>(src[pos + last - 1]) == 0)
+            --last;
+         if (last == 0) [[unlikely]]
+            ssz_throw_fail("ssz: bitlist missing delimiter",
+                           static_cast<std::uint32_t>(pos));
+         std::uint8_t lb = static_cast<std::uint8_t>(src[pos + last - 1]);
+         int hi = 31 - __builtin_clz(static_cast<unsigned int>(lb));
+         std::size_t bits =
+            (last - 1) * 8 + static_cast<std::size_t>(hi);
+         if (bits > MaxN) [[unlikely]]
+            ssz_throw_fail("ssz: bitlist bit_count exceeds bound",
+                           static_cast<std::uint32_t>(pos));
+      }
+
+      template <Record T, std::size_t... Is>
+      void validate_or_throw_record(std::span<const char> src,
+                                    std::size_t            pos,
+                                    std::size_t            end,
+                                    std::index_sequence<Is...>)
+      {
+         using R = ::psio3::reflect<T>;
+         constexpr std::size_t NF = R::member_count;
+
+         constexpr std::size_t fixed_region = (
+            []<std::size_t I>() consteval -> std::size_t {
+               using F = typename R::template member_type<I>;
+               if constexpr (is_fixed_v<F>) return fixed_size_of<F>();
+               else                          return 4;
+            }.template operator()<Is>() + ... + std::size_t{0});
+
+         if (end - pos < fixed_region) [[unlikely]]
+            ssz_throw_fail("ssz: record fixed region truncated",
+                           static_cast<std::uint32_t>(pos));
+
+         if constexpr (is_fixed_v<T>)
+         {
+            // Fully-fixed Record: every field is a fixed primitive,
+            // fixed array, fixed bitvector, or another fixed Record.
+            // The outer `end - pos >= fixed_region` check already
+            // proves the buffer fits every field's bytes. Per-field
+            // recursion would just re-check spans the compiler can
+            // already prove via algebra — but in practice GCC
+            // doesn't propagate the bound across the lambda fold for
+            // 9-field records, so each redundant check survives as a
+            // ~1-cycle compare. Skip the recursion entirely.
+            return;
+         }
+         else
+         {
+            std::array<std::uint32_t, NF> offsets{};
+            std::array<bool, NF>          is_var{};
+            std::size_t                   fp = pos;
+            (
+               ([&]
+                {
+                   using F = typename R::template member_type<Is>;
+                   if constexpr (is_fixed_v<F>)
+                   {
+                      is_var[Is] = false;
+                      fp        += fixed_size_of<F>();
+                   }
+                   else
+                   {
+                      is_var[Is] = true;
+                      std::uint32_t o = 0;
+                      std::memcpy(&o, src.data() + fp, 4);
+                      offsets[Is] = o;
+                      fp         += 4;
+                   }
+                }()),
+               ...);
+
+            const std::uint32_t span =
+               static_cast<std::uint32_t>(end - pos);
+            std::uint32_t prev = static_cast<std::uint32_t>(fixed_region);
+            for (std::size_t i = 0; i < NF; ++i)
+            {
+               if (!is_var[i]) continue;
+               if (offsets[i] < prev || offsets[i] > span) [[unlikely]]
+                  ssz_throw_fail("ssz: record variable offset out of range",
+                                 static_cast<std::uint32_t>(pos));
+               prev = offsets[i];
+            }
+
+            std::array<std::uint32_t, NF> var_end{};
+            {
+               std::uint32_t last_end = span;
+               for (std::size_t i = NF; i-- > 0;)
+               {
+                  if (is_var[i])
+                  {
+                     var_end[i] = last_end;
+                     last_end   = offsets[i];
+                  }
+               }
+            }
+
+            for (std::size_t i = 0; i < NF; ++i)
+            {
+               if (is_var[i])
+               {
+                  if (offsets[i] != fixed_region) [[unlikely]]
+                     ssz_throw_fail(
+                        "ssz: record first variable offset != fixed_region",
+                        static_cast<std::uint32_t>(pos));
+                  break;
+               }
+            }
+
+            (
+               ([&]
+                {
+                   using F = typename R::template member_type<Is>;
+                   if constexpr (!is_fixed_v<F>)
+                   {
+                      const std::size_t beg = pos + offsets[Is];
+                      const std::size_t fin = pos + var_end[Is];
+                      validate_or_throw_value<F>(src, beg, fin);
+                   }
+                }()),
+               ...);
+         }
+      }
+
+      template <typename T>
+      void validate_or_throw_value(std::span<const char> src,
+                                   std::size_t            pos,
+                                   std::size_t            end)
+      {
+         if constexpr (::psio3::format_should_dispatch_adapter_v<
+                          ::psio3::ssz, T>)
+         {
+            using Proj = ::psio3::adapter<std::remove_cvref_t<T>,
+                                          ::psio3::binary_category>;
+            auto st = Proj::validate(std::span<const char>(
+               src.data() + pos,
+               (end > pos) ? (end - pos) : 0));
+            if (!st.ok()) [[unlikely]]
+               throw codec_exception{st.error()};
+         }
+         else if constexpr (is_fixed_v<T> && !Record<T>)
+         {
+            if (end - pos < fixed_size_of<T>()) [[unlikely]]
+               ssz_throw_fail("ssz: buffer too small for fixed primitive",
+                              static_cast<std::uint32_t>(pos));
+            if constexpr (is_std_array_v<T>)
+            {
+               using E = typename T::value_type;
+               if constexpr (Record<E>)
+               {
+                  constexpr std::size_t N   = std::tuple_size<T>::value;
+                  constexpr std::size_t esz = fixed_size_of<E>();
+                  for (std::size_t i = 0; i < N; ++i)
+                     validate_or_throw_value<E>(src, pos + i * esz,
+                                                 pos + (i + 1) * esz);
+               }
+            }
+         }
+         else if constexpr (is_bitlist_v<T>)
+            validate_or_throw_bitlist_payload<T::max_size_value>(
+               src, pos, end);
+         else if constexpr (std::is_same_v<T, std::string>)
+         {
+            if (pos > end || end > src.size()) [[unlikely]]
+               ssz_throw_fail("ssz: string span out of bounds",
+                              static_cast<std::uint32_t>(pos));
+         }
+         else if constexpr (is_std_array_v<T>)
+         {
+            using E                 = typename T::value_type;
+            constexpr std::size_t N = std::tuple_size<T>::value;
+            validate_or_throw_array_payload<E, N>(src, pos, end);
+         }
+         else if constexpr (is_std_vector_v<T>)
+         {
+            using E = typename T::value_type;
+            validate_or_throw_vector_payload<E>(src, pos, end);
+         }
+         else if constexpr (is_std_optional_v<T>)
+         {
+            if (pos > end || end > src.size()) [[unlikely]]
+               ssz_throw_fail("ssz: optional span out of bounds",
+                              static_cast<std::uint32_t>(pos));
+            if (pos == end) [[unlikely]]
+               ssz_throw_fail("ssz: optional missing selector",
+                              static_cast<std::uint32_t>(pos));
+            const std::uint8_t sel = static_cast<std::uint8_t>(src[pos]);
+            if (sel == 0)
+            {
+               if (end - pos != 1) [[unlikely]]
+                  ssz_throw_fail("ssz: None optional has trailing bytes",
+                                 static_cast<std::uint32_t>(pos));
+               return;
+            }
+            if (sel != 1) [[unlikely]]
+               ssz_throw_fail("ssz: optional selector not 0/1",
+                              static_cast<std::uint32_t>(pos));
+            using V = typename T::value_type;
+            validate_or_throw_value<V>(src, pos + 1, end);
+         }
+         else if constexpr (is_std_variant_v<T>)
+         {
+            if (pos >= end || end > src.size()) [[unlikely]]
+               ssz_throw_fail("ssz: variant span out of bounds",
+                              static_cast<std::uint32_t>(pos));
+            const std::uint8_t sel = static_cast<std::uint8_t>(src[pos]);
+            constexpr std::size_t NA = std::variant_size_v<T>;
+            if (sel >= NA) [[unlikely]]
+               ssz_throw_fail("ssz: variant selector out of range",
+                              static_cast<std::uint32_t>(pos));
+            [&]<std::size_t... Js>(std::index_sequence<Js...>) {
+               (((sel == Js)
+                    ? (validate_or_throw_value<
+                          std::variant_alternative_t<Js, T>>(
+                          src, pos + 1, end),
+                       true)
+                    : false) ||
+                ...);
+            }(std::make_index_sequence<NA>{});
+         }
+         else if constexpr (Record<T>)
+         {
+            using R = ::psio3::reflect<T>;
+            validate_or_throw_record<T>(
+               src, pos, end, std::make_index_sequence<R::member_count>{});
+         }
+         else
+         {
+            ssz_throw_fail("ssz: unsupported type in validate",
+                           static_cast<std::uint32_t>(pos));
+         }
+      }
+
       // ── Main dispatch ─────────────────────────────────────────────────────
 
       template <typename T>
@@ -1686,7 +2070,7 @@ namespace psio3 {
             return detail::ssz_impl::size_of_v(v);
       }
 
-      // ── validate (structural only) ─────────────────────────────────────
+      // ── validate (structural only, no-throw) ───────────────────────────
       template <typename T>
       friend codec_status tag_invoke(decltype(::psio3::validate<T>),
                                      ssz,
@@ -1694,6 +2078,19 @@ namespace psio3 {
                                      std::span<const char> bytes) noexcept
       {
          return detail::ssz_impl::validate_value<T>(bytes, 0, bytes.size());
+      }
+
+      // ── validate_or_throw (structural only, throwing) ──────────────────
+      //
+      // Native-only: throws codec_exception on first failure, void on
+      // success. Compiler can elide the entire check chain when it
+      // proves no throw is reachable, matching v1's success-path cost.
+      template <typename T>
+      friend void tag_invoke(decltype(::psio3::validate_or_throw<T>),
+                             ssz, T*, std::span<const char> bytes)
+      {
+         detail::ssz_impl::validate_or_throw_value<T>(
+            bytes, 0, bytes.size());
       }
 
       // ── validate_strict — structural + spec-carried semantic checks ──

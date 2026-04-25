@@ -117,6 +117,16 @@ namespace {
       return psio3::validate<T>(fmt, b);
    }
 
+   // Throwing v3 validate. Mirrors v1's API shape — void on success,
+   // codec_exception on failure. Compiler can elide the entire check
+   // chain on shapes where range-propagation proves no throw fires.
+   template <typename Fmt, typename T>
+   [[gnu::noinline]] static void v3_validate_or_throw_call(
+      Fmt fmt, std::span<const char> b)
+   {
+      psio3::validate_or_throw<T>(fmt, b);
+   }
+
    // ── v1 format oracles ─────────────────────────────────────────────
    //
    // Each *_v1 helper returns a result_row with timings + wire bytes.
@@ -331,10 +341,24 @@ namespace {
          auto n = psio3::size_of(fmt, v);
          asm volatile("" : : "r,m"(n) : "memory");
       }, kTrials);
+      // Two validate APIs exist on v3: status (no-throw, WASM-safe)
+      // and or_throw (zero-cost on success in native). We time
+      // or_throw whenever the format implements it — that's the
+      // apples-to-apples comparison to v1's throwing validate.
       auto t_val = ns_per_iter(kIters, [&](std::size_t) {
          asm volatile("" : : "r"(bytes.data()) : "memory");
-         auto st = v3_validate_call<Fmt, T>(fmt, cview(bytes));
-         asm volatile("" : : "r,m"(st) : "memory");
+         if constexpr (requires {
+            psio3::validate_or_throw<T>(fmt, cview(bytes));
+         })
+         {
+            v3_validate_or_throw_call<Fmt, T>(fmt, cview(bytes));
+            asm volatile("" : : : "memory");
+         }
+         else
+         {
+            auto st = v3_validate_call<Fmt, T>(fmt, cview(bytes));
+            asm volatile("" : : "r,m"(st) : "memory");
+         }
       }, kTrials);
       r.enc_ns_min  = t_enc.min_ns;
       r.dec_ns_min  = t_dec.min_ns;

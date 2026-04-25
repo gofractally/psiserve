@@ -87,7 +87,12 @@ namespace psio3 {
          }
       };
 
-      // ── validate (structural only) ────────────────────────────────────
+      // ── validate (structural only, no-throw) ──────────────────────────
+      //
+      // Returns codec_status. Always available — the only validate API
+      // usable under -fno-exceptions (WASM, freestanding). The success
+      // path constructs a default codec_status (null unique_ptr, one
+      // register-sized return).
       template <typename T>
       struct validate_fn
       {
@@ -99,7 +104,36 @@ namespace psio3 {
          }
       };
 
-      // ── validate_strict (structural + semantic) ───────────────────────
+      // ── validate_or_throw (structural only, throwing) ─────────────────
+      //
+      // Throws codec_exception on failure, void on success. Format
+      // authors implement this with direct throw-from-check macros so
+      // the compiler can elide the entire check chain when it proves no
+      // throw is reachable on the success path — the same zero-cost
+      // pattern v1 uses. Use this in native code where exceptions are
+      // available; fall back to validate (status) under -fno-exceptions.
+      template <typename T>
+      struct validate_or_throw_fn
+      {
+         // Constrained operator() — SFINAE'd on tag_invoke availability
+         // so `requires { psio3::validate_or_throw<T>(fmt, b); }` cleanly
+         // reports false for formats that haven't implemented the
+         // throwing path. (Without the `requires`, the unconstrained
+         // body would generate a hard error during requires-expression
+         // probing instead of a clean `false`.)
+         template <typename Fmt>
+            requires requires(Fmt fmt, std::span<const char> b) {
+               tag_invoke(std::declval<const validate_or_throw_fn&>(),
+                          fmt, static_cast<T*>(nullptr), b);
+            }
+         constexpr void
+         operator()(Fmt fmt, std::span<const char> b) const
+         {
+            tag_invoke(*this, fmt, static_cast<T*>(nullptr), b);
+         }
+      };
+
+      // ── validate_strict (structural + semantic, no-throw) ─────────────
       template <typename T>
       struct validate_strict_fn
       {
@@ -108,6 +142,23 @@ namespace psio3 {
          operator()(Fmt fmt, std::span<const char> b) const noexcept
          {
             return tag_invoke(*this, fmt, static_cast<T*>(nullptr), b);
+         }
+      };
+
+      // ── validate_strict_or_throw (structural + semantic, throwing) ────
+      template <typename T>
+      struct validate_strict_or_throw_fn
+      {
+         template <typename Fmt>
+            requires requires(Fmt fmt, std::span<const char> b) {
+               tag_invoke(
+                  std::declval<const validate_strict_or_throw_fn&>(),
+                  fmt, static_cast<T*>(nullptr), b);
+            }
+         constexpr void
+         operator()(Fmt fmt, std::span<const char> b) const
+         {
+            tag_invoke(*this, fmt, static_cast<T*>(nullptr), b);
          }
       };
 
@@ -180,7 +231,14 @@ namespace psio3 {
    inline constexpr detail::validate_fn<T> validate{};
 
    template <typename T>
+   inline constexpr detail::validate_or_throw_fn<T> validate_or_throw{};
+
+   template <typename T>
    inline constexpr detail::validate_strict_fn<T> validate_strict{};
+
+   template <typename T>
+   inline constexpr detail::validate_strict_or_throw_fn<T>
+      validate_strict_or_throw{};
 
    template <typename T>
    inline constexpr detail::make_boxed_fn<T> make_boxed{};
