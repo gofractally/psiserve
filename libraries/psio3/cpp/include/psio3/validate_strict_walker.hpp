@@ -144,7 +144,7 @@ namespace psio3 {
                      {
                         codec_status s = S::validate(bytes);
                         if (!s.ok())
-                           err = s;
+                           err = std::move(s);
                      }
                   }()),
                   ...);
@@ -258,7 +258,7 @@ namespace psio3 {
                                  codec_status s = C::validate(bv);
                                  if (!s.ok())
                                  {
-                                    err = s;
+                                    err = std::move(s);
                                     return;
                                  }
                               }
