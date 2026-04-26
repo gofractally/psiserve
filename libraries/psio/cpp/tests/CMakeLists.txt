@@ -120,6 +120,9 @@ psio3_add_test(psio3_structural_tests structural_tests.cpp)
 # Runtime WIT generator (wit_gen.hpp).
 psio3_add_test(psio3_wit_gen_tests wit_gen_tests.cpp)
 
+# Consteval WIT generator (wit_constexpr.hpp).
+psio3_add_test(psio3_wit_constexpr_tests wit_constexpr_tests.cpp)
+
 # Phase 6b partial: v1 ↔ psio SSZ byte-parity tests. Links BOTH psio
 # (v1) and psio into the same executable so we can encode the same
 # value through both codecs and assert identical bytes.
