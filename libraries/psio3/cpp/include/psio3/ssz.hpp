@@ -160,6 +160,38 @@ namespace psio3 {
          return (fixed_size_of<typename R::template member_type<Is>>() + ... + 0);
       }
 
+      // Size contribution of member I to the SSZ record's fixed_region:
+      // fixed members contribute their full payload, variable members
+      // contribute a 4-byte offset slot.  `_full` additionally honours
+      // the `as_override` annotation, which forces a member to be
+      // treated as variable regardless of its underlying type.  These
+      // are free function templates rather than the previous
+      // lambda-in-fold pattern because clang 22 trips on
+      // `lambda.template operator()<I>()` invoked from a fold inside a
+      // non-constant-evaluated enclosing function.
+      template <Record T, std::size_t I>
+      consteval std::size_t ssz_member_fixed_size_simple()
+      {
+         using R = ::psio3::reflect<T>;
+         using F = typename R::template member_type<I>;
+         if constexpr (is_fixed_v<F>) return fixed_size_of<F>();
+         else                          return 4;
+      }
+
+      template <Record T, std::size_t I>
+      consteval std::size_t ssz_member_fixed_size_full()
+      {
+         using R = ::psio3::reflect<T>;
+         using F = typename R::template member_type<I>;
+         using eff = typename ::psio3::effective_annotations_for<
+            T, F, R::template member_pointer<I>>::value_t;
+         constexpr bool override_v = ::psio3::has_as_override_v<eff>;
+         if constexpr (!override_v && is_fixed_v<F>)
+            return fixed_size_of<F>();
+         else
+            return 4;
+      }
+
       template <typename T>
       struct is_bitvector : std::false_type {};
       template <std::size_t N>
@@ -560,20 +592,8 @@ namespace psio3 {
                // fixed_region is a compile-time constant for any
                // reflected T — sum of fixed field sizes + 4 per
                // variable field. Hoist to constexpr.
-               constexpr std::size_t fixed_region = (
-                  []<std::size_t I>() consteval -> std::size_t {
-                     using F = typename R::template member_type<I>;
-                     using eff =
-                        typename ::psio3::effective_annotations_for<
-                           T, F,
-                           R::template member_pointer<I>>::value_t;
-                     constexpr bool override_v =
-                        ::psio3::has_as_override_v<eff>;
-                     if constexpr (!override_v && is_fixed_v<F>)
-                        return fixed_size_of<F>();
-                     else
-                        return 4;
-                  }.template operator()<Is>() + ... + std::size_t{0});
+               constexpr std::size_t fixed_region =
+                  (ssz_member_fixed_size_full<T, Is>() + ... + std::size_t{0});
                const std::size_t container_start = s.written();
                // Reserve the fixed region — for size_stream this is
                // size += fixed_region; for fast_buf_stream this is
@@ -1339,11 +1359,7 @@ namespace psio3 {
          // Compile-time fixed_region size: sum of fixed field sizes
          // plus 4 per variable field (offset slot).
          constexpr std::size_t fixed_region = (
-            []<std::size_t I>() consteval -> std::size_t {
-               using F = typename R::template member_type<I>;
-               if constexpr (is_fixed_v<F>) return fixed_size_of<F>();
-               else                          return 4;
-            }.template operator()<Is>() + ... + std::size_t{0});
+            ssz_member_fixed_size_simple<T, Is>() + ... + std::size_t{0});
 
          if (end - pos < fixed_region)
             return codec_fail("ssz: record fixed region truncated",
@@ -1663,11 +1679,7 @@ namespace psio3 {
          constexpr std::size_t NF = R::member_count;
 
          constexpr std::size_t fixed_region = (
-            []<std::size_t I>() consteval -> std::size_t {
-               using F = typename R::template member_type<I>;
-               if constexpr (is_fixed_v<F>) return fixed_size_of<F>();
-               else                          return 4;
-            }.template operator()<Is>() + ... + std::size_t{0});
+            ssz_member_fixed_size_simple<T, Is>() + ... + std::size_t{0});
 
          if (end - pos < fixed_region) [[unlikely]]
             ssz_throw_fail("ssz: record fixed region truncated",

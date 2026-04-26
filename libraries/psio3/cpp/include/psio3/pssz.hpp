@@ -172,6 +172,34 @@ namespace psio3 {
          return (fixed_size_of<typename R::template member_type<Is>>() + ... + 0);
       }
 
+      // Size contribution of member I to the pSSZ record's fixed_region.
+      // Variable members occupy a `W`-byte offset slot (W = 1, 2, or 4
+      // bytes per the per-record width selector).  See ssz.hpp for the
+      // rationale on why these are free function templates rather than
+      // lambdas-in-folds.
+      template <std::size_t W, Record T, std::size_t I>
+      consteval std::size_t pssz_member_fixed_size_simple()
+      {
+         using R = ::psio3::reflect<T>;
+         using F = typename R::template member_type<I>;
+         if constexpr (is_fixed_v<F>) return fixed_size_of<F>();
+         else                          return W;
+      }
+
+      template <std::size_t W, Record T, std::size_t I>
+      consteval std::size_t pssz_member_fixed_size_full()
+      {
+         using R = ::psio3::reflect<T>;
+         using F = typename R::template member_type<I>;
+         using eff = typename ::psio3::effective_annotations_for<
+            T, F, R::template member_pointer<I>>::value_t;
+         constexpr bool override_v = ::psio3::has_as_override_v<eff>;
+         if constexpr (!override_v && is_fixed_v<F>)
+            return fixed_size_of<F>();
+         else
+            return W;
+      }
+
       template <typename T>
       constexpr std::size_t fixed_size_of() noexcept
       {
@@ -529,20 +557,8 @@ namespace psio3 {
             }
             using R = ::psio3::reflect<T>;
             [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-               constexpr std::size_t fixed_region = (
-                  []<std::size_t I>() consteval -> std::size_t {
-                     using F = typename R::template member_type<I>;
-                     using eff =
-                        typename ::psio3::effective_annotations_for<
-                           T, F,
-                           R::template member_pointer<I>>::value_t;
-                     constexpr bool override_v =
-                        ::psio3::has_as_override_v<eff>;
-                     if constexpr (!override_v && is_fixed_v<F>)
-                        return fixed_size_of<F>();
-                     else
-                        return W;
-                  }.template operator()<Is>() + ... + std::size_t{0});
+               constexpr std::size_t fixed_region =
+                  (pssz_member_fixed_size_full<W, T, Is>() + ... + std::size_t{0});
 
                // u{W} fixed_size header — fracpack's forward-compat
                // slot. DWNC types skip it (matches v1 pssz: the header
@@ -1268,11 +1284,7 @@ namespace psio3 {
          constexpr std::size_t NF = R::member_count;
 
          constexpr std::size_t fixed_region = (
-            []<std::size_t I>() consteval -> std::size_t {
-               using F = typename R::template member_type<I>;
-               if constexpr (is_fixed_v<F>) return fixed_size_of<F>();
-               else                          return W;
-            }.template operator()<Is>() + ... + std::size_t{0});
+            pssz_member_fixed_size_simple<W, T, Is>() + ... + std::size_t{0});
 
          // Non-DWNC records carry a u{W} fixed_region header. Skip it
          // and re-anchor pos at the first fixed-region byte.
@@ -1543,11 +1555,7 @@ namespace psio3 {
          constexpr std::size_t NF = R::member_count;
 
          constexpr std::size_t fixed_region = (
-            []<std::size_t I>() consteval -> std::size_t {
-               using F = typename R::template member_type<I>;
-               if constexpr (is_fixed_v<F>) return fixed_size_of<F>();
-               else                          return W;
-            }.template operator()<Is>() + ... + std::size_t{0});
+            pssz_member_fixed_size_simple<W, T, Is>() + ... + std::size_t{0});
 
          std::size_t cstart;
          if constexpr (::psio3::is_dwnc_v<T>)
