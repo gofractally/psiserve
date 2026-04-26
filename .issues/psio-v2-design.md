@@ -1,11 +1,12 @@
 # psio v2 — Unified Codec Architecture
 
-**Status:** design, 2026-04-24. No code yet. This doc is the contract
-the implementation is measured against.
+**Status:** design plus psio2 implementation in progress, 2026-04-24. This
+doc is the contract the implementation is measured against.
 
-**Scope:** a full-parity replacement of psio's serialization entry points
-that lives under `psio::v2::` (C++) / `psio::v2::` (Rust module). v1
-remains untouched during development.
+**Scope:** a full-parity replacement of psio's serialization entry points.
+During development it lives under `psio2::` / `PSIO2` in `libraries/psio2`;
+once complete, it should be mechanically renamed to `psio::` / `PSIO` and v1
+can remain only as a reference oracle during migration.
 
 ---
 
@@ -55,7 +56,7 @@ remains untouched during development.
 3. **No breaking change to v1 users during development.** v1 entry
    points (`psio::to_ssz`, `psio::convert_to_ssz`, `psio::from_ssz`,
    ...) keep working while v2 matures. Migration or deprecation is a
-   separate phase after v2 ships all 13 formats.
+   separate phase after v2 ships all official formats.
 4. **No new format-pair conversion matrix.** Cross-format conversion
    falls out of shape-polymorphic encode; we don't write 13×13 specialized
    converters.
@@ -64,9 +65,10 @@ remains untouched during development.
 
 ### 3.1 Functional
 
-- [R1] Every v1 format is reachable through v2: ssz, pssz, frac, bin,
-  key, avro, borsh, bincode, json, flatbuf-native, flatbuf-lib, capnp,
-  wit.
+- [R1] Every official v1 format is reachable through v2: ssz, pssz, frac,
+  bin, key, avro, borsh, bincode, json, native flatbuf, capnp, and wit. The
+  upstream FlatBuffers library path is a demo/benchmark comparison only, not
+  part of the official codec surface.
 - [R2] Every format provides: `encode`, `decode`, `size` (if cheap),
   `validate` (where structurally possible), `make_boxed` (default-init
   + decode, no zero-init), view access (zero-copy for offset-based
@@ -174,8 +176,9 @@ remains untouched during development.
   round-tripped with N allocations, v2 rounds-trips with N.
 - [N3] Compile times: v2 instantiation cost is within 20% of v1.
   Monitored; not a CI gate.
-- [N4] Header weight: v2 primary header (`psio/v2.hpp`) pulls in no
-  more than the union of v1 format-specific headers.
+- [N4] Header weight: the primary codec header (`psio/codec.hpp`, staged as
+  `psio2/codec.hpp`) pulls in no more than the union of v1 format-specific
+  headers.
 - [N5] **Works without exceptions.** The library compiles and
   functions under `-fno-exceptions`. Exception-using convenience
   (`.or_throw()`, etc.) is conditionally compiled.
@@ -206,7 +209,7 @@ The common case: serialize a value, hand the bytes to something else,
 later reconstitute.
 
 ```cpp
-#include <psio/v2.hpp>
+#include <psio/codec.hpp>
 
 // Encode — format-scoped form is the common-case sugar:
 auto buf = psio::ssz::encode(validator);
@@ -931,73 +934,49 @@ if (auto s = psio::validate_strict_dynamic(
 
 #### 5.2.6.7 Third-party annotation serialization
 
-Schemas need a generic way to round-trip annotations defined by any third-party namespace. The representation must:
+Schemas need a generic way to round-trip annotations defined by any third-party
+namespace. Specs are data. Behavior belongs to the format or tool that consumes
+the spec; the core library does not require a behavior CPO on spec types.
 
-- **Preserve unknown specs** on round-trip. If the loader doesn't know `foo::bar_spec`, emitting the schema back out must reproduce it byte-for-byte.
-- **Require no central registry.** Discovery is ADL-based, mirroring the rest of the design.
-- **Require zero boilerplate** for reflected spec types. If a spec is `PSIO_REFLECT`-ed (or C++26 reflected), default encode/decode come for free.
+The representation must:
+
+- **Preserve unknown specs** on round-trip. If the loader does not know
+  `foo::bar_spec`, emitting the schema back out must reproduce it.
+- **Require no central registry.** A schema may carry any namespaced spec.
+- **Keep interpretation open.** A format recognizes the specs it understands
+  by convention and ignores the rest.
 
 **Representation in the schema:**
 ```cpp
 namespace psio {
    struct dynamic_spec {
       std::string_view  kind_name;   // e.g. "myfmt::retry_spec"
-      std::vector<char> payload;     // canonical self-describing bytes (JSON by default)
+      std::vector<char> payload;     // canonical schema encoding
    };
 }
 ```
 
-**Three CPOs for spec self-description** — spec authors implement one or zero of them; reflection provides defaults:
-
-```cpp
-namespace psio {
-   inline constexpr struct spec_kind_fn    { /* → std::string_view */ } spec_kind{};
-   inline constexpr struct spec_encode_fn  { /* → std::vector<char>  */ } spec_encode{};
-   inline constexpr struct spec_decode_fn  { /* → std::optional<Spec> */ } spec_decode{};
-}
-```
-
-- `spec_kind(s)` — canonical name. Default: demangled `typeid` (unstable across compilers). Spec authors should override for schema portability.
-- `spec_encode(s)` — produces self-describing bytes (default: encode s as JSON via `reflect<Spec>`).
-- `spec_decode<Spec>(bytes)` — inverse (default: decode JSON into Spec using reflection).
-
-**Third-party spec authoring — minimum required:**
-```cpp
-namespace myfmt {
-   struct retry_spec {
-      std::uint32_t attempts   = 1;
-      std::uint32_t backoff_ms = 100;
-
-      friend constexpr std::string_view
-      tag_invoke(decltype(psio::spec_kind), retry_spec) noexcept
-      { return "myfmt::retry_spec"; }
-   };
-}
-PSIO_REFLECT(myfmt::retry_spec, attempts, backoff_ms)
-// That's it. spec_encode / spec_decode default to JSON via the reflection.
-```
-
-**Unknown specs pass through unchanged.** Loaders preserve the `dynamic_spec { kind_name, payload }` verbatim; emitters write it back without parsing. Open-protocol property holds: a schema round-trips through code that doesn't understand its annotations.
+**Unknown specs pass through unchanged.** Loaders preserve the
+`dynamic_spec { kind_name, payload }` verbatim; emitters write it back without
+parsing. Open-protocol property holds: a schema round-trips through code that
+does not understand its annotations.
 
 **Typed read at the consumer:**
 ```cpp
 for (const auto& ds : field.annotations) {
-   if (auto r = psio::try_read_spec<myfmt::retry_spec>(ds)) { /* use *r */ }
-   else if (auto c = psio::try_read_spec<myfmt::compression_spec>(ds)) { /* use *c */ }
-   // Other kinds: silently skipped on this code path, preserved in the schema.
+   if (ds.kind_name == "myfmt::retry_spec") {
+      auto spec = myfmt::decode_retry_spec(ds.payload);
+      // consume spec here
+   }
+   // Other kinds: skipped on this code path, preserved in the schema.
 }
 ```
 
-`try_read_spec<Spec>(ds)` checks `ds.kind_name == spec_kind(Spec{})` and, on match, invokes `spec_decode<Spec>(ds.payload)`. Returns `nullopt` otherwise.
-
-**Compile-time → runtime bridge:** `reflect<T>::schema()` walks `psio::annotate<&T::m>` (tuple of compile-time spec values), calls `spec_kind` + `spec_encode` on each, and packs the results into `dynamic_spec` entries. All CPO calls are constexpr-callable so the schema can be fully built at compile time if needed.
-
-**Canonical payload format** is JSON text by default. Chosen because:
-- Portable across languages and compilers (capnp schema files, wit text, etc. can include annotations as JSON strings).
-- Self-describing — no type info needed beyond what reflection provides.
-- Schema files are typically small; JSON verbosity is not a bottleneck.
-
-Spec authors can override the encoding format per spec type if they need compactness (CBOR, msgpack, or format-specific binary) by providing their own `tag_invoke(spec_encode, …)` / `tag_invoke(spec_decode, …)`. The `kind_name` disambiguates.
+**Compile-time -> runtime bridge:** `reflect<T>::schema()` walks effective
+annotations (type + wrapper + member) and emits the first-party specs it knows
+how to render. Third-party specs are still pure data; schema exporters can add
+adapters for specs they care about without forcing a protocol on every spec
+author.
 
 #### 5.2.6.8 Visibility into compile-time shapes
 
@@ -1025,6 +1004,20 @@ Spec authors can override the encoding format per spec type if they need compact
 | `Record` | reflected structs (via PSIO_REFLECT today, or C++26 reflection) | field walk |
 
 Shapes are purely structural; **semantic variation** (bytes vs text, bounds, default values, custom validators) is expressed as annotations — see below.
+
+**Producer / consumer model.** Annotations are a single-direction protocol:
+
+- **Producers (users)** attach specs to types and members. Specs are plain data structs — designated-init-friendly aggregates with no behavior.
+- **Consumers (formats)** read the specs they recognize during encode/decode/validate/schema. A consumer that doesn't recognize a spec kind ignores it. A consumer that does recognize one decides for itself how to apply it (SSZ and JSON may both honor a length bound, but one expresses it in offset tables and the other in string length).
+- The library ships a **canonical vocabulary** (`length_bound`, `utf8`, `sorted`, `field_num`, …) that every first-party format agrees on; third parties can introduce their own specs in their own namespaces without coordinating with psio, and the format authors that want to consume them do so in their own code.
+
+Specs are data, not behavior. This keeps the split clean — adding a spec never forces every consumer to be updated, and adding a consumer never requires extending the spec vocabulary.
+
+**Type-level vs member-level — member always wins.** Annotations attach either to a type (`psio::annotate<psio::type<T>{}>`) or to a specific data member (`psio::annotate<&T::field>`). The resolution rule throughout psio is uniform:
+
+> **Member annotation → wrapper-inherent annotation → type annotation → format-default fallback.**
+
+This single precedence rule governs the annotation system, format annotations (§5.3.7), and every format-level dispatch. There are no per-subsystem variations.
 
 #### 5.3.1 `psio::annotate` — unified annotation trait
 
@@ -1067,20 +1060,74 @@ inline constexpr auto psio::annotate<psio::type<Validator>{}> = std::tuple{
 
 #### 5.3.2 Built-in spec types
 
-All spec types live in `psio::` and are aggregates with designated-init-friendly members:
+All spec types live in `psio::` and are aggregates with designated-init-friendly members. The `length_bound` spec is the unified size-like vocabulary — one struct covers exact, minimum, and maximum length constraints regardless of whether the target shape's length dimension is bytes, elements, or bits. The shape, not the spec, picks which dimension is being bounded:
 
 | Spec | Members | Use |
 |---|---|---|
-| `psio::bytes_spec` | `size`, `field_num` | opaque bytes of fixed wire length |
-| `psio::utf8_spec` | `max`, `field_num` | UTF-8 text, runtime size ≤ `max`; semantic validator checks well-formedness |
+| `psio::length_bound` | `exact`, `max`, `min` (all `std::optional<std::uint32_t>`) | length constraint; shape-dimension-dependent (byte count for `ByteString`, element count for `VariableSequence`, bit count for `Bitlist`) |
+| `psio::utf8_spec` | `max`, `field_num` | UTF-8 text; semantic validator checks well-formedness |
 | `psio::hex_spec` | `bytes`, `field_num` | bytes encoded as hex text on the wire |
-| `psio::max_size_spec` | `max` | runtime upper bound (non-string containers) |
 | `psio::sorted_spec` | `unique`, `ascending` | sequence is sorted; `unique=true` = set semantics |
 | `psio::default_value_spec<T>` | `value` | default when the field is absent on the wire (extensibility) |
 | `psio::default_factory_spec<F>` | (compile-time factory fn) | non-trivial defaults |
-| `psio::field_num_spec` | `value` | protobuf/capnp ordinal (when not implied by spec-with-field_num) |
+| `psio::field_num_spec` | `value` | protobuf/capnp ordinal |
 | `psio::skip_spec` | `value` | skip this field for the given format |
 | `psio::definition_will_not_change` | *(empty)* | type-level: wire layout frozen; enables DWNC fast paths. **Spelled out, not abbreviated, so the reader sees the commitment.** |
+
+The pre-consolidation `bytes_spec{.size = N}` and `max_size_spec{.max = N}` both fold into `length_bound`:
+- `bytes_spec{.size = 48}` → `length_bound{.exact = 48}`.
+- `max_size_spec{.max = 256}` → `length_bound{.max = 256}`.
+
+**Static vs runtime spec tagging.** Specs split into two categories:
+
+- **Static specs** influence code generation and emit no runtime work once dispatch is resolved: `field_num_spec`, `skip_spec`, `definition_will_not_change`.
+- **Runtime specs** are checked at validate time: `length_bound`, `utf8_spec`, `sorted_spec`.
+
+Each spec type declares its category via a nested tag:
+
+```cpp
+namespace psio {
+   struct static_spec_tag {};
+   struct runtime_spec_tag {};
+
+   // Example declarations:
+   struct field_num_spec {
+      using spec_category = static_spec_tag;
+      std::uint32_t value = 0;
+   };
+
+   struct length_bound {
+      using spec_category = runtime_spec_tag;
+      std::optional<std::uint32_t> exact;
+      std::optional<std::uint32_t> max;
+      std::optional<std::uint32_t> min;
+   };
+}
+```
+
+Formats use the category to split the effective annotation tuple at compile time — static specs drive `if constexpr` dispatch during codegen; runtime specs become a loop in `validate()`. `validate()` never pays for specs that are already resolved.
+
+**Shape applicability — compile-time safeguard.** Each spec declares which shapes it's meaningful on. The library emits a `static_assert` when `effective_annotations` attaches a spec to a member whose shape is not in the spec's `applies_to` set:
+
+```cpp
+namespace psio {
+   struct length_bound {
+      using spec_category = runtime_spec_tag;
+
+      // Meaningful only on shapes that carry a length dimension.
+      using applies_to = shape_set<
+         VariableSequence,
+         ByteString,
+         Bitlist>;
+
+      std::optional<std::uint32_t> exact;
+      std::optional<std::uint32_t> max;
+      std::optional<std::uint32_t> min;
+   };
+}
+```
+
+Attaching `length_bound{.max = 256}` to a `Record` or a `Primitive` field is a compile error at the point of annotation, not a silent no-op at the validator.
 
 #### 5.3.3 Semantic validators — the two-phase model
 
@@ -1314,46 +1361,261 @@ namespace psio {
 }
 ```
 
-**Composition and static conflict detection.** A field's effective annotations are the union of `psio::inherent_annotations<FieldType>::value` (from its wrapper type) and `psio::annotate<&T::m>` (from reflection). At compile time, the library checks the two agree wherever they overlap:
+**Composition and static conflict detection — three-way merge.** A field's effective annotations come from three sources, merged with **member > wrapper > type** precedence. Type-level annotations come from the field's own type, wrapper annotations come from the field type's inherent wrapper facts, and member annotations come from the reflected member pointer. At compile time, the library checks each source for internal contradictions; cross-source duplicates are resolved by precedence:
 
 ```cpp
 struct Validator {
-   psio::byte_array<48> pubkey;   // wrapper: fixed_size = 48
+   psio::byte_array<48> pubkey;   // wrapper: length_bound{.exact = 48}
 };
 
-// OK: annotation adds field_num without contradicting the 48:
+// OK: member annotation adds field_num without contradicting the wrapper's 48:
 template <> inline constexpr auto psio::annotate<&Validator::pubkey> = std::tuple{
    psio::field_num_spec{.value = 1},
 };
 
-// ERROR: annotation says 32, wrapper says 48.
-// static_assert fires with a readable message.
+// OK: member annotation explicitly overrides the wrapper's bound for this field.
 template <> inline constexpr auto psio::annotate<&Validator::pubkey> = std::tuple{
-   psio::bytes_spec{.size = 32, .field_num = 1},   // 32 ≠ 48 → compile error
+   psio::length_bound{.exact = 32},   // member override wins
+   psio::field_num_spec{.value = 1},
+};
+
+// Type-level defaults belong to the field type. They are lower precedence than
+// wrapper inherent annotations and member annotations.
+template <> inline constexpr auto psio::annotate<psio::type<psio::byte_array<48>>{}> = std::tuple{
+   psio::field_num_spec{.value = 1},    // type-level default
+};
+template <> inline constexpr auto psio::annotate<&Validator::pubkey> = std::tuple{
+   psio::field_num_spec{.value = 7},    // member-level override — wins
 };
 ```
 
-The conflict-detection lives in one helper:
+The merge helper:
 
 ```cpp
 namespace psio {
    template <typename FieldType, auto MemberPtr>
    struct effective_annotations {
-      // Combines inherent + explicit; static_asserts agreement.
+      // Type-level annotations from the field's type.
+      static constexpr auto type_anns = annotate<type<FieldType>{}>;
+
+      // Wrapper-inherent annotations from the field's type (e.g. byte_array<48>).
+      static constexpr auto wrapper_anns = inherent_annotations<FieldType>::value;
+
+      // Member-level annotations from the member pointer.
+      static constexpr auto member_anns = annotate<MemberPtr>;
+
+      // Last matching spec wins, so tuple order encodes the precedence.
       static constexpr auto value =
-         merge_asserting_consistent(
-            inherent_annotations<FieldType>::value,
-            annotate<MemberPtr>);
+         std::tuple_cat(type_anns, wrapper_anns, member_anns);
    };
 }
 ```
 
-Format authors query `effective_annotations` (not `annotate` directly) so wrapper types and explicit annotations unify into a single spec tuple by the time wire code sees it.
+Format authors query `effective_annotations` (never `annotate` directly) so that the three sources unify into a single spec tuple by the time wire code sees it.
+
+**Why wrapper sits between member and type.** A wrapper is a type-level fact about the *field's* type, not about the enclosing record. A user-supplied type-level annotation on the enclosing record shouldn't silently override a wrapper's inherent bound — the wrapper is closer to the data. But a user-supplied *member*-level annotation is an explicit per-field decision and wins over both.
 
 **Rule of thumb:**
 - Use **wrappers** (rich types) when the invariant matters in business logic before serialization — e.g. you want the email to be rejected at construction time, not just at wire-validation time.
 - Use **annotations** (attributes) when the constraint is purely a wire-boundary concern — e.g. "this field is 48 bytes on the wire; I don't care if the in-memory `std::string` is longer before serialization" (it'd be truncated or rejected at encode time).
-- Mix freely. Library statically guarantees they can't contradict each other silently.
+- Mix freely. Within one annotation source, contradictions are compile-time errors; across sources, the explicit precedence rule decides which spec is effective.
+
+#### 5.3.7 Format annotations — semantic leaves with alternate encodings
+
+Reflection walks records, sequences, optionals, variants, and bitfields through
+shape dispatch. Some domain types should instead be treated as semantic leaves:
+
+- `name_id` stores a `uint64_t`, but JSON uses the canonical string `"alice"`.
+- A hash stores bytes, but text may use hex or base58.
+- A timestamp stores a numeric count, but text may use RFC3339.
+- A strong wrapper may collapse to the wrapped value on the wire.
+- A rich reflected object may render as an XML string for one JSON field.
+- A reflected object may render as bin bytes inside a fracpack structure.
+
+These leaf encodings are ordinary annotations:
+
+```cpp
+psio::binary_format<Adapter>{}
+psio::text_format<Adapter>{}
+```
+
+The annotation is data: it names an adapter. Interpretation is behavior owned
+by the consuming format. JSON asks effective annotations for `text_format`.
+Binary-oriented formats ask for `binary_format`. Other categories can be added
+later using the same producer/consumer rule.
+
+**Serialization order when a format annotation is in play:**
+
+```text
+logical C++ type
+  -> selected format annotation
+  -> adapter shape (uint64_t, string, fixed_bytes<N>, ...)
+  -> format encoder / decoder / validator for that shape
+```
+
+If no matching format annotation exists, psio continues normal shape dispatch.
+
+**Adapter declaration:**
+
+```cpp
+struct name_binary
+{
+   using shape_type = std::uint64_t;
+   static constexpr shape_type to(name_id n) noexcept { return n.value; }
+   static constexpr name_id from(shape_type v) noexcept { return name_id{v}; }
+};
+
+struct name_text
+{
+   using shape_type = std::string_view;
+   static std::string to(name_id n) { return n.str(); }
+   static name_id from(std::string_view s) { return name_id::parse_or_abort(s); }
+   static psio::codec_status validate(std::string_view s) noexcept;
+};
+```
+
+Required adapter members are `shape_type`, `to`, and `from`. `validate` is
+optional and is used when the shape domain is wider than the logical type.
+
+Adapters may also represent a nested encoded subtree. The simple implemented
+form uses `format_adapter<T, Fmt>`, a byte-shaped adapter:
+
+```cpp
+using payload_bin = psio::format_adapter<payload, psio::bin>;
+```
+
+When consumed by a delimiter-aware parent format such as fracpack, SSZ, pssz,
+Avro, Borsh, Bincode, key, a native FlatBuffers table field, Cap'n Proto, or
+WIT canonical ABI, the parent frames the bytes and the adapter validates the
+delegated format. The optimized Adapter contract is the same boundary without
+mandatory materialization:
+`packsize(value)`, streamed `encode(value, sink)`, `decode(span)`,
+`validate(span)`, and `validate_strict(span)`. The staged C++ implementation
+has this direct byte-shaped path for `bin`, `frac`, `ssz`, `pssz`, `key`,
+`avro`, `borsh`, `bincode`, native `flatbuf`, `capnp`, and `wit`; `key` keeps
+ownership of null escaping and validates/constructs from the unescaped span.
+Native `flatbuf`, `capnp`, and `wit` named view accessors now expose
+Adapter-annotated leaves as logical values, while their format-specific schema
+text generators emit the selected Adapter wire shape (`[ubyte]`, `Data`,
+`list<u8>`, etc.). Runtime SchemaBuilder records `binary-format` /
+`text-format` attributes with the selected Adapter shape. Dynamic `frac`
+validation/decode/encode and same-format transcode compile runtime schemas
+through `binary-format` wire shapes. Cap'n Proto dynamic views expose Adapter
+fields by wire shape and can materialize logical fields via `dynamic_view::as<T>()`.
+Cross-format dynamic transcode and mutable views still need to consume that
+metadata without changing their public APIs.
+
+**Type-level defaults:**
+
+```cpp
+template <>
+inline constexpr auto psio::annotate<psio::type<name_id>{}> = std::tuple{
+   psio::binary_format<name_binary>{},
+   psio::text_format<name_text>{},
+};
+```
+
+The non-intrusive spelling is:
+
+```cpp
+PSIO_ATTRS(psio::type<app::name_id>{},
+           psio::binary_format<app_name_binary>{},
+           psio::text_format<app_name_text>{});
+```
+
+**Member override:**
+
+```cpp
+struct transaction
+{
+   app::name_id account;
+};
+
+PSIO_REFLECT(transaction, account)
+
+PSIO_ATTRS(&transaction::account,
+           psio::text_format<app_name_base58>{});
+```
+
+Resolution uses the same `effective_annotations` tuple as every other spec:
+type-level annotations first, wrapper inherent annotations next, member
+annotations last. Last matching `text_format` or `binary_format` wins, so the
+precedence is member > wrapper > type.
+
+This applies to rich objects too. Encoding `payload` directly as JSON may produce
+`{"id":7,"label":"seven"}`, while a member annotated with
+`text_format<payload_xml>` produces an escaped XML string at that field. Likewise
+a type-level or member-level `binary_format<payload_bin>` can make a reflected
+payload appear as a byte leaf when a binary-oriented format asks for binary.
+
+**Packsize** is computed on the selected adapter shape, not on the logical type.
+For `name_id` under bin, the selected shape is `uint64_t` and the size is 8
+bytes. For JSON, the selected shape is a string and the size is the JSON string
+size including quotes and escaping.
+
+**Validation** follows the same path:
+
+```text
+wire bytes
+  -> format validates shape
+  -> optional adapter validate(shape)
+  -> adapter from(shape)
+```
+
+For JSON `name_id`, shape validation proves the field is a string; adapter
+validation proves it is a valid canonical name. For binary `name_id`, shape
+validation proves the expected integer width exists; adapter validation can
+reject reserved numeric values.
+
+For nested byte leaves, validation is fractal: the parent format validates the
+container boundary, then the adapter validates the delegated encoded subtree.
+
+**Customizing external types** requires no format-specific serializer:
+
+```cpp
+namespace app {
+   struct name_id {
+      std::uint64_t value;
+      std::string str() const;
+      static name_id parse(std::string_view);
+   };
+}
+
+struct app_name_binary
+{
+   using shape_type = std::uint64_t;
+   static shape_type to(app::name_id n) noexcept { return n.value; }
+   static app::name_id from(shape_type v) noexcept { return {v}; }
+};
+
+struct app_name_text
+{
+   using shape_type = std::string_view;
+   static std::string to(app::name_id n) { return n.str(); }
+   static app::name_id from(std::string_view s) { return app::name_id::parse(s); }
+};
+
+PSIO_ATTRS(psio::type<app::name_id>{},
+           psio::binary_format<app_name_binary>{},
+           psio::text_format<app_name_text>{});
+```
+
+Binary formats see a `uint64_t`. JSON sees a string. The type author wrote one
+customization.
+
+**Schema and dynamic use.** Schemas retain the logical type, selected format
+annotation, and adapter shape. Dynamic validators and transcoders therefore know
+that a JSON string is `name_id` using its `text_format`, not merely "some
+string".
+
+**Rule of thumb:**
+- Use `binary_format` / `text_format` when the wire encoding is a domain choice
+  distinct from the type's storage layout.
+- Use rich wrappers when the invariant itself matters in the C++ type system and
+  the wire form remains the wrapped container.
+- Use ordinary annotations such as `length_bound`, `field_num`, and `sorted`
+  when the field is still walked as its normal shape and the spec only colors in
+  a wire-boundary detail.
 
 ### 5.4 Error model
 
@@ -1489,12 +1751,13 @@ discriminator in hot paths.
 
 ## 6. Naming
 
-- Format tags: `psio::ssz`, `psio::pssz`, `psio::pssz8`, `psio::pssz16`,
-  `psio::pssz32`, `psio::frac`, `psio::frac16`, `psio::frac32`,
+- Format tags: `psio::ssz`, `psio::pssz` (auto-selected width),
+  `psio::pssz16`, `psio::pssz32`, `psio::frac`, `psio::frac16`, `psio::frac32`,
   `psio::json`, `psio::bin`, `psio::key`, `psio::avro`, `psio::borsh`,
-  `psio::bincode`, `psio::flatbuf`, `psio::flatbuf_lib`, `psio::capnp`,
-  `psio::wit`. Plain types at the top level — no `_fmt` suffix, no
-  nested `fmt::`.
+  `psio::bincode`, `psio::flatbuf`, `psio::capnp`, `psio::wit`. Plain types
+  at the top level — no `_fmt` suffix, no nested `fmt::`. Comparisons against
+  the upstream FlatBuffers library live in demo/benchmark code, not the
+  official format tag list.
 - Result types: `psio::buffer<T, Fmt, Store>`, `psio::view<T, Fmt,
   Store>`, `psio::mutable_view<T, Fmt>`. Storage default is
   `psio::owning_vec`.
@@ -1515,13 +1778,13 @@ moved under `psio::detail::` if implementation-internal, or moved to
 
 ## 7. Coexistence / migration
 
-- v2 lives under `psio::v2::` initially. Users opt in by
-  `#include <psio/v2.hpp>` and `using namespace psio::v2;` or by
-  qualified calls.
+- v2 is staged in `libraries/psio2` under `psio2::` / `PSIO2`, with no nested
+  `v2` namespace. Users of the staging tree opt in with
+  `#include <psio2/codec.hpp>` and qualified `psio2::` calls.
 - Each format lands as one PR: scaffold + shape concepts for format,
   byte-parity tests, bench confirmation (§ 3.2 N1 perf gate — meet
   or exceed v1 within ±2% on the anchor workloads).
-- Once all 13 formats are green, a follow-up PR promotes v2 to the
+- Once all official formats are green, a follow-up PR promotes v2 to the
   primary namespace and demotes v1 under `psio::v1::`. Sugar layer
   (`psio::to_ssz`, etc.) becomes one-line `inline` forwarders to the
   v2 implementations.
@@ -1540,10 +1803,10 @@ v2 ships when:
    through v2 for every format.
 2. **Perf parity** — bench throughput meets or exceeds v1 within ±2%
    on the anchor workloads (mainnet-genesis BeaconState encode /
-   decode / validate for SSZ, pSSZ, frac; 21 063-Validator list for
+   decode / validate for SSZ, pssz, frac; 21 063-Validator list for
    all formats that support it). Measured by the existing bench
    harness; no asm-level lockstep required.
-3. **Format coverage** — all 13 formats (§ 1 of
+3. **Format coverage** — all official formats (§ 1 of
    `psio-format-feature-matrix.md`) have their `tag_invoke`
    hidden-friend overloads on a tag struct deriving from
    `format_tag_base`. Static path + dynamic path both implemented
@@ -1593,8 +1856,8 @@ migration.
 
 | File | What it covers | Action under v2 |
 |---|---|---|
-| `ssz_tests.cpp` | SSZ encode/decode round-trip, view, validate | **Preserve** — add a parallel `ssz_v2_tests.cpp` that runs the same assertions through `psio::v2::` wrappers. Merge into the format-neutral conformance harness once SSZ lands in v2. |
-| `pssz_tests.cpp` | pSSZ equivalent | Same as ssz_tests — parallel v2 file, eventual merge. |
+| `ssz_tests.cpp` | SSZ encode/decode round-trip, view, validate | **Preserve** — add a parallel psio2 test that runs the same assertions through the staged `psio2::` wrappers. Merge into the format-neutral conformance harness once SSZ lands in v2. |
+| `pssz_tests.cpp` | pssz equivalent | Same as ssz_tests — parallel v2 file, eventual merge. |
 | `frac_ref_tests.cpp` | fracpack view/ref tests | Preserve; fracpack is last into v2, tests stay as v1 until the migration PR. |
 | `frac16_tests.cpp`, `frac16_mutation_tests.cpp`, `frac16_fuzz_generated.cpp` | frac16 format + mutation + generated fuzz vectors | Preserve; frac16 in v2 is a tag-param on `frac<W>`. Fuzz-generated vectors stay valid. |
 | `validate_frac_tests.cpp` | Structural validation for frac | Preserve; becomes one of the inputs to v2's `validate_strict` harness. |
@@ -1618,7 +1881,7 @@ migration.
 | `bench_ssz_beacon.cpp` | SSZ + fracpack on mainnet BeaconState; head-to-head with sszpp | **Anchor perf-parity test.** During v2 development, a parallel `bench_ssz_beacon_v2.cpp` runs the same workload through v2; CI compares medians. v2 ship-gate requires parity. |
 | `bench_fracpack.cpp`, `bench_fracpack16.cpp` | frac32 / frac16 perf | **Anchor** — parallel v2 runs; parity required before frac lands in v2. |
 | `bench_capnp.cpp`, `bench_cp_view.cpp` | capnp encode / view | **Anchor** for capnp v2 migration. |
-| `bench_flatbuf.cpp`, `bench_standalone_flatbuf.cpp`, `bench_reflect_flatbuf.cpp` | flatbuf native + library impls | **Anchor** — both flatbuf-native and flatbuf-lib need v2 parity. |
+| `bench_flatbuf.cpp`, `bench_standalone_flatbuf.cpp`, `bench_reflect_flatbuf.cpp` | native flatbuf plus upstream-library comparison benches | **Anchor** — native flatbuf needs v2 parity; upstream FlatBuffers numbers remain demo/benchmark comparison data, not an official codec target. |
 | `bench_wit.cpp` | wit canonical-ABI perf | **Anchor** for wit v2 migration. |
 | `bench_msgpack.cpp`, `bench_protobuf.cpp` | Head-to-head against external msgpack / protobuf | **Preserve** — these are the competitor benches from principle 5 of the language doc. Become CI-reported in v2 as "psio vs competitor" numbers per release. |
 | `bench_modern_state.cpp`, `bench_shadow_index.cpp`, `bench_zero_compress.cpp` | Secondary workloads (non-BeaconState) | Preserve; v2 parity required but not the ship gate. |
@@ -1642,7 +1905,7 @@ v2 adds **cross-language fixture emission**: beyond C++→Rust, also Rust→C++,
 | Location | Coverage | Action |
 |---|---|---|
 | `ssz.rs` inline tests | SSZ primitives, String, Vec, Option, ext-int, bitvector, bitlist, array, bounded, views | **Preserve** — parallel v2 tests introduced with the Rust v2 port. |
-| `pssz.rs` inline tests | pSSZ equivalent | Same. |
+| `pssz.rs` inline tests | pssz equivalent | Same. |
 | `fracpack.rs` inline tests | Fracpack encode/decode, prevalidated, structural walks | Same. |
 | `ssz_derive.rs`, `pssz_derive.rs` inline | Derive macro outputs | Upgrade to test annotation-driven codegen once v2 annotation DSL is settled. |
 | `cross_validation_tests.rs` | C++-emitted fixtures → Rust decode, round-trip | **Anchor** — expand to every format and every tier-1 language pair. |
@@ -1658,7 +1921,7 @@ v2 adds **cross-language fixture emission**: beyond C++→Rust, also Rust→C++,
 |---|---|---|
 | `fracpack_bench.rs` | Rust fracpack encode/decode | **Anchor** perf-parity bench. |
 | `ssz_validator_bench.rs` | 21k-Validator list, head-to-head vs ethereum_ssz + ssz_rs | **Anchor** — head-to-head numbers ship in every release note. |
-| `ssz_beacon_bench.rs` | Full mainnet BeaconState, 4-way (psio SSZ, psio pSSZ, ethereum_ssz, ssz_rs) | **Anchor** — the flagship perf demonstration. |
+| `ssz_beacon_bench.rs` | Full mainnet BeaconState, 4-way (psio SSZ, psio pssz, ethereum_ssz, ssz_rs) | **Anchor** — the flagship perf demonstration. |
 
 ### 8.5.6 Fuzzing corpora
 
@@ -1784,9 +2047,8 @@ point.
   IS the schema — static and dynamic paths produce byte-identical
   wire results.
 - **Third-party annotation serialization** — `dynamic_spec
-  { kind_name, payload }` + three CPOs (`spec_kind`, `spec_encode`,
-  `spec_decode`) with reflection-based defaults for any
-  `PSIO_REFLECT`-ed spec. Canonical payload is JSON; overridable.
+  { kind_name, payload }` preserves pure-data specs. Formats and tools
+  consume the spec names they recognize by convention and ignore the rest.
   Unknown-kind specs round-trip opaquely (open protocol). (§ 5.2.6.7)
 - **Annotation DSL (macro level)** — `field |= annotation | annotation`
   inside `PSIO_REFLECT`, and `PSIO_ATTRS(Type, …)` separately. Macro

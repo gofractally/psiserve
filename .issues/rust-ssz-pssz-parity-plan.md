@@ -1,4 +1,4 @@
-# Rust SSZ / pSSZ → C++ parity plan
+# Rust SSZ / pssz → C++ parity plan
 
 **Hard constraint**: wire format must be **byte-identical** to C++. Every
 single feature below ends with a **cross-validation test** that encodes
@@ -11,7 +11,7 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
   8-64, f32/f64, bool), `String`, `Vec<T>`, `Option<T>`.
 - **C++ fixtures repo**: `/tmp/xval/emit_fixtures.cpp` generates hex for
   every format on canonical shapes. Keep it in sync.
-- **Done tests**: 545 Rust tests pass, 12 of them cross-validate SSZ/pSSZ
+- **Done tests**: 545 Rust tests pass, 12 of them cross-validate SSZ/pssz
   against C++.
 - **Remaining**: everything in the checklist below.
 
@@ -52,8 +52,8 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
 ### Phase D — Optional / Union
 
 - [x] `Option<T>` SSZ: always 1-byte Union selector ✅ done
-- [x] `Option<T>` pSSZ: selector iff inner `MIN_ENCODED_SIZE == 0` ✅ done
-- [ ] Verify `Option<Option<T>>` encoding parity (pSSZ edge case)
+- [x] `Option<T>` pssz: selector iff inner `MIN_ENCODED_SIZE == 0` ✅ done
+- [ ] Verify `Option<Option<T>>` encoding parity (pssz edge case)
 
 ### Phase E — Reflected structs (requires proc-macro)
 
@@ -95,7 +95,7 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
 - [ ] Cross-val: verify every C++ fixture validates cleanly
 - [ ] Negative cases: malformed fixture → specific error message
 
-### Phase H — pSSZ-specific plumbing
+### Phase H — pssz-specific plumbing
 
 - [x] Format tags `Pssz8`, `Pssz16`, `Pssz32` ✅ done
 - [x] `MIN_ENCODED_SIZE` associated const on `PsszPack` ✅ done
@@ -141,7 +141,7 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
 
 ### Phase L — Documentation + cleanup
 
-- [ ] Rename pSSZ → psiSSZ in C++ (user's note), mirror rename in Rust
+- [ ] Rename pssz → psiSSZ in C++ (user's note), mirror rename in Rust
 - [ ] Update `.issues/pssz-format-design.md` with final Rust parity table
 - [ ] Update `.issues/format-parity-audit.md` → all rows green
 - [ ] Publish API reference: `psio::ssz::{SszPack, SszUnpack, SszView, …}`
@@ -185,10 +185,10 @@ Before declaring Rust parity complete, **every row below must be green**:
 | std::bitset<N> | ✅ | ✅ (same wire as bitvector) |
 | std::optional<T> (Union encoding) | ✅ | ✅ |
 | Reflected struct (SSZ) | ✅ | ✅ via `ssz_struct!` macro (Phase E) |
-| Reflected struct (pSSZ) | ✅ | ✅ via `pssz_struct!` macro (Phase E) |
+| Reflected struct (pssz) | ✅ | ✅ via `pssz_struct!` macro (Phase E) |
 | DWNC memcpy fast path | ✅ | ✅ `ssz_struct_dwnc!` / `pssz_struct_dwnc!` |
-| Extensibility header (pSSZ non-DWNC) | ✅ | ✅ (Phase E) |
-| Trailing-optional pruning (pSSZ) | ✅ | ⚠ deferred (rarely needed; proc-macro territory) |
+| Extensibility header (pssz non-DWNC) | ✅ | ✅ (Phase E) |
+| Trailing-optional pruning (pssz) | ✅ | ⚠ deferred (rarely needed; proc-macro territory) |
 | min_encoded_size trait | ✅ | ✅ (Phase H) |
 | max_encoded_size trait | ✅ | ✅ `MAX_ENCODED_SIZE: Option<usize>` (Phase H) |
 | auto_pssz_format_t | ✅ | ✅ `choose_pssz_format_width` + `PsszWidth` (Phase H) |
@@ -207,11 +207,11 @@ from 528), **703 C++ tests**. Fixture emitters live in
 
 **Remaining deferred work** (see comment column above):
 - DWNC memcpy fast path (requires detecting packed layout at compile time)
-- Trailing-optional pruning in pSSZ encoder
-- pSSZ view field<I> accessor
-- pSSZ → psiSSZ rename (user said "we will rename it later")
+- Trailing-optional pruning in pssz encoder
+- pssz view field<I> accessor
+- pssz → psiSSZ rename (user said "we will rename it later")
 
-These don't block wire format parity — Rust SSZ/pSSZ matches C++ byte-for-byte on every type tested, including a real Phase-0 Validator.
+These don't block wire format parity — Rust SSZ/pssz matches C++ byte-for-byte on every type tested, including a real Phase-0 Validator.
 
 Wire format changes are **NOT allowed**. If a C++ fixture and Rust
 output disagree, the Rust side is wrong by definition and must be fixed.
@@ -236,7 +236,7 @@ output disagree, the Rust side is wrong by definition and must be fixed.
    (`Option<T>` always has `MIN_ENCODED_SIZE = 0`).
 
 4. **BeaconState is the integration test.** If Rust can round-trip a
-   real mainnet Phase 0 BeaconState with pSSZ/SSZ and match the C++
+   real mainnet Phase 0 BeaconState with pssz/SSZ and match the C++
    output byte-for-byte, we're done. Nothing less counts.
 
 5. **"must be identical to what we did in c++"** — this document

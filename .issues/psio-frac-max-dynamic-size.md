@@ -1,10 +1,11 @@
 # psio: max_dynamic_size trait + auto-pick frac16 for bounded types
 
 > **Superseded by [pssz-format-design.md](pssz-format-design.md) (2026-04-23).**
-> The `max_encoded_size<T>` trait defined below is folded into pSSZ's size
+> The `max_encoded_size<T>` trait defined below is folded into pssz's size
 > traits section, and the auto-pick logic is generalized there to choose
-> between pssz8 / pssz16 / pssz32 rather than just frac16 / frac32.
-> This file is kept for historical context; pick up work from the pSSZ
+> between pssz's internal 8-bit tier, pssz16, and pssz32 rather than
+> just frac16 / frac32.
+> This file is kept for historical context; pick up work from the pssz
 > design doc.
 
 

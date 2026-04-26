@@ -252,7 +252,7 @@ Each row below is a standalone work item sized for a single PR.
 - [ ] T-64: Same for flatbuf-native.
 - [ ] T-65: Same for capnp (once C++ writer exists — T-45).
 
-### 6.9 Rename / feature: pSSZ → psiSSZ
+### 6.9 Rename / feature: pssz → psiSSZ
 
 - [ ] T-70: Finalize marketing rename. Identifier prefix stays `pssz` for now (short, already-widespread in code); documentation / public-facing name says "psiSSZ". Cross-reference in docs.
 
@@ -297,7 +297,7 @@ All seven original questions have been answered through the v2 design:
 | # | Question | Resolution |
 |---|---|---|
 | 1 | `fracpack_size` → `frac_size`? | **Yes** — part of v2 canonical naming; v1 name becomes `[[deprecated]]` alias on v2 promotion. |
-| 2 | pSSZ → psiSSZ rename fold-in? | **No** — identifier stays `pssz`; public name "psiSSZ" lives in docs only. |
+| 2 | pssz → psiSSZ rename fold-in? | **No** — identifier stays `pssz`; public name "psiSSZ" lives in docs only. |
 | 3 | `convert_*` — deprecate or delete? | **Deprecate for one release, then delete.** Applied on v2 promotion (`psio-v2-design.md` § 7). |
 | 4 | Rust `from_<fmt>_boxed` naming divergence OK? | **Yes** — Rust-idiomatic, no Rc/Arc distinction. |
 | 5 | `format_json` → `json_pretty`? | **Yes** — rename happens on v2 promotion. |

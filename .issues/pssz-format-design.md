@@ -1,4 +1,4 @@
-# pSSZ (PsiSSZ): hybrid fracpack + SSZ format
+# pssz (PsiSSZ): hybrid fracpack + SSZ format
 
 Status: design, not yet prototyped. Conversation captured 2026-04-23.
 
@@ -25,7 +25,7 @@ This suggests a format that combines:
 - **fracpack's schema-evolution story** (extensibility header, trailing-
   optional pruning, unknown-field handling)
 - **fracpack's DWNC memcpy fast path** for all-fixed structs
-- **fracpack's u16/u32 offset-width switch** (pSSZ16 / pSSZ32)
+- **fracpack's u16/u32 offset-width switch** (pssz16 / pssz32)
 
 …could beat both on size for extensible schemas while keeping the O(1)
 random-access guarantee both enjoy.
@@ -105,32 +105,32 @@ for Optional, zero for primitives, etc.). `fixed_size` in the header tells
 the decoder how many fields' worth of fixed region were actually written.
 The decoder synthesizes defaults for everything past `fixed_size`.
 
-This is fracpack's existing mechanism; pSSZ inherits it untouched.
+This is fracpack's existing mechanism; pssz inherits it untouched.
 
 ## Feature tally
 
-### pSSZ wins over SSZ
+### pssz wins over SSZ
 
 - u16 `fixed_size` header → forward/backward schema compatibility
 - Trailing-None pruning (≈5 B saved per pruned optional)
 - Unknown-field tolerance at decode
 - DWNC memcpy fast path for all-fixed structs (skips the u16 header)
-- u16 offset variant (pSSZ16) for records < 64 KiB
+- u16 offset variant (pssz16) for records < 64 KiB
 
-### pSSZ wins over fracpack
+### pssz wins over fracpack
 
 - 4 B saved per non-empty variable field (implicit sizing)
 - Simpler offset math for zero-copy views — container-relative means the
   view base pointer is constant across field accesses, no per-field base
   computation
 
-### pSSZ costs vs SSZ
+### pssz costs vs SSZ
 
 - +2 B per extensible container (u16 header; zero for DWNC)
 - +1 B per None<variable T> (Union selector) — but this is the same cost
   SSZ already pays for all optionals
 
-### pSSZ costs vs fracpack
+### pssz costs vs fracpack
 
 - Subobjects are **not self-contained** — a view on a subobject needs the
   root pointer as context, same as SSZ views. This breaks the "fractal"
@@ -139,7 +139,7 @@ This is fracpack's existing mechanism; pSSZ inherits it untouched.
 
 ## Design question left open
 
-Do we want pSSZ as:
+Do we want pssz as:
 
 1. **A new `frac_format_pssz32` / `_pssz16` variant** alongside
    existing frac_format_32/16 — user opts in per type. Easy to prototype,
@@ -151,7 +151,7 @@ Recommendation: (1) first, real data decides, then possibly (2).
 
 ## Size traits: min and max
 
-pSSZ needs two compile-time traits. Together they drive both the
+pssz needs two compile-time traits. Together they drive both the
 selector-or-not decision (min rule) and the offset-width auto-select
 (max rule).
 
@@ -182,8 +182,8 @@ Reports `std::optional<std::size_t>`: a value when a bound exists,
 | uint128 / uint256                 | 16 / 32                                               |
 | std::array<T, N>                  | N × max<T>  (nullopt if max<T> nullopt)               |
 | bitvector<N> / std::bitset<N>     | (N + 7) / 8                                           |
-| bitlist<N>                        | sizeof(length_t<N>) + (N + 7) / 8 (pSSZ: just length) |
-| bounded_list<T, N>                | N × max<T> + selector_overhead (pSSZ) — no length pfx |
+| bitlist<N>                        | sizeof(length_t<N>) + (N + 7) / 8 (pssz: just length) |
+| bounded_list<T, N>                | N × max<T> + selector_overhead (pssz) — no length pfx |
 | bounded_string<N>                 | N                                                     |
 | std::optional<T>                  | (min<T>==0 ? 1 : 0) + max<T>                          |
 | std::vector<T> / std::string      | **nullopt** — fall back to widest format              |
@@ -200,23 +200,24 @@ stable bound independent of what the compiler can currently deduce.
 Given `max_encoded_size<T>()`, the narrowest width that safely encodes
 every value of T is:
 
-| max_encoded_size<T> | offset width | header width | format                |
-|---------------------|-------------:|-------------:|-----------------------|
-| ≤ 0xff              | u8 (1 B)     | u8           | `frac_format_pssz8`   |
-| ≤ 0xffff            | u16          | u16          | `frac_format_pssz16`  |
-| ≤ 0xffffffff        | u32          | u32          | `frac_format_pssz32`  |
-| unbounded           | u32          | u16 (as now) | `frac_format_pssz32u` |
+| max_encoded_size<T> | offset width | header width | format                 |
+|---------------------|-------------:|-------------:|------------------------|
+| ≤ 0xff              | u8 (1 B)     | u8           | internal auto tier     |
+| ≤ 0xffff            | u16          | u16          | `frac_format_pssz16`   |
+| ≤ 0xffffffff        | u32          | u32          | `frac_format_pssz32`   |
+| unbounded           | u32          | u16 (as now) | `frac_format_pssz32u`  |
 
-`frac_format_pssz8` is a new tier. It's small potatoes per field (save
-3 B per offset) but adds up for dense records like Token or sensor
-packets with 5–10 variable fields. Fits exactly when the whole record
-stays < 256 B.
+`frac_format_pssz8` exists only as the internal 8-bit auto tier. It is
+not an official user-selected format facade; `pssz` may choose it when
+`max_encoded_size<T>() <= 0xff`, while public override knobs start at
+`pssz16` and `pssz32`.
 
 For mixed embedding: each container picks its own width based on its
-own `max_encoded_size`. A pssz32 container can embed a pssz8 child —
-the child's offset slots in its own fixed region are 1 B each; the
-parent's offset slot pointing at the child is 4 B. Both sides agree on
-each type's format, so round-trips work.
+own `max_encoded_size`. A pssz32 container can embed a child whose
+auto-selected width is the internal 8-bit tier; the child's offset
+slots in its own fixed region are 1 B each, while the parent's offset
+slot pointing at the child is 4 B. Both sides agree on each type's
+format, so round-trips work.
 
 ## Auto-select policy
 
@@ -232,10 +233,12 @@ using auto_pssz_format_t =
 
 ### Opt-in vs opt-out
 
-Default behavior on `to_pssz(T, value)`:
+Default behavior on `to_pssz(T, value)` / `psio::pssz`:
 
 - Explicit format: `to_pssz<frac_format_pssz16>(v)` — user picks.
 - Auto: `to_pssz(v)` with no format tag → `auto_pssz_format_t<T>`.
+- No public `pssz8` override: the 8-bit width is selected only by auto
+  after the compile-time bound proves the whole value fits.
 
 A `PSIO_PSSZ_AUTO(T)` macro flips a per-type default if opt-out is
 preferred later. Starting opt-in is safer — users explicitly ask for
@@ -266,7 +269,7 @@ type with 1 variable field, current frac32 = 35 B):
   31 B (no length prefix)
 - pssz16: 2 B hdr + (2 + 4 + 4) inline + 2 B offset + 4 B content =
   29 B (SSZ parity)
-- **pssz8**: 1 B hdr + (2 + 4 + 4) inline + 1 B offset + 4 B content =
+- internal 8-bit pssz tier: 1 B hdr + (2 + 4 + 4) inline + 1 B offset + 4 B content =
   **27 B** (matches pack_bin, the current size leader)
 
 UserProfile (max < 64 KiB once tags vector is bounded, 4 variable
@@ -298,18 +301,19 @@ Tests:
   decode correctly.
 - Optional<fixed> with no selector byte.
 - Optional<string> with selector byte (None vs Some("") distinct).
-- Cross-format: fracpack32, fracpack16, pSSZ32, pSSZ16 size comparison
+- Cross-format: fracpack32, fracpack16, pssz32, pssz16 size comparison
   on BeaconState and bench types.
 
 ## Completed on 2026-04-23 overnight
 
 - ✅ `min_encoded_size<T>` + `max_encoded_size<T>` traits (`to_pssz.hpp`)
-- ✅ Format tags `frac_format_pssz8 / _16 / _32`
+- ✅ Format tags `frac_format_pssz16 / _32`, plus internal
+  `frac_format_pssz8` selected only by auto
 - ✅ Encoder with **single-pass backpatching** (no size recursion)
 - ✅ Decoder with extensibility-header skip and auto-width
 - ✅ `auto_pssz_format_t<T>` picks narrowest width via max_encoded_size
 - ✅ `pssz_view<T, F>` zero-copy view (parallel to ssz_view / frac_view)
-- ✅ Unit tests (10 pSSZ cases in `pssz_tests.cpp`)
+- ✅ Unit tests (10 pssz cases in `pssz_tests.cpp`)
 - ✅ Benchmarked vs all formats on both unbounded and bounded types
 - ✅ Generic `bounded<T, N>` wrapper added — legacy classes retained
 - ✅ SSZ encoder inherited the single-pass backpatching fix
@@ -318,19 +322,19 @@ Tests:
   primitives, String, Vec, Option. 13 tests, 6 of them cross-validate
   against C++ byte-for-byte.
 
-## Deferred to pSSZ follow-up
+## Deferred to pssz follow-up
 
-- **Rust derive macro** for reflected-struct pSSZ (like `#[derive(Pack)]`)
+- **Rust derive macro** for reflected-struct pssz (like `#[derive(Pack)]`)
 - **`bounded<T, N>` migration**: sweep format specializations to use the
   generic wrapper + legacy class aliasing
-- Schema IR + WIT/capnp/flatbuf/JSON schema emitters for pSSZ types
-- `hash_tree_root` for pSSZ (if eth compatibility ever wanted)
-- pSSZ ↔ SSZ transcoding (lossy — we carry extensibility info they don't)
+- Schema IR + WIT/capnp/flatbuf/JSON schema emitters for pssz types
+- `hash_tree_root` for pssz (if eth compatibility ever wanted)
+- pssz ↔ SSZ transcoding (lossy — we carry extensibility info they don't)
 - Avro / WIT support for `bounded<T, N>` (currently std-shadowed)
 
 ## Non-goals
 
-- Ethereum consensus layer adoption. Eth has its own SSZ; pSSZ is for
+- Ethereum consensus layer adoption. Eth has its own SSZ; pssz is for
   psio-ecosystem extensible schemas.
 - In-place mutation. Mutators are a separate short-lived format by
   design; not a wire-format problem.

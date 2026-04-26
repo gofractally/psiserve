@@ -38,7 +38,7 @@ pssz test module).
 | `psio_structural_tests.cpp` | PSIO_REFLECT coverage | ~20 |
 | `psio_attribute_tests.cpp` | field attributes | ~10 |
 | `ssz_tests.cpp` | SSZ round-trip | ~28 |
-| `pssz_tests.cpp` | pSSZ round-trip + view | 10 |
+| `pssz_tests.cpp` | pssz round-trip + view | 10 |
 | `beacon_state_tests.cpp` | Eth BeaconState decode | ~5 |
 | `capnp_view_tests.cpp` | capnp views | ~15 |
 | `capnp_schema_tests.cpp` | capnp schema emit | ~10 |
@@ -71,7 +71,7 @@ pssz test module).
 | `dynamic_schema.rs` | dynamic schema | 18 |
 | `wit/view.rs` | wit views | 15 |
 | `schema_import/fbs_parser.rs` | flatbuf schema parse | 15 |
-| **`pssz.rs`** | **pSSZ (new this session)** | **13 (incl 6 cross-val)** |
+| **`pssz.rs`** | **pssz (new this session)** | **13 (incl 6 cross-val)** |
 | `schema_import/capnp_parser.rs` | capnp schema parse | 12 |
 | **`cross_validation_tests.rs`** | **fracpack C++↔Rust (new this session)** | **6** |
 | (other modules: 10–40 each) | … | … |
@@ -181,7 +181,7 @@ All formats: `efbeadde`.
 ## Recommended next steps (prioritized)
 
 1. **Port SSZ to Rust** — biggest gap; major use case. Follow the
-   pSSZ bootstrap pattern: primitives → String → Vec → Option → later
+   pssz bootstrap pattern: primitives → String → Vec → Option → later
    a derive macro. Cross-validation fixtures already above.
 2. **Add cross-validation for wit/capnp/flatbuf** — low effort, high
    confidence payoff. Use the C++ emitters already in the repo.

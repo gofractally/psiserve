@@ -1,4 +1,4 @@
-# pSSZ overnight completion report — 2026-04-23
+# pssz overnight completion report — 2026-04-23
 
 All four phases from `pssz-phase5-overnight-plan.md` completed and tested.
 
@@ -8,20 +8,20 @@ All four phases from `pssz-phase5-overnight-plan.md` completed and tested.
 |---|---|
 | **5a: `pssz_view` zero-copy accessor** | ✅ done, 3 new tests, 702 → cumulative |
 | **5b: `bounded<T, N>` generic wrapper** | ✅ added (additive, non-breaking), 1 new test |
-| **5c: Rust pSSZ parity (bootstrap)** | ✅ 13 tests, **6 cross-validate C++ byte-identical** |
+| **5c: Rust pssz parity (bootstrap)** | ✅ 13 tests, **6 cross-validate C++ byte-identical** |
 | **5d: Report + docs** | ✅ this file + `pssz-format-design.md` updated |
 | **C++ test suite** | ✅ **703 test cases, 83048 assertions, all pass** |
 | **Rust test suite** | ✅ **528 tests, all pass** |
 
 Bonus that fell out of the work:
 - **SSZ encoder got single-pass backpatching** too (same pattern I applied to
-  pSSZ). UserProfile pack 51→34 ns (33% faster), Order pack 108→68 ns (37%).
+  pssz). UserProfile pack 51→34 ns (33% faster), Order pack 108→68 ns (37%).
   Verified against native `OffchainLabs/sszpp`: psio is still 1.47× faster
   at encode and 2.04× faster at decode on the 260 MiB real mainnet
   validator list.
 - **Fracpack audited**: no similar mistake there. Its pointer-relative
   offsets naturally fit single-pass backpatching (via `embedded_fixed_repack`).
-  Only SSZ and pSSZ had the 3-pass size-recursion anti-pattern.
+  Only SSZ and pssz had the 3-pass size-recursion anti-pattern.
 
 ## Details per phase
 
@@ -29,7 +29,7 @@ Bonus that fell out of the work:
 
 New header `libraries/psio/cpp/include/psio/pssz_view.hpp`. Mirrors
 `ssz_view` but:
-- Format-parameterized (pssz8 / pssz16 / pssz32 offset widths)
+- Format-parameterized (internal 8-bit / pssz16 / pssz32 offset widths)
 - Reflected containers skip the `F::header_bytes` extensibility header
   automatically
 - `Option<T>` accessor honors the min-size-gated selector rule (no
@@ -61,7 +61,7 @@ Test: `generic bounded<T,N> basic usage` — covers construction, bound
 enforcement via `REQUIRE_THROWS` on overflow, storage access, and the
 `is_bounded_v<T>` detection trait.
 
-### Phase 5c — Rust pSSZ port
+### Phase 5c — Rust pssz port
 
 New module `libraries/psio/rust/psio/src/pssz.rs` (~350 lines). API:
 
@@ -112,24 +112,24 @@ Not in this bootstrap port (documented as followup in
 
 **Unbounded bench types, pack ns (after SSZ backpatching):**
 
-| Type | frac32 | ssz | wit | pssz-auto |
+| Type | frac32 | ssz | wit | pssz |
 |---|---:|---:|---:|---:|
 | UserProfile | 40 | **34** | 32 | 34 |
 | Order | 97 | **68** | 59 | 70 |
 
 **Bounded bench types, sizes (brackets = smallest; all formats):**
 
-| Type | frac32 | frac16 | bin | bincode | borsh | avro | ssz | wit | pssz-auto |
+| Type | frac32 | frac16 | bin | bincode | borsh | avro | ssz | wit | pssz |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | BToken | 39 | 37 | 34 | 40 | 36 | **[26]** | 36 | 42 | 34 |
 | BUserProfile | 188 | 172 | 156 | 210 | 178 | **[149]** | 178 | 223 | 164 |
 | BOrder | 399 | 356 | 309 | 405 | 345 | **[274]** | 369 | 446 | 341 |
 | BSensorReading | 151 | 145 | 140 | 152 | 144 | **[132]** | 148 | 157 | 139 |
 
-Avro wins raw size (varint); pSSZ wins among O(1)-random-access formats.
+Avro wins raw size (varint); pssz wins among O(1)-random-access formats.
 
-**Phase 0 BeaconState (5.15 MiB, all bounded):** pSSZ32 ties SSZ to the
-byte (both 5,404,504 B). **Fulu mainnet BeaconState (310 MiB):** pSSZ32
+**Phase 0 BeaconState (5.15 MiB, all bounded):** pssz32 ties SSZ to the
+byte (both 5,404,504 B). **Fulu mainnet BeaconState (310 MiB):** pssz32
 = 325,002,441 vs SSZ 325,002,437 — 4 B difference (the single
 extensibility header). Round-trip byte-identical.
 
@@ -142,7 +142,7 @@ extensibility header). Round-trip byte-identical.
 
 ## Known regressions / things to look at next session
 
-- `SensorReading` pSSZ pack: 51 ns vs frac16 20 ns — pssz8 path has
+- `SensorReading` pssz pack: 51 ns vs frac16 20 ns — the internal 8-bit path has
   small-offset overhead that hurts structs with just 2 variable fields
   in a mostly-fixed body. Worth checking the inlined assembly; may be
   a codegen issue rather than algorithmic.
@@ -169,7 +169,7 @@ extensibility header). Round-trip byte-identical.
   added `bounded_string<N>` / `bounded_list<T,N>` delegating overloads
 - `libraries/psio/cpp/benchmarks/bench_fracpack.cpp` — bounded bench
   section (BToken / BUserProfile / BOrder / BSensorReading), unbounded
-  bench gained pSSZ columns
+  bench gained pssz columns
 
 **Rust (new):**
 - `libraries/psio/rust/psio/src/pssz.rs`

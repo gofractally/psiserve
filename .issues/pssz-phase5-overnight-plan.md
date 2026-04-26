@@ -1,10 +1,10 @@
-# pSSZ Phase 5 — overnight work plan
+# pssz Phase 5 — overnight work plan
 
 User went to bed 2026-04-23. Wants full report in the morning covering:
 
 1. **pssz_view** zero-copy accessor (task #55)
 2. **bounded<T, N>** unification (task #56)
-3. **Rust feature parity** audit + pSSZ port (task #57)
+3. **Rust feature parity** audit + pssz port (task #57)
 4. Final report + doc update (task #58)
 
 ## Execution order (to maximize useful completion)
@@ -34,11 +34,11 @@ User went to bed 2026-04-23. Wants full report in the morning covering:
   - ext_int (u128/i128/u256)
   - bounded_*
   - SSZ encode/decode
-  - pSSZ encode/decode
+  - pssz encode/decode
   - Varint/bincode/borsh/avro if applicable
-- [ ] Port the highest-leverage missing piece (likely pSSZ since it's new and benefits from matched design)
+- [ ] Port the highest-leverage missing piece (likely pssz since it's new and benefits from matched design)
 - [ ] Cargo test passes on `libraries/psio/rust/`
-- [ ] Round-trip compatibility test: encode in C++, decode in Rust (and vice-versa) for at least one pSSZ type
+- [ ] Round-trip compatibility test: encode in C++, decode in Rust (and vice-versa) for at least one pssz type
 
 ### 5d: Report
 - [ ] Update `.issues/pssz-format-design.md` with final numbers and any design-time learnings
