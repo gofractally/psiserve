@@ -76,24 +76,28 @@ equivalent.  No reason to drop them.
       port, mechanical.  Earlier classification as "SUPERSEDED" was
       wrong.
 
-- [ ] **`structural.hpp`** — `PSIO1_PACKAGE(name, version)`,
-      `PSIO1_INTERFACE`, etc. — L2 schema declaration macros (437 lines).
-      **Keystone for both WIT-generation flows** — defines
-      `interface_info<Tag>` which is the input to both
-      `wit_gen.hpp` (runtime) and `wit_constexpr.hpp` (compile-time
-      embedding).  Required for the schema-as-contract workflow.
+- [x] **`structural.hpp`** — `PSIO_PACKAGE(name, version)` +
+      `PSIO_INTERFACE(Tag, types(…), funcs(…))` ported as
+      `psio/structural.hpp`. `interface_info<Tag>` is the input to
+      both wit_gen and wit_constexpr. Test: psio3_structural_tests
+      (6 cases / 30 assertions). Note: v3 sheds the FixedString NTTP
+      pattern — package tags are unique-per-name `*_pkg_tag` structs,
+      interface tags are the user's anchor struct itself. PSIO_USE /
+      PSIO_WORLD / PSIO_HOST_MODULE deferred until a host needs them
+      (WASI 2.3 host bindings only use PACKAGE + INTERFACE).
 
-- [ ] **`wit_constexpr.hpp`** — **compile-time** WIT text generator
-      (354 lines).  Walks reflection at consteval time, produces a
-      fixed-size `std::array<char, N>` containing
-      `PSIO1_WIT\x01` magic + u32 length + WIT text.  The output
-      array is placed via clang `__attribute__((section("...")))`
-      directly in the wasm guest's data section; `pzam_wit` tool
-      promotes it to a `component-type:NAME` custom section.  This
-      is the **embedding flow** psizam/module.hpp uses via
-      `PSIO1_WIT_SECTION(IFACE)`.  Critical for guest builds — no
-      heap, no runtime, the wasm artifact carries its own schema.
-      Depends on `structural.hpp::interface_info<Tag>`.
+- [x] **`wit_constexpr.hpp`** — consteval WIT text generator ported
+      as `psio/wit_constexpr.hpp`. Walks `interface_info<Tag>` plus
+      reflect<T> at compile time, emits a fixed-size
+      `std::array<char, N>` containing `PSIO_WIT\x01` magic (distinct
+      from v1's `PSIO1_WIT\x01` so a host scanning a hybrid binary
+      can route them separately) + u32le length + WIT text. Output is
+      byte-identical to wit_gen's interface block — proven by a
+      cross-check test that strips the package + world preamble from
+      the runtime text and string-equals it against the consteval
+      array. Test: psio3_wit_constexpr_tests (4 cases / 12
+      assertions covering literal text match, runtime parity, blob
+      layout, param/return lowering).
 
 - [ ] **`emit_wit.hpp`** — schema IR → WIT text emitter (41 lines
       of declarations; impl lives in `schema.hpp` body).  Cannot ship
@@ -107,21 +111,30 @@ equivalent.  No reason to drop them.
       `wit_parse(text) → wit_world`.  Required for schema-import
       workflow ("read this `.wit`, generate matching C++ stubs").
 
-- [ ] **`wit_encode.hpp`** — `wit_world` → Component Model binary.
-      Required for emitting deployable Component artefacts (vs only
-      consuming the canonical ABI which `wit.hpp` already does).
+- [x] **`wit_encode.hpp`** — `wit_world` → Component Model binary.
+      Ported as `psio/wit_encode.hpp` (near-verbatim — purely
+      data-driven over wit_world / wit_func / wit_type_def, no design
+      shifts). Public API: `encode_wit_binary(world)` and
+      `generate_wit_binary<Tag>(ns, name, version, world_name)`.
+      Test: psio3_wit_encode_tests (3 cases / 22 assertions
+      including byte-identical parity against `psio1::encode_wit_binary`
+      for an equivalently-built wit_world — v1 has been validated
+      against wasm-tools, so identical bytes from v3 means we
+      round-trip the same way).
 
-- [ ] **`wit_gen.hpp`** — **runtime** WIT generator (630 lines).
-      Walks PSIO-reflected types at runtime, builds a `wit_world`,
-      emits `std::string` (text) or `std::vector<uint8_t>` (Component
-      Model binary).  Public API:
-      `psio1::generate_wit_text<T>(package)` /
-      `generate_wit_binary<T>(package)`.  Used by:
-        - `psizam/component.hpp` (host-side component definition)
-        - `psi-api/db.hpp` (database API generates its own WIT)
-        - `pzam_wit` tool (display component-type sections)
-      Depends on `structural.hpp::interface_info<Tag>`,
-      `get_type_name`, `wit_resource`.
+- [x] **`wit_gen.hpp`** — runtime WIT generator ported as
+      `psio/wit_gen.hpp`. v3-native re-implementation rather than a
+      sed — the v1 runtime path consumed reflect::member_functions,
+      but v3's PSIO_REFLECT covers data members only, so functions
+      come from PSIO_INTERFACE (interface_info<Tag>) the same way
+      wit_constexpr does. Public surface mirrors v1 in spirit:
+      `generate_wit<Tag>(...)`, `generate_wit_text<Tag>(...)`,
+      `wit_to_text(world)`. Resources (wit_resource-derived) emit as
+      `resource T { ... }` when T itself is PSIO_INTERFACE'd, else
+      bare `resource T;`. own<T>/borrow<T> render as type
+      constructors. Test: psio3_wit_gen_tests (5 cases / 29
+      assertions including literal byte-match WIT text on a
+      WASI-clocks-shaped fixture).
 
 - [x] **`wit_types.hpp`** — WIT IR data structures.  `wit_prim` enum
       (13 primitives), `wit_type_kind` enum (11 kinds including
