@@ -32,8 +32,7 @@ struct V3Point
    std::int32_t x = 0, y = 0;
    friend bool operator==(const V3Point&, const V3Point&) = default;
 };
-PSIO3_REFLECT(V3Point, x, y)
-PSIO3_TYPE_ATTRS(V3Point, psio3::definition_will_not_change{})
+PSIO3_REFLECT(V3Point, x, y, definitionWillNotChange())
 
 // ── Tier 2: NameRecord — 16 B fixed, DWNC ─────────────────────────────
 struct V1NameRecord
@@ -50,8 +49,7 @@ struct V3NameRecord
    friend bool operator==(const V3NameRecord&,
                            const V3NameRecord&) = default;
 };
-PSIO3_REFLECT(V3NameRecord, account, limit)
-PSIO3_TYPE_ATTRS(V3NameRecord, psio3::definition_will_not_change{})
+PSIO3_REFLECT(V3NameRecord, account, limit, definitionWillNotChange())
 
 // ── Tier 3: FlatRecord — non-DWNC, variable ───────────────────────────
 struct V1FlatRecord
@@ -132,10 +130,11 @@ struct __attribute__((packed)) V3Validator
    friend bool operator==(const V3Validator&,
                            const V3Validator&) = default;
 };
-PSIO3_REFLECT(V3Validator, pubkey_lo, pubkey_hi, withdrawal_lo,
+PSIO3_REFLECT(V3Validator,
+              pubkey_lo, pubkey_hi, withdrawal_lo,
               withdrawal_hi, effective_balance, slashed,
-              activation_epoch, exit_epoch, withdrawable_epoch)
-PSIO3_TYPE_ATTRS(V3Validator, psio3::definition_will_not_change{})
+              activation_epoch, exit_epoch, withdrawable_epoch,
+              definitionWillNotChange())
 
 // ── Tier 6: Order — nested records + vector + optional ────────────────
 struct V1LineItem
@@ -254,11 +253,10 @@ struct V3FlatRecordBounded
    friend bool operator==(const V3FlatRecordBounded&,
                            const V3FlatRecordBounded&) = default;
 };
-PSIO3_REFLECT(V3FlatRecordBounded, id, label, values)
-PSIO3_FIELD_ATTRS(V3FlatRecordBounded, label,
-   psio3::length_bound{.max = 63})
-PSIO3_FIELD_ATTRS(V3FlatRecordBounded, values,
-   psio3::length_bound{.max = 255})
+PSIO3_REFLECT(V3FlatRecordBounded,
+   id,
+   attr(label,  max<63>),
+   attr(values, max<255>))
 
 struct V1RecordBounded
 {
@@ -280,11 +278,11 @@ struct V3RecordBounded
    friend bool operator==(const V3RecordBounded&,
                            const V3RecordBounded&) = default;
 };
-PSIO3_REFLECT(V3RecordBounded, id, label, values, score)
-PSIO3_FIELD_ATTRS(V3RecordBounded, label,
-   psio3::length_bound{.max = 63})
-PSIO3_FIELD_ATTRS(V3RecordBounded, values,
-   psio3::length_bound{.max = 255})
+PSIO3_REFLECT(V3RecordBounded,
+   id,
+   attr(label,  max<63>),
+   attr(values, max<255>),
+   score)
 
 struct V1LineItemBounded
 {
@@ -304,9 +302,10 @@ struct V3LineItemBounded
    friend bool operator==(const V3LineItemBounded&,
                            const V3LineItemBounded&) = default;
 };
-PSIO3_REFLECT(V3LineItemBounded, product, qty, unit_price)
-PSIO3_FIELD_ATTRS(V3LineItemBounded, product,
-   psio3::length_bound{.max = 63})
+PSIO3_REFLECT(V3LineItemBounded,
+   attr(product, max<63>),
+   qty,
+   unit_price)
 
 struct V1UserProfileBounded
 {
@@ -330,11 +329,12 @@ struct V3UserProfileBounded
    friend bool operator==(const V3UserProfileBounded&,
                            const V3UserProfileBounded&) = default;
 };
-PSIO3_REFLECT(V3UserProfileBounded, id, name, email, age, verified)
-PSIO3_FIELD_ATTRS(V3UserProfileBounded, name,
-   psio3::length_bound{.max = 63})
-PSIO3_FIELD_ATTRS(V3UserProfileBounded, email,
-   psio3::length_bound{.max = 255})
+PSIO3_REFLECT(V3UserProfileBounded,
+   id,
+   attr(name,  max<63>),
+   attr(email, max<255>),
+   age,
+   verified)
 
 struct V1OrderBounded
 {
@@ -358,11 +358,12 @@ struct V3OrderBounded
    friend bool operator==(const V3OrderBounded&,
                            const V3OrderBounded&) = default;
 };
-PSIO3_REFLECT(V3OrderBounded, id, customer, items, total, note)
-PSIO3_FIELD_ATTRS(V3OrderBounded, items,
-   psio3::length_bound{.max = 255})
-PSIO3_FIELD_ATTRS(V3OrderBounded, note,
-   psio3::length_bound{.max = 255})
+PSIO3_REFLECT(V3OrderBounded,
+   id,
+   customer,
+   attr(items, max<255>),
+   total,
+   attr(note,  max<255>))
 
 struct V1ValidatorListBounded
 {
@@ -380,9 +381,9 @@ struct V3ValidatorListBounded
    friend bool operator==(const V3ValidatorListBounded&,
                            const V3ValidatorListBounded&) = default;
 };
-PSIO3_REFLECT(V3ValidatorListBounded, epoch, validators)
-PSIO3_FIELD_ATTRS(V3ValidatorListBounded, validators,
-   psio3::length_bound{.max = 1024})
+PSIO3_REFLECT(V3ValidatorListBounded,
+   epoch,
+   attr(validators, max<1024>))
 
 // ── Sample factories (identical values on both sides) ─────────────────
 namespace psio3_bench {
