@@ -526,6 +526,47 @@ namespace psio3 {
 
 }  // namespace psio3
 
+// ── Spec helpers (terse names for use inside annotation expressions) ────
+//
+// These are the surface that v2 design § 5.3.5 Form 1 calls for:
+// `attr(items, max<255> | field<3>)` instead of
+// `attr(items, length_bound{.max=255} | field_num_spec{.value=3})`.
+// Each helper is a `static_spec_tag` / `runtime_spec_tag` value (not a
+// new spec type) — they emit the same struct the underlying spec
+// expects, so format code that already reads `length_bound` /
+// `field_num_spec` / etc. needs no changes.
+//
+// Inside the `attr(...)` macro body, `using namespace ::psio3;` brings
+// these into scope so the user can write `max<255>` rather than
+// `psio3::max<255>`. Outside that scope, fully-qualified `psio3::max<N>`
+// is the spelling.
+
+namespace psio3 {
+
+   template <std::uint32_t N>
+   inline constexpr length_bound max{.max = N};
+
+   template <std::uint32_t N>
+   inline constexpr length_bound exact{.exact = N};
+   // (Note: an alias `bytes<N>` would be ideal here as a near-synonym
+   // of `exact<N>` for byte-array contexts, but `psio3::bytes` is
+   // already a free function defined in psio3/buffer.hpp.  Use
+   // `exact<N>` for both.)
+
+   template <std::uint32_t N>
+   inline constexpr field_num_spec field{.value = N};
+
+   template <std::uint32_t N>
+   inline constexpr utf8_spec utf8{.max = N};
+
+   inline constexpr sorted_spec sorted{};
+   inline constexpr sorted_spec unique{.unique = true};
+   inline constexpr sorted_spec sorted_unique{.unique = true};
+
+   inline constexpr definition_will_not_change dwnc{};
+
+}  // namespace psio3
+
 // ── Composition helpers ─────────────────────────────────────────────────
 
 namespace psio3 {

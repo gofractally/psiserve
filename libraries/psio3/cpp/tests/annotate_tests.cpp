@@ -234,6 +234,75 @@ PSIO3_FIELD_ATTRS(OptBoundForm, title,
 PSIO3_FIELD_ATTRS(OptBoundForm, tags,
    psio3::length_bound{.max = 16})
 
+// ── PSIO3_REFLECT keyword dispatch (attr / definitionWillNotChange) ──
+
+struct AttrSyntaxRecord
+{
+   std::int32_t                 id     = 0;
+   std::string                  label;
+   std::vector<std::uint32_t>   tags;
+   std::optional<std::string>   note;
+};
+PSIO3_REFLECT(AttrSyntaxRecord,
+   id,
+   attr(label, max<63>),
+   attr(tags,  max<255> | field<7>),
+   attr(note,  max<255>))
+
+struct DwncRecord
+{
+   std::uint64_t a = 0;
+   std::uint64_t b = 0;
+};
+PSIO3_REFLECT(DwncRecord, a, b, definitionWillNotChange())
+
+TEST_CASE("PSIO3_REFLECT attr(...) registers field + annotation",
+          "[annotate][reflect][attr]")
+{
+   using R = psio3::reflect<AttrSyntaxRecord>;
+   STATIC_REQUIRE(R::member_count == 4);
+
+   // Bare field — no annotation.
+   constexpr auto id_anns = psio3::annotate<&AttrSyntaxRecord::id>;
+   STATIC_REQUIRE(std::tuple_size_v<decltype(id_anns)> == 0);
+
+   // attr(label, max<63>) — single spec.
+   constexpr auto label_anns = psio3::annotate<&AttrSyntaxRecord::label>;
+   auto label_lb = psio3::find_spec<psio3::length_bound>(label_anns);
+   REQUIRE(label_lb.has_value());
+   REQUIRE(label_lb->max == 63);
+
+   // attr(tags, max<255> | field<7>) — composed specs.
+   constexpr auto tags_anns = psio3::annotate<&AttrSyntaxRecord::tags>;
+   auto tags_lb = psio3::find_spec<psio3::length_bound>(tags_anns);
+   auto tags_fn = psio3::find_spec<psio3::field_num_spec>(tags_anns);
+   REQUIRE(tags_lb.has_value());
+   REQUIRE(tags_lb->max == 255);
+   REQUIRE(tags_fn.has_value());
+   REQUIRE(tags_fn->value == 7);
+
+   // attr(note, max<255>) — annotation reaches the inner string via
+   // the optional unwrap rule (landed earlier).
+   constexpr auto note_anns = psio3::annotate<&AttrSyntaxRecord::note>;
+   auto note_lb = psio3::find_spec<psio3::length_bound>(note_anns);
+   REQUIRE(note_lb.has_value());
+   REQUIRE(note_lb->max == 255);
+}
+
+TEST_CASE("PSIO3_REFLECT definitionWillNotChange() emits type-level dwnc",
+          "[annotate][reflect][dwnc]")
+{
+   using R = psio3::reflect<DwncRecord>;
+   // Field count is 2 — definitionWillNotChange() is not a field.
+   STATIC_REQUIRE(R::member_count == 2);
+
+   constexpr auto type_anns =
+      psio3::annotate<psio3::type<DwncRecord>{}>;
+   auto dwnc =
+      psio3::find_spec<psio3::definition_will_not_change>(type_anns);
+   REQUIRE(dwnc.has_value());
+}
+
 TEST_CASE("length_bound on optional<T> reaches the inner T",
           "[annotate][optional]")
 {

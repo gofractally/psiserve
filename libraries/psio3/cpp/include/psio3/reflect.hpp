@@ -148,8 +148,106 @@ namespace psio3 {
 // macro expansion in a later phase; today's phase-1 constraint covers
 // all of v1 psio's existing callers.
 
-#define PSIO3_REFLECT(TYPE, ...) \
-   PSIO3_REFLECT_IMPL_(TYPE, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))
+// ── Keyword dispatch ──────────────────────────────────────────────────────
+//
+// PSIO3_REFLECT accepts three kinds of arguments:
+//
+//   1. A bare identifier              `pubkey`
+//      → registered as a field, name = identifier
+//
+//   2. attr(name, spec_expr)          `attr(items, max<255> | field<3>)`
+//      → registered as a field AND emits the field's annotation
+//      specialisation. `spec_expr` is evaluated inside a constexpr lambda
+//      with `using namespace ::psio3;` in scope so spec helpers
+//      (`max<N>`, `field<N>`, `bytes<N>`, `utf8<N>`, `sorted`, `unique`,
+//      ...) are available unqualified.
+//
+//   3. definitionWillNotChange()      keyword
+//      → emits the type-level `psio3::definition_will_not_change`
+//      annotation, contributes nothing to the field list.  Same name as
+//      v1 reflect's flag for source-compatibility.
+//
+// The dispatch uses the v1 PSIO_MATCH cat-detect pattern: each keyword
+// is recognised by pasting its spelling onto a known prefix and seeing
+// whether the resulting macro is defined.  Bare identifiers fall through
+// to the "field" handler.  Adding a new keyword = one macro definition.
+//
+// `attr` and `definitionWillNotChange` are global preprocessor names.
+// If they collide with a user identifier in the same TU, `#undef` after
+// the REFLECT block.
+
+#define PSIO3_PP_FIRST(a, ...) a
+#define PSIO3_PP_APPLY_FIRST(a) PSIO3_PP_FIRST(a)
+#define PSIO3_PP_MATCH(prefix, x) PSIO3_PP_MATCH_CHECK(BOOST_PP_CAT(prefix, x))
+#define PSIO3_PP_MATCH_CHECK(...) PSIO3_PP_MATCH_CHECK_N(__VA_ARGS__, 0, )
+#define PSIO3_PP_MATCH_CHECK_N(x, n, r, ...) \
+   BOOST_PP_BITAND(n, BOOST_PP_COMPL(BOOST_PP_CHECK_EMPTY(r)))
+
+// Match table.  Each defined entry expands to `(KIND, payload...), 1`
+// where KIND is one of `attrfield` / `typeattr_dwnc`.
+//
+//   - attr(F, spec_expr)            → (attrfield, F, spec_expr), 1
+//   - definitionWillNotChange()     → (typeattr_dwnc), 1
+//
+// Bare identifiers leave the cat unexpanded → PSIO3_PP_MATCH returns 0.
+#define PSIO3_REFLECT_KW_attr(F, ...) (attrfield, F, __VA_ARGS__), 1
+#define PSIO3_REFLECT_KW_definitionWillNotChange(...) (typeattr_dwnc), 1
+
+// Classify each item into `(KIND, payload...)`.  Bare ident → (field, ident).
+#define PSIO3_REFLECT_CLASSIFY(s, _, item)                                  \
+   BOOST_PP_IIF(PSIO3_PP_MATCH(PSIO3_REFLECT_KW_, item),                    \
+                PSIO3_REFLECT_CLASSIFY_KW,                                  \
+                PSIO3_REFLECT_CLASSIFY_PLAIN)(item)
+#define PSIO3_REFLECT_CLASSIFY_KW(item) \
+   PSIO3_PP_APPLY_FIRST(BOOST_PP_CAT(PSIO3_REFLECT_KW_, item))
+#define PSIO3_REFLECT_CLASSIFY_PLAIN(item) (field, item)
+
+// Field-list filter: keep `field` and `attrfield`; drop `typeattr_*`.
+#define PSIO3_REFLECT_KEEP_FIELD(s, _, kt) \
+   BOOST_PP_BITOR(BOOST_PP_EQUAL(0, BOOST_PP_CAT(PSIO3_REFLECT_KIND_, BOOST_PP_TUPLE_ELEM(0, kt))), \
+                  BOOST_PP_EQUAL(1, BOOST_PP_CAT(PSIO3_REFLECT_KIND_, BOOST_PP_TUPLE_ELEM(0, kt))))
+// Map kind tags to small integers so we can compare without strcmp.
+#define PSIO3_REFLECT_KIND_field         0
+#define PSIO3_REFLECT_KIND_attrfield     1
+#define PSIO3_REFLECT_KIND_typeattr_dwnc 2
+
+// Field-name extractor.  For `(field, F)` and `(attrfield, F, ...)`
+// the name is element 1 of the tuple.
+#define PSIO3_REFLECT_NAME_OF(s, _, kt) BOOST_PP_TUPLE_ELEM(1, kt)
+
+// Annotation emitter.  Per-tuple dispatch via cat to a kind-specific
+// emitter that takes (TYPE, kt).  For `field` kind, emits nothing.
+#define PSIO3_REFLECT_EMIT_ANN(s, TYPE, kt) \
+   BOOST_PP_CAT(PSIO3_REFLECT_EMIT_ANN_, BOOST_PP_TUPLE_ELEM(0, kt))(TYPE, kt)
+
+#define PSIO3_REFLECT_EMIT_ANN_field(TYPE, kt) /* no-op */
+
+#define PSIO3_REFLECT_EMIT_ANN_attrfield(TYPE, kt)                              \
+   template <>                                                                  \
+   inline constexpr auto ::psio3::annotate<&TYPE::BOOST_PP_TUPLE_ELEM(1, kt)> = \
+      [] {                                                                      \
+         using namespace ::psio3;                                                \
+         return ::psio3::to_spec_tuple(BOOST_PP_TUPLE_ELEM(2, kt));              \
+      }();
+
+#define PSIO3_REFLECT_EMIT_ANN_typeattr_dwnc(TYPE, kt)                          \
+   template <>                                                                  \
+   inline constexpr auto ::psio3::annotate<::psio3::type<TYPE>{}> =             \
+      ::std::tuple{::psio3::definition_will_not_change{}};
+
+#define PSIO3_REFLECT(TYPE, ...)                                                          \
+   PSIO3_REFLECT_DISPATCH_(                                                               \
+      TYPE,                                                                               \
+      BOOST_PP_SEQ_TRANSFORM(PSIO3_REFLECT_CLASSIFY, _,                                   \
+                             BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__)))
+
+#define PSIO3_REFLECT_DISPATCH_(TYPE, KIND_SEQ)                                           \
+   PSIO3_REFLECT_IMPL_(                                                                   \
+      TYPE,                                                                               \
+      BOOST_PP_SEQ_TRANSFORM(                                                             \
+         PSIO3_REFLECT_NAME_OF, _,                                                        \
+         BOOST_PP_SEQ_FILTER(PSIO3_REFLECT_KEEP_FIELD, _, KIND_SEQ)))                     \
+   BOOST_PP_SEQ_FOR_EACH(PSIO3_REFLECT_EMIT_ANN, TYPE, KIND_SEQ)
 
 #define PSIO3_REFLECT_IMPL_(TYPE, SEQ)                                                   \
    struct BOOST_PP_CAT(psio3_reflect_impl_, TYPE)                                        \
