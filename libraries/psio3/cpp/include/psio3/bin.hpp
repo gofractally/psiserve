@@ -19,6 +19,7 @@
 #include <psio3/reflect.hpp>
 #include <psio3/stream.hpp>
 #include <psio3/validate_strict_walker.hpp>
+#include <psio3/varint/leb128.hpp>
 #include <psio3/wrappers.hpp>  // effective_annotations_for
 
 #include <array>
@@ -91,53 +92,37 @@ namespace psio3 {
       // The EOSIO bin wire format uses LEB128-style varuint32 everywhere a
       // length / count / index is emitted: string size, vector size,
       // variant index, bitlist bit count, record content_size prefix.
-      // Each byte carries 7 payload bits; the MSB is the continuation flag.
-      // Max 5 bytes for a full u32 (5 × 7 = 35 bits).
+      // The wire encoding (7-bit groups, MSB = continuation, max 5 bytes
+      // for a full u32) is implemented in psio3/varint/leb128.hpp; the
+      // wrappers below bridge that header-only library to the bin
+      // codec's `Sink::write(const char*, n)` and `std::span<const char>`
+      // calling conventions.  Decoders that care about strict canonicity
+      // (e.g. validate) should use `varint::leb128::scalar::decode_u32`
+      // directly and check the `ok` field; the wrapper here mirrors the
+      // prior best-effort behaviour (returns 0 on malformed input).
 
       constexpr std::size_t varuint32_size(std::uint32_t v) noexcept
       {
-         std::size_t n = 1;
-         while (v >= 0x80)
-         {
-            v >>= 7;
-            ++n;
-         }
-         return n;
+         return ::psio3::varint::leb128::size_u32(v);
       }
 
       template <typename Sink>
       void write_varuint32(Sink& s, std::uint32_t v) noexcept
       {
-         while (v >= 0x80)
-         {
-            const unsigned char b = static_cast<unsigned char>((v & 0x7F) | 0x80);
-            s.write(reinterpret_cast<const char*>(&b), 1);
-            v >>= 7;
-         }
-         const unsigned char b = static_cast<unsigned char>(v);
-         s.write(reinterpret_cast<const char*>(&b), 1);
+         std::uint8_t buf[::psio3::varint::leb128::max_bytes_u32];
+         const auto   n = ::psio3::varint::leb128::encode_u32(buf, v);
+         s.write(reinterpret_cast<const char*>(buf), n);
       }
 
-      // Read varuint32 from `src` at `pos`, advancing pos. Returns 0 on
-      // malformed input — callers that care (validate) should bounds-check
-      // `pos` separately.
       inline std::uint32_t
       read_varuint32(std::span<const char> src, std::size_t& pos) noexcept
       {
-         std::uint32_t v     = 0;
-         unsigned      shift = 0;
-         while (pos < src.size())
-         {
-            const unsigned char b =
-               static_cast<unsigned char>(src[pos++]);
-            v |= static_cast<std::uint32_t>(b & 0x7F) << shift;
-            if ((b & 0x80) == 0)
-               return v;
-            shift += 7;
-            if (shift >= 32)
-               return v;  // malformed — stop accumulating
-         }
-         return v;
+         const auto avail = src.size() - pos;
+         const auto r     = ::psio3::varint::leb128::decode_u32(
+            reinterpret_cast<const std::uint8_t*>(src.data() + pos), avail);
+         if (!r.ok) return 0;
+         pos += r.len;
+         return r.value;
       }
 
       // Sinks that only count bytes (psio3::size_stream) skip the actual

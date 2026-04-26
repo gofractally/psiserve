@@ -22,6 +22,7 @@
 #include <psio3/adapter.hpp>
 #include <psio3/reflect.hpp>
 #include <psio3/stream.hpp>
+#include <psio3/varint/leb128.hpp>
 #include <psio3/wrappers.hpp>
 
 #include <array>
@@ -69,33 +70,28 @@ namespace psio3 {
       template <std::size_t N>
       struct is_bitlist<::psio3::bitlist<N>> : std::true_type {};
 
+      // Avro `long` is zig-zag varint over int64 (max 10 wire bytes).
+      // Wire encoding lives in psio3/varint/leb128.hpp; the wrappers
+      // here bridge to the codec's `Sink::write(const void*, n)` and
+      // `std::span<const char>` calling conventions.
       template <typename Sink>
       inline void write_long(Sink& s, std::int64_t v)
       {
-         std::uint64_t zz = (static_cast<std::uint64_t>(v) << 1) ^
-                            static_cast<std::uint64_t>(v >> 63);
-         do
-         {
-            std::uint8_t b = zz & 0x7f;
-            zz >>= 7;
-            b |= ((zz > 0) << 7);
-            s.write(static_cast<char>(b));
-         } while (zz);
+         std::uint8_t buf[::psio3::varint::leb128::max_bytes_i64];
+         const auto   n =
+            ::psio3::varint::leb128::encode_zigzag64(buf, v);
+         s.write(reinterpret_cast<const void*>(buf), n);
       }
 
       inline std::int64_t read_long(std::span<const char> src,
                                     std::size_t&          pos)
       {
-         std::uint64_t r     = 0;
-         int           shift = 0;
-         std::uint8_t  b     = 0;
-         do
-         {
-            b = static_cast<std::uint8_t>(src[pos++]);
-            r |= static_cast<std::uint64_t>(b & 0x7f) << shift;
-            shift += 7;
-         } while (b & 0x80);
-         return static_cast<std::int64_t>((r >> 1) ^ (~(r & 1) + 1));
+         const auto avail = src.size() - pos;
+         const auto r     = ::psio3::varint::leb128::decode_zigzag64(
+            reinterpret_cast<const std::uint8_t*>(src.data() + pos), avail);
+         if (!r.ok) return 0;
+         pos += r.len;
+         return r.value;
       }
 
       template <typename T, typename Sink>

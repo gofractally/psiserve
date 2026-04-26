@@ -84,6 +84,9 @@ psio3_add_test(psio3_runtime_reflect_tests runtime_reflect_tests.cpp)
 # Phase 17: compat aliases for consumer migration.
 psio3_add_test(psio3_compat_tests compat_tests.cpp)
 
+# Varint codec library — leb128, prefix2 (BE + LE), prefix3.
+psio3_add_test(psio3_varint_tests varint_tests.cpp)
+
 # Phase 6b partial: v1 ↔ psio3 SSZ byte-parity tests. Links BOTH psio
 # (v1) and psio3 into the same executable so we can encode the same
 # value through both codecs and assert identical bytes.

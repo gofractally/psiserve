@@ -13,3 +13,11 @@ target_link_libraries(psio3_bench_perf_report PRIVATE psio3 psio)
 target_include_directories(psio3_bench_perf_report PRIVATE
    ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(psio3_bench_perf_report PRIVATE cxx_std_23)
+
+# Varint codec library — leb128, prefix2 (BE + LE), prefix3.
+add_executable(psio3_bench_varint bench_varint.cpp)
+target_link_libraries(psio3_bench_varint PRIVATE psio3)
+target_include_directories(psio3_bench_varint PRIVATE
+   ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(psio3_bench_varint PRIVATE cxx_std_23)
+target_compile_options(psio3_bench_varint PRIVATE -O3 -DNDEBUG)
