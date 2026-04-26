@@ -97,6 +97,9 @@ add_test(NAME psio3_name_tests COMMAND psio3_name_tests)
 # Small utility headers ported from psio v1.
 psio3_add_test(psio3_util_tests util_tests.cpp)
 
+# WIT resource vocabulary (own<T> / borrow<T> / wit_resource_drop).
+psio3_add_test(psio3_wit_resource_tests wit_resource_tests.cpp)
+
 # Phase 6b partial: v1 ↔ psio3 SSZ byte-parity tests. Links BOTH psio
 # (v1) and psio3 into the same executable so we can encode the same
 # value through both codecs and assert identical bytes.

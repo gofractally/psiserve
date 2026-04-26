@@ -89,14 +89,18 @@ equivalent.  No reason to drop them.
       types.  Used by `psi-api/db.hpp` (`psio::generate_wit_binary<store>`).
       Foundational for the "API definition is C++ types" pattern.
 
-- [ ] **`wit_resource.hpp`** — `psio::wit_resource`, `psio::own<T>`,
-      `psio::borrow<T>`.  **Used directly in `psi-api/db.hpp` for
-      `cursor`, `table`, `transaction` resource types.**  `wit.hpp` says
-      these are "out of scope" — needs reconsidering.  Without these,
-      `psi-api` cannot define resource-typed interfaces under v3.
-      **REVIEW**: confirm whether resource semantics belong in psio3
-      or move to a separate library (`psiwit3`?) — they sit at the
-      edge of "serialization" vs "object lifetime".
+- [x] **`wit_resource.hpp`** — `psio3::wit_resource`, `psio3::own<T>`,
+      `psio3::borrow<T>`.  Ported as `psio3/wit_resource.hpp`.  The
+      "real surface area" is ~50 lines of code (vs 299 of doc):
+      empty marker base, is_wit_resource_v trait, RAII own<T>,
+      bare borrow<T>, and a wit_resource_drop<T> customisation point
+      that defaults to no-op.  wasm_type_traits<own<T>> /
+      wasm_type_traits<borrow<T>> stay in `namespace psizam` (already
+      did, runtime concern).  Resolves the "psio3 or separate
+      library?" question — psio3 owns the vocabulary, psizam owns
+      the runtime traits + handle table.  Test:
+      psio3_wit_resource_tests (5 cases / 15 assertions including
+      RAII drop count, move semantics, release()).
 
 - [ ] **`wit_owned.hpp`** + **`wview.hpp`** — owning value + WASM
       Canonical ABI projection types.  Counterpart to `view<T, wit>`
@@ -123,11 +127,16 @@ equivalent.  No reason to drop them.
       Two registries opt-in via ADL overloads.  Needed before the
       WIT generator side can attach C++-side attribute metadata.
 
-- [ ] **`guest_alloc.hpp`** — `cabi_realloc` for WASM guest.  Required
-      when targeting WASM Component guest builds.
+- [→psizam] **`guest_alloc.hpp`** — `cabi_realloc` for WASM guest.
+      Pure WASM concern (`__heap_base` + `__builtin_wasm_memory_grow`),
+      no psio dependency.  **Belongs in psizam**, not psio3 — psizam
+      already owns the host-side WASM glue (host_function,
+      canonical_dispatch, component, runtime).  Tracked under psizam.
 
-- [ ] **`guest_attrs.hpp`** — clang attribute macros for WASM guest
-      ABI wiring.
+- [→psizam] **`guest_attrs.hpp`** — clang attribute macros
+      (`import_module` / `import_name` / `export_name`) for guest
+      WASM ABI wiring.  Pure compiler-attribute spelling, no psio
+      surface.  **Belongs in psizam**.  Tracked under psizam.
 
 - [ ] **`schema.hpp` (full)** — v1 has a 2521-line `schema.hpp` with
       `SchemaBuilder`, schema diff, WIT roundtrip.  v3's is 310 lines
@@ -170,12 +179,13 @@ equivalent.  No reason to drop them.
       One alias; trivial.  Ported as `psio3/bytes_view.hpp` (with
       `mutable_bytes_view` sibling).  Test in `util_tests.cpp`.
 
-- [ ] **`check.hpp`** — `psio::check(cond, msg)` and `abort_error`
-      helpers.  Bridges to `psibase::abortMessage` under WASM.  Trivial
-      port; some downstream callers may use it.  **REVIEW**: psio3
-      uses `codec_status` / `codec_exception` for its own error
-      reporting — may be that v3 callers should use those instead and
-      `check.hpp` is superseded.
+- [~] **`check.hpp`** — `psio::check(cond, msg)` and `abort_error`
+      helpers.  Used internally by v1 codecs (bitset, from_avro,
+      from_json, etc.).  **SUPERSEDED**: zero downstream callers
+      (`grep -rn psio::check libraries/` outside `/psio/cpp/` returns
+      empty); v3 has `codec_status` / `codec_exception` /
+      `validate_or_throw` for the same role with a richer error model.
+      No port — confirmed.
 
 - [~] **`ctype.hpp`** — backward-compat alias for `CView` / `COwned`
       (renamed `WView` / `WOwned` in `wview.hpp`).  6-line shim.
@@ -184,11 +194,19 @@ equivalent.  No reason to drop them.
       REVIEW.
 
 - [ ] **`chrono.hpp`** (413 lines) — `std::chrono::duration` /
-      `time_point` packing for fracpack.  Will need a v3 equivalent
-      that registers these types with each codec via `tag_invoke`.
-      Direct port; replicate per format the v1 work did inline against
-      fracpack only.  **REVIEW**: which formats need chrono support —
-      all of them?  bin, ssz, pssz, key, json — likely yes for all.
+      `time_point` packing for fracpack.  **DEFERRED**: no current
+      downstream users serialise chrono types through reflection
+      (`grep -rn "std::chrono::duration\|std::chrono::time_point"
+      libraries/psi-api libraries/pfs libraries/psitri` — only one
+      hit, in psizam watchdog as a runtime-internal type, not a
+      reflected field).  v1's chrono.hpp wires the type into a
+      single `is_packable` specialisation; v3 needs a tag_invoke
+      overload per codec (bin, ssz, pssz, frac, borsh, bincode,
+      avro, key, json — 9 codecs).  When the first downstream user
+      needs it, port at that point — the right pattern is unwrap
+      `duration` to its `count()` and recurse, but we lack a precedent
+      for "treat as transparent wrapper of inner type" across all
+      codecs today.  Tracked, not blocking.
 
 - [ ] **`untagged.hpp`** — 10 lines; defines `psio_is_untagged(T*)`
       ADL hook for marking variants as untagged.  Trivial port; the
