@@ -61,13 +61,20 @@ equivalent.  No reason to drop them.
       also load-bearing in psizam / psiserve / psitri / psi-api.
       Direct port — no dependencies on the rest of v1 beyond stdlib.
 
-- [~] **`compress_name.hpp`** — method-name compressor (different
-      alphabet from `name.hpp`'s general name encoding).  503 lines,
-      MIT-licensed.  Used internally by v1's `get_type_name.hpp`;
-      no other downstream callers (`grep -rn method_to_number
-      libraries/` outside `/psio/cpp/` and `/psio2/cpp/` returns
-      empty).  **SUPERSEDED** along with `get_type_name.hpp`.  No
-      port — flagged in REVIEW.
+- [x] **`compress_name.hpp`** — method-name compressor.  503 lines,
+      MIT-licensed.  **DISTINCT** from `name.hpp`: different alphabet
+      (27 symbols, lowercase a-z only) and different frequency tables
+      → produces different u64 outputs for the same input.  Pairs with
+      `name.hpp`: `name` encodes general identifiers (a-z, 0-9, hyphen
+      — namespaces, accounts, paths), `compress_name` encodes method
+      names (pure-letter — RPC method dispatch).  Public API:
+      `method_to_number(string_view) → u64`, `number_to_method(u64) →
+      string`, `is_hash_name(u64)` (when name didn't compress, value
+      is a hash).  Will be needed when v3 acquires RPC method dispatch
+      and/or `get_type_name` ports (which uses
+      `detail::method_to_number` for non-reflected types).  Direct
+      port, mechanical.  Earlier classification as "SUPERSEDED" was
+      wrong.
 
 - [ ] **`structural.hpp`** — `PSIO_PACKAGE(name, version)`,
       `PSIO_INTERFACE`, etc. — L2 schema declaration macros (437 lines).
@@ -222,12 +229,19 @@ equivalent.  No reason to drop them.
       template).  Codec wiring (variant codec consults the hook) is a
       separate follow-up — for now the marker is registerable.
 
-- [~] **`get_type_name.hpp`** — compile-time type-name string for
-      arbitrary T.  **SUPERSEDED**: zero downstream callers
-      (`grep -rn psio::get_type_name libraries/` outside `/psio/cpp/`
-      and `/psio2/cpp/` returns empty).  v3 reflection exposes the
-      type name via `psio3::reflect<T>::name` directly.  No port —
-      flagged in REVIEW for sign-off.
+- [x] **`get_type_name.hpp`** — compile-time type-name string for
+      arbitrary T.  Earlier classification as "SUPERSEDED" was wrong
+      — it's actually **load-bearing** for schema/WIT generation.
+      `psio3::reflect<T>::name` only handles reflected user types;
+      `get_type_name` handles the full universe: primitives
+      (`int32`, `uint64`, `f64`), `std::vector<T>`, `std::optional<T>`,
+      `std::variant<...>`, `std::tuple<...>`, `std::chrono::duration`,
+      `std::array<T,N>`, AND reflected types via the
+      `is_reflected<T>` requires-clause overload.  v1 schema.hpp:1822
+      consumes it directly to render type strings in schema output.
+      Depends on `compress_name.hpp` for non-reflected type-name
+      compression.  Will be needed when the schema/WIT toolchain
+      ports.  Direct port, mechanical (~250 lines).
 
 - [~] **`tuple.hpp`** — `std::tuple` reflection helpers
       (`tuple_get`, `tuple_for_each`).  **SUPERSEDED**: zero
