@@ -8,7 +8,9 @@
 // name, and doesn't round-trip fully-qualified names from a namespace.
 // Matches the pattern already used by v1_oracle_tests.cpp.
 
+#include <psio/bounded.hpp>
 #include <psio/reflect.hpp>
+#include <psio3/annotate.hpp>
 #include <psio3/ext_int.hpp>
 #include <psio3/reflect.hpp>
 
@@ -221,6 +223,167 @@ struct V3ValidatorList
 };
 PSIO3_REFLECT(V3ValidatorList, epoch, validators)
 
+// ── Tier 8: bounded variants of the unbounded shapes ──────────────────
+//
+// Same data as Tier 3-7, with explicit length_bound annotations.
+// v1 expresses the bound via type-level wrappers (bounded_string<N>,
+// bounded_list<T,N>); v3 attaches `psio3::length_bound{.max=N}` via
+// PSIO3_FIELD_ATTRS on the std:: type.
+//
+// (The intrusive v3 form — `psio3::bounded<T,N>` / `psio3::utf8_string<N>`
+// — exists in psio3/wrappers.hpp with `inherent_annotations`, but the
+// per-codec dispatch (ssz / pssz / frac / bin / borsh / bincode / avro)
+// does not yet recognise these wrappers. Until that lands, the bench
+// uses the annotation form.)
+
+struct V1FlatRecordBounded
+{
+   std::uint32_t                          id = 0;
+   psio::bounded_string<63>               label;
+   psio::bounded_list<std::uint32_t, 255> values;
+   friend bool operator==(const V1FlatRecordBounded&,
+                           const V1FlatRecordBounded&) = default;
+};
+PSIO_REFLECT(V1FlatRecordBounded, id, label, values)
+
+struct V3FlatRecordBounded
+{
+   std::uint32_t              id = 0;
+   std::string                label;
+   std::vector<std::uint32_t> values;
+   friend bool operator==(const V3FlatRecordBounded&,
+                           const V3FlatRecordBounded&) = default;
+};
+PSIO3_REFLECT(V3FlatRecordBounded, id, label, values)
+PSIO3_FIELD_ATTRS(V3FlatRecordBounded, label,
+   psio3::length_bound{.max = 63})
+PSIO3_FIELD_ATTRS(V3FlatRecordBounded, values,
+   psio3::length_bound{.max = 255})
+
+struct V1RecordBounded
+{
+   std::uint32_t                          id = 0;
+   psio::bounded_string<63>               label;
+   psio::bounded_list<std::uint32_t, 255> values;
+   std::optional<std::uint32_t>           score;
+   friend bool operator==(const V1RecordBounded&,
+                           const V1RecordBounded&) = default;
+};
+PSIO_REFLECT(V1RecordBounded, id, label, values, score)
+
+struct V3RecordBounded
+{
+   std::uint32_t                id = 0;
+   std::string                  label;
+   std::vector<std::uint32_t>   values;
+   std::optional<std::uint32_t> score;
+   friend bool operator==(const V3RecordBounded&,
+                           const V3RecordBounded&) = default;
+};
+PSIO3_REFLECT(V3RecordBounded, id, label, values, score)
+PSIO3_FIELD_ATTRS(V3RecordBounded, label,
+   psio3::length_bound{.max = 63})
+PSIO3_FIELD_ATTRS(V3RecordBounded, values,
+   psio3::length_bound{.max = 255})
+
+struct V1LineItemBounded
+{
+   psio::bounded_string<63> product;
+   std::uint32_t            qty        = 0;
+   double                   unit_price = 0.0;
+   friend bool operator==(const V1LineItemBounded&,
+                           const V1LineItemBounded&) = default;
+};
+PSIO_REFLECT(V1LineItemBounded, product, qty, unit_price)
+
+struct V3LineItemBounded
+{
+   std::string   product;
+   std::uint32_t qty        = 0;
+   double        unit_price = 0.0;
+   friend bool operator==(const V3LineItemBounded&,
+                           const V3LineItemBounded&) = default;
+};
+PSIO3_REFLECT(V3LineItemBounded, product, qty, unit_price)
+PSIO3_FIELD_ATTRS(V3LineItemBounded, product,
+   psio3::length_bound{.max = 63})
+
+struct V1UserProfileBounded
+{
+   std::uint64_t             id = 0;
+   psio::bounded_string<63>  name;
+   psio::bounded_string<255> email;
+   std::uint32_t             age      = 0;
+   bool                      verified = false;
+   friend bool operator==(const V1UserProfileBounded&,
+                           const V1UserProfileBounded&) = default;
+};
+PSIO_REFLECT(V1UserProfileBounded, id, name, email, age, verified)
+
+struct V3UserProfileBounded
+{
+   std::uint64_t id = 0;
+   std::string   name;
+   std::string   email;
+   std::uint32_t age      = 0;
+   bool          verified = false;
+   friend bool operator==(const V3UserProfileBounded&,
+                           const V3UserProfileBounded&) = default;
+};
+PSIO3_REFLECT(V3UserProfileBounded, id, name, email, age, verified)
+PSIO3_FIELD_ATTRS(V3UserProfileBounded, name,
+   psio3::length_bound{.max = 63})
+PSIO3_FIELD_ATTRS(V3UserProfileBounded, email,
+   psio3::length_bound{.max = 255})
+
+struct V1OrderBounded
+{
+   std::uint64_t                              id = 0;
+   V1UserProfileBounded                       customer;
+   psio::bounded_list<V1LineItemBounded, 255> items;
+   double                                     total = 0.0;
+   std::optional<psio::bounded_string<255>>   note;
+   friend bool operator==(const V1OrderBounded&,
+                           const V1OrderBounded&) = default;
+};
+PSIO_REFLECT(V1OrderBounded, id, customer, items, total, note)
+
+struct V3OrderBounded
+{
+   std::uint64_t                  id = 0;
+   V3UserProfileBounded           customer;
+   std::vector<V3LineItemBounded> items;
+   double                         total = 0.0;
+   std::optional<std::string>     note;
+   friend bool operator==(const V3OrderBounded&,
+                           const V3OrderBounded&) = default;
+};
+PSIO3_REFLECT(V3OrderBounded, id, customer, items, total, note)
+PSIO3_FIELD_ATTRS(V3OrderBounded, items,
+   psio3::length_bound{.max = 255})
+PSIO3_FIELD_ATTRS(V3OrderBounded, note,
+   psio3::length_bound{.max = 255})
+
+struct V1ValidatorListBounded
+{
+   std::uint64_t                         epoch = 0;
+   psio::bounded_list<V1Validator, 1024> validators;
+   friend bool operator==(const V1ValidatorListBounded&,
+                           const V1ValidatorListBounded&) = default;
+};
+PSIO_REFLECT(V1ValidatorListBounded, epoch, validators)
+
+struct V3ValidatorListBounded
+{
+   std::uint64_t            epoch = 0;
+   std::vector<V3Validator> validators;
+   friend bool operator==(const V3ValidatorListBounded&,
+                           const V3ValidatorListBounded&) = default;
+};
+PSIO3_REFLECT(V3ValidatorListBounded, epoch, validators)
+PSIO3_FIELD_ATTRS(V3ValidatorListBounded, validators,
+   psio3::length_bound{.max = 1024})
+
 // ── Sample factories (identical values on both sides) ─────────────────
 namespace psio3_bench {
 
@@ -319,6 +482,108 @@ namespace psio3_bench {
    inline V3ValidatorList v3_vlist(std::uint32_t n = 100)
    {
       return make_vlist<V3ValidatorList, V3Validator>(n);
+   }
+
+   // ── Bounded factories ────────────────────────────────────────────
+   inline V1FlatRecordBounded v1_flatrec_bounded()
+   {
+      V1FlatRecordBounded r;
+      r.id     = 9;
+      r.label  = psio::bounded_string<63>{std::string{"flat-cap"}};
+      r.values = psio::bounded_list<std::uint32_t, 255>{
+         std::vector<std::uint32_t>{3, 5, 8, 13, 21, 34}};
+      return r;
+   }
+   inline V3FlatRecordBounded v3_flatrec_bounded()
+   {
+      return {.id = 9, .label = "flat-cap",
+              .values = {3, 5, 8, 13, 21, 34}};
+   }
+
+   inline V1RecordBounded v1_record_bounded()
+   {
+      V1RecordBounded r;
+      r.id     = 7;
+      r.label  = psio::bounded_string<63>{std::string{"oracle"}};
+      r.values = psio::bounded_list<std::uint32_t, 255>{
+         std::vector<std::uint32_t>{1, 2, 65535, 4096, 32768, 0}};
+      r.score  = 99;
+      return r;
+   }
+   inline V3RecordBounded v3_record_bounded()
+   {
+      return {.id = 7, .label = "oracle",
+              .values = {1, 2, 65535, 4096, 32768, 0}, .score = 99};
+   }
+
+   inline V1OrderBounded v1_order_bounded()
+   {
+      V1OrderBounded o;
+      o.id   = 10042;
+      o.customer.id       = 77;
+      o.customer.name     =
+         psio::bounded_string<63>{std::string{"Alice Stone"}};
+      o.customer.email    =
+         psio::bounded_string<255>{std::string{"alice@example.com"}};
+      o.customer.age      = 34;
+      o.customer.verified = true;
+      std::vector<V1LineItemBounded> items_v;
+      items_v.push_back(
+         {.product = psio::bounded_string<63>{std::string{"Widget"}},
+          .qty = 2, .unit_price = 9.99});
+      items_v.push_back(
+         {.product = psio::bounded_string<63>{std::string{"Sprocket"}},
+          .qty = 1, .unit_price = 14.50});
+      items_v.push_back(
+         {.product = psio::bounded_string<63>{std::string{"Gizmo-Mk.II"}},
+          .qty = 5, .unit_price = 3.25});
+      o.items = psio::bounded_list<V1LineItemBounded, 255>{
+         std::move(items_v)};
+      o.total = 2 * 9.99 + 14.50 + 5 * 3.25;
+      o.note  = psio::bounded_string<255>{std::string{"gift-wrap please"}};
+      return o;
+   }
+   inline V3OrderBounded v3_order_bounded()
+   {
+      V3OrderBounded o;
+      o.id   = 10042;
+      o.customer = V3UserProfileBounded{
+         .id = 77, .name = "Alice Stone",
+         .email = "alice@example.com",
+         .age = 34, .verified = true};
+      o.items = {
+         V3LineItemBounded{.product = "Widget",
+                            .qty = 2, .unit_price = 9.99},
+         V3LineItemBounded{.product = "Sprocket",
+                            .qty = 1, .unit_price = 14.50},
+         V3LineItemBounded{.product = "Gizmo-Mk.II",
+                            .qty = 5, .unit_price = 3.25},
+      };
+      o.total = 2 * 9.99 + 14.50 + 5 * 3.25;
+      o.note  = std::string{"gift-wrap please"};
+      return o;
+   }
+
+   inline V1ValidatorListBounded v1_vlist_bounded(std::uint32_t n = 100)
+   {
+      V1ValidatorListBounded l;
+      l.epoch = 42;
+      std::vector<V1Validator> v;
+      v.reserve(n);
+      for (std::uint32_t i = 0; i < n; ++i)
+         v.push_back(make_validator<V1Validator>(i));
+      l.validators =
+         psio::bounded_list<V1Validator, 1024>{std::move(v)};
+      return l;
+   }
+   inline V3ValidatorListBounded v3_vlist_bounded(std::uint32_t n = 100)
+   {
+      V3ValidatorListBounded l;
+      l.epoch = 42;
+      l.validators.reserve(n);
+      for (std::uint32_t i = 0; i < n; ++i)
+         l.validators.push_back(make_validator<V3Validator>(i));
+      return l;
    }
 
 }  // namespace psio3_bench

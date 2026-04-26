@@ -62,6 +62,12 @@ struct frac_supports<V3Order> : std::false_type {};
 template <>
 struct frac_supports<V1Order> : std::false_type {};
 
+template <>
+struct frac_supports<V3OrderBounded> : std::false_type {};
+
+template <>
+struct frac_supports<V1OrderBounded> : std::false_type {};
+
 // v1 ssz_validate has no overload for std::optional<std::string> and some
 // other composites — the static_assert lives inside template instantiation
 // below the SFINAE boundary. Gate manually.
@@ -72,6 +78,15 @@ template <>
 struct v1_ssz_validate_supports<V1Order> : std::false_type {};
 template <>
 struct v1_ssz_validate_supports<V1Record> : std::false_type {};
+
+template <>
+struct v1_ssz_validate_supports<V1OrderBounded> : std::false_type {};
+template <>
+struct v1_ssz_validate_supports<V1RecordBounded> : std::false_type {};
+template <>
+struct v1_ssz_validate_supports<V1FlatRecordBounded> : std::false_type {};
+template <>
+struct v1_ssz_validate_supports<V1ValidatorListBounded> : std::false_type {};
 
 namespace {
 
@@ -458,6 +473,15 @@ int main()
    run_shape("Validator",     v1_validator(),v3_validator(),rows);
    run_shape("Order",         v1_order(),    v3_order(),    rows);
    run_shape("ValidatorList", v1_vlist(100), v3_vlist(100), rows);
+
+   // Bounded variants — same data, length_bound annotations on every
+   // variable field. v1 uses bounded_string<N>/bounded_list<T,N> type
+   // wrappers; v3 uses std::* + PSIO3_FIELD_ATTRS{length_bound{.max=N}}
+   // (the intrusive psio3::bounded<T,N> form awaits per-codec dispatch).
+   run_shape("FlatRecord!",   v1_flatrec_bounded(),  v3_flatrec_bounded(),  rows);
+   run_shape("Record!",       v1_record_bounded(),   v3_record_bounded(),   rows);
+   run_shape("Order!",        v1_order_bounded(),    v3_order_bounded(),    rows);
+   run_shape("ValidatorList!",v1_vlist_bounded(100), v3_vlist_bounded(100), rows);
 
    // Console: print the table.
    report_table(std::cout, rows);
