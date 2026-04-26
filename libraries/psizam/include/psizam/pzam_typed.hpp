@@ -12,14 +12,14 @@
 //      void log(uint32_t ptr, uint32_t len);
 //      uint32_t get_time();
 //   };
-//   PSIO_REFLECT(my_host, method(log, ptr, len), method(get_time))
+//   PSIO1_REFLECT(my_host, method(log, ptr, len), method(get_time))
 //
 //   // Define WASM exports you want to call:
 //   struct my_exports {
 //      uint32_t add(uint32_t a, uint32_t b);
 //      void     on_request(uint32_t path_ptr, uint32_t path_len);
 //   };
-//   PSIO_REFLECT(my_exports, method(add, a, b), method(on_request, path_ptr, path_len))
+//   PSIO1_REFLECT(my_exports, method(add, a, b), method(on_request, path_ptr, path_len))
 //
 //   // Load and use:
 //   my_host host_impl;
@@ -34,7 +34,7 @@
 #include <psizam/pzam_format.hpp>
 #include <psizam/pzam_metadata.hpp>
 
-#include <psio/reflect.hpp>
+#include <psio1/reflect.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -57,7 +57,7 @@ namespace psizam {
    namespace detail {
       template<auto... Funcs>
       void register_methods(host_function_table& table, const std::string& module_name,
-                            psio::MemberList<Funcs...>*,
+                            psio1::MemberList<Funcs...>*,
                             const std::initializer_list<const char*>* names) {
          std::size_t i = 0;
          (table.add<Funcs>(module_name, std::string(*names[i++].begin())), ...);
@@ -70,7 +70,7 @@ namespace psizam {
    ///   struct my_host {
    ///      void log(uint32_t ptr, uint32_t len);
    ///   };
-   ///   PSIO_REFLECT(my_host, method(log, ptr, len))
+   ///   PSIO1_REFLECT(my_host, method(log, ptr, len))
    ///
    ///   host_function_table table;
    ///   register_reflected<my_host>(table, "env");
@@ -78,7 +78,7 @@ namespace psizam {
    ///
    template<typename Host>
    void register_reflected(host_function_table& table, const std::string& module_name) {
-      using R = psio::reflect<Host>;
+      using R = psio1::reflect<Host>;
       detail::register_methods(table, module_name,
          static_cast<typename R::member_functions*>(nullptr),
          R::member_function_names);
@@ -123,7 +123,7 @@ namespace psizam {
       }
    } // namespace detail
 
-   /// ProxyObject for psio::reflect proxy pattern.
+   /// ProxyObject for psio1::reflect proxy pattern.
    /// Dispatches method calls to WASM exported functions via the execution context.
    template<typename Exports>
    class pzam_export_dispatch {
@@ -136,12 +136,12 @@ namespace psizam {
 
       uint32_t resolve_index(std::size_t method_index) const {
          if (_func_indices.empty())
-            _func_indices.resize(sizeof(psio::reflect<Exports>::member_function_names) /
-                                 sizeof(psio::reflect<Exports>::member_function_names[0]),
+            _func_indices.resize(sizeof(psio1::reflect<Exports>::member_function_names) /
+                                 sizeof(psio1::reflect<Exports>::member_function_names[0]),
                                  UINT32_MAX);
 
          if (_func_indices[method_index] == UINT32_MAX) {
-            const char* name = *psio::reflect<Exports>::member_function_names[method_index].begin();
+            const char* name = *psio1::reflect<Exports>::member_function_names[method_index].begin();
             _func_indices[method_index] = _mod->get_exported_function(name);
          }
          return _func_indices[method_index];
@@ -174,7 +174,7 @@ namespace psizam {
    /// The typed export proxy. Wraps pzam_export_dispatch with psio's proxy pattern
    /// so you can call WASM exports with natural C++ syntax.
    template<typename Exports>
-   using pzam_export_proxy = typename psio::reflect<Exports>::template proxy<pzam_export_dispatch<Exports>>;
+   using pzam_export_proxy = typename psio1::reflect<Exports>::template proxy<pzam_export_dispatch<Exports>>;
 
    // =========================================================================
    // pzam_instance — loaded module ready to execute
@@ -395,10 +395,10 @@ namespace psizam {
    /// Load a .pzam file and create a typed instance.
    ///
    ///   struct my_host { void log(uint32_t, uint32_t); };
-   ///   PSIO_REFLECT(my_host, method(log, ptr, len))
+   ///   PSIO1_REFLECT(my_host, method(log, ptr, len))
    ///
    ///   struct my_exports { uint32_t add(uint32_t a, uint32_t b); };
-   ///   PSIO_REFLECT(my_exports, method(add, a, b))
+   ///   PSIO1_REFLECT(my_exports, method(add, a, b))
    ///
    ///   my_host host;
    ///   auto instance = pzam_load<my_host, my_exports>(pzam_data, host);

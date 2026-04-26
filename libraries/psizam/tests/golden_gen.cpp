@@ -1,6 +1,6 @@
 #include <catch2/catch.hpp>
-#include <psio/wit_encode.hpp>
-#include <psio/wit_types.hpp>
+#include <psio1/wit_encode.hpp>
+#include <psio1/wit_types.hpp>
 
 #include <cstdint>
 #include <fstream>
@@ -9,7 +9,7 @@
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-using namespace psio;
+using namespace psio1;
 
 static constexpr int32_t P_BOOL   = wit_prim_idx(wit_prim::bool_);
 static constexpr int32_t P_U8     = wit_prim_idx(wit_prim::u8);

@@ -290,8 +290,8 @@ TEST_CASE("pzam_metadata: full round-trip extract→fracpack→restore", "[pzam_
    auto meta = extract_metadata(mod);
 
    // Serialize to fracpack and back
-   auto bytes = psio::convert_to_frac(meta);
-   auto restored_meta = psio::from_frac<pzam_module_metadata>(bytes);
+   auto bytes = psio1::convert_to_frac(meta);
+   auto restored_meta = psio1::from_frac<pzam_module_metadata>(bytes);
 
    // Restore to module
    auto restored = restore_module(restored_meta);

@@ -3,7 +3,7 @@
 #include <wasi/0.2.3/cli.hpp>
 #include <wasi/0.2.3/io_host.hpp>
 
-#include <psio/structural.hpp>
+#include <psio1/structural.hpp>
 
 #include <cstdlib>
 #include <fcntl.h>
@@ -53,19 +53,19 @@ struct WasiCliHost
 
    // ── wasi:cli/stdin, stdout, stderr ────────────────────────────────
 
-   psio::own<input_stream> get_stdin()
+   psio1::own<input_stream> get_stdin()
    {
       int flags = ::fcntl(STDIN_FILENO, F_GETFL, 0);
       ::fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
       return io.create_input_stream(RealFd{STDIN_FILENO});
    }
 
-   psio::own<output_stream> get_stdout()
+   psio1::own<output_stream> get_stdout()
    {
       return io.create_output_stream(RealFd{STDOUT_FILENO});
    }
 
-   psio::own<output_stream> get_stderr()
+   psio1::own<output_stream> get_stderr()
    {
       return io.create_output_stream(RealFd{STDERR_FILENO});
    }
@@ -73,5 +73,5 @@ struct WasiCliHost
 
 }  // namespace wasi_host
 
-PSIO_HOST_MODULE(wasi_host::WasiCliHost,
+PSIO1_HOST_MODULE(wasi_host::WasiCliHost,
    interface(environment, get_environment, get_arguments, initial_cwd))

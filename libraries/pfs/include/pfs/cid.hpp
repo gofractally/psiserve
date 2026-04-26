@@ -1,7 +1,7 @@
 #pragma once
-#include <psio/bytes_view.hpp>
-#include <psio/fracpack.hpp>
-#include <psio/reflect.hpp>
+#include <psio1/bytes_view.hpp>
+#include <psio1/fracpack.hpp>
+#include <psio1/reflect.hpp>
 
 #include <array>
 #include <cstdint>
@@ -46,14 +46,14 @@ struct cid
 static_assert(sizeof(cid) == 36);
 
 // Compute CID from raw data using IPFS-compatible chunking + UnixFS DAG.
-cid compute_cid(psio::bytes_view data);
+cid compute_cid(psio1::bytes_view data);
 
 }  // namespace pfs
 
-namespace psio
+namespace psio1
 {
 template <>
 struct is_packable_memcpy<pfs::cid> : std::bool_constant<true>
 {
 };
-}  // namespace psio
+}  // namespace psio1

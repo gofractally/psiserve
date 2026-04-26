@@ -5,9 +5,9 @@
 #include <pfs/config.hpp>
 #include <pfs/schema.hpp>
 
-#include <psio/bytes_view.hpp>
-#include <psio/fracpack.hpp>
-#include <psio/name.hpp>
+#include <psio1/bytes_view.hpp>
+#include <psio1/fracpack.hpp>
+#include <psio1/name.hpp>
 
 #include <psitri/read_session.hpp>
 
@@ -30,9 +30,9 @@ class file_handle
 
    void read(uint64_t                                              offset,
              uint64_t                                              length,
-             std::function<void(psio::bytes_view)> const&  cb);
+             std::function<void(psio1::bytes_view)> const&  cb);
 
-   void read(std::function<void(psio::bytes_view)> const& cb);
+   void read(std::function<void(psio1::bytes_view)> const& cb);
 
   private:
    friend class store;
@@ -71,48 +71,48 @@ class store
    store(std::shared_ptr<psitri::database> db, config cfg = {});
 
    // ── Content-addressed storage (no filesystem entry) ──────────────
-   cid         put(psio::bytes_view data);
+   cid         put(psio1::bytes_view data);
    void        unpin(const cid& c);
    file_handle open(const cid& c);
 
    // ── File handles (read) ─────────────────────────────────────────
-   file_handle open(psio::name_id tenant, const path& p);
+   file_handle open(psio1::name_id tenant, const path& p);
 
    // ── Mutations ───────────────────────────────────────────────────
-   cid  write(psio::name_id            tenant,
+   cid  write(psio1::name_id            tenant,
               const path&              p,
-              psio::bytes_view data,
+              psio1::bytes_view data,
               uint16_t                 mode  = 0644,
               uint32_t                 owner = 0);
-   void remove(psio::name_id tenant, const path& p);
-   void mkdir(psio::name_id tenant,
+   void remove(psio1::name_id tenant, const path& p);
+   void mkdir(psio1::name_id tenant,
               const path&   p,
               uint16_t      mode  = 0755,
               uint32_t      owner = 0);
-   void chmod(psio::name_id tenant, const path& p, uint16_t mode);
+   void chmod(psio1::name_id tenant, const path& p, uint16_t mode);
 
    // ── Directory listing ───────────────────────────────────────────
-   dir_cursor ls(psio::name_id tenant, const path& p);
-   dir_cursor ls(psio::name_id tenant, const path& p, std::string_view after);
+   dir_cursor ls(psio1::name_id tenant, const path& p);
+   dir_cursor ls(psio1::name_id tenant, const path& p, std::string_view after);
 
    // ── Metadata ────────────────────────────────────────────────────
-   std::optional<fs_entry> stat(psio::name_id tenant, const path& p);
+   std::optional<fs_entry> stat(psio1::name_id tenant, const path& p);
 
    // ── Quota ───────────────────────────────────────────────────────
-   void     set_quota(psio::name_id tenant, uint64_t limit);
-   fs_quota quota(psio::name_id tenant);
+   void     set_quota(psio1::name_id tenant, uint64_t limit);
+   fs_quota quota(psio1::name_id tenant);
 
    // ── Sharing ─────────────────────────────────────────────────────
-   void share(psio::name_id src,
+   void share(psio1::name_id src,
               const path&   src_path,
-              psio::name_id dst,
+              psio1::name_id dst,
               const path&   dst_path);
 
   private:
    std::string normalize_path(const path& p);
-   uint32_t    root_for_tenant(psio::name_id tenant) const;
+   uint32_t    root_for_tenant(psio1::name_id tenant) const;
    void        update_quota(psitri::transaction& tx,
-                            psio::name_id        tenant,
+                            psio1::name_id        tenant,
                             int64_t              size_delta);
    uint64_t    now_ns() const;
 

@@ -1,154 +1,221 @@
-#include <catch2/catch.hpp>
-#include <psio/from_json.hpp>
-#include <psio/to_json.hpp>
+// Phase 9 — JSON format.
+//
+// Exercises the v3 architecture against a text format. Scope matches the
+// other format tests: primitives, strings, vectors, arrays, optionals,
+// reflected records.
 
-// ── Test structs ──────────────────────────────────────────────────────────────
+#include <psio/json.hpp>
+#include <psio/reflect.hpp>
 
-struct Point
+#include <catch.hpp>
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
+
+struct JsonPoint
 {
-   int32_t x;
-   int32_t y;
+   std::int32_t x;
+   std::int32_t y;
 };
-PSIO_REFLECT(Point, x, y)
+PSIO_REFLECT(JsonPoint, x, y)
 
-struct Person
+struct JsonPerson
 {
-   std::string name;
-   uint32_t    age;
-   Point       location;
+   std::string  name;
+   std::int32_t age;
 };
-PSIO_REFLECT(Person, name, age, location)
+PSIO_REFLECT(JsonPerson, name, age)
 
-// ── to_json tests ────────────────────────────────────────────────────────────
-
-TEST_CASE("to_json: primitives", "[json]")
+struct JsonNested
 {
-   REQUIRE(psio::convert_to_json(uint32_t(42)) == "42");
-   REQUIRE(psio::convert_to_json(int32_t(-7)) == "-7");
-   REQUIRE(psio::convert_to_json(true) == "true");
-   REQUIRE(psio::convert_to_json(false) == "false");
-   REQUIRE(psio::convert_to_json(std::string("hello")) == "\"hello\"");
+   JsonPerson  owner;
+   std::string title;
+};
+PSIO_REFLECT(JsonNested, owner, title)
+
+TEST_CASE("json encodes bool", "[json][primitive]")
+{
+   REQUIRE(psio::encode(psio::json{}, true) == "true");
+   REQUIRE(psio::encode(psio::json{}, false) == "false");
 }
 
-TEST_CASE("to_json: struct", "[json]")
+TEST_CASE("json round-trips bool", "[json][primitive]")
 {
-   Point p{10, 20};
-   auto  json = psio::convert_to_json(p);
-   REQUIRE(json == "{\"x\":10,\"y\":20}");
+   auto s = psio::encode(psio::json{}, true);
+   auto v = psio::decode<bool>(psio::json{}, std::span<const char>{s});
+   REQUIRE(v == true);
 }
 
-TEST_CASE("to_json: nested struct", "[json]")
+TEST_CASE("json round-trips integers", "[json][primitive]")
 {
-   Person p{"Alice", 30, {1, 2}};
-   auto   json = psio::convert_to_json(p);
-   REQUIRE(json == "{\"name\":\"Alice\",\"age\":30,\"location\":{\"x\":1,\"y\":2}}");
+   auto s = psio::encode(psio::json{}, std::int32_t{-42});
+   REQUIRE(s == "-42");
+   auto v =
+      psio::decode<std::int32_t>(psio::json{}, std::span<const char>{s});
+   REQUIRE(v == -42);
 }
 
-TEST_CASE("to_json: vector", "[json]")
+TEST_CASE("json round-trips large unsigned integer", "[json][primitive]")
 {
-   std::vector<int32_t> v{1, 2, 3};
-   auto                 json = psio::convert_to_json(v);
-   REQUIRE(json == "[1,2,3]");
+   std::uint64_t big = 0xDEADBEEFCAFEBABE;
+   auto          s   = psio::encode(psio::json{}, big);
+   auto          v   = psio::decode<std::uint64_t>(
+      psio::json{}, std::span<const char>{s});
+   REQUIRE(v == big);
 }
 
-TEST_CASE("to_json: optional", "[json]")
+TEST_CASE("json escapes string quotes and newlines", "[json][string]")
 {
-   std::optional<int32_t> present = 42;
-   std::optional<int32_t> absent;
-   REQUIRE(psio::convert_to_json(present) == "42");
-   REQUIRE(psio::convert_to_json(absent) == "null");
+   std::string in = "a\"b\nc";
+   auto        s  = psio::encode(psio::json{}, in);
+   REQUIRE(s == R"("a\"b\nc")");
+
+   auto back =
+      psio::decode<std::string>(psio::json{}, std::span<const char>{s});
+   REQUIRE(back == in);
 }
 
-TEST_CASE("to_json: string escaping", "[json]")
+TEST_CASE("json round-trips std::vector<int>", "[json][vector]")
 {
-   REQUIRE(psio::convert_to_json(std::string("a\"b")) == "\"a\\\"b\"");
-   REQUIRE(psio::convert_to_json(std::string("a\\b")) == "\"a\\\\b\"");
-   REQUIRE(psio::convert_to_json(std::string("a\nb")) == "\"a\\nb\"");
-   REQUIRE(psio::convert_to_json(std::string("a\tb")) == "\"a\\tb\"");
+   std::vector<std::int32_t> v{1, 2, 3};
+   auto                      s = psio::encode(psio::json{}, v);
+   REQUIRE(s == "[1,2,3]");
+
+   auto back = psio::decode<std::vector<std::int32_t>>(
+      psio::json{}, std::span<const char>{s});
+   REQUIRE(back == v);
 }
 
-TEST_CASE("to_json: floating point", "[json]")
+TEST_CASE("json round-trips empty std::vector", "[json][vector]")
 {
-   auto json = psio::convert_to_json(3.14);
-   REQUIRE(json.find("3.14") != std::string::npos);
-
-   REQUIRE(psio::convert_to_json(0.0) == "0");
+   std::vector<std::int32_t> v;
+   auto                      s = psio::encode(psio::json{}, v);
+   REQUIRE(s == "[]");
+   auto back = psio::decode<std::vector<std::int32_t>>(
+      psio::json{}, std::span<const char>{s});
+   REQUIRE(back.empty());
 }
 
-TEST_CASE("to_json: pretty print", "[json]")
+TEST_CASE("json round-trips std::array", "[json][array]")
 {
-   Point p{10, 20};
-   auto  json = psio::format_json(p);
-   // Pretty format should have newlines
-   REQUIRE(json.find('\n') != std::string::npos);
-   REQUIRE(json.find("\"x\"") != std::string::npos);
+   std::array<std::uint32_t, 3> arr{{10, 20, 30}};
+   auto                         s = psio::encode(psio::json{}, arr);
+   REQUIRE(s == "[10,20,30]");
+   auto back = psio::decode<std::array<std::uint32_t, 3>>(
+      psio::json{}, std::span<const char>{s});
+   REQUIRE(back == arr);
 }
 
-// ── from_json tests ──────────────────────────────────────────────────────────
-
-TEST_CASE("from_json: primitives", "[json]")
+TEST_CASE("json round-trips std::optional<T>", "[json][optional]")
 {
-   REQUIRE(psio::convert_from_json<uint32_t>("\"42\"") == 42);
-   REQUIRE(psio::convert_from_json<int32_t>("\"-7\"") == -7);
-   REQUIRE(psio::convert_from_json<bool>("true") == true);
-   REQUIRE(psio::convert_from_json<bool>("false") == false);
-   REQUIRE(psio::convert_from_json<std::string>("\"hello\"") == "hello");
+   std::optional<std::int32_t> some = 7;
+   auto                        s    = psio::encode(psio::json{}, some);
+   REQUIRE(s == "7");
+   auto back = psio::decode<std::optional<std::int32_t>>(
+      psio::json{}, std::span<const char>{s});
+   REQUIRE(back.has_value());
+   REQUIRE(*back == 7);
+
+   std::optional<std::int32_t> none;
+   auto                        s2 = psio::encode(psio::json{}, none);
+   REQUIRE(s2 == "null");
+   auto back2 = psio::decode<std::optional<std::int32_t>>(
+      psio::json{}, std::span<const char>{s2});
+   REQUIRE(!back2.has_value());
 }
 
-TEST_CASE("from_json: struct", "[json]")
+TEST_CASE("json round-trips reflected records", "[json][record]")
 {
-   auto p = psio::convert_from_json<Point>("{\"x\":10,\"y\":20}");
-   REQUIRE(p.x == 10);
-   REQUIRE(p.y == 20);
+   JsonPoint p{3, -5};
+   auto      s = psio::encode(psio::json{}, p);
+   REQUIRE(s == R"({"x":3,"y":-5})");
+   auto back =
+      psio::decode<JsonPoint>(psio::json{}, std::span<const char>{s});
+   REQUIRE(back.x == 3);
+   REQUIRE(back.y == -5);
 }
 
-TEST_CASE("from_json: nested struct", "[json]")
+TEST_CASE("json round-trips records with string fields", "[json][record]")
 {
-   // Note: from_json reads integers as quoted strings
-   std::string json = "{\"name\":\"Alice\",\"age\":\"30\",\"location\":{\"x\":\"1\",\"y\":\"2\"}}";
-   auto p = psio::convert_from_json<Person>(std::move(json));
-   REQUIRE(p.name == "Alice");
-   REQUIRE(p.age == 30);
-   REQUIRE(p.location.x == 1);
-   REQUIRE(p.location.y == 2);
+   JsonPerson pp{"Alice", 30};
+   auto       s = psio::encode(psio::json{}, pp);
+   REQUIRE(s == R"({"name":"Alice","age":30})");
+   auto back =
+      psio::decode<JsonPerson>(psio::json{}, std::span<const char>{s});
+   REQUIRE(back.name == "Alice");
+   REQUIRE(back.age == 30);
 }
 
-TEST_CASE("from_json: vector", "[json]")
+TEST_CASE("json decoder tolerates whitespace and key reordering",
+          "[json][record]")
 {
-   auto v = psio::convert_from_json<std::vector<std::string>>("[\"a\",\"b\",\"c\"]");
-   REQUIRE(v.size() == 3);
-   REQUIRE(v[0] == "a");
-   REQUIRE(v[1] == "b");
-   REQUIRE(v[2] == "c");
-}
-
-TEST_CASE("from_json: optional", "[json]")
-{
-   auto present = psio::convert_from_json<std::optional<std::string>>("\"hello\"");
-   auto absent  = psio::convert_from_json<std::optional<std::string>>("null");
-   REQUIRE(present.has_value());
-   REQUIRE(*present == "hello");
-   REQUIRE(!absent.has_value());
-}
-
-// ── Round-trip tests ─────────────────────────────────────────────────────────
-
-TEST_CASE("json: round-trip Point", "[json]")
-{
-   // to_json emits integers < 64-bit unquoted, but from_json expects quoted.
-   // Round-trip test uses the quoted format from_json needs.
-   std::string json = "{\"x\":\"42\",\"y\":\"-7\"}";
-   auto        back = psio::convert_from_json<Point>(std::move(json));
-   REQUIRE(back.x == 42);
-   REQUIRE(back.y == -7);
-}
-
-TEST_CASE("json: round-trip string field", "[json]")
-{
-   std::string json = "{\"name\":\"Bob\",\"age\":\"25\",\"location\":{\"x\":\"100\",\"y\":\"200\"}}";
-   auto        back = psio::convert_from_json<Person>(std::move(json));
+   std::string text = R"(  { "age" : 30 , "name" : "Bob" } )";
+   auto        back =
+      psio::decode<JsonPerson>(psio::json{}, std::span<const char>{text});
    REQUIRE(back.name == "Bob");
-   REQUIRE(back.age == 25);
-   REQUIRE(back.location.x == 100);
-   REQUIRE(back.location.y == 200);
+   REQUIRE(back.age == 30);
+}
+
+TEST_CASE("json round-trips nested records", "[json][record][nested]")
+{
+   JsonNested n{{"Carol", 25}, "Dr"};
+   auto       s = psio::encode(psio::json{}, n);
+   REQUIRE(s == R"({"owner":{"name":"Carol","age":25},"title":"Dr"})");
+   auto back =
+      psio::decode<JsonNested>(psio::json{}, std::span<const char>{s});
+   REQUIRE(back.owner.name == "Carol");
+   REQUIRE(back.owner.age == 25);
+   REQUIRE(back.title == "Dr");
+}
+
+TEST_CASE("json validate accepts well-formed input", "[json][validate]")
+{
+   std::string s  = R"({"x":1,"y":2})";
+   auto        st = psio::validate<JsonPoint>(psio::json{},
+                                        std::span<const char>{s});
+   REQUIRE(st.ok());
+}
+
+TEST_CASE("json validate rejects empty input", "[json][validate]")
+{
+   char tiny = '\0';
+   auto st = psio::validate<JsonPoint>(psio::json{},
+                                         std::span<const char>{&tiny, 0});
+   REQUIRE(!st.ok());
+}
+
+TEST_CASE("json scoped sugar matches generic CPO", "[json][format_tag_base]")
+{
+   JsonPoint p{1, 2};
+   auto      a = psio::encode(psio::json{}, p);
+   auto      b = psio::json::encode(p);
+   REQUIRE(a == b);
+
+   auto v = psio::json::decode<JsonPoint>(std::span<const char>{a});
+   REQUIRE(v.x == 1);
+   REQUIRE(v.y == 2);
+}
+
+TEST_CASE("json encodes std::variant as [index, value]", "[json][variant]")
+{
+   using V = std::variant<std::int32_t, std::string>;
+   REQUIRE(psio::encode(psio::json{}, V{std::int32_t{42}}) ==
+           "[0,42]");
+   REQUIRE(psio::encode(psio::json{}, V{std::string("hi")}) ==
+           "[1,\"hi\"]");
+}
+
+TEST_CASE("json round-trips std::variant", "[json][variant][round-trip]")
+{
+   using V = std::variant<std::int32_t, std::string>;
+   V     in = std::string("payload");
+   auto  bv = psio::encode(psio::json{}, in);
+   auto  out =
+      psio::decode<V>(psio::json{}, std::span<const char>{bv});
+   REQUIRE(out.index() == 1);
+   REQUIRE(std::get<1>(out) == "payload");
 }

@@ -88,9 +88,9 @@ target_compile_options(psizam INTERFACE
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
-   target_link_libraries(psizam INTERFACE psio)
+   target_link_libraries(psizam INTERFACE psio1)
 else()
-   target_link_libraries(psizam INTERFACE Threads::Threads psio)
+   target_link_libraries(psizam INTERFACE Threads::Threads psio1)
 endif()
 
 # ucc::typed_int is the type-safe int primitive used by gas_units and the

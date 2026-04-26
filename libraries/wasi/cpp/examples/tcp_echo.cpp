@@ -85,28 +85,28 @@ int main()
           ip_socket_address bind_addr = ipv4_socket_address{0, ipv4_address{{127, 0, 0, 1}}};
 
           auto bind_r = sockets.tcp_socket_start_bind(
-              psio::borrow<tcp_socket>{sock.handle},
-              psio::borrow<network>{net.handle}, bind_addr);
+              psio1::borrow<tcp_socket>{sock.handle},
+              psio1::borrow<network>{net.handle}, bind_addr);
           check(bind_r, "start_bind");
 
           auto finish_bind_r = sockets.tcp_socket_finish_bind(
-              psio::borrow<tcp_socket>{sock.handle});
+              psio1::borrow<tcp_socket>{sock.handle});
           check(finish_bind_r, "finish_bind");
 
           // Read back the assigned port
           auto local_r = sockets.tcp_socket_local_address(
-              psio::borrow<tcp_socket>{sock.handle});
+              psio1::borrow<tcp_socket>{sock.handle});
           auto local_addr = unwrap(local_r, "local_address");
           port = std::get<ipv4_socket_address>(local_addr).port;
           std::cout << "[server] Bound to 127.0.0.1:" << port << "\n";
 
           // Listen
           auto listen_r = sockets.tcp_socket_start_listen(
-              psio::borrow<tcp_socket>{sock.handle});
+              psio1::borrow<tcp_socket>{sock.handle});
           check(listen_r, "start_listen");
 
           auto finish_listen_r = sockets.tcp_socket_finish_listen(
-              psio::borrow<tcp_socket>{sock.handle});
+              psio1::borrow<tcp_socket>{sock.handle});
           check(finish_listen_r, "finish_listen");
 
           server_ready = true;
@@ -114,26 +114,26 @@ int main()
 
           // Accept one connection (yields until a client connects)
           auto accept_r = sockets.tcp_socket_accept(
-              psio::borrow<tcp_socket>{sock.handle});
+              psio1::borrow<tcp_socket>{sock.handle});
           auto [client_sock, is, os] = unwrap(accept_r, "accept");
           std::cout << "[server] Accepted connection\n";
 
           // Read data from client
           auto read_r = io.input_stream_blocking_read(
-              psio::borrow<input_stream>{is.handle}, 4096);
+              psio1::borrow<input_stream>{is.handle}, 4096);
           auto data = unwrap_io(read_r, "server read");
           std::string msg(data.begin(), data.end());
           std::cout << "[server] Received: \"" << msg << "\"\n";
 
           // Echo it back
           auto write_r = io.output_stream_write(
-              psio::borrow<output_stream>{os.handle}, std::move(data));
+              psio1::borrow<output_stream>{os.handle}, std::move(data));
           check_io(write_r, "server write");
           std::cout << "[server] Echoed back\n";
 
           // Shutdown
           sockets.tcp_socket_shutdown(
-              psio::borrow<tcp_socket>{client_sock.handle},
+              psio1::borrow<tcp_socket>{client_sock.handle},
               shutdown_type::both);
        },
        "server");
@@ -156,8 +156,8 @@ int main()
           ip_socket_address remote = ipv4_socket_address{port, ipv4_address{{127, 0, 0, 1}}};
 
           auto conn_r = sockets.tcp_socket_start_connect(
-              psio::borrow<tcp_socket>{sock.handle},
-              psio::borrow<network>{net.handle}, remote);
+              psio1::borrow<tcp_socket>{sock.handle},
+              psio1::borrow<network>{net.handle}, remote);
           check(conn_r, "start_connect");
 
           // Wait for connection to complete
@@ -165,7 +165,7 @@ int main()
               sockets.tcp_sockets.get(sock.handle)->fd, psiber::Writable);
 
           auto finish_r = sockets.tcp_socket_finish_connect(
-              psio::borrow<tcp_socket>{sock.handle});
+              psio1::borrow<tcp_socket>{sock.handle});
           auto [is, os] = unwrap(finish_r, "finish_connect");
           std::cout << "[client] Connected\n";
 
@@ -173,13 +173,13 @@ int main()
           std::string message = "Hello from WASI sockets!";
           std::vector<uint8_t> payload(message.begin(), message.end());
           auto write_r = io.output_stream_write(
-              psio::borrow<output_stream>{os.handle}, std::move(payload));
+              psio1::borrow<output_stream>{os.handle}, std::move(payload));
           check_io(write_r, "client write");
           std::cout << "[client] Sent: \"" << message << "\"\n";
 
           // Read the echo
           auto read_r = io.input_stream_blocking_read(
-              psio::borrow<input_stream>{is.handle}, 4096);
+              psio1::borrow<input_stream>{is.handle}, 4096);
           auto data = unwrap_io(read_r, "client read");
           std::string echo(data.begin(), data.end());
           std::cout << "[client] Received echo: \"" << echo << "\"\n";

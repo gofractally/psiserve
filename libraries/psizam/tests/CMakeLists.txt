@@ -314,7 +314,7 @@ target_include_directories(component_tests PUBLIC
 )
 target_compile_definitions(component_tests PUBLIC
    CATCH_CONFIG_NO_POSIX_SIGNALS
-   GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../psio/golden"
+   GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../psio1/golden"
 )
 catch_discover_tests(component_tests)
 

@@ -24,7 +24,7 @@ Three concentric goals:
 
 ## Test file layout
 
-Mirrors the existing psio3 conventions in `libraries/psio3/cpp/tests/`.
+Mirrors the existing psio3 conventions in `libraries/psio/cpp/tests/`.
 
 | file | concern |
 |---|---|
@@ -42,7 +42,7 @@ Plus benchmarks:
 
 | file | concern |
 |---|---|
-| `libraries/psio3/cpp/benchmarks/jsonb_perf_report.cpp` | head-to-head: jsonb vs JSON-text vs BSON vs PG-jsonb-modeled vs pssz, across shape tiers |
+| `libraries/psio/cpp/benchmarks/jsonb_perf_report.cpp` | head-to-head: jsonb vs JSON-text vs BSON vs PG-jsonb-modeled vs pssz, across shape tiers |
 | reuses `harness.hpp` | auto-tuning iters, warmup, 7-trial min/median/stddev, CV reporting (already built) |
 
 ## Test corpora
@@ -55,7 +55,7 @@ Plus benchmarks:
 | `pssz_struct_corpus` | reflected structs from psio3's existing shape library (`shapes.hpp`) — Point, NameRecord, FlatRecord, Record, Validator, Order, ValidatorList | 7 tiers | parity with existing bench shapes |
 | `adversarial` | hand-crafted malformed JSONB buffers | a few hundred | validator robustness |
 
-Corpora live in `libraries/psio3/cpp/tests/jsonb_corpus/` as files plus
+Corpora live in `libraries/psio/cpp/tests/jsonb_corpus/` as files plus
 expected golden outputs.
 
 ## Wire-format compliance — `jsonb_format_tests.cpp`
@@ -148,7 +148,7 @@ Reflection-driven encoder tests:
 Correctness:
 
 - `jsonb_view<T>::get<&T::field>()` returns the same value the encoder put in.
-- Sub-objects: `view.inner().field()` (chain of `PSIO3_REFLECT`-generated accessors) returns the right value.
+- Sub-objects: `view.inner().field()` (chain of `PSIO_REFLECT`-generated accessors) returns the right value.
 - Iteration: walking a `jsonb_object_view` yields all (key, value) pairs in storage order; iterating a `jsonb_array_view` yields elements in order.
 - `string_view` returned from `as_string()` points into the source buffer (verify by pointer-arithmetic check).
 - `span<const byte>` from `as_bytes()` points into the source buffer.
@@ -256,7 +256,7 @@ Reuse `harness.hpp` (already supports auto-tuning, warmup, CV
 reporting). Output format: same markdown table style as
 `PERF_V1_V3_FULL.md`.
 
-Specific output: `libraries/psio3/JSONB_PERF.md` with one row per
+Specific output: `libraries/psio/JSONB_PERF.md` with one row per
 (shape, format, library) tuple, columns for encode / decode / lookup /
 validate / size, plus CV. Plus a CSV mirror.
 

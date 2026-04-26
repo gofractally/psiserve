@@ -8,7 +8,7 @@
  *
  *   - Guest:  includes this header, calls methods on own<database>
  *             (and friends) as if they were native objects. The
- *             PSIO_REFLECT proxy generates Canonical ABI stubs that
+ *             PSIO1_REFLECT proxy generates Canonical ABI stubs that
  *             marshal to the imported component.
  *
  *   - Host:   reflects the same declarations to discover the import
@@ -16,7 +16,7 @@
  *             the methods natively (handle-table entries).
  *
  * The WIT binary is derived mechanically by
- * psio::generate_wit_binary<store>(...). No hand-authored .wit file,
+ * psio1::generate_wit_binary<store>(...). No hand-authored .wit file,
  * no handwritten stub layer.
  *
  * ── Transaction scoping ──────────────────────────────────────────────
@@ -62,8 +62,8 @@
 #include <string>
 #include <vector>
 
-#include <psio/reflect.hpp>
-#include <psio/wit_resource.hpp>
+#include <psio1/reflect.hpp>
+#include <psio1/wit_resource.hpp>
 
 namespace psi::db
 {
@@ -89,7 +89,7 @@ namespace psi::db
       std::uint64_t total_key_bytes;
       std::uint64_t total_val_bytes;
    };
-   PSIO_REFLECT(stats, key_count, total_key_bytes, total_val_bytes)
+   PSIO1_REFLECT(stats, key_count, total_key_bytes, total_val_bytes)
 
    /* Domain error codes. Methods that can fail return
     * std::expected<T, error>. */
@@ -121,7 +121,7 @@ namespace psi::db
     * table that opened it, which in turn is scoped to its parent
     * transaction. Valid while the tx is uncommitted and the table
     * handle is alive. */
-   struct cursor : psio::wit_resource
+   struct cursor : psio1::wit_resource
    {
       std::expected<bool, error> seek(bytes key);
       std::expected<bool, error> seek_first();
@@ -140,7 +140,7 @@ namespace psi::db
       std::expected<bytes, error> value(std::uint32_t                offset = 0,
                                         std::optional<std::uint32_t> len    = std::nullopt);
    };
-   PSIO_REFLECT(cursor,
+   PSIO1_REFLECT(cursor,
                 method(seek, key),
                 method(seek_first),
                 method(seek_last),
@@ -161,13 +161,13 @@ namespace psi::db
     * Read ops (get, open_cursor, get_stats) work on tables from both
     * read-tx and write-tx. Mutating ops (upsert, remove, remove_range)
     * on a table from a read-tx return error::read_only_tx. */
-   struct table : psio::wit_resource
+   struct table : psio1::wit_resource
    {
       /* Read ops. */
       std::expected<bytes, error> get(bytes                        key,
                                       std::uint32_t                offset = 0,
                                       std::optional<std::uint32_t> len    = std::nullopt);
-      psio::own<cursor>           open_cursor();
+      psio1::own<cursor>           open_cursor();
       stats                       get_stats();
 
       /* Write ops. */
@@ -175,7 +175,7 @@ namespace psi::db
       std::expected<bool, error>          remove(bytes key);         /* true=removed */
       std::expected<std::uint32_t, error> remove_range(bytes low, bytes high);
    };
-   PSIO_REFLECT(table,
+   PSIO1_REFLECT(table,
                 method(get, key, offset, len),
                 method(open_cursor),
                 method(get_stats),
@@ -192,16 +192,16 @@ namespace psi::db
     * Dropping an uncommitted transaction aborts it via [resource-drop].
     * A read-tx rejects DDL (create_table, drop_table) with
     * error::read_only_tx. */
-   struct transaction : psio::wit_resource
+   struct transaction : psio1::wit_resource
    {
       std::expected<void, error> commit();
       void                       abort();
 
-      psio::own<transaction> start_sub();
+      psio1::own<transaction> start_sub();
 
       /* Table acquisition (lives within this tx). */
-      std::expected<psio::own<table>, error> open_table(std::string name);
-      std::expected<psio::own<table>, error> create_table(std::string name);
+      std::expected<psio1::own<table>, error> open_table(std::string name);
+      std::expected<psio1::own<table>, error> create_table(std::string name);
       std::expected<void, error>             drop_table(std::string name);
 
       /* Snapshot of the top-root's table directory as seen by this
@@ -209,7 +209,7 @@ namespace psi::db
        * additionally reflects its own create/drop operations. */
       std::vector<std::string> list_tables();
    };
-   PSIO_REFLECT(transaction,
+   PSIO1_REFLECT(transaction,
                 method(commit),
                 method(abort),
                 method(start_sub),
@@ -225,7 +225,7 @@ namespace psi::db
     * snapshot directory is navigated with a stateful cursor rather
     * than a bulk list. Scoped to its parent `snapshots` sub-resource;
     * valid while that handle (and the owning database) is alive. */
-   struct snapshot_cursor : psio::wit_resource
+   struct snapshot_cursor : psio1::wit_resource
    {
       std::expected<bool, error> seek(std::string name);   /* lower_bound */
       std::expected<bool, error> seek_first();
@@ -237,7 +237,7 @@ namespace psi::db
       /* Name of the current snapshot. Error if !on_row. */
       std::expected<std::string, error> name();
    };
-   PSIO_REFLECT(snapshot_cursor,
+   PSIO1_REFLECT(snapshot_cursor,
                 method(seek, name),
                 method(seek_first),
                 method(seek_last),
@@ -255,16 +255,16 @@ namespace psi::db
     * `create` both registers a new named snapshot and returns a handle
     * to it — same return shape as `open`, so the caller can use it
     * immediately without a redundant open. */
-   struct snapshots : psio::wit_resource
+   struct snapshots : psio1::wit_resource
    {
-      std::expected<psio::own<database>, error> create(std::string name);
-      std::expected<psio::own<database>, error> open(std::string name);
+      std::expected<psio1::own<database>, error> create(std::string name);
+      std::expected<psio1::own<database>, error> open(std::string name);
       std::expected<void, error>                release(std::string name);
 
       /* Iterate the snapshot name-space in sorted order. */
-      psio::own<snapshot_cursor> cursor();
+      psio1::own<snapshot_cursor> cursor();
    };
-   PSIO_REFLECT(snapshots,
+   PSIO1_REFLECT(snapshots,
                 method(create, name),
                 method(open, name),
                 method(release, name),
@@ -272,19 +272,19 @@ namespace psi::db
 
    // ── database (virtual DB / top root) ──────────────────────────────
 
-   struct database : psio::wit_resource
+   struct database : psio1::wit_resource
    {
       /* Transactions are top-root-scoped. */
-      psio::own<transaction> start_read(read_mode mode = read_mode::latest);
-      psio::own<transaction> start_write();
+      psio1::own<transaction> start_read(read_mode mode = read_mode::latest);
+      psio1::own<transaction> start_write();
 
       /* Snapshot directory for this database. */
-      psio::own<snapshots> snapshots();
+      psio1::own<snapshots> snapshots();
 
       /* Atomically replace live state with a snapshot's contents. */
-      std::expected<void, error> restore_to(psio::borrow<database> snapshot);
+      std::expected<void, error> restore_to(psio1::borrow<database> snapshot);
    };
-   PSIO_REFLECT(database,
+   PSIO1_REFLECT(database,
                 method(start_read, mode),
                 method(start_write),
                 method(snapshots),
@@ -298,12 +298,12 @@ namespace psi::db
     * can be satisfied by the runtime host, a virtualization shim, or
     * another component, and the guest need not care which.
     *
-    * psio::generate_wit_binary<store> produces the Component Model
+    * psio1::generate_wit_binary<store> produces the Component Model
     * binary. */
    struct store
    {
-      std::expected<psio::own<database>, error> open(std::string name);
+      std::expected<psio1::own<database>, error> open(std::string name);
    };
-   PSIO_REFLECT(store, method(open, name))
+   PSIO1_REFLECT(store, method(open, name))
 
 }  // namespace psi::db

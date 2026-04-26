@@ -11,7 +11,7 @@ block_store::block_store(std::shared_ptr<psitri::database> db, const config& cfg
 {
 }
 
-uint64_t block_store::alloc(psitri::transaction& tx, psio::bytes_view data)
+uint64_t block_store::alloc(psitri::transaction& tx, psio1::bytes_view data)
 {
    if (data.size() > max_block_size)
       throw std::runtime_error("pfs::block_store: data exceeds max block size");

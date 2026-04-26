@@ -1,192 +1,137 @@
 #pragma once
+//
+// psio3/stream.hpp — shared sink primitives used by every binary format.
+//
+// Every encoder walks its shape once and writes bytes into a sink. The
+// sink concept is uniform across walks so the *same* walker routine
+// can drive:
+//
+//   - `size_stream`      — just counts bytes (the packsize pass)
+//   - `fast_buf_stream`  — raw-cursor write into a pre-sized buffer
+//                          (after packsize sized it)
+//   - `fixed_buf_stream` — raw-cursor write with per-call bounds check
+//                          (when packsize was skipped or untrusted)
+//   - `vector_stream`    — grow a std::vector as you write
+//   - `string_stream`    — grow a std::string as you write (JSON path)
+//
+// The shared surface is small:
+//
+//   s.write(char)                   — single byte
+//   s.write(const void*, size_t)    — raw bytes
+//   s.put(const T&)                 — sizeof(T) raw bytes of T
+//   s.write_raw(const T&)           — alias of put, kept for v1 parity
+//   s.rewrite(size_t, const void*, size_t)
+//   s.rewrite_raw(size_t, const T&) — patch an earlier offset
+//   s.skip(int32_t)                 — advance without writing
+//   s.about_to_write(size_t)        — optional reserve hint
+//   s.written() const               — bytes emitted so far
+//
+// The `put` method is a psio3 addition for clarity at call sites —
+// `s.put(len)` reads better than `s.write_raw(len)`; both compile to
+// the same thing.
+//
+// These types are direct ports of v1's `psio/stream.hpp`. See the
+// v1 header for the long history of tuning that went into them.
+
+#include <psio/error.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstring>
-#include <psio/check.hpp>
 #include <span>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <vector>
 
-namespace psio
-{
-   enum class stream_error
-   {
-      no_error,
-      overrun,
-      underrun,
-      doubleread,
-      float_error,
-      varuint_too_big,
-      invalid_varuint_encoding,
-      bad_variant_index,
-      array_size_mismatch,
-      name_too_long,
-      json_writer_error,
-      invalid_frac_encoding,
-      empty_vec_used_offset,
-   };  // stream_error
+namespace psio {
 
-   constexpr inline std::string_view error_to_str(stream_error e)
-   {
-      switch (e)
-      {
-            // clang-format off
-         case stream_error::no_error:                 return "No error";
-         case stream_error::overrun:                  return "Stream overrun";
-         case stream_error::underrun:                 return "Stream underrun";
-         case stream_error::doubleread:               return "Double-read Error";
-         case stream_error::float_error:              return "Float error";
-         case stream_error::varuint_too_big:          return "Varuint too big";
-         case stream_error::invalid_varuint_encoding: return "Invalid varuint encoding";
-         case stream_error::bad_variant_index:        return "Bad variant index";
-         case stream_error::array_size_mismatch:      return "T[] size and unpacked size don't match";
-         case stream_error::name_too_long:            return "String is too long to be a valid name";
-         case stream_error::json_writer_error:        return "Error writing json";
-         case stream_error::invalid_frac_encoding:    return "Invalid fracpack encoding";
-         case stream_error::empty_vec_used_offset:    return "empty_vec_used_offset";
-            // clang-format on
+   // ── Bitwise-serialization trait ─────────────────────────────────────────
+   //
+   // Types that are memcpy-safe on the wire — used by the vector bulk
+   // write fast path. Arithmetic + enum types qualify automatically.
+   // User types opt in via `psio::is_bitwise_copy<T>` specialization.
 
-         default:
-            return "unknown";
-      }
-   }
-
-   // Opt-in trait for user-defined types that memcpy safely on the wire.
-   // Specialize to std::true_type for types that should participate in
-   // run-batching, vector bulk writes, and the memcpy serialization path.
    template <typename T>
    struct is_bitwise_copy : std::false_type
    {
    };
 
-   // Forward declaration — the std::array specialization below references
-   // has_bitwise_serialization recursively for its element type.
    template <typename T>
    constexpr bool has_bitwise_serialization();
 
-   namespace detail
-   {
+   namespace detail {
       template <typename T>
       struct is_std_array_of_bitwise : std::false_type
       {
       };
       template <typename U, std::size_t N>
       struct is_std_array_of_bitwise<std::array<U, N>>
-          : std::bool_constant<has_bitwise_serialization<U>() &&
-                               sizeof(std::array<U, N>) == N * sizeof(U)>
+         : std::bool_constant<has_bitwise_serialization<U>() &&
+                              sizeof(std::array<U, N>) == N * sizeof(U)>
       {
       };
-   }
+   }  // namespace detail
 
    template <typename T>
    constexpr bool has_bitwise_serialization()
    {
       if constexpr (std::is_arithmetic_v<T>)
-      {
          return true;
-      }
       else if constexpr (std::is_enum_v<T>)
       {
          static_assert(!std::is_convertible_v<T, std::underlying_type_t<T>>,
-                       "Serializing unscoped enum");
+                       "serializing unscoped enum");
          return true;
       }
       else if constexpr (is_bitwise_copy<T>::value)
-      {
          return true;
-      }
       else if constexpr (detail::is_std_array_of_bitwise<T>::value)
-      {
-         // std::array<U, N> where U is bitwise-copy and the array has no
-         // trailing padding (sizeof matches N*sizeof(U)) — memcpy-safe.
          return true;
-      }
       else
-      {
          return false;
-      }
    }
 
-   template <int max_size>
-   struct small_buffer
-   {
-      char  data[max_size];
-      char* pos{data};
+   // ── size_stream ─────────────────────────────────────────────────────────
+   //
+   // Zero-overhead packsize counter. Every write op is a `size += n`
+   // arithmetic update — compiler inlines it to a running total.
 
-      void reverse() { std::reverse(data, pos); }
+   struct size_stream
+   {
+      std::size_t size = 0;
+
+      void about_to_write(std::size_t) noexcept {}
+
+      void write(char) noexcept { ++size; }
+      void write(const void*, std::size_t n) noexcept { size += n; }
+
+      void rewrite(std::size_t, const void*, std::size_t) noexcept {}
+
+      template <typename T>
+      void put(const T&) noexcept
+      {
+         size += sizeof(T);
+      }
+      template <typename T>
+      void write_raw(const T& v) noexcept
+      {
+         put(v);
+      }
+      template <typename T>
+      void rewrite_raw(std::size_t, const T&) noexcept
+      {
+      }
+
+      void        skip(std::int32_t s) noexcept { size += s; }
+      std::size_t written() const noexcept { return size; }
    };
 
-   struct string_stream
-   {
-      std::string& data;
-      string_stream(std::string& data) : data(data) {}
-
-      void write(char ch) { data += ch; }
-
-      void write(const void* src, size_t size)
-      {
-         auto s = reinterpret_cast<const char*>(src);
-         data.insert(data.end(), s, s + size);
-      }
-
-      void rewrite(size_t offset, const void* src, size_t size)
-      {
-         std::memcpy(data.data() + offset, src, size);
-      }
-
-      template <typename T>
-      void write_raw(const T& v)
-      {
-         write(&v, sizeof(v));
-      }
-
-      template <typename T>
-      void rewrite_raw(size_t offset, const T& v)
-      {
-         rewrite(offset, &v, sizeof(v));
-      }
-
-      size_t written() const { return data.size(); }
-   };
-
-   struct vector_stream
-   {
-      std::vector<char>& data;
-      vector_stream(std::vector<char>& data) : data(data) {}
-
-      void about_to_write(size_t amount) { data.reserve(data.size() + amount); }
-
-      void write(char ch) { data.push_back(ch); }
-
-      void write(const void* src, size_t size)
-      {
-         auto s = reinterpret_cast<const char*>(src);
-         data.insert(data.end(), s, s + size);
-      }
-
-      void rewrite(size_t offset, const void* src, size_t size)
-      {
-         std::memcpy(data.data() + offset, src, size);
-      }
-
-      template <typename T>
-      void write_raw(const T& v)
-      {
-         write(&v, sizeof(v));
-      }
-
-      template <typename T>
-      void rewrite_raw(size_t offset, const T& v)
-      {
-         rewrite(offset, &v, sizeof(v));
-      }
-
-      size_t written() const { return data.size(); }
-   };
+   // ── fixed_buf_stream — bounds-checked raw cursor ────────────────────────
+   //
+   // Use when the caller cannot prove the buffer is big enough — every
+   // write checks `pos + n > end`. Throws `codec_exception` on overrun.
 
    struct fixed_buf_stream
    {
@@ -194,386 +139,225 @@ namespace psio
       char* pos;
       char* end;
 
-      fixed_buf_stream(char* pos, size_t size) : begin(pos), pos{pos}, end{pos + size} {}
+      fixed_buf_stream(char* p, std::size_t size) noexcept
+         : begin(p), pos(p), end(p + size)
+      {
+      }
 
-      void about_to_write(size_t amount) {}
+      void about_to_write(std::size_t) noexcept {}
 
       void write(char ch)
       {
          if (pos >= end)
-            abort_error(stream_error::overrun);
+            throw codec_exception{
+               codec_error{"stream overrun", 0, "fixed_buf_stream"}};
          *pos++ = ch;
       }
 
-      void write(const void* src, size_t size)
+      void write(const void* src, std::size_t n)
       {
-         if (pos + size > end)
-            abort_error(stream_error::overrun);
-         std::memcpy(pos, src, size);
-         pos += size;
+         if (pos + n > end)
+            throw codec_exception{
+               codec_error{"stream overrun", 0, "fixed_buf_stream"}};
+         std::memcpy(pos, src, n);
+         pos += n;
       }
 
-      void rewrite(size_t offset, const void* src, size_t size)
+      void rewrite(std::size_t offset, const void* src, std::size_t n)
       {
-         std::memcpy(begin + offset, src, size);
+         std::memcpy(begin + offset, src, n);
       }
 
+      template <typename T>
+      void put(const T& v)
+      {
+         write(&v, sizeof(T));
+      }
       template <typename T>
       void write_raw(const T& v)
       {
-         write(&v, sizeof(v));
+         put(v);
       }
-
       template <typename T>
-      void rewrite_raw(size_t offset, const T& v)
+      void rewrite_raw(std::size_t offset, const T& v)
       {
-         rewrite(offset, &v, sizeof(v));
+         rewrite(offset, &v, sizeof(T));
       }
 
-      void skip(int32_t s)
+      void skip(std::int32_t s)
       {
-         if ((pos + s > end) or (pos + s < begin))
-            abort_error(stream_error::overrun);
+         if ((pos + s > end) || (pos + s < begin))
+            throw codec_exception{
+               codec_error{"stream overrun", 0, "fixed_buf_stream"}};
          pos += s;
       }
 
-      size_t remaining() const { return end - pos; }
-      size_t consumed() const { return pos - begin; }
-      size_t written() const { return pos - begin; }
+      std::size_t remaining() const noexcept { return end - pos; }
+      std::size_t consumed() const noexcept { return pos - begin; }
+      std::size_t written() const noexcept { return pos - begin; }
    };
 
-   /**
-    * Does not bounds checking, assuming packsize was done first.
-    */
+   // ── fast_buf_stream — un-checked raw cursor ─────────────────────────────
+   //
+   // Assumes packsize has already proved the buffer is exactly the
+   // right size. No bounds checks — every write is a bare memcpy plus
+   // pointer advance. This is the hot path for encode.
+
    struct fast_buf_stream
    {
       char* begin;
       char* pos;
       char* end;
 
-      void about_to_write(size_t amount) {}
-
-      fast_buf_stream(char* pos, size_t size) : begin(pos), pos{pos}, end{pos + size} {}
-
-      void write(char ch) { *pos++ = ch; }
-
-      void write(const void* src, size_t size)
+      fast_buf_stream(char* p, std::size_t size) noexcept
+         : begin(p), pos(p), end(p + size)
       {
-         std::memcpy(pos, src, size);
-         pos += size;
       }
 
-      void rewrite(size_t offset, const void* src, size_t size)
+      void about_to_write(std::size_t) noexcept {}
+
+      void write(char ch) noexcept { *pos++ = ch; }
+
+      void write(const void* src, std::size_t n) noexcept
       {
-         std::memcpy(begin + offset, src, size);
+         std::memcpy(pos, src, n);
+         pos += n;
       }
 
+      void rewrite(std::size_t offset, const void* src, std::size_t n) noexcept
+      {
+         std::memcpy(begin + offset, src, n);
+      }
+
+      template <typename T>
+      void put(const T& v) noexcept
+      {
+         std::memcpy(pos, &v, sizeof(T));
+         pos += sizeof(T);
+      }
+      template <typename T>
+      void write_raw(const T& v) noexcept
+      {
+         put(v);
+      }
+      template <typename T>
+      void rewrite_raw(std::size_t offset, const T& v) noexcept
+      {
+         std::memcpy(begin + offset, &v, sizeof(T));
+      }
+
+      void skip(std::int32_t s) noexcept { pos += s; }
+
+      std::size_t remaining() const noexcept { return end - pos; }
+      std::size_t consumed() const noexcept { return pos - begin; }
+      std::size_t written() const noexcept { return pos - begin; }
+   };
+
+   // ── vector_stream — grow-into-vector ────────────────────────────────────
+
+   struct vector_stream
+   {
+      std::vector<char>& data;
+
+      explicit vector_stream(std::vector<char>& d) noexcept : data(d) {}
+
+      void about_to_write(std::size_t amount)
+      {
+         data.reserve(data.size() + amount);
+      }
+
+      void write(char ch) { data.push_back(ch); }
+
+      void write(const void* src, std::size_t n)
+      {
+         const char* s = static_cast<const char*>(src);
+         data.insert(data.end(), s, s + n);
+      }
+
+      void rewrite(std::size_t offset, const void* src, std::size_t n)
+      {
+         std::memcpy(data.data() + offset, src, n);
+      }
+
+      template <typename T>
+      void put(const T& v)
+      {
+         write(&v, sizeof(T));
+      }
       template <typename T>
       void write_raw(const T& v)
       {
-         write(&v, sizeof(v));
+         put(v);
+      }
+      template <typename T>
+      void rewrite_raw(std::size_t offset, const T& v)
+      {
+         rewrite(offset, &v, sizeof(T));
+      }
+
+      // Reserve `n` bytes at the current end. The bytes are
+      // value-initialized (zero) so callers can subsequently
+      // `rewrite()` over them or leave them as zero placeholders.
+      void skip(std::int32_t n) { data.resize(data.size() + n); }
+
+      std::size_t written() const noexcept { return data.size(); }
+   };
+
+   // ── string_stream — grow-into-string (JSON path) ────────────────────────
+
+   struct string_stream
+   {
+      std::string& data;
+
+      explicit string_stream(std::string& d) noexcept : data(d) {}
+
+      void about_to_write(std::size_t amount) { data.reserve(data.size() + amount); }
+
+      void write(char ch) { data.push_back(ch); }
+
+      void write(const void* src, std::size_t n)
+      {
+         const char* s = static_cast<const char*>(src);
+         data.insert(data.end(), s, s + n);
+      }
+
+      void rewrite(std::size_t offset, const void* src, std::size_t n)
+      {
+         std::memcpy(data.data() + offset, src, n);
       }
 
       template <typename T>
-      void rewrite_raw(size_t offset, const T& v)
+      void put(const T& v)
       {
-         rewrite(offset, &v, sizeof(v));
+         write(&v, sizeof(T));
       }
-
-      void skip(int32_t s) { pos += s; }
-
-      size_t remaining() const { return end - pos; }
-      size_t consumed() const { return pos - begin; }
-      size_t written() const { return pos - begin; }
-   };
-
-   struct size_stream
-   {
-      size_t size = 0;
-
-      void about_to_write(size_t amount) {}
-
-      void write(char ch) { ++size; }
-      void write(const void* src, size_t size) { this->size += size; }
-
-      void rewrite(size_t offset, const void* src, size_t size) {}
-
       template <typename T>
       void write_raw(const T& v)
       {
-         size += sizeof(v);
+         put(v);
       }
-
       template <typename T>
-      void rewrite_raw(size_t offset, const T& v)
+      void rewrite_raw(std::size_t offset, const T& v)
       {
+         rewrite(offset, &v, sizeof(T));
       }
 
-      void   skip(int32_t s) { size += s; }
-      size_t written() const { return size; }
+      std::size_t written() const noexcept { return data.size(); }
    };
 
-   template <typename S>
-   void increase_indent(S&)
-   {
-   }
-
-   template <typename S>
-   void decrease_indent(S&)
-   {
-   }
-
-   template <typename S>
-   void write_colon(S& s)
-   {
-      s.write(':');
-   }
-
-   template <typename S>
-   void write_newline(S&)
-   {
-   }
-
-   template <typename Base>
-   struct pretty_stream : Base
-   {
-      using Base::Base;
-      int               indent_size = 4;
-      std::vector<char> current_indent;
-   };
-
-   template <typename S>
-   void increase_indent(pretty_stream<S>& s)
-   {
-      s.current_indent.resize((int)s.current_indent.size() + s.indent_size, ' ');
-   }
-
-   template <typename S>
-   void decrease_indent(pretty_stream<S>& s)
-   {
-      if ((int)s.current_indent.size() < s.indent_size)
-         abort_error(stream_error::overrun);
-      s.current_indent.resize((int)s.current_indent.size() - s.indent_size);
-   }
-
-   template <typename S>
-   void write_colon(pretty_stream<S>& s)
-   {
-      s.write(": ", 2);
-   }
-
-   template <typename S>
-   void write_newline(pretty_stream<S>& s)
-   {
-      s.write('\n');
-      s.write(s.current_indent.data(), (int)s.current_indent.size());
-   }
-
-   struct input_stream
-   {
-      const char* pos;
-      const char* end;
-
-      constexpr input_stream() : pos{nullptr}, end{nullptr} {}
-      constexpr input_stream(const char* pos, size_t size) : pos{pos}, end{pos + size} {}
-      constexpr input_stream(const char* pos, const char* end) : pos{pos}, end{end}
-      {
-         if (end < pos)
-            abort_error(stream_error::overrun);
-      }
-      input_stream(const std::vector<char>& v) : pos{v.data()}, end{v.data() + v.size()} {}
-      constexpr input_stream(std::string_view v) : pos{v.data()}, end{v.data() + v.size()} {}
-      constexpr input_stream(std::span<const char> v) : pos{v.data()}, end{v.data() + v.size()} {}
-      constexpr input_stream(const input_stream&) = default;
-
-      input_stream& operator=(const input_stream&) = default;
-
-      std::string_view  string_view() const { return {pos, remaining()}; }
-      std::vector<char> vector() const { return {pos, pos + remaining()}; }
-
-      size_t remaining() const { return end - pos; }
-
-      void check_available(size_t size) const
-      {
-         if (size > size_t(end - pos))
-            abort_error(stream_error::overrun);
-      }
-
-      void read(void* dest, size_t size)
-      {
-         if (size > size_t(end - pos))
-            abort_error(stream_error::overrun);
-         std::memcpy(dest, pos, size);
-         pos += size;
-      }
-
-      template <typename T>
-      void read_raw(T& dest)
-      {
-         read(&dest, sizeof(dest));
-      }
-
-      void skip(size_t size)
-      {
-         if (size > size_t(end - pos))
-            abort_error(stream_error::overrun);
-         pos += size;
-      }
-
-      void read_reuse_storage(const char*& result, size_t size)
-      {
-         if (size > size_t(end - pos))
-            abort_error(stream_error::overrun);
-         result = pos;
-         pos += size;
-      }
-
-      operator std::span<const char>() const { return {pos, end}; }
-   };
-
-   namespace detail
-   {
-      // A stream backed by a contiguous in-memory buffer (input_stream,
-      // check_input_stream). We can fetch the raw pointer and advance
-      // past a read region, enabling bulk-copy fast paths.
-      template <typename S>
-      concept ContiguousInputStream = requires(S& s, std::size_t n) {
-         { s.pos } -> std::convertible_to<const char*>;
-         { s.end } -> std::convertible_to<const char*>;
-         s.check_available(n);
-      };
-   }
-
-   // Bulk-read a vector of trivially-copyable T from a stream.
+   // ── Small on-stack buffer ───────────────────────────────────────────────
    //
-   // The obvious `v.resize(n); stream.read(v.data(), n*sizeof(T))` pays a
-   // hidden zero-init tax: libstdc++'s resize(n) value-initializes every
-   // element before our read overwrites it, doubling the write bandwidth.
-   //
-   // When the stream exposes a contiguous buffer pointer we skip the
-   // resize entirely and use vector::assign(first, last), which goes
-   // through __uninitialized_copy_a → single memcpy. 2× speedup on large
-   // trivially-copyable vectors. See .issues/psio-bounded-and-ext-int-
-   // followups.md §8c for measurements on a 260 MiB Ethereum validator
-   // list.
-   template <typename T, typename S>
-      requires std::is_trivially_copyable_v<T>
-   void read_vector_bitwise(std::vector<T>& v, S& stream, std::size_t n)
+   // Used by narrow fast paths that build up a few bytes then emit
+   // (varint encoders, etc.). Not a stream per se — direct access to
+   // `data` and `pos`.
+
+   template <int MaxSize>
+   struct small_buffer
    {
-      if constexpr (detail::ContiguousInputStream<S>)
-      {
-         stream.check_available(n * sizeof(T));
-         const T* first = reinterpret_cast<const T*>(stream.pos);
-         v.assign(first, first + n);
-         stream.pos += n * sizeof(T);
-      }
-      else
-      {
-         v.resize(n);
-         if (n)
-            stream.read(reinterpret_cast<char*>(v.data()), n * sizeof(T));
-      }
-   }
+      char  data[MaxSize];
+      char* pos{data};
 
-   // std::string overload. Same rationale.
-   template <typename S>
-   void read_string_bulk(std::string& s, S& stream, std::size_t n)
-   {
-      if constexpr (detail::ContiguousInputStream<S>)
-      {
-         stream.check_available(n);
-         s.assign(stream.pos, stream.pos + n);
-         stream.pos += n;
-      }
-      else
-      {
-         s.resize(n);
-         if (n)
-            stream.read(s.data(), n);
-      }
-   }
-
-   struct check_input_stream
-   {
-      const char* begin;
-      const char* pos;
-      const char* end;
-      size_t      total_read = 0;
-      size_t      size       = 0;
-      void        add_total_read(uint32_t v)
-      {
-         total_read += v;
-         if (size < get_total_read())
-         {
-            abort_error(stream_error::doubleread);
-         }
-      }
-      size_t get_total_read() const { return total_read + (pos - begin); }
-
-      constexpr check_input_stream() : begin{nullptr}, pos{nullptr}, end{nullptr} {}
-      constexpr check_input_stream(const char* pos, size_t size)
-          : begin(pos), pos{pos}, end{pos + size}, size(size)
-      {
-      }
-      constexpr check_input_stream(const char* pos, const char* end)
-          : begin(pos), pos{pos}, end{end}
-      {
-         if (end < pos)
-            abort_error(stream_error::overrun);
-      }
-      check_input_stream(const std::vector<char>& v)
-          : begin(v.data()), pos{v.data()}, end{v.data() + v.size()}
-      {
-      }
-      constexpr check_input_stream(std::string_view v)
-          : begin(v.data()), pos{v.data()}, end{v.data() + v.size()}
-      {
-      }
-      constexpr check_input_stream(const check_input_stream&) = default;
-
-      check_input_stream& operator=(const check_input_stream&) = default;
-
-      size_t remaining() const { return end - pos; }
-
-      void check_available(size_t size) const
-      {
-         if (size > size_t(end - pos))
-            abort_error(stream_error::overrun);
-      }
-
-      void read(void* dest, size_t size)
-      {
-         if (size > size_t(end - pos))
-            abort_error(stream_error::overrun);
-         std::memcpy(dest, pos, size);
-         pos += size;
-      }
-
-      template <typename T>
-      void read_raw(T& dest)
-      {
-         read(&dest, sizeof(dest));
-      }
-
-      void skip(size_t size)
-      {
-         if (size > size_t(end - pos))
-            abort_error(stream_error::overrun);
-         pos += size;
-      }
-
-      void read_reuse_storage(const char*& result, size_t size)
-      {
-         if (size > size_t(end - pos))
-            abort_error(stream_error::overrun);
-         result = pos;
-         pos += size;
-      }
+      void reverse() noexcept { std::reverse(data, pos); }
    };
 
-   template <typename S>
-   void write_str(std::string_view str, S& stream)
-   {
-      stream.write(str.data(), str.size());
-   }
 }  // namespace psio

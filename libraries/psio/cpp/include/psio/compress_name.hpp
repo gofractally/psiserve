@@ -34,6 +34,28 @@ change based on the prior element.
 
 */
 #pragma once
+//
+// psio3/compress_name.hpp — method-name compressor (port of
+// psio/compress_name.hpp).
+//
+// Encodes pure-letter (a-z) method-name strings into a 64-bit integer
+// via context-dependent arithmetic coding.  Distinct from psio::name
+// (which encodes general identifiers including digits and hyphen): the
+// alphabet is 27 symbols (lowercase a-z + terminator), the frequency
+// tables are tuned for method-name n-gram statistics, and the wire
+// format is **not** interchangeable with psio::name.
+//
+// Public API (psio::detail):
+//   method_to_number(string_view) → u64
+//   number_to_method(u64)         → std::string
+//   is_hash_name(u64)             → true when input did not compress
+//                                    (bit 7 set; the u64 carries a
+//                                    fallback hash, not arithmetic-
+//                                    coded bits).
+//
+// Wire-compatible with psio v1 — the frequency tables below are the
+// authoritative source.
+
 #include <cstdint>
 #include <limits>
 #include <string>

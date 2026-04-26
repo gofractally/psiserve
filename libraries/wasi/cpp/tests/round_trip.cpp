@@ -3,7 +3,7 @@
 // the structural expectations set by the vendored .wit.
 //
 // Byte-equal diff is still out of reach — emit_wit currently renders
-// packages as `name@version;` and the PSIO_PACKAGE macro only accepts
+// packages as `name@version;` and the PSIO1_PACKAGE macro only accepts
 // C++ identifiers (no colon), so `wasi:cli` can't round-trip yet.
 // This test pins the invariants we DO expect to hold so any accidental
 // regression in either side (the header or emit_wit) is surfaced
@@ -11,8 +11,8 @@
 
 #include <catch2/catch.hpp>
 
-#include <psio/emit_wit.hpp>
-#include <psio/schema.hpp>
+#include <psio1/emit_wit.hpp>
+#include <psio1/schema.hpp>
 
 #include <wasi/0.2.3/cli.hpp>
 
@@ -40,16 +40,16 @@ namespace
 // Wrap the vendored interface in a minimal world so SchemaBuilder's
 // public entry point (insert_world) can walk it. Exists only for the
 // test — production composition happens inside psiserve's Linker.
-PSIO_WORLD(cli_env_canary,
+PSIO1_WORLD(cli_env_canary,
            imports(),
            exports(::environment))
 
 TEST_CASE("wasi:cli/environment — header reflects into a Schema",
           "[wasi][cli][round_trip]")
 {
-   namespace S = psio::schema_types;
+   namespace S = psio1::schema_types;
    auto schema = S::SchemaBuilder{}
-                     .insert_world<psio::detail::cli_env_canary_world_tag>()
+                     .insert_world<psio1::detail::cli_env_canary_world_tag>()
                      .build();
 
    REQUIRE(schema.package.name == "wasi_cli");
@@ -68,15 +68,15 @@ TEST_CASE("wasi:cli/environment — header reflects into a Schema",
 TEST_CASE("wasi:cli/environment — emit_wit matches vendored shape",
           "[wasi][cli][round_trip][emit_wit]")
 {
-   namespace S = psio::schema_types;
+   namespace S = psio1::schema_types;
    auto schema = S::SchemaBuilder{}
-                     .insert_world<psio::detail::cli_env_canary_world_tag>()
+                     .insert_world<psio1::detail::cli_env_canary_world_tag>()
                      .build();
    auto text = S::emit_wit(schema);
 
    // Package header. Drift from canonical `wasi:cli` noted at the top
    // of this file — pinning the current output protects against
-   // silent regressions until PSIO_PACKAGE can carry a namespace.
+   // silent regressions until PSIO1_PACKAGE can carry a namespace.
    REQUIRE(contains(text, "package wasi_cli@0.2.3;"));
 
    // Interface + function spellings (kebab-cased).

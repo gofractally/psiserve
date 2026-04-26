@@ -1,7 +1,7 @@
 #include <pfs/store.hpp>
 #include <pfs/keys.hpp>
 
-#include <psio/fracpack.hpp>
+#include <psio1/fracpack.hpp>
 
 #include <chrono>
 #include <cstring>
@@ -14,14 +14,14 @@ namespace pfs
 
 void file_handle::read(uint64_t                                              offset,
                        uint64_t                                              length,
-                       std::function<void(psio::bytes_view)> const&  cb)
+                       std::function<void(psio1::bytes_view)> const&  cb)
 {
    if (!_entry.content_cid)
       throw std::runtime_error("pfs::file_handle: no content CID (directory?)");
    _cas->read(*_entry.content_cid, offset, length, cb);
 }
 
-void file_handle::read(std::function<void(psio::bytes_view)> const& cb)
+void file_handle::read(std::function<void(psio1::bytes_view)> const& cb)
 {
    read(0, _entry.size, cb);
 }
@@ -42,7 +42,7 @@ std::string store::normalize_path(const path& p)
    return s;
 }
 
-uint32_t store::root_for_tenant(psio::name_id tenant) const
+uint32_t store::root_for_tenant(psio1::name_id tenant) const
 {
    return _cfg.root_base + fs_shard(tenant, _cfg.shard_count);
 }
@@ -55,7 +55,7 @@ uint64_t store::now_ns() const
 }
 
 void store::update_quota(psitri::transaction& tx,
-                         psio::name_id        tenant,
+                         psio1::name_id        tenant,
                          int64_t              size_delta)
 {
    auto meta_key = fs_key(tenant, "$meta");
@@ -63,7 +63,7 @@ void store::update_quota(psitri::transaction& tx,
 
    fs_quota q;
    if (existing)
-      q = psio::from_frac<fs_quota>(
+      q = psio1::from_frac<fs_quota>(
           std::span<const char>(existing->data(), existing->size()));
 
    q.used = static_cast<uint64_t>(static_cast<int64_t>(q.used) + size_delta);
@@ -71,13 +71,13 @@ void store::update_quota(psitri::transaction& tx,
    if (q.limit > 0 && q.used > q.limit)
       throw std::runtime_error("pfs::store: quota exceeded");
 
-   auto val = psio::to_frac(q);
+   auto val = psio1::to_frac(q);
    tx.upsert(meta_key, std::string_view(val.data(), val.size()));
 }
 
 // ── Content-addressed storage ──────────────────────────────────────
 
-cid store::put(psio::bytes_view data)
+cid store::put(psio1::bytes_view data)
 {
    return _cas.put(data);
 }
@@ -89,9 +89,9 @@ void store::unpin(const cid& c)
 
 // ── Mutations ──────────────────────────────────────────────────────
 
-cid store::write(psio::name_id            tenant,
+cid store::write(psio1::name_id            tenant,
                  const path&              p,
-                 psio::bytes_view data,
+                 psio1::bytes_view data,
                  uint16_t                 mode,
                  uint32_t                 owner)
 {
@@ -115,7 +115,7 @@ cid store::write(psio::name_id            tenant,
    auto existing = tx.get<std::string>(key);
    if (existing)
    {
-      auto old_entry = psio::from_frac<fs_entry>(
+      auto old_entry = psio1::from_frac<fs_entry>(
           std::span<const char>(existing->data(), existing->size()));
       old_size = static_cast<int64_t>(old_entry.size);
       if (old_entry.content_cid)
@@ -133,7 +133,7 @@ cid store::write(psio::name_id            tenant,
    entry.size        = data.size();
    entry.content_cid = content_cid;
 
-   auto val = psio::to_frac(entry);
+   auto val = psio1::to_frac(entry);
    tx.upsert(key, std::string_view(val.data(), val.size()));
 
    // Update quota
@@ -148,7 +148,7 @@ cid store::write(psio::name_id            tenant,
    return content_cid;
 }
 
-void store::remove(psio::name_id tenant, const path& p)
+void store::remove(psio1::name_id tenant, const path& p)
 {
    auto path_str = normalize_path(p);
    auto root_idx = root_for_tenant(tenant);
@@ -163,7 +163,7 @@ void store::remove(psio::name_id tenant, const path& p)
       return;
    }
 
-   auto entry = psio::from_frac<fs_entry>(
+   auto entry = psio1::from_frac<fs_entry>(
        std::span<const char>(existing->data(), existing->size()));
 
    tx.remove(key);
@@ -178,7 +178,7 @@ void store::remove(psio::name_id tenant, const path& p)
       _cas.unpin(*entry.content_cid);
 }
 
-void store::mkdir(psio::name_id tenant,
+void store::mkdir(psio1::name_id tenant,
                   const path&   p,
                   uint16_t      mode,
                   uint32_t      owner)
@@ -200,12 +200,12 @@ void store::mkdir(psio::name_id tenant,
    entry.owner    = owner;
    entry.mtime_ns = now_ns();
 
-   auto val = psio::to_frac(entry);
+   auto val = psio1::to_frac(entry);
    tx.upsert(key, std::string_view(val.data(), val.size()));
    tx.commit();
 }
 
-void store::chmod(psio::name_id tenant, const path& p, uint16_t mode)
+void store::chmod(psio1::name_id tenant, const path& p, uint16_t mode)
 {
    auto path_str = normalize_path(p);
    auto root_idx = root_for_tenant(tenant);
@@ -217,18 +217,18 @@ void store::chmod(psio::name_id tenant, const path& p, uint16_t mode)
    if (!existing)
       throw std::runtime_error("pfs::store::chmod: path not found");
 
-   auto entry = psio::from_frac<fs_entry>(
+   auto entry = psio1::from_frac<fs_entry>(
        std::span<const char>(existing->data(), existing->size()));
    entry.mode = mode;
 
-   auto val = psio::to_frac(entry);
+   auto val = psio1::to_frac(entry);
    tx.upsert(key, std::string_view(val.data(), val.size()));
    tx.commit();
 }
 
 // ── Reads ──────────────────────────────────────────────────────────
 
-file_handle store::open(psio::name_id tenant, const path& p)
+file_handle store::open(psio1::name_id tenant, const path& p)
 {
    auto path_str = normalize_path(p);
    auto root_idx = root_for_tenant(tenant);
@@ -240,7 +240,7 @@ file_handle store::open(psio::name_id tenant, const path& p)
    if (!result)
       throw std::runtime_error("pfs::store::open: file not found");
 
-   auto entry = psio::from_frac<fs_entry>(
+   auto entry = psio1::from_frac<fs_entry>(
        std::span<const char>(result->data(), result->size()));
    return file_handle(std::move(entry), &_cas);
 }
@@ -332,12 +332,12 @@ void dir_cursor::decode_current()
    if (val)
    {
       _current.name  = std::string(remainder);
-      _current.entry = psio::from_frac<fs_entry>(
+      _current.entry = psio1::from_frac<fs_entry>(
           std::span<const char>(val->data(), val->size()));
    }
 }
 
-dir_cursor store::ls(psio::name_id tenant, const path& p)
+dir_cursor store::ls(psio1::name_id tenant, const path& p)
 {
    auto path_str = normalize_path(p);
    if (!path_str.empty() && path_str.back() != '/')
@@ -350,7 +350,7 @@ dir_cursor store::ls(psio::name_id tenant, const path& p)
    return dir_cursor(std::move(rs), root_idx, std::move(prefix));
 }
 
-dir_cursor store::ls(psio::name_id tenant, const path& p, std::string_view after)
+dir_cursor store::ls(psio1::name_id tenant, const path& p, std::string_view after)
 {
    auto path_str = normalize_path(p);
    if (!path_str.empty() && path_str.back() != '/')
@@ -370,7 +370,7 @@ dir_cursor store::ls(psio::name_id tenant, const path& p, std::string_view after
    return dc;
 }
 
-std::optional<fs_entry> store::stat(psio::name_id tenant, const path& p)
+std::optional<fs_entry> store::stat(psio1::name_id tenant, const path& p)
 {
    auto path_str = normalize_path(p);
    auto root_idx = root_for_tenant(tenant);
@@ -382,13 +382,13 @@ std::optional<fs_entry> store::stat(psio::name_id tenant, const path& p)
    if (!result)
       return std::nullopt;
 
-   return psio::from_frac<fs_entry>(
+   return psio1::from_frac<fs_entry>(
        std::span<const char>(result->data(), result->size()));
 }
 
 // ── Quota ──────────────────────────────────────────────────────────
 
-void store::set_quota(psio::name_id tenant, uint64_t limit)
+void store::set_quota(psio1::name_id tenant, uint64_t limit)
 {
    auto root_idx = root_for_tenant(tenant);
    auto ws       = _db->start_write_session();
@@ -399,16 +399,16 @@ void store::set_quota(psio::name_id tenant, uint64_t limit)
 
    fs_quota q;
    if (existing)
-      q = psio::from_frac<fs_quota>(
+      q = psio1::from_frac<fs_quota>(
           std::span<const char>(existing->data(), existing->size()));
 
    q.limit = limit;
-   auto val = psio::to_frac(q);
+   auto val = psio1::to_frac(q);
    tx.upsert(meta_key, std::string_view(val.data(), val.size()));
    tx.commit();
 }
 
-fs_quota store::quota(psio::name_id tenant)
+fs_quota store::quota(psio1::name_id tenant)
 {
    auto root_idx = root_for_tenant(tenant);
    auto rs       = _db->start_read_session();
@@ -419,15 +419,15 @@ fs_quota store::quota(psio::name_id tenant)
    if (!result)
       return {};
 
-   return psio::from_frac<fs_quota>(
+   return psio1::from_frac<fs_quota>(
        std::span<const char>(result->data(), result->size()));
 }
 
 // ── Sharing ────────────────────────────────────────────────────────
 
-void store::share(psio::name_id src,
+void store::share(psio1::name_id src,
                   const path&   src_path,
-                  psio::name_id dst,
+                  psio1::name_id dst,
                   const path&   dst_path)
 {
    // Read source entry
@@ -451,7 +451,7 @@ void store::share(psio::name_id src,
    fs_entry entry  = *src_entry;
    entry.mtime_ns  = now_ns();
 
-   auto val = psio::to_frac(entry);
+   auto val = psio1::to_frac(entry);
    tx.upsert(key, std::string_view(val.data(), val.size()));
 
    update_quota(tx, dst, static_cast<int64_t>(entry.size));

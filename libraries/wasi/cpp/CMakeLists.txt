@@ -1,8 +1,8 @@
 # ── wasi-cpp: PSIO-reflected C++ bindings for WASI interfaces ─────────────────
 #
 # Header-only INTERFACE library. Each header under include/wasi/<version>/
-# declares one WASI interface (or related group) via PSIO_PACKAGE,
-# PSIO_INTERFACE, and PSIO_REFLECT so psio::emit_wit projects it back to
+# declares one WASI interface (or related group) via PSIO1_PACKAGE,
+# PSIO1_INTERFACE, and PSIO1_REFLECT so psio1::emit_wit projects it back to
 # the vendored .wit in ../wit/<version>/. The round-trip test is what
 # enforces the C++ ↔ WIT contract.
 
@@ -12,7 +12,7 @@ target_include_directories(wasi-cpp INTERFACE
    ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(wasi-cpp INTERFACE psio)
+target_link_libraries(wasi-cpp INTERFACE psio1)
 
 target_compile_features(wasi-cpp INTERFACE cxx_std_23)
 

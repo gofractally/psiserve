@@ -48,7 +48,7 @@ if(PSIZAM_ENABLE_TESTS)
    psi_add_wasm_module(db_guest
       SOURCES tests/db_guest.cpp
       OUTPUT  db_guest.wasm
-      DEPS    psio psizam psi-api)
+      DEPS    psio1 psizam psi-api)
 
    if(TARGET db_guest)
       get_target_property(_db_guest_wasm db_guest PSI_WASM_OUTPUT)

@@ -3,43 +3,43 @@
 
 #include "shared.hpp"
 
-#include <psio/guest_alloc.hpp>
+#include <psio1/guest_alloc.hpp>
 #include <psizam/module.hpp>
 
 #include <span>
 #include <string.h>
 
-PSIO_WIT_SECTION(processor)
-PSIO_WIT_SECTION(greeter)
-PSIO_WIT_SECTION(env)
+PSIO1_WIT_SECTION(processor)
+PSIO1_WIT_SECTION(greeter)
+PSIO1_WIT_SECTION(env)
 
 // ── Env imports ────────────────────────────────────────────────────
-PSIO_GUEST_IMPORTS(env, log_string)
+PSIO1_GUEST_IMPORTS(env, log_string)
 void env::log_string(std::string_view msg) {
    _psio_import_call_env_log_string(msg);
 }
 
 // ── Greeter imports — all methods via ImportProxy ──────────────────
-PSIO_IMPORT_IMPL(greeter, add, concat, double_it,
+PSIO1_IMPORT_IMPL(greeter, add, concat, double_it,
                  translate, sum_list, make_grid)
 
 uint32_t greeter::add(uint32_t a, uint32_t b)
-   PSIO_IMPORT_IMPL_BODY(greeter, add, a, b)
+   PSIO1_IMPORT_IMPL_BODY(greeter, add, a, b)
 
 wit::string greeter::concat(std::string_view a, std::string_view b)
-   PSIO_IMPORT_IMPL_BODY(greeter, concat, a, b)
+   PSIO1_IMPORT_IMPL_BODY(greeter, concat, a, b)
 
 uint64_t greeter::double_it(uint64_t v)
-   PSIO_IMPORT_IMPL_BODY(greeter, double_it, v)
+   PSIO1_IMPORT_IMPL_BODY(greeter, double_it, v)
 
 point greeter::translate(point p, int32_t dx, int32_t dy)
-   PSIO_IMPORT_IMPL_BODY(greeter, translate, p, dx, dy)
+   PSIO1_IMPORT_IMPL_BODY(greeter, translate, p, dx, dy)
 
 uint32_t greeter::sum_list(std::vector<uint32_t> xs)
-   PSIO_IMPORT_IMPL_BODY(greeter, sum_list, xs)
+   PSIO1_IMPORT_IMPL_BODY(greeter, sum_list, xs)
 
 wit::vector<point> greeter::make_grid(uint32_t w, uint32_t h)
-   PSIO_IMPORT_IMPL_BODY(greeter, make_grid, w, h)
+   PSIO1_IMPORT_IMPL_BODY(greeter, make_grid, w, h)
 
 // ── Processor implementation ────────────────────────────────────────
 
@@ -79,6 +79,6 @@ struct processor_impl
    }
 };
 
-PSIO_MODULE(processor_impl,
+PSIO1_MODULE(processor_impl,
             test_add, test_concat, test_double,
             test_translate, test_sum_list, test_make_grid)

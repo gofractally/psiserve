@@ -1,18 +1,23 @@
 #pragma once
+//
+// psio3/to_hex.hpp — hex string conversion utilities.  Direct port of
+// psio/to_hex.hpp.
+
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
-namespace psio
-{
+namespace psio {
 
    template <typename SrcIt, typename DestIt>
-   void hex(SrcIt begin, SrcIt end, DestIt dest, std::optional<char> delimiter = std::nullopt)
+   void hex(SrcIt begin, SrcIt end, DestIt dest,
+            std::optional<char> delimiter = std::nullopt)
    {
-      auto nibble = [&dest](std::uint8_t i)
-      {
+      auto nibble = [&dest](std::uint8_t i) {
          if (i <= 9)
             *dest++ = '0' + i;
          else
@@ -33,10 +38,11 @@ namespace psio
    }
 
    template <typename SrcIt>
-   std::string hex(SrcIt begin, SrcIt end, std::optional<char> delimiter = std::nullopt)
+   std::string hex(SrcIt begin, SrcIt end,
+                   std::optional<char> delimiter = std::nullopt)
    {
       std::string s;
-      size_t      size = (end - begin) * 2;
+      std::size_t size = (end - begin) * 2;
       if (delimiter && begin != end)
          size += (end - begin - 1);
       s.reserve(size);
@@ -45,7 +51,7 @@ namespace psio
    }
 
    inline std::string to_hex(const std::span<const char>& bytes,
-                             std::optional<char>          delimiter = std::nullopt)
+                             std::optional<char> delimiter = std::nullopt)
    {
       return hex(bytes.begin(), bytes.end(), delimiter);
    }
@@ -57,8 +63,7 @@ namespace psio
 
       auto begin     = h.begin();
       auto end       = h.end();
-      auto get_digit = [&](std::uint8_t& nibble)
-      {
+      auto get_digit = [&](std::uint8_t& nibble) {
          if (*begin >= '0' && *begin <= '9')
             nibble = *begin++ - '0';
          else if (*begin >= 'a' && *begin <= 'f')

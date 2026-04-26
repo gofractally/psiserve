@@ -1,6 +1,6 @@
 #pragma once
 #include <pfs/cid.hpp>
-#include <psio/reflect.hpp>
+#include <psio1/reflect.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -15,7 +15,7 @@ struct chunk_ref
    uint32_t offset;
    uint32_t size;
 };
-PSIO_REFLECT(chunk_ref, block_id, offset, size)
+PSIO1_REFLECT(chunk_ref, block_id, offset, size)
 
 struct cas_entry
 {
@@ -24,7 +24,7 @@ struct cas_entry
    std::vector<uint8_t>   inline_data;
    std::vector<chunk_ref> chunks;
 };
-PSIO_REFLECT(cas_entry, refcount, total_size, inline_data, chunks)
+PSIO1_REFLECT(cas_entry, refcount, total_size, inline_data, chunks)
 
 enum class entry_type : uint8_t
 {
@@ -41,14 +41,14 @@ struct fs_entry
    uint64_t           size     = 0;
    std::optional<cid> content_cid;
 };
-PSIO_REFLECT(fs_entry, type, mode, owner, mtime_ns, size, content_cid)
+PSIO1_REFLECT(fs_entry, type, mode, owner, mtime_ns, size, content_cid)
 
 struct fs_quota
 {
    uint64_t limit = 0;
    uint64_t used  = 0;
 };
-PSIO_REFLECT(fs_quota, limit, used)
+PSIO1_REFLECT(fs_quota, limit, used)
 
 struct dir_entry
 {

@@ -2,11 +2,11 @@
 
 ## Goal
 
-Create C++ bindings (PSIO_INTERFACE + PSIO_HOST_MODULE compatible)
+Create C++ bindings (PSIO1_INTERFACE + PSIO1_HOST_MODULE compatible)
 for the WASI 0.2.3 IO, HTTP, and Sockets interfaces. Each binding
 follows the pattern established by `wasi/0.2.3/cli.hpp`: struct with
-static methods, PSIO_INTERFACE declaration, resource types via
-`psio::wit_resource` + `psio::own<T>` / `psio::borrow<T>`.
+static methods, PSIO1_INTERFACE declaration, resource types via
+`psio1::wit_resource` + `psio1::own<T>` / `psio1::borrow<T>`.
 
 ## Source WIT files
 
@@ -56,8 +56,8 @@ random.hpp      ← random bytes
 ## Pattern for each interface
 
 1. Read the .wit file
-2. For each resource type: create a struct inheriting `psio::wit_resource`,
-   add PSIO_REFLECT with empty data members
+2. For each resource type: create a struct inheriting `psio1::wit_resource`,
+   add PSIO1_REFLECT with empty data members
 3. For each interface: create a struct with static methods matching the
    WIT function signatures
 4. Map WIT types to C++ types:
@@ -70,11 +70,11 @@ random.hpp      ← random bytes
    - `option<T>` → `std::optional<T>`
    - `result<T, E>` → `std::expected<T, E>` or a result struct
    - `tuple<A, B>` → `std::tuple<A, B>`
-   - `own<T>` → `psio::own<T>`
-   - `borrow<T>` → `psio::borrow<T>`
-   - `resource X { ... }` → `struct X : psio::wit_resource {}`
-5. Add PSIO_INTERFACE with types() and funcs()
-6. Add PSIO_PACKAGE for the wasi:io / wasi:http / wasi:sockets package
+   - `own<T>` → `psio1::own<T>`
+   - `borrow<T>` → `psio1::borrow<T>`
+   - `resource X { ... }` → `struct X : psio1::wit_resource {}`
+5. Add PSIO1_INTERFACE with types() and funcs()
+6. Add PSIO1_PACKAGE for the wasi:io / wasi:http / wasi:sockets package
 
 ## WIT variant/enum mapping
 
@@ -88,11 +88,11 @@ variant stream-error {
 →
 ```cpp
 struct stream_error {
-   std::variant<psio::own<io_error>, std::monostate> value;
+   std::variant<psio1::own<io_error>, std::monostate> value;
    // variant index 0 = last-operation-failed
    // variant index 1 = closed
 };
-PSIO_REFLECT(stream_error, value)
+PSIO1_REFLECT(stream_error, value)
 ```
 
 Or simpler with an enum + optional:
@@ -100,7 +100,7 @@ Or simpler with an enum + optional:
 enum class stream_error_kind { last_operation_failed, closed };
 struct stream_error {
    stream_error_kind kind;
-   std::optional<psio::own<io_error>> error; // present if last_operation_failed
+   std::optional<psio1::own<io_error>> error; // present if last_operation_failed
 };
 ```
 
@@ -133,7 +133,7 @@ Phase 4 (Rest):   depends on Phase 1 (clocks use pollable)
 
 Each phase includes a test in `libraries/wasi/cpp/tests/` that:
 1. Verifies the C++ types compile
-2. Verifies PSIO_INTERFACE reflection produces valid WIT text
+2. Verifies PSIO1_INTERFACE reflection produces valid WIT text
 3. Compares generated WIT against the source .wit files (golden diff)
 
 Follow the pattern in `tests/round_trip.cpp`.

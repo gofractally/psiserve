@@ -4,7 +4,7 @@
 #include <pfs/config.hpp>
 #include <pfs/schema.hpp>
 
-#include <psio/bytes_view.hpp>
+#include <psio1/bytes_view.hpp>
 
 #include <functional>
 #include <memory>
@@ -20,7 +20,7 @@ class cas
    cas(std::shared_ptr<psitri::database> db, block_store& bs, const config& cfg = {});
 
    // Store data, returns the CID. Handles dedup via refcount.
-   cid put(psio::bytes_view data);
+   cid put(psio1::bytes_view data);
 
    // Increment refcount for an existing CID.
    void pin(const cid& c);
@@ -38,7 +38,7 @@ class cas
    void read(const cid&                                              c,
              uint64_t                                                offset,
              uint64_t                                                length,
-             std::function<void(psio::bytes_view)> const&    cb);
+             std::function<void(psio1::bytes_view)> const&    cb);
 
    // Stat a CID.
    std::optional<cas_stat> stat(const cid& c);

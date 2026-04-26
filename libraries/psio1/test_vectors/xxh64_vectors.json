@@ -1,0 +1,17 @@
+{
+  "description": "xxh64 hash test vectors for cross-language verification. Both C++ (psio1::xxh64) and Rust (psio1::xxh64) must produce identical hashes.",
+  "vectors": [
+    {"input": "",       "seed": 0, "hash": "0xef46db3751d8e999"},
+    {"input": "a",      "seed": 0, "hash": "0xd24ec4f1a98c6e5b"},
+    {"input": "abc",    "seed": 0, "hash": "0x44bc2cf5ad770999"},
+    {"input": "name",   "seed": 0, "hash": "0x6c5f7b2e4a79fd6d"},
+    {"input": "hello",  "seed": 0, "hash": "0x26c7827d889f6da3"},
+    {"input": "balance","seed": 0, "hash": "0x47887cdfc8c8a122"},
+    {"input": "username","seed": 0, "hash": "0x0400e5dc95ec9594"},
+    {"input": "field_name","seed": 0, "hash": "0x1f9992f4280b53cf"},
+    {"input": "Hello, World!","seed": 0, "hash": "0xc49aacf8080fe47f"},
+    {"input": "abcdefghijklmnopqrstuvwxyz012345", "seed": 0, "hash": "0xd87beb27fb6b2023"},
+    {"input": "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF", "seed": 0, "hash": "0xf61e973fb752589c"},
+    {"input": "hello",  "seed": 42, "hash": "0xc3629e6318d53932"}
+  ]
+}

@@ -47,8 +47,8 @@
 // each import slot to exactly one provider, where a provider is any
 // of:
 //
-//   (a) a host implementation type registered with PSIO_HOST_MODULE — the
-//       impl's tag is found by `psio::impl_of<T>::type`;
+//   (a) a host implementation type registered with PSIO1_HOST_MODULE — the
+//       impl's tag is found by `psio1::impl_of<T>::type`;
 //   (b) another module in the same composition, whose PSIO-reflected
 //       export interfaces declare their tags;
 //   (c) an already-instantiated Instance carrying the same exports as
@@ -66,9 +66,9 @@
 // ── Hiding *_tag names ───────────────────────────────────────────────
 //
 // `Linker<World>` accepts the world type, not its tag. Users say
-// `Linker<node>` after `PSIO_WORLD(node, …)`. The macro is responsible
+// `Linker<node>` after `PSIO1_WORLD(node, …)`. The macro is responsible
 // for making `node` resolve to a public type (today: a thin wrapper
-// that aliases to `::psio::detail::node_world_tag`). No `_tag` name
+// that aliases to `::psio1::detail::node_world_tag`). No `_tag` name
 // appears in any public API.
 //
 // ── Thread safety ────────────────────────────────────────────────────
@@ -476,8 +476,8 @@ namespace psiserve
 
    /// Builds one Composition against world `World`.
    ///
-   /// `World` is the public world type emitted by PSIO_WORLD (e.g.
-   /// `PSIO_WORLD(node, …)` makes `node` usable as `Linker<node>`).
+   /// `World` is the public world type emitted by PSIO1_WORLD (e.g.
+   /// `PSIO1_WORLD(node, …)` makes `node` usable as `Linker<node>`).
    /// The linker reads `World`'s import list at compile time for the
    /// outer-import check, and its declared exports for the "did the
    /// composition cover everything the world promises?" check.
@@ -492,8 +492,8 @@ namespace psiserve
       Linker() = default;
 
       /// Register a host implementation. Slot is resolved via
-      /// `psio::impl_of<T>::type`, so the impl class must have been
-      /// declared with PSIO_HOST_MODULE. Fails to compile if it wasn't.
+      /// `psio1::impl_of<T>::type`, so the impl class must have been
+      /// declared with PSIO1_HOST_MODULE. Fails to compile if it wasn't.
       template <typename Impl>
       Linker& provide(Impl& impl);
 

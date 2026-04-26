@@ -1,5 +1,5 @@
 # hello_world — end-to-end run of a guest WASM built from C++ with
-# host imports wired by walking PSIO_HOST_MODULE's reflected interface
+# host imports wired by walking PSIO1_HOST_MODULE's reflected interface
 # list. The guest (guest.cpp) and host (host.cpp) share interface
 # declarations via shared.hpp; each side owns its own impl — shared.hpp
 # itself is declaration-only.
@@ -12,13 +12,13 @@
 # The wasi-sdk probe + include resolution is handled by
 # psi_add_wasm_module() (see cmake/PsiWasmModule.cmake); we just
 # name the CMake targets whose transitive INTERFACE_INCLUDE_DIRECTORIES
-# the guest needs — psio pulls in Boost::headers PUBLIC, so Boost.PP
-# and Boost.Core demangle are reachable for PSIO_REFLECT.
+# the guest needs — psio1 pulls in Boost::headers PUBLIC, so Boost.PP
+# and Boost.Core demangle are reachable for PSIO1_REFLECT.
 
 psi_add_wasm_module(hello_world_guest
    SOURCES guest.cpp
    OUTPUT  guest.wasm
-   DEPS    psio psizam wasi-cpp)
+   DEPS    psio1 psizam wasi-cpp)
 
 if(NOT TARGET hello_world_guest)
    # helper skipped (no wasi-sdk) — nothing else to build

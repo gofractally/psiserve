@@ -33,8 +33,8 @@
 #include <psizam/host_function_table.hpp>
 #include <psizam/hosted.hpp>
 
-#include <psio/structural.hpp>
-#include <psio/wit_owned.hpp>
+#include <psio1/structural.hpp>
+#include <psio1/wit_owned.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -69,7 +69,7 @@ template <typename R, typename... Args>
 struct bridge_fn_traits<R (*)(Args...)>
 {
    using ReturnType = R;
-   using ArgTypes   = ::psio::TypeList<std::remove_cvref_t<Args>...>;
+   using ArgTypes   = ::psio1::TypeList<std::remove_cvref_t<Args>...>;
    static constexpr std::size_t arg_count = sizeof...(Args);
 };
 
@@ -99,7 +99,7 @@ struct module_instance
    template <typename Tag>
    auto as()
    {
-      using info    = ::psio::detail::interface_info<Tag>;
+      using info    = ::psio1::detail::interface_info<Tag>;
       using adapter = detail::void_proxy_adapter<backend_t, info>;
       using proxy_t = typename info::template proxy<adapter>;
       return proxy_t{*be, static_cast<void*>(host_ptr)};
@@ -133,14 +133,14 @@ public:
    }
 
    // Register host C++ methods as imports for a specific module.
-   // Walks Impl's PSIO_HOST_MODULE interfaces and registers each
+   // Walks Impl's PSIO1_HOST_MODULE interfaces and registers each
    // method with the module's host_function_table.
    template <typename Impl>
    void register_host(instance_t& mod)
    {
-      if constexpr (requires { typename ::psio::detail::impl_info<Impl>::interfaces; })
+      if constexpr (requires { typename ::psio1::detail::impl_info<Impl>::interfaces; })
       {
-         using interfaces = typename ::psio::detail::impl_info<Impl>::interfaces;
+         using interfaces = typename ::psio1::detail::impl_info<Impl>::interfaces;
          [&]<typename... IfaceImpls>(std::tuple<IfaceImpls...>*) {
             (register_host_iface<IfaceImpls>(mod), ...);
          }(static_cast<interfaces*>(nullptr));
@@ -151,7 +151,7 @@ public:
    template <typename InterfaceTag>
    void link(instance_t& consumer, instance_t& provider)
    {
-      using info = ::psio::detail::interface_info<InterfaceTag>;
+      using info = ::psio1::detail::interface_info<InterfaceTag>;
       constexpr auto N = info::func_names.size();
       link_interface_methods<InterfaceTag>(consumer, provider,
                                           std::make_index_sequence<N>{});
@@ -204,7 +204,7 @@ private:
    void register_host_iface(instance_t& mod)
    {
       using iface_tag  = typename IfaceImpl::tag;
-      using iface_info = ::psio::detail::interface_info<iface_tag>;
+      using iface_info = ::psio1::detail::interface_info<iface_tag>;
       constexpr auto n =
          std::tuple_size_v<std::remove_cvref_t<decltype(IfaceImpl::methods)>>;
       register_host_methods<IfaceImpl>(
@@ -250,7 +250,7 @@ private:
          using MType      = detail::member_fn_types<decltype(MemPtr)>;
          using ReturnType = typename MType::ReturnType;
 
-         ::psio::native_value slots[16];
+         ::psio1::native_value slots[16];
          for (int i = 0; i < 16; ++i)
             slots[i].i64 = args[i].i64;
 
@@ -258,7 +258,7 @@ private:
          detail::host_lift_policy lift{slots, mem};
          auto fn_args = [&]<typename H, typename R, typename... As>(R (H::*)(As...)) {
             return detail::lift_canonical_args<MemPtr>(
-               lift, ::psio::TypeList<std::remove_cvref_t<As>...>{});
+               lift, ::psio1::TypeList<std::remove_cvref_t<As>...>{});
          }(MemPtr);
 
          if constexpr (std::is_void_v<ReturnType>) {
@@ -301,7 +301,7 @@ private:
    template <typename InterfaceTag, std::size_t I>
    void link_one_method(instance_t& consumer, instance_t& provider)
    {
-      using info = ::psio::detail::interface_info<InterfaceTag>;
+      using info = ::psio1::detail::interface_info<InterfaceTag>;
       using func_types = typename info::func_types;
       using FnPtr = std::tuple_element_t<I, func_types>;
       using Traits = detail::bridge_fn_traits<FnPtr>;
@@ -322,7 +322,7 @@ private:
 
       // Detect scalar-only signatures at compile time.
       // Scalar bridge: forward args directly — no lift, no lower, no copy.
-      constexpr bool all_args_scalar = []<typename... As>(::psio::TypeList<As...>) {
+      constexpr bool all_args_scalar = []<typename... As>(::psio1::TypeList<As...>) {
          return (detail::is_scalar_wasm_type_v<As> && ...);
       }(ArgTypes{});
       constexpr bool ret_scalar = detail::is_scalar_wasm_type_v<Ret> ||

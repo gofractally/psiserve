@@ -26,7 +26,7 @@ byte saved multiplies by billions of rows.
    struct is_packable;`
 2. **Verify byte-identical output** to the legacy `fracpack.hpp` at
    `Format = frac_format_32` by running the existing 326-test suite
-   against v2 under a `PSIO_FRACPACK_V2` compile flag.
+   against v2 under a `PSIO1_FRACPACK_V2` compile flag.
 3. **Once all tests pass**, delete `fracpack.hpp`, rename v2 in its
    place. Add `to_frac16`/`from_frac16`/`validate_frac16` aliases for
    the `frac_format_16` instantiation.

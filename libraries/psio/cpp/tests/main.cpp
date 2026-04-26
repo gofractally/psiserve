@@ -1,2 +1,7 @@
+// Shared Catch2 main for every psio3 test executable.
+// The Catch2 v2 single-header lives at ../../psio/external/Catch2/catch.hpp.
+// Define CATCH_CONFIG_MAIN exactly once per test binary; all other TUs
+// just include <catch.hpp>.
+
 #define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch.hpp>

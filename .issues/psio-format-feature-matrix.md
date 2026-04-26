@@ -20,14 +20,14 @@ is retained as:
 
 - Customization via `tag_invoke` CPOs + `format_tag_base<Derived>`
   CRTP (not class-template specialization of `codec_ops<Fmt>`).
-- Format tags at top level (`psio::ssz`, `psio::frac`, …), not
-  `psio::fmt::*`.
-- Two call forms: generic `psio::encode(fmt, v)` + format-scoped
-  `psio::frac::encode(v)` — both compile to the same code via
+- Format tags at top level (`psio1::ssz`, `psio1::frac`, …), not
+  `psio1::fmt::*`.
+- Two call forms: generic `psio1::encode(fmt, v)` + format-scoped
+  `psio1::frac::encode(v)` — both compile to the same code via
   `format_tag_base` sugar.
 - Heap factory is `make_boxed<T>(fmt, bytes)` (not
   `make_unique_from_<fmt>` / `make_shared_from_<fmt>`).
-- Annotations live in `psio::annotate<X>` (tuple of spec structs),
+- Annotations live in `psio1::annotate<X>` (tuple of spec structs),
   not a series of tag composition `operator|` calls on individual
   attributes.
 - Rename pass (v1 `convert_*` → v2 canonical) happens as part of the
@@ -57,7 +57,7 @@ psio currently ships thirteen wire formats, split into three paradigms:
 | 10 | **flatbuf-native** | symmetric binary codec (zero-dep) | `to_flatbuf` / `from_flatbuf` (via unified `view<T, fb>`) |
 | 11 | **flatbuf-lib** | adapter to Google flatbuffers runtime | `to_flatbuf(fbb, T)` / `from_flatbuf(...)` |
 | 12 | **capnp** | symmetric binary codec (zero-dep) | `to_capnp` / `from_capnp` |
-| 13 | **wit** | canonical-ABI codec + schema tooling | `to_wit` / `from_wit` (currently `psio::wit::pack`/`unpack`) |
+| 13 | **wit** | canonical-ABI codec + schema tooling | `to_wit` / `from_wit` (currently `psio1::wit::pack`/`unpack`) |
 
 **Important**: flatbuf has two implementations. The native zero-dep one is
 the default and lives in `flatbuf.hpp`; the runtime-adapter is in
@@ -72,11 +72,11 @@ continue to coexist; tests and benches compare them.
 > (Architecture) for the canonical API.** The early sketch this
 > section held has been replaced by:
 >
-> - Generic: `psio::encode(fmt, v)` / `psio::decode<T>(fmt, bytes)` /
->   `psio::size(fmt, v)` / `psio::validate<T>(fmt, bytes)` /
->   `psio::make_boxed<T>(fmt, bytes)` — CPOs dispatching via
+> - Generic: `psio1::encode(fmt, v)` / `psio1::decode<T>(fmt, bytes)` /
+>   `psio1::size(fmt, v)` / `psio1::validate<T>(fmt, bytes)` /
+>   `psio1::make_boxed<T>(fmt, bytes)` — CPOs dispatching via
 >   `tag_invoke`.
-> - Format-scoped sugar: `psio::ssz::encode(v)` etc. via
+> - Format-scoped sugar: `psio1::ssz::encode(v)` etc. via
 >   `format_tag_base<Derived>` CRTP.
 > - No `make_unique_from_<fmt>` / `make_shared_from_<fmt>` per-format
 >   functions — the generic `make_boxed` CPO covers it.
@@ -109,12 +109,12 @@ Legend: ✅ present & canonical · ⚠️ present but non-canonical (naming mism
 | flatbuf-native | ⚠️ class `fb_builder.pack(T)` (not a free `to_flatbuf`) | ⚠️ free `fb_unpack<T>(buf)` | ❌ | ❌ | ❌ | ⚠️ `fb_unpack<T>(buf)` | ❌ | ❌ | ❌ | ❌ | ✅ `fb_view<T>` / `view<T, fb>` | ⚠️ `fb_mut<T>` | ⚠️ (schema export not surfaced at top level — search for `fb_` in schema.hpp) | ⚠️ `fbs_parser.hpp` | ✅ `FbBuilder`, `FbUnpack`, `FbView` | ❌ |
 | flatbuf-lib | ✅ `to_flatbuf(fbb, T)` (builder-shaped) + `to_flatbuf_finish(fbb, T)` | ✅ `from_flatbuf(...)` | — (flatbuffers runtime owns buffer) | — | ✅ | — | ❌ | ❌ | ❌ | ❌ | ⚠️ `flatbuf_view` | ❌ | — (fbs text via `emit_wit`-style sibling TBD) | — | ❌ | ❌ |
 | capnp | ❌ (no `to_capnp(T, stream)`) | ❌ (no `from_capnp(T&, ...)`) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ `capnp_view<T>` | ❌ | ⚠️ via `capnp_schema.hpp` | ✅ `capnp_parser.hpp` | ✅ `CapnpPack`, `CapnpUnpack`, `CapnpView` | ❌ |
-| wit | ⚠️ `psio::wit::pack(T)` (namespaced verb, not `to_wit`) | ⚠️ `psio::wit::unpack<T>(buf)` | ❌ | ❌ | ❌ | ⚠️ `psio::wit::unpack<T>` | ❌ | ❌ | ❌ | ⚠️ `psio::wit::validate<T>(buf)` | ✅ `wit_view` / `view<T, wit>` | ✅ `wit_mut<T>`, `wit_owned<T>` | ✅ `generate_wit<T>()` + `emit_wit` | ✅ `wit_parser.hpp` | ✅ `psio::wit::pack`/`unpack` (also non-canonical) | ✅ (conformance_tests.rs) |
+| wit | ⚠️ `psio1::wit::pack(T)` (namespaced verb, not `to_wit`) | ⚠️ `psio1::wit::unpack<T>(buf)` | ❌ | ❌ | ❌ | ⚠️ `psio1::wit::unpack<T>` | ❌ | ❌ | ❌ | ⚠️ `psio1::wit::validate<T>(buf)` | ✅ `wit_view` / `view<T, wit>` | ✅ `wit_mut<T>`, `wit_owned<T>` | ✅ `generate_wit<T>()` + `emit_wit` | ✅ `wit_parser.hpp` | ✅ `psio1::wit::pack`/`unpack` (also non-canonical) | ✅ (conformance_tests.rs) |
 
 ### Additional format-specific quirks
 
 - **json**: returns `std::string`, not `std::vector<char>`. Has two extra siblings: `format_json` (pretty-print) and `to_json_fast` (alternate impl). Under canonicalization these become `json_pretty` and `json_fast`.
-- **wit**: uses namespaced verb `psio::wit::pack` instead of free `to_wit`. Also has `canonicalize<T>` which is wit-specific (canonical-ABI doesn't need it in the pack path but exposes it for re-canonicalizing existing buffers).
+- **wit**: uses namespaced verb `psio1::wit::pack` instead of free `to_wit`. Also has `canonicalize<T>` which is wit-specific (canonical-ABI doesn't need it in the pack path but exposes it for re-canonicalizing existing buffers).
 - **flatbuf-native vs flatbuf-lib**: entirely different entry points. Native uses class builder `fb_builder.pack(token)`; library uses `to_flatbuf(fbb, T)` with `FlatBufferBuilder` argument. Keep both but rename native's entry points to fit the `to_/from_` pattern (see TODOs below).
 - **capnp**: view-only today. No writer. Gap: full symmetric codec.
 - **bin**: no size/validate/view — this is the oldest/simplest format; gap is largest here.
@@ -123,7 +123,7 @@ Legend: ✅ present & canonical · ⚠️ present but non-canonical (naming mism
 
 ## 4. Rust feature matrix (current state)
 
-Legend same as above. "Canonical" = free function in `psio::<fmt>` module.
+Legend same as above. "Canonical" = free function in `psio1::<fmt>` module.
 
 | Format | to_ fn | from_ fn | size fn | validate fn | from_…_boxed | View | Mut | Schema export | Schema import | C++↔Rust xval |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -148,7 +148,7 @@ Legend same as above. "Canonical" = free function in `psio::<fmt>` module.
 > **See `psio-v2-design.md` § 7 (Coexistence / migration) for the
 > actual plan.** Summary of deltas from this early sketch:
 >
-> - v2 lives in a fresh `psio::v2::` namespace during development,
+> - v2 lives in a fresh `psio1::v2::` namespace during development,
 >   not a rename-in-place of v1. No `[[deprecated]]` aliases during
 >   the development phase.
 > - When v2 promotes to primary, the legacy `convert_*`, `format_json`,
@@ -158,10 +158,10 @@ Legend same as above. "Canonical" = free function in `psio::<fmt>` module.
 >   applicable — but they happen as part of the namespace promotion,
 >   not as a standalone pass.
 > - `make_unique_from_<fmt>` / `make_shared_from_<fmt>` per-format
->   names are gone — replaced by the single `psio::make_boxed<T>(fmt,
+>   names are gone — replaced by the single `psio1::make_boxed<T>(fmt,
 >   bytes)` CPO and its format-scoped sugar `fmt::make_boxed<T>(bytes)`.
-> - Flatbuf dual-impl disambiguation: flatbuf-native keeps `psio::flatbuf`;
->   flatbuf-lib lives under `psio::flatbuf_lib::` (decided).
+> - Flatbuf dual-impl disambiguation: flatbuf-native keeps `psio1::flatbuf`;
+>   flatbuf-lib lives under `psio1::flatbuf_lib::` (decided).
 >
 > Cross-validation fixtures per format remain a concrete TODO — see
 > § 6.8 below.
@@ -180,12 +180,12 @@ Each row below is a standalone work item sized for a single PR.
 - [ ] T-04: Rename `format_json` → `json_pretty`, `to_json_fast` → `json_fast`. Keep old names as `[[deprecated]]` aliases.
 - [ ] T-05: Same canonical overloads for bin/key/avro/borsh/bincode; deprecate `convert_*`.
 - [ ] T-06: For flatbuf-native: add free `to_flatbuf<T>(T) → vec`, `from_flatbuf<T>(span) → T`. Keep `fb_builder` class as the power-user interface.
-- [ ] T-07: For flatbuf-lib: decide disambiguation (see Section 5B). Recommend moving to `psio::flatbuf_lib::` namespace so both `to_flatbuf` free functions coexist.
-- [ ] T-08: For wit: add free `to_wit` / `from_wit` / `wit_size` / `wit_validate`. Keep `psio::wit::pack` etc. as deprecated aliases.
+- [ ] T-07: For flatbuf-lib: decide disambiguation (see Section 5B). Recommend moving to `psio1::flatbuf_lib::` namespace so both `to_flatbuf` free functions coexist.
+- [ ] T-08: For wit: add free `to_wit` / `from_wit` / `wit_size` / `wit_validate`. Keep `psio1::wit::pack` etc. as deprecated aliases.
 
 ### 6.2 Feature additions — heap factories
 
-- [ ] T-10: Implement `psio::make_boxed<T>(fmt, bytes)` CPO that
+- [ ] T-10: Implement `psio1::make_boxed<T>(fmt, bytes)` CPO that
       default-inits `T` on the heap (no POD zero-init) then dispatches
       to the format's `tag_invoke(decode, fmt, bytes, *ptr)`. One
       header helper `psio/detail/make_default_init.hpp` provides the
@@ -220,7 +220,7 @@ Each row below is a standalone work item sized for a single PR.
 - [ ] T-35: `json_validate<T>(string_view)` — syntactic + type-directed.
 - [ ] T-36: `flatbuf_validate<T>(span)` for both impls.
 - [ ] T-37: `capnp_validate<T>(span)` free fn (Rust has one; C++ should mirror).
-- [ ] T-38: `wit_validate<T>(span)` — promote from namespaced `psio::wit::validate` to free.
+- [ ] T-38: `wit_validate<T>(span)` — promote from namespaced `psio1::wit::validate` to free.
 
 ### 6.5 Feature additions — views / mutable views
 
@@ -245,7 +245,7 @@ Each row below is a standalone work item sized for a single PR.
 
 ### 6.8 Cross-validation tests
 
-- [ ] T-60: Emit C++ fixtures for bin, commit to `libraries/psio/cpp/tests/fixtures/`, write Rust assertion tests.
+- [ ] T-60: Emit C++ fixtures for bin, commit to `libraries/psio1/cpp/tests/fixtures/`, write Rust assertion tests.
 - [ ] T-61: Same for key.
 - [ ] T-62: Same for avro.
 - [ ] T-63: Same for json (text equality modulo whitespace for non-fast paths).
@@ -259,7 +259,7 @@ Each row below is a standalone work item sized for a single PR.
 ### 6.10 Bench coverage
 
 - [ ] T-80: Bench matrix: for each of { ssz, pssz, frac, flatbuf-native, flatbuf-lib, capnp, wit, bin, key, json, borsh, bincode } × { encode, decode, validate, view-access } on the real BeaconState workload (where the format can express it) and on a synthetic mid-size struct (bench_modern_state).
-- [ ] T-81: Publish the matrix as `libraries/psio/cpp/benchmarks/README.md` with numbers for each machine we've run on.
+- [ ] T-81: Publish the matrix as `libraries/psio1/cpp/benchmarks/README.md` with numbers for each machine we've run on.
 
 ---
 
@@ -270,8 +270,8 @@ Each row below is a standalone work item sized for a single PR.
 >
 > - Customization point is `tag_invoke` CPO + `format_tag_base<Derived>`
 >   CRTP, NOT `codec_ops<Fmt>` class-template specialization.
-> - Format tags sit at top level (`psio::ssz`, `psio::frac`, etc.),
->   NOT in a `psio::ssz_fmt` / `psio::frac_fmt<W>` naming scheme.
+> - Format tags sit at top level (`psio1::ssz`, `psio1::frac`, etc.),
+>   NOT in a `psio1::ssz_fmt` / `psio1::frac_fmt<W>` naming scheme.
 >   They inherit from `format_tag_base<Self>` to get the scoped form
 >   for free.
 > - `make_boxed<T>(fmt, bytes)` is a single CPO — no separate
@@ -301,8 +301,8 @@ All seven original questions have been answered through the v2 design:
 | 3 | `convert_*` — deprecate or delete? | **Deprecate for one release, then delete.** Applied on v2 promotion (`psio-v2-design.md` § 7). |
 | 4 | Rust `from_<fmt>_boxed` naming divergence OK? | **Yes** — Rust-idiomatic, no Rc/Arc distinction. |
 | 5 | `format_json` → `json_pretty`? | **Yes** — rename happens on v2 promotion. |
-| 6 | flatbuf dual-impl disambiguation? | **`psio::flatbuf_lib::` namespace** for the runtime-adapter; `psio::flatbuf` tag for native. |
-| 7 | Generic `psio::encode<Fmt>(v)` vs per-format `to_<fmt>(v)` as default? | **Generic is default** in docs and examples; per-format sugar via `format_tag_base` covers the short form (`psio::frac::encode(v)`). Low-level `to_frac(v, stream&)` stays for advanced use. |
+| 6 | flatbuf dual-impl disambiguation? | **`psio1::flatbuf_lib::` namespace** for the runtime-adapter; `psio1::flatbuf` tag for native. |
+| 7 | Generic `psio1::encode<Fmt>(v)` vs per-format `to_<fmt>(v)` as default? | **Generic is default** in docs and examples; per-format sugar via `format_tag_base` covers the short form (`psio1::frac::encode(v)`). Low-level `to_frac(v, stream&)` stays for advanced use. |
 
 Open questions going forward live in `psio-v2-design.md` § 11.
 

@@ -1,21 +1,23 @@
 #pragma once
-
-// psio/name.hpp — Compressed name identifier.
+//
+// psio3/name.hpp — compressed-name identifier (port of psio/name.hpp).
 //
 // Encodes short human-readable strings (a-z, 0-9, hyphen, up to 18
 // chars) into a 64-bit integer using arithmetic coding with a
 // context-dependent probability model. The encoding is bijective:
-// every valid name maps to a unique u64 and back.
+// every valid name maps to a unique u64 and back; names that don't
+// compress (too long, invalid chars) produce 0.
 //
 // Used as the universal key type throughout the stack:
-//   psio:     schema/reflection metadata keys
+//   psio3:    schema/reflection metadata keys
 //   psizam:   module/instance/interface identifiers
 //   psitri:   database primary keys
 //   psiserve: process/service names
 //   WIT:      passed as a single i64 flat_val (scalar fast path)
 //
-// Names that don't compress (too long, invalid chars) produce 0.
-// The caller can fall back to a hash for those cases.
+// Wire-compatible with v1 — the frequency tables below are the
+// authoritative source; the same input string must produce the same
+// 64-bit output as `psio1::name_to_number`.
 //
 // Derived from psibase::name (Mark Thomas Nelson's arithmetic coding,
 // adapted by Daniel Larimer for short-name compression with context-
@@ -54,6 +56,7 @@ THE SOFTWARE.
  based on the prior element and it is no longer general purpose.
 */
 
+#include <psio/annotate.hpp>
 #include <psio/reflect.hpp>
 
 #include <cstdint>
@@ -62,11 +65,9 @@ THE SOFTWARE.
 #include <string>
 #include <string_view>
 
-namespace psio
-{
+namespace psio {
 
-namespace detail_name
-{
+namespace detail_name {
 
 struct name_model
 {
@@ -412,9 +413,11 @@ struct name_id
 
    constexpr explicit operator bool() const { return value != 0; }
    constexpr auto operator<=>(const name_id&) const = default;
-
-   PSIO_REFLECT(name_id, definitionWillNotChange(), value)
 };
+PSIO_REFLECT(name_id, value)
+}  // namespace psio
+PSIO_TYPE_ATTRS(::psio::name_id, ::psio::definition_will_not_change{})
+namespace psio {
 
 inline namespace literals
 {
@@ -439,7 +442,7 @@ namespace psizam {
    struct wasm_type_traits<psio::name_id, void> {
       static constexpr bool is_wasm_type = true;
       using wasm_type = uint64_t;
-      static constexpr uint64_t      unwrap(psio::name_id n) { return n.value; }
-      static constexpr psio::name_id wrap(uint64_t v)        { return psio::name_id{v}; }
+      static constexpr uint64_t       unwrap(psio::name_id n) { return n.value; }
+      static constexpr psio::name_id wrap(uint64_t v)         { return psio::name_id{v}; }
    };
 } // namespace psizam

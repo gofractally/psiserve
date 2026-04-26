@@ -190,7 +190,7 @@ Reports `std::optional<std::size_t>`: a value when a bound exists,
 | Reflected (DWNC)                  | sizeof(T)                                             |
 | Reflected (extensible)            | header_bytes + Σ max<field> + selector_bytes          |
 
-A `PSIO_MAX_ENCODED_SIZE(T, N)` macro lets users commit to a bound
+A `PSIO1_MAX_ENCODED_SIZE(T, N)` macro lets users commit to a bound
 explicitly. Needed when a type contains a `std::vector` but the user
 knows from context it won't exceed N elements, or when they want a
 stable bound independent of what the compiler can currently deduce.
@@ -233,14 +233,14 @@ using auto_pssz_format_t =
 
 ### Opt-in vs opt-out
 
-Default behavior on `to_pssz(T, value)` / `psio::pssz`:
+Default behavior on `to_pssz(T, value)` / `psio1::pssz`:
 
 - Explicit format: `to_pssz<frac_format_pssz16>(v)` — user picks.
 - Auto: `to_pssz(v)` with no format tag → `auto_pssz_format_t<T>`.
 - No public `pssz8` override: the 8-bit width is selected only by auto
   after the compile-time bound proves the whole value fits.
 
-A `PSIO_PSSZ_AUTO(T)` macro flips a per-type default if opt-out is
+A `PSIO1_PSSZ_AUTO(T)` macro flips a per-type default if opt-out is
 preferred later. Starting opt-in is safer — users explicitly ask for
 the narrower format when they accept the 64 KiB / 256 B bound.
 
@@ -251,7 +251,7 @@ max past 64 KiB, or changing `bounded_list<T, 100>` to `<T, 100000>`)
 **silently flips the wire format**. Old encoders emit narrower bytes;
 new decoders expect wider. Mitigation:
 
-- `PSIO_MAX_ENCODED_SIZE(T, N)` pins the compiler's view of max. If the
+- `PSIO1_MAX_ENCODED_SIZE(T, N)` pins the compiler's view of max. If the
   type later grows past N, compile fails instead of silently flipping.
 - Version-embed the format tag in the stored bytes (1-byte header
   prefix) — costs 1 B but catches mismatches at decode. Probably wanted
@@ -318,7 +318,7 @@ Tests:
 - ✅ Generic `bounded<T, N>` wrapper added — legacy classes retained
 - ✅ SSZ encoder inherited the single-pass backpatching fix
   (UserProfile pack 51→34 ns, Order pack 108→68 ns)
-- ✅ Rust bootstrap port: `libraries/psio/rust/psio/src/pssz.rs` with
+- ✅ Rust bootstrap port: `libraries/psio1/rust/psio/src/pssz.rs` with
   primitives, String, Vec, Option. 13 tests, 6 of them cross-validate
   against C++ byte-for-byte.
 

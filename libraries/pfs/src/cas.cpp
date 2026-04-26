@@ -1,7 +1,7 @@
 #include <pfs/cas.hpp>
 #include <pfs/keys.hpp>
 
-#include <psio/fracpack.hpp>
+#include <psio1/fracpack.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -15,7 +15,7 @@ cas::cas(std::shared_ptr<psitri::database> db, block_store& bs, const config& cf
 {
 }
 
-cid cas::put(psio::bytes_view data)
+cid cas::put(psio1::bytes_view data)
 {
    auto content_cid = compute_cid(data);
    auto key         = cas_key(content_cid);
@@ -28,10 +28,10 @@ cid cas::put(psio::bytes_view data)
    auto existing = tx.get<std::string>(key);
    if (existing)
    {
-      auto entry = psio::from_frac<cas_entry>(
+      auto entry = psio1::from_frac<cas_entry>(
           std::span<const char>(existing->data(), existing->size()));
       entry.refcount++;
-      auto val = psio::to_frac(entry);
+      auto val = psio1::to_frac(entry);
       tx.upsert(key, std::string_view(val.data(), val.size()));
       tx.commit();
       return content_cid;
@@ -67,7 +67,7 @@ cid cas::put(psio::bytes_view data)
       }
    }
 
-   auto val = psio::to_frac(entry);
+   auto val = psio1::to_frac(entry);
    tx.upsert(key, std::string_view(val.data(), val.size()));
    tx.commit();
    return content_cid;
@@ -85,10 +85,10 @@ void cas::pin(const cid& c)
    if (!existing)
       throw std::runtime_error("pfs::cas::pin: CID not found");
 
-   auto entry = psio::from_frac<cas_entry>(
+   auto entry = psio1::from_frac<cas_entry>(
        std::span<const char>(existing->data(), existing->size()));
    entry.refcount++;
-   auto val = psio::to_frac(entry);
+   auto val = psio1::to_frac(entry);
    tx.upsert(key, std::string_view(val.data(), val.size()));
    tx.commit();
 }
@@ -105,7 +105,7 @@ void cas::unpin(const cid& c)
    if (!existing)
       return;  // already gone
 
-   auto entry = psio::from_frac<cas_entry>(
+   auto entry = psio1::from_frac<cas_entry>(
        std::span<const char>(existing->data(), existing->size()));
 
    if (entry.refcount <= 1)
@@ -118,7 +118,7 @@ void cas::unpin(const cid& c)
    else
    {
       entry.refcount--;
-      auto val = psio::to_frac(entry);
+      auto val = psio1::to_frac(entry);
       tx.upsert(key, std::string_view(val.data(), val.size()));
    }
    tx.commit();
@@ -135,7 +135,7 @@ cas_entry cas::read_entry(const cid& c)
    if (!result)
       throw std::runtime_error("pfs::cas: CID not found");
 
-   return psio::from_frac<cas_entry>(
+   return psio1::from_frac<cas_entry>(
        std::span<const char>(result->data(), result->size()));
 }
 
@@ -206,7 +206,7 @@ std::vector<uint8_t> cas::get_range(const cid& c, uint64_t offset, uint64_t leng
 void cas::read(const cid&                                            c,
                uint64_t                                              offset,
                uint64_t                                              length,
-               std::function<void(psio::bytes_view)> const&  cb)
+               std::function<void(psio1::bytes_view)> const&  cb)
 {
    auto entry = read_entry(c);
 
@@ -215,7 +215,7 @@ void cas::read(const cid&                                            c,
 
    if (!entry.inline_data.empty())
    {
-      auto span = psio::bytes_view(entry.inline_data).subspan(offset, length);
+      auto span = psio1::bytes_view(entry.inline_data).subspan(offset, length);
       cb(span);
       return;
    }
@@ -254,7 +254,7 @@ std::optional<cas_stat> cas::stat(const cid& c)
    if (!result)
       return std::nullopt;
 
-   auto entry = psio::from_frac<cas_entry>(
+   auto entry = psio1::from_frac<cas_entry>(
        std::span<const char>(result->data(), result->size()));
 
    return cas_stat{

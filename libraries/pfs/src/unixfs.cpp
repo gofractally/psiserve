@@ -38,7 +38,7 @@ namespace
    // Protobuf length-delimited field
    void write_bytes_field(std::vector<uint8_t>& buf,
                           uint32_t              field,
-                          psio::bytes_view data)
+                          psio1::bytes_view data)
    {
       write_tag(buf, field, 2);  // wire type 2 = length-delimited
       write_varint(buf, data.size());
@@ -52,7 +52,7 @@ namespace
    }
 
    // Build UnixFS Data message for a file leaf (type=File, with inline data)
-   std::vector<uint8_t> make_unixfs_data(psio::bytes_view file_data)
+   std::vector<uint8_t> make_unixfs_data(psio1::bytes_view file_data)
    {
       std::vector<uint8_t> buf;
       buf.reserve(file_data.size() + 16);
@@ -90,7 +90,7 @@ namespace
    }
 }  // namespace
 
-std::vector<uint8_t> encode_file_block(psio::bytes_view data)
+std::vector<uint8_t> encode_file_block(psio1::bytes_view data)
 {
    // Build the UnixFS Data message
    auto unixfs_data = make_unixfs_data(data);

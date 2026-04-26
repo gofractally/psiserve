@@ -14,16 +14,16 @@
 //   )
 //
 // Produces:
-//   - PSIO_REFLECT for the class
+//   - PSIO1_REFLECT for the class
 //   - WIT embedded in component-type custom section
 //   - cabi_realloc export
 //   - Typed extern "C" exports for each method
 //   - Canonical ABI lift/lower for all parameter and return types
 
-#include <psio/reflect.hpp>
-#include <psio/wit_gen.hpp>
-#include <psio/wit_encode.hpp>
-#include <psio/wview.hpp>
+#include <psio1/reflect.hpp>
+#include <psio1/wit_gen.hpp>
+#include <psio1/wit_encode.hpp>
+#include <psio1/wview.hpp>
 #include <psizam/component_proxy.hpp>  // flat_val, export_*_policy, ComponentProxy
 
 #include <cstdint>
@@ -41,20 +41,20 @@ namespace psizam {
 
    template <typename T>
    std::string generate_component_wit(const std::string& package) {
-      return psio::generate_wit_text<T>(package);
+      return psio1::generate_wit_text<T>(package);
    }
 
    // Generate Component Model binary for embedding as a component-type custom section.
    template <typename T>
    std::vector<uint8_t> generate_component_wit_binary(const std::string& package) {
-      return psio::generate_wit_binary<T>(package);
+      return psio1::generate_wit_binary<T>(package);
    }
 
 } // namespace psizam
 
 // ── PZAM_COMPONENT macro ─────────────────────────────────────────────────────
 //
-// Generates: PSIO_REFLECT + static instance + extern "C" exports
+// Generates: PSIO1_REFLECT + static instance + extern "C" exports
 //
 // The preprocessor iteration uses a simple X-macro pattern to handle
 // each method(...) entry in the variadic args.
@@ -114,6 +114,6 @@ namespace psizam {
 // ── The main macro ───────────────────────────────────────────────────────────
 
 #define PZAM_COMPONENT(Class, ...) \
-   PSIO_REFLECT(Class, __VA_ARGS__) \
+   PSIO1_REFLECT(Class, __VA_ARGS__) \
    static Class _pzam_impl; \
    _PZAM_FOREACH(Class, __VA_ARGS__)

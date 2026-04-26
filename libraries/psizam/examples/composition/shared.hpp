@@ -9,24 +9,24 @@
 
 #include <stdint.h>
 #include <string_view>
-#include <psio/guest_attrs.hpp>
-#include <psio/structural.hpp>
-#include <psio/wit_owned.hpp>
+#include <psio1/guest_attrs.hpp>
+#include <psio1/structural.hpp>
+#include <psio1/wit_owned.hpp>
 
-PSIO_PACKAGE(composition, "0.1.0");
-#undef  PSIO_CURRENT_PACKAGE_
-#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(composition)
+PSIO1_PACKAGE(composition, "0.1.0");
+#undef  PSIO1_CURRENT_PACKAGE_
+#define PSIO1_CURRENT_PACKAGE_ PSIO1_PACKAGE_TYPE_(composition)
 
 // ── Host-provided interface ─────────────────────────────────────────
 struct env
 {
-   PSIO_IMPORT(env, log_u64)
+   PSIO1_IMPORT(env, log_u64)
    static void log_u64(uint64_t n);
 
    static void log_string(std::string_view msg);
 };
 
-PSIO_INTERFACE(env, types(), funcs(func(log_u64, value),
+PSIO1_INTERFACE(env, types(), funcs(func(log_u64, value),
                                    func(log_string, msg)))
 
 // ── Shared record types ─────────────────────────────────────────────
@@ -35,7 +35,7 @@ struct point {
    uint32_t x{};
    uint32_t y{};
 };
-PSIO_REFLECT(point, x, y)
+PSIO1_REFLECT(point, x, y)
 
 // ── Provider-exported interface (greeter) ───────────────────────────
 // Coverage: scalars, strings, records, lists of scalars, lists of records.
@@ -49,7 +49,7 @@ struct greeter
    static wit::vector<point> make_grid(uint32_t w, uint32_t h);
 };
 
-PSIO_INTERFACE(greeter, types(point),
+PSIO1_INTERFACE(greeter, types(point),
    funcs(func(add,       a, b),
          func(concat,    a, b),
          func(double_it, v),
@@ -68,7 +68,7 @@ struct processor
    static wit::vector<point> test_make_grid(uint32_t w, uint32_t h);
 };
 
-PSIO_INTERFACE(processor, types(),
+PSIO1_INTERFACE(processor, types(),
    funcs(func(test_add,       x, y),
          func(test_concat,    a, b),
          func(test_double,    v),

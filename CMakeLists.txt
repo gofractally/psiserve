@@ -55,7 +55,7 @@ if(NOT PSISERVE_WASI)
 endif()
 
 # Boost::headers is promoted to root scope so psi_add_wasm_module can
-# walk `psio`'s PUBLIC Boost dep and resolve the include path in any
+# walk `psio1`'s PUBLIC Boost dep and resolve the include path in any
 # subdirectory — imported targets created by find_package() are
 # otherwise scoped to the directory that called find_package().
 find_package(Boost REQUIRED)
@@ -70,8 +70,8 @@ if(NOT PSISERVE_WASI)
 endif()
 
 # ── Libraries ──────────────────────────────────────────────────────────────────
+add_subdirectory(libraries/psio1)
 add_subdirectory(libraries/psio)
-add_subdirectory(libraries/psio3)
 if(NOT PSISERVE_WASI)
    # Embed psitri as a subdirectory so its headers / libraries (sal, psitri,
    # hash, ucc, art) are available to psiserve. Psitri's own test suite and

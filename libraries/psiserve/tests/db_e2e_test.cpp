@@ -10,14 +10,14 @@
 
 #include <filesystem>
 
-PSIO_PACKAGE(test, "0.0.0");
+PSIO1_PACKAGE(test, "0.0.0");
 
 struct db_test_guest
 {
    static uint32_t run_test();
 };
 
-PSIO_INTERFACE(db_test_guest, types(),
+PSIO1_INTERFACE(db_test_guest, types(),
    funcs(func(run_test)))
 
 TEST_CASE("db_host E2E WASM guest")

@@ -25,7 +25,7 @@ blocks: []
 Collapse the 4+ hand-rolled "load a WASM module and wire its imports"
 code paths into a single library entrypoint built on `psizam::runtime`.
 Eliminate `host_function_table` and `wasi_host` (the legacy, name-string-
-based binding system) in favor of `PSIO_INTERFACE`-driven registration
+based binding system) in favor of `PSIO1_INTERFACE`-driven registration
 through `runtime::provide<>`.
 
 This is the structural fix for the class of bug tracked in issue #0016
@@ -92,7 +92,7 @@ inst.run_start();                                    // WASI-style start
 ```
 
 From the commit message:
-> "runtime::provide<Host>(mod, host) walks PSIO_HOST_MODULE interfaces
+> "runtime::provide<Host>(mod, host) walks PSIO1_HOST_MODULE interfaces
 > and registers methods with the module's host_function_table —
 > **scalar methods get fast trampolines, canonical methods get
 > type-specialized 16-wide handlers with compile-time lift/lower
@@ -144,7 +144,7 @@ After this issue is done, the whole host-binding picture is:
            │                │                 │
            ▼                ▼                 ▼
      wasi_preview1       psix            user-defined
-     PSIO_INTERFACE      PSIO_INTERFACE   PSIO_INTERFACE
+     PSIO1_INTERFACE      PSIO1_INTERFACE   PSIO1_INTERFACE
      (scalar ABI)        (scalar ABI)     (canonical ABI)
            │                │                 │
            └────────┬───────┴─────────────────┘
@@ -198,10 +198,10 @@ than hand-constructing host_function_table entries.
 
 ## Concrete work plan
 
-### Step 1 — Define WASI Preview 1 as a `PSIO_INTERFACE` host
+### Step 1 — Define WASI Preview 1 as a `PSIO1_INTERFACE` host
 Re-express the ~60 WASI Preview 1 functions currently in
 `wasi_host.hpp` as a `struct wasi_snapshot_preview1 { ... }` with
-`PSIO_INTERFACE(...)` reflection. Keep the signatures scalar (i32/i64);
+`PSIO1_INTERFACE(...)` reflection. Keep the signatures scalar (i32/i64);
 the implementation still calls the existing POSIX-backed handlers. The
 rename matters: `wasi_host` becomes the host-side *implementation*
 (the struct whose methods get bound), no longer a special binding
@@ -214,9 +214,9 @@ with psix. Just move the ABI surface onto the typed interface system.
 keep `wasi_host.hpp`'s argv/env/preopens state but strip its
 `host_function_table` registration helpers.
 
-### Step 2 — Express `psix` as a `PSIO_INTERFACE`
+### Step 2 — Express `psix` as a `PSIO1_INTERFACE`
 Following `plans/psix-ipc-design.md`, design the initial psix host
-interface as a `PSIO_INTERFACE`. Scalar signatures where the spec
+interface as a `PSIO1_INTERFACE`. Scalar signatures where the spec
 calls for them (fds, byte offsets), rich types via canonical ABI where
 they fit (message envelopes, preopened descriptors).
 
@@ -266,7 +266,7 @@ should show only internal library files.
 
 ## Acceptance criteria
 
-- [ ] WASI Preview 1 surface lives in a `PSIO_INTERFACE` declaration;
+- [ ] WASI Preview 1 surface lives in a `PSIO1_INTERFACE` declaration;
       no `host_function_table::entry` is constructed outside
       `runtime::provide<>`.
 - [ ] `psix` is registered through the same `provide<>` mechanism.
@@ -310,7 +310,7 @@ Deleted:
 - `libraries/psizam/examples/runtime/hello_runtime.cpp` — working
   end-to-end example of the new API with typed interfaces.
 - `libraries/psizam/examples/hello_world/host.cpp` — example host
-  binding via `PSIO_INTERFACE`.
+  binding via `PSIO1_INTERFACE`.
 - `libraries/psizam/include/psizam/backend.hpp` — where the
   trampoline-direction dispatch currently lives (`reverse_host_args`
   flag per backend + `96cba71`'s asserts).
@@ -456,8 +456,8 @@ is narrow once those two tools are ported.
 
 ### 6. Package / interface naming for WASI
 
-`PSIO_INTERFACE(wasi_snapshot_preview1, ...)` implies a package
-declaration. `PSIO_PACKAGE(wasi, "0.1.0");` is a reasonable default
+`PSIO1_INTERFACE(wasi_snapshot_preview1, ...)` implies a package
+declaration. `PSIO1_PACKAGE(wasi, "0.1.0");` is a reasonable default
 but we should confirm psio's reflection machinery handles the
 colon-delimited `wasi_snapshot_preview1` name (it already does for
 `psiserve:io.*`-shaped names — check `plans/psix-ipc-design.md` for
@@ -466,9 +466,9 @@ conventions before committing to a spelling).
 ### 7. ~60 functions is actually 42
 
 Current `wasi_host` implements exactly 42 functions (counted from
-the `register_wasi` body). The `func(...)` macro in PSIO_INTERFACE
+the `register_wasi` body). The `func(...)` macro in PSIO1_INTERFACE
 takes a comma-separated name + param list per function, so the
-PSIO_INTERFACE block for WASI P1 will be ~42 entries, not ~60.
+PSIO1_INTERFACE block for WASI P1 will be ~42 entries, not ~60.
 
 ## Suggested order of attack (post-psizam-runtime-api-maturation)
 
@@ -476,7 +476,7 @@ PSIO_INTERFACE block for WASI P1 will be ~42 entries, not ~60.
    `load_cached`, and instance_impl up to the level the tests and
    tools need. Includes backend-kind dispatch, pzam loader migration,
    and the memory-injection hook on the fast trampoline.
-2. Add `PSIO_INTERFACE(wasi_snapshot_preview1, ...)` + `PSIO_HOST_MODULE`
+2. Add `PSIO1_INTERFACE(wasi_snapshot_preview1, ...)` + `PSIO1_HOST_MODULE`
    on `wasi_host`. Register WASI through `provide<wasi_host>` in both
    `psizam_wasi.cpp` and `pzam_run.cpp`.
 3. Delete `register_wasi`, `add_wasi_func`, `wasi_trampoline`,
@@ -490,5 +490,5 @@ PSIO_INTERFACE block for WASI P1 will be ~42 entries, not ~60.
 5. Port `pzam_run.cpp` to the runtime API (~40 lines).
 6. Add the 96cba71-style assert at the remaining trampoline-direction
    write sites — expectation: only one, inside `runtime::instantiate`.
-7. Design + define psix as `PSIO_INTERFACE`. This is a new interface,
+7. Design + define psix as `PSIO1_INTERFACE`. This is a new interface,
    not a migration — see `plans/psix-ipc-design.md`.

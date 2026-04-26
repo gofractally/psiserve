@@ -3,16 +3,16 @@
 
 #include "shared.hpp"
 
-#include <psio/guest_alloc.hpp>
+#include <psio1/guest_alloc.hpp>
 #include <psizam/module.hpp>
 
 #include <span>
 #include <string.h>
 
-PSIO_WIT_SECTION(greeter)
-PSIO_WIT_SECTION(env)
+PSIO1_WIT_SECTION(greeter)
+PSIO1_WIT_SECTION(env)
 
-PSIO_GUEST_IMPORTS(env, log_string)
+PSIO1_GUEST_IMPORTS(env, log_string)
 
 void env::log_string(std::string_view msg) {
    _psio_import_call_env_log_string(msg);
@@ -54,6 +54,6 @@ struct greeter_impl
    }
 };
 
-PSIO_MODULE(greeter_impl,
+PSIO1_MODULE(greeter_impl,
             add, concat, double_it,
             translate, sum_list, make_grid)

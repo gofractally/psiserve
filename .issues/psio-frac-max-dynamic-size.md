@@ -12,7 +12,7 @@
 ## Motivation
 
 We've added:
-- `PSIO_FRAC_MAX_FIXED_SIZE(T, N)` — per-type commitment to a wider header for
+- `PSIO1_FRAC_MAX_FIXED_SIZE(T, N)` — per-type commitment to a wider header for
   extensible structs with fixed regions > 64 KiB (Phase D.3, 2026-04-23)
 - `bounded_list<T, N>`, `bounded_string<N>`, `bounded_bytes<N>`,
   `bitlist<N>`, `bitvector<N>` — all carry compile-time capacity
@@ -70,7 +70,7 @@ Then `to_frac<T>(value)` picks the right format without user intervention.
      format. Changes wire format silently for existing code when a type
      transitions from unbounded to bounded members.
 
-   Probably opt-in initially. The `PSIO_FRAC_AUTOPICK(T)` macro could flip
+   Probably opt-in initially. The `PSIO1_FRAC_AUTOPICK(T)` macro could flip
    it per-type.
 
 2. **Cross-format embedding.** If struct A auto-picks frac16 and embeds B
@@ -83,7 +83,7 @@ Then `to_frac<T>(value)` picks the right format without user intervention.
 3. **Schema evolution.** A bounded type growing past 64 KiB total would
    silently flip from frac16 to frac32 — wire format breaks. Same hazard as
    the auto-deduce header width discussed in the D.3 design notes. Resolved
-   the same way: `PSIO_FRAC_MAX_TOTAL_SIZE(T, N)` explicit commitment,
+   the same way: `PSIO1_FRAC_MAX_TOTAL_SIZE(T, N)` explicit commitment,
    independent of what the compiler can currently deduce.
 
 ## Benefits

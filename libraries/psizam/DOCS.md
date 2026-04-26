@@ -82,14 +82,14 @@ struct my_host {
    uint32_t get_value() { return 42; }
    void log(uint32_t ptr, uint32_t len) { /* ... */ }
 };
-PSIO_REFLECT(my_host, method(get_value), method(log, ptr, len))
+PSIO1_REFLECT(my_host, method(get_value), method(log, ptr, len))
 
 // Declare WASM exports you want to call (must match the module's exports)
 struct my_exports {
    uint32_t add(uint32_t a, uint32_t b);
    void     on_request(uint32_t path_ptr, uint32_t path_len);
 };
-PSIO_REFLECT(my_exports, method(add, a, b), method(on_request, path_ptr, path_len))
+PSIO1_REFLECT(my_exports, method(add, a, b), method(on_request, path_ptr, path_len))
 
 int main() {
    my_host host;
@@ -188,7 +188,7 @@ pzam_file
     code_blob        — native machine code
 ```
 
-Serialized with [fracpack](../psio/) for zero-copy access via `psio::view<pzam_file>`.
+Serialized with [fracpack](../psio/) for zero-copy access via `psio1::view<pzam_file>`.
 
 ### Multi-Architecture Support
 
@@ -206,14 +206,14 @@ At load time, the loader picks the code section matching the host architecture.
 
 ### Reflection-Based (Recommended)
 
-With `PSIO_REFLECT`, a single call registers all methods:
+With `PSIO1_REFLECT`, a single call registers all methods:
 
 ```cpp
 struct my_host {
    uint32_t get_value() { return 42; }
    void log(uint32_t ptr, uint32_t len) { /* ... */ }
 };
-PSIO_REFLECT(my_host, method(get_value), method(log, ptr, len))
+PSIO1_REFLECT(my_host, method(get_value), method(log, ptr, len))
 
 auto table = psizam::make_host_table<my_host>("env");
 ```

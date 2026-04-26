@@ -6,8 +6,8 @@
 // values into a member function and lowers the result.
 //
 // Extracted from psizam/component.hpp so guest-only translation units
-// can include it without dragging in <psio/wit_gen.hpp> /
-// <psio/wit_encode.hpp>. Those pull in typeid and std::runtime_error
+// can include it without dragging in <psio1/wit_gen.hpp> /
+// <psio1/wit_encode.hpp>. Those pull in typeid and std::runtime_error
 // throws (for WIT binary emission), which are both incompatible with
 // the guest's `-fno-exceptions -fno-rtti` default.
 //
@@ -16,7 +16,7 @@
 // should include this header directly.
 
 #include <psizam/canonical_dispatch.hpp>
-#include <psio/wit_owned.hpp>
+#include <psio1/wit_owned.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -85,12 +85,12 @@ namespace psizam {
    };
 
    // ── Lower policy for component export results ─────────────────────────────
-   // Writes canonical ABI flat values to a psio::native_value array.
+   // Writes canonical ABI flat values to a psio1::native_value array.
    // Satisfies LowerPolicy. For memory allocation (string/vector data in results),
    // uses a bump allocator into an internal buffer.
 
    struct export_lower_policy {
-      psio::native_value results[16] = {};
+      psio1::native_value results[16] = {};
       size_t       result_count = 0;
 
       // Bump allocator for result data (string/vector contents)
@@ -116,10 +116,10 @@ namespace psizam {
          if (len > 0) std::memcpy(&result_buf[off], data, len);
       }
 
-      void emit_i32(uint32_t v) { psio::native_value nv; nv.i64 = 0; nv.i32 = v; results[result_count++] = nv; }
-      void emit_i64(uint64_t v) { psio::native_value nv; nv.i64 = v; results[result_count++] = nv; }
-      void emit_f32(float v)    { psio::native_value nv; nv.i64 = 0; nv.f32 = v; results[result_count++] = nv; }
-      void emit_f64(double v)   { psio::native_value nv; nv.i64 = 0; nv.f64 = v; results[result_count++] = nv; }
+      void emit_i32(uint32_t v) { psio1::native_value nv; nv.i64 = 0; nv.i32 = v; results[result_count++] = nv; }
+      void emit_i64(uint64_t v) { psio1::native_value nv; nv.i64 = v; results[result_count++] = nv; }
+      void emit_f32(float v)    { psio1::native_value nv; nv.i64 = 0; nv.f32 = v; results[result_count++] = nv; }
+      void emit_f64(double v)   { psio1::native_value nv; nv.i64 = 0; nv.f64 = v; results[result_count++] = nv; }
    };
 
    // ── Return-area StorePolicy for multi-slot export results ─────────────────
@@ -163,7 +163,7 @@ namespace psizam {
    namespace detail_component {
 
       template <typename... Args>
-      constexpr size_t param_flat_count(psio::TypeList<Args...>) {
+      constexpr size_t param_flat_count(psio1::TypeList<Args...>) {
          return (0 + ... + psizam::flat_count_v<Args>);
       }
 
@@ -203,12 +203,12 @@ namespace psizam {
       /// vector data (as produced by buffer_lower_policy).
       template <auto MemPtr>
       static flat_val call_with_memory(T* impl, const flat_val* slots, const uint8_t* memory) {
-         using MType    = psio::MemberPtrType<decltype(MemPtr)>;
+         using MType    = psio1::MemberPtrType<decltype(MemPtr)>;
          using ArgTypes = typename MType::SimplifiedArgTypes;
 
          constexpr size_t pcnt = detail_component::param_flat_count(ArgTypes{});
-         static_assert(pcnt <= psio::MAX_FLAT_PARAMS,
-            "Method exceeds psio::MAX_FLAT_PARAMS (16). Spilled args not yet supported.");
+         static_assert(pcnt <= psio1::MAX_FLAT_PARAMS,
+            "Method exceeds psio1::MAX_FLAT_PARAMS (16). Spilled args not yet supported.");
 
          // Lift all args from flat values using canonical ABI rules
          export_lift_policy lift_p(slots, memory);
@@ -221,19 +221,19 @@ namespace psizam {
 
    private:
       template <psizam::LiftPolicy Policy, typename... Args>
-      static auto lift_args(Policy& p, psio::TypeList<Args...>) {
+      static auto lift_args(Policy& p, psio1::TypeList<Args...>) {
          return std::tuple{psizam::canonical_lift_flat<std::remove_cvref_t<Args>>(p)...};
       }
 
       template <auto MemPtr, typename Tuple, size_t... Is>
       static flat_val invoke_and_lower(T* impl, Tuple& args, std::index_sequence<Is...>) {
-         using MType      = psio::MemberPtrType<decltype(MemPtr)>;
+         using MType      = psio1::MemberPtrType<decltype(MemPtr)>;
          using ReturnType = typename MType::ReturnType;
 
          if constexpr (std::is_void_v<ReturnType>) {
             (impl->*MemPtr)(std::get<Is>(args)...);
             return 0;
-         } else if constexpr (std::is_same_v<ReturnType, psio::owned<std::string, psio::wit>>
+         } else if constexpr (std::is_same_v<ReturnType, psio1::owned<std::string, psio1::wit>>
                               || detail_dispatch::is_wit_vector<ReturnType>::value) {
             // wit::string / wit::vector<T> — the payload buffer already
             // lives in linear memory (cabi_realloc-owned), so we just
@@ -254,7 +254,7 @@ namespace psizam {
          } else {
             constexpr size_t rflat = psizam::flat_count_v<ReturnType>;
             auto result = (impl->*MemPtr)(std::get<Is>(args)...);
-            if constexpr (rflat <= psio::MAX_FLAT_RESULTS) {
+            if constexpr (rflat <= psio1::MAX_FLAT_RESULTS) {
                // Single-slot flat return: lower directly into slot 0.
                export_lower_policy lower_p;
                psizam::canonical_lower_flat(result, lower_p);
@@ -265,8 +265,8 @@ namespace psizam {
                // string bytes) each get their own cabi_realloc allocation;
                // the embedded i32 "pointers" we write are wasm linear-memory
                // addresses, which the host reads through its memory view.
-               constexpr uint32_t align = psio::canonical_align_v<ReturnType>;
-               constexpr uint32_t size  = psio::canonical_size_v<ReturnType>;
+               constexpr uint32_t align = psio1::canonical_align_v<ReturnType>;
+               constexpr uint32_t size  = psio1::canonical_size_v<ReturnType>;
 #ifdef __wasm__
                uint8_t* ret_area =
                   static_cast<uint8_t*>(::cabi_realloc(nullptr, 0, align, size));
@@ -275,7 +275,7 @@ namespace psizam {
                uint8_t* ret_area = fallback_ret;
 #endif
                guest_return_area_policy ra{ret_area};
-               psio::canonical_lower_fields(result, ra, 0);
+               psio1::canonical_lower_fields(result, ra, 0);
                return static_cast<flat_val>(reinterpret_cast<uintptr_t>(ret_area));
             }
          }
@@ -345,24 +345,24 @@ namespace psizam {
          // empty payload — nothing to emit
       }
       else if constexpr (std::is_same_v<U, std::string_view> ||
-                         std::is_same_v<U, psio::owned<std::string, psio::wit>> ||
-                         psio::detail::is_std_string_ct<U>::value) {
+                         std::is_same_v<U, psio1::owned<std::string, psio1::wit>> ||
+                         psio1::detail::is_std_string_ct<U>::value) {
          slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
          slots[idx++] = static_cast<flat_val>(v.size());
       }
-      else if constexpr (psio::detail::is_std_optional_ct<U>::value) {
-         using E = typename psio::detail::optional_elem_ct<U>::type;
+      else if constexpr (psio1::detail::is_std_optional_ct<U>::value) {
+         using E = typename psio1::detail::optional_elem_ct<U>::type;
          if (v.has_value()) {
             slots[idx++] = 1;
             guest_import_lower(slots, idx, *v);
          } else {
             slots[idx++] = 0;
-            constexpr size_t n = psio::canonical_flat_count_v<E>;
+            constexpr size_t n = psio1::canonical_flat_count_v<E>;
             for (size_t j = 0; j < n; ++j)
                slots[idx++] = 0;
          }
       }
-      else if constexpr (psio::detail::is_std_vector_ct<U>::value) {
+      else if constexpr (psio1::detail::is_std_vector_ct<U>::value) {
          slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
          slots[idx++] = static_cast<flat_val>(v.size());
       }
@@ -374,26 +374,26 @@ namespace psizam {
          slots[idx++] = static_cast<flat_val>(reinterpret_cast<uintptr_t>(v.data()));
          slots[idx++] = static_cast<flat_val>(v.size());
       }
-      else if constexpr (psio::detail::is_own_ct<U>::value ||
-                         psio::detail::is_borrow_ct<U>::value ||
-                         psio::detail::is_psio_own<U>::value ||
-                         psio::detail::is_psio_borrow<U>::value) {
+      else if constexpr (psio1::detail::is_own_ct<U>::value ||
+                         psio1::detail::is_borrow_ct<U>::value ||
+                         psio1::detail::is_psio_own<U>::value ||
+                         psio1::detail::is_psio_borrow<U>::value) {
          slots[idx++] = static_cast<flat_val>(v.handle);
       }
       else if constexpr (has_wasm_type_traits_impl<std::decay_t<U>>::value) {
          slots[idx++] = static_cast<flat_val>(
             wasm_type_traits<std::decay_t<U>, void>::unwrap(v));
       }
-      else if constexpr (psio::is_std_tuple<U>::value) {
+      else if constexpr (psio1::is_std_tuple<U>::value) {
          [&]<size_t... Is>(std::index_sequence<Is...>) {
             (guest_import_lower(slots, idx, std::get<Is>(v)), ...);
          }(std::make_index_sequence<std::tuple_size_v<U>>{});
       }
-      else if constexpr (psio::is_std_variant_v<U>) {
+      else if constexpr (psio1::is_std_variant_v<U>) {
          constexpr size_t N = std::variant_size_v<U>;
          constexpr size_t max_payload = []<size_t... Is>(std::index_sequence<Is...>) {
             size_t m = 0;
-            ((m = std::max(m, psio::detail_canonical::canonical_flat_count_impl<
+            ((m = std::max(m, psio1::detail_canonical::canonical_flat_count_impl<
                std::variant_alternative_t<Is, U>>())), ...);
             return m;
          }(std::make_index_sequence<N>{});
@@ -413,9 +413,9 @@ namespace psizam {
          for (uint32_t i = 0; i < n; i++)
             guest_import_lower(slots, idx, v[i]);
       }
-      else if constexpr (psio::Reflected<U>) {
-         psio::apply_members(
-            (typename psio::reflect<U>::data_members*)nullptr,
+      else if constexpr (psio1::Reflected<U>) {
+         psio1::apply_members(
+            (typename psio1::reflect<U>::data_members*)nullptr,
             [&](auto... ptrs) {
                (guest_import_lower(slots, idx, v.*ptrs), ...);
             }
@@ -448,7 +448,7 @@ namespace psizam {
                 slots[8],  slots[9],  slots[10], slots[11],
                 slots[12], slots[13], slots[14], slots[15]);
          }
-         else if constexpr (rflat <= psio::MAX_FLAT_RESULTS) {
+         else if constexpr (rflat <= psio1::MAX_FLAT_RESULTS) {
             // Scalar return — direct cast from flat_val
             flat_val r = raw(
                 slots[0],  slots[1],  slots[2],  slots[3],
@@ -481,23 +481,23 @@ namespace psizam {
             // Records use their canonical size from reflection.
             constexpr uint32_t ret_align = []() -> uint32_t {
                using U = std::remove_cvref_t<Ret>;
-               if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>> ||
-                             psio::detail::is_std_string_ct<U>::value)
+               if constexpr (std::is_same_v<U, psio1::owned<std::string, psio1::wit>> ||
+                             psio1::detail::is_std_string_ct<U>::value)
                   return 4;
                else if constexpr (detail_dispatch::is_wit_vector<U>::value)
                   return 4;
                else
-                  return psio::canonical_align_v<U>;
+                  return psio1::canonical_align_v<U>;
             }();
             constexpr uint32_t ret_size = []() -> uint32_t {
                using U = std::remove_cvref_t<Ret>;
-               if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>> ||
-                             psio::detail::is_std_string_ct<U>::value)
+               if constexpr (std::is_same_v<U, psio1::owned<std::string, psio1::wit>> ||
+                             psio1::detail::is_std_string_ct<U>::value)
                   return 8;
                else if constexpr (detail_dispatch::is_wit_vector<U>::value)
                   return 8;
                else
-                  return psio::canonical_size_v<U>;
+                  return psio1::canonical_size_v<U>;
             }();
 #ifdef __wasm__
             uint8_t* ret_area = static_cast<uint8_t*>(
@@ -523,11 +523,11 @@ namespace psizam {
       template <typename Ret>
       static Ret lift_from_retarea(const uint8_t* ret_area) {
          using U = std::remove_cvref_t<Ret>;
-         if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>) {
+         if constexpr (std::is_same_v<U, psio1::owned<std::string, psio1::wit>>) {
             uint32_t ptr, len;
             std::memcpy(&ptr, ret_area, 4);
             std::memcpy(&len, ret_area + 4, 4);
-            return psio::owned<std::string, psio::wit>::adopt(
+            return psio1::owned<std::string, psio1::wit>::adopt(
                reinterpret_cast<char*>(static_cast<uintptr_t>(ptr)), len);
          }
          else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
@@ -538,7 +538,7 @@ namespace psizam {
             return U::adopt(
                reinterpret_cast<E*>(static_cast<uintptr_t>(ptr)), len);
          }
-         else if constexpr (psio::detail::is_std_string_ct<U>::value) {
+         else if constexpr (psio1::detail::is_std_string_ct<U>::value) {
             // std::string return — read {ptr, len} from return area,
             // construct string from linear memory
             uint32_t ptr, len;
@@ -547,12 +547,12 @@ namespace psizam {
             return std::string(
                reinterpret_cast<const char*>(static_cast<uintptr_t>(ptr)), len);
          }
-         else if constexpr (psio::Reflected<U> ||
-                            psio::is_std_variant_v<U> ||
-                            psio::detail::is_std_optional_ct<U>::value ||
-                            psio::detail::is_std_vector_ct<U>::value ||
-                            psio::detail::is_std_expected_ct<U>::value ||
-                            psio::is_std_tuple<U>::value) {
+         else if constexpr (psio1::Reflected<U> ||
+                            psio1::is_std_variant_v<U> ||
+                            psio1::detail::is_std_optional_ct<U>::value ||
+                            psio1::detail::is_std_vector_ct<U>::value ||
+                            psio1::detail::is_std_expected_ct<U>::value ||
+                            psio1::is_std_tuple<U>::value) {
             // Canonical ABI stores all pointers as absolute linear-memory
             // offsets, so the load policy must resolve them from address 0.
             struct abs_load_policy {
@@ -573,7 +573,7 @@ namespace psizam {
             abs_load_policy lp;
             uint32_t ra_off = static_cast<uint32_t>(
                reinterpret_cast<uintptr_t>(ret_area));
-            return psio::canonical_lift_fields<U>(lp, ra_off);
+            return psio1::canonical_lift_fields<U>(lp, ra_off);
          }
          else {
             static_assert(sizeof(Ret) == 0, "ImportProxy: unsupported multi-slot return type");

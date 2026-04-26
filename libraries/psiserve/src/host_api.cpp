@@ -1052,7 +1052,7 @@ namespace psiserve
 
       try
       {
-         auto span = psio::bytes_view(
+         auto span = psio1::bytes_view(
              reinterpret_cast<const uint8_t*>(_wasm_memory + *data), *data_len);
 
          auto content_cid = _ipfs->put(span);
@@ -1093,7 +1093,7 @@ namespace psiserve
 
          char*    dst      = _wasm_memory + *buf;
          uint64_t written  = 0;
-         fh.read(offset, to_read, [&](psio::bytes_view chunk)
+         fh.read(offset, to_read, [&](psio1::bytes_view chunk)
          {
             std::memcpy(dst + written, chunk.data(), chunk.size());
             written += chunk.size();

@@ -13,7 +13,7 @@ struct BenchHost {
    void log_u64(uint64_t) {}
    void log_string(std::string_view) {}
 };
-PSIO_HOST_MODULE(BenchHost, interface(env, log_u64, log_string))
+PSIO1_HOST_MODULE(BenchHost, interface(env, log_u64, log_string))
 
 static std::vector<uint8_t> read_file(const char* path) {
    std::ifstream f(path, std::ios::binary);

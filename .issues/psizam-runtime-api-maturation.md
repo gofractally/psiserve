@@ -144,7 +144,7 @@ Phase B.
     section in raw WASM bytes.
   - `runtime::bind(consumer, provider, iface_name)` reads the
     consumer's WIT custom section, parses it via
-    `psio::wit_parser::parse_wit()`, locates the named interface in
+    `psio1::wit_parser::parse_wit()`, locates the named interface in
     `world.imports` (fallback `exports`), and registers a
     `slow_dispatch` bridge entry on the consumer's
     `host_function_table` for each `wit_func`. The bridge routes
@@ -779,9 +779,9 @@ Return an `instance` wrapping the constructed context.
 - Porting `pzam_run.cpp`, `psizam_wasi.cpp`, or `composition_tests.cpp`
   onto the runtime API — those are
   `psizam-unify-host-registration-under-runtime` Steps 3/4.
-- Defining WASI Preview 1 as `PSIO_INTERFACE` — downstream issue
+- Defining WASI Preview 1 as `PSIO1_INTERFACE` — downstream issue
   Step 1.
-- Designing / implementing psix as `PSIO_INTERFACE` — downstream
+- Designing / implementing psix as `PSIO1_INTERFACE` — downstream
   issue Step 2.
 - Deleting the legacy WASI helpers — downstream issue Step 5.
 - Implementing `gas_state`, `gas_handler_t` single-sourcing, or

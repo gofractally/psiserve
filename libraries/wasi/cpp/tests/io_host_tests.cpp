@@ -28,7 +28,7 @@ TEST_CASE("WasiIoHost input_stream read from pipe", "[wasi][io]")
    ::write(pipefd[1], msg, 10);
 
    // Read via WASI API
-   auto result = host.input_stream_read(psio::borrow<input_stream>{is.handle}, 64);
+   auto result = host.input_stream_read(psio1::borrow<input_stream>{is.handle}, 64);
    REQUIRE(result.index() == 0);  // ok
    auto& data = std::get<0>(result);
    REQUIRE(data.size() == 10);
@@ -53,7 +53,7 @@ TEST_CASE("WasiIoHost output_stream write to pipe", "[wasi][io]")
 
    std::vector<uint8_t> content{'W', 'A', 'S', 'I'};
    auto result = host.output_stream_write(
-       psio::borrow<output_stream>{os.handle}, std::move(content));
+       psio1::borrow<output_stream>{os.handle}, std::move(content));
    REQUIRE(result.index() == 0);  // ok
 
    // Verify data arrived
@@ -76,7 +76,7 @@ TEST_CASE("WasiIoHost check_write returns capacity", "[wasi][io]")
    auto os = host.create_output_stream(RealFd{pipefd[1]});
 
    auto result = host.output_stream_check_write(
-       psio::borrow<output_stream>{os.handle});
+       psio1::borrow<output_stream>{os.handle});
    REQUIRE(result.index() == 0);
    REQUIRE(std::get<0>(result) == 65536);
 
@@ -95,16 +95,16 @@ TEST_CASE("WasiIoHost pollable_ready on readable pipe", "[wasi][io]")
    ::fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
 
    auto is = host.create_input_stream(RealFd{pipefd[0]});
-   auto p = host.input_stream_subscribe(psio::borrow<input_stream>{is.handle});
+   auto p = host.input_stream_subscribe(psio1::borrow<input_stream>{is.handle});
 
    // Not ready yet (nothing written)
-   REQUIRE_FALSE(host.pollable_ready(psio::borrow<pollable>{p.handle}));
+   REQUIRE_FALSE(host.pollable_ready(psio1::borrow<pollable>{p.handle}));
 
    // Write data
    ::write(pipefd[1], "x", 1);
 
    // Now should be ready
-   REQUIRE(host.pollable_ready(psio::borrow<pollable>{p.handle}));
+   REQUIRE(host.pollable_ready(psio1::borrow<pollable>{p.handle}));
 
    ::close(pipefd[0]);
    ::close(pipefd[1]);
@@ -115,7 +115,7 @@ TEST_CASE("WasiIoHost error_to_debug_string", "[wasi][io]")
    WasiIoHost host;
 
    auto handle = host.errors.create(io_error_data{"test error message"});
-   auto result = host.error_to_debug_string(psio::borrow<io_error>{handle});
+   auto result = host.error_to_debug_string(psio1::borrow<io_error>{handle});
    REQUIRE(std::string(result.begin(), result.end()) == "test error message");
 }
 
@@ -125,7 +125,7 @@ TEST_CASE("WasiIoHost closed stream returns error", "[wasi][io]")
 
    // Invalid handle
    auto result = host.input_stream_read(
-       psio::borrow<input_stream>{psizam::handle_table<stream_data, 256>::invalid_handle}, 64);
+       psio1::borrow<input_stream>{psizam::handle_table<stream_data, 256>::invalid_handle}, 64);
    REQUIRE(result.index() == 1);  // err
    REQUIRE(std::get<1>(result).tag == stream_error::closed);
 }

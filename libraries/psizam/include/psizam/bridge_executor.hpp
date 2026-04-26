@@ -16,9 +16,9 @@
 // type signature (via compile_bridge<FnPtr>). Later, these will be compiled
 // from WIT-parsed type descriptors instead.
 
-#include <psio/canonical_abi.hpp>
-#include <psio/structural.hpp>
-#include <psio/wit_owned.hpp>
+#include <psio1/canonical_abi.hpp>
+#include <psio1/structural.hpp>
+#include <psio1/wit_owned.hpp>
 
 #include <psizam/canonical_dispatch.hpp>
 #include <psizam/detail/instance_be.hpp>
@@ -47,7 +47,7 @@ template <typename R, typename... Args>
 struct bridge_fn_traits<R (*)(Args...)>
 {
    using ReturnType = R;
-   using ArgTypes   = ::psio::TypeList<std::remove_cvref_t<Args>...>;
+   using ArgTypes   = ::psio1::TypeList<std::remove_cvref_t<Args>...>;
    static constexpr std::size_t arg_count = sizeof...(Args);
 };
 
@@ -134,7 +134,7 @@ struct arg_emitter {
          return 1;
       }
       else if constexpr (std::is_same_v<U, std::string_view> ||
-                         psio::detail::is_std_string_ct<U>::value) {
+                         psio1::detail::is_std_string_ct<U>::value) {
          // String arg: consumer has {ptr, len} in two slots
          prog.emit(copy_string_arg, src_slot, dst_slot);
          return 2;  // consumes 2 consumer slots
@@ -143,14 +143,14 @@ struct arg_emitter {
          using E = typename detail_dispatch::is_wit_vector<U>::element_type;
          prog.emit(copy_list_arg, src_slot, dst_slot,
                    static_cast<uint8_t>(alignof(E)),
-                   static_cast<uint32_t>(psio::canonical_size_v<E>));
+                   static_cast<uint32_t>(psio1::canonical_size_v<E>));
          return 2;  // consumes 2 consumer slots (ptr, len)
       }
-      else if constexpr (psio::detail::is_std_vector_ct<U>::value) {
-         using E = typename psio::detail::vector_elem_ct<U>::type;
+      else if constexpr (psio1::detail::is_std_vector_ct<U>::value) {
+         using E = typename psio1::detail::vector_elem_ct<U>::type;
          prog.emit(copy_list_arg, src_slot, dst_slot,
-                   static_cast<uint8_t>(psio::canonical_align_v<E>),
-                   static_cast<uint32_t>(psio::canonical_size_v<E>));
+                   static_cast<uint8_t>(psio1::canonical_align_v<E>),
+                   static_cast<uint32_t>(psio1::canonical_size_v<E>));
          return 2;  // consumes 2 consumer slots (ptr, len)
       }
       else if constexpr (detail_dispatch::is_std_span<U>::value) {
@@ -160,20 +160,20 @@ struct arg_emitter {
                    static_cast<uint32_t>(sizeof(E)));
          return 2;  // consumes 2 consumer slots
       }
-      else if constexpr (psio::Reflected<U>) {
+      else if constexpr (psio1::Reflected<U>) {
          // Record: recursively emit field-by-field forwarding instructions.
          // Each field becomes its own forward/copy instruction(s).
          constexpr size_t fc = flat_count_v<U>;
-         if constexpr (fc <= psio::MAX_FLAT_PARAMS) {
+         if constexpr (fc <= psio1::MAX_FLAT_PARAMS) {
             // Fits in flat slots — expand each field
             uint8_t field_src = src_slot;
             uint8_t field_dst = dst_slot;
-            psio::apply_members(
-               (typename psio::reflect<U>::data_members*)nullptr,
+            psio1::apply_members(
+               (typename psio1::reflect<U>::data_members*)nullptr,
                [&](auto... ptrs) {
                   ((([&]<typename MP>(MP) {
                      using FieldType = std::remove_cvref_t<
-                        typename psio::MemberPtrType<MP>::ValueType>;
+                        typename psio1::MemberPtrType<MP>::ValueType>;
                      uint8_t consumed = arg_emitter<FieldType>::emit(
                         prog, field_src, field_dst);
                      constexpr size_t ffc = flat_count_v<FieldType>;
@@ -186,8 +186,8 @@ struct arg_emitter {
          } else {
             // Too many flat slots — spilled to memory as a pointer
             prog.emit(copy_record_arg, src_slot, dst_slot,
-                      static_cast<uint8_t>(psio::canonical_align_v<U>),
-                      static_cast<uint32_t>(psio::canonical_size_v<U>));
+                      static_cast<uint8_t>(psio1::canonical_align_v<U>),
+                      static_cast<uint32_t>(psio1::canonical_size_v<U>));
             return 1;  // single pointer slot
          }
       }
@@ -208,15 +208,15 @@ constexpr uint8_t call_slot_count() {
    using U = std::remove_cvref_t<T>;
    constexpr size_t fc = flat_count_v<U>;
    if constexpr (std::is_same_v<U, std::string_view> ||
-                 psio::detail::is_std_string_ct<U>::value ||
+                 psio1::detail::is_std_string_ct<U>::value ||
                  detail_dispatch::is_wit_vector<U>::value ||
-                 psio::detail::is_std_vector_ct<U>::value ||
+                 psio1::detail::is_std_vector_ct<U>::value ||
                  detail_dispatch::is_std_span<U>::value) {
       return 2;
-   } else if constexpr (psio::Reflected<U> &&
+   } else if constexpr (psio1::Reflected<U> &&
                         !std::is_integral_v<U> && !std::is_floating_point_v<U> &&
                         !std::is_same_v<U, bool>) {
-      return (fc <= psio::MAX_FLAT_PARAMS) ? static_cast<uint8_t>(fc) : 1;
+      return (fc <= psio1::MAX_FLAT_PARAMS) ? static_cast<uint8_t>(fc) : 1;
    } else {
       return static_cast<uint8_t>(fc);
    }
@@ -224,7 +224,7 @@ constexpr uint8_t call_slot_count() {
 
 // Walk all arg types and emit instructions
 template <typename... Args>
-void emit_args(bridge_program& prog, ::psio::TypeList<Args...>) {
+void emit_args(bridge_program& prog, ::psio1::TypeList<Args...>) {
    uint8_t src = 0;
    uint8_t dst = 0;
    auto emit_one = [&]<typename T>() {
@@ -243,20 +243,20 @@ void emit_return(bridge_program& prog) {
    if constexpr (std::is_void_v<U>) {
       // No return value — just done
    }
-   else if constexpr (flat_count_v<U> <= psio::MAX_FLAT_RESULTS) {
+   else if constexpr (flat_count_v<U> <= psio1::MAX_FLAT_RESULTS) {
       // Single-slot scalar return
       prog.emit(return_scalar);
    }
-   else if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>) {
+   else if constexpr (std::is_same_v<U, psio1::owned<std::string, psio1::wit>>) {
       // String return: the set_retptr was already emitted before call
-      constexpr size_t num_arg_flats = []<typename... As>(::psio::TypeList<As...>) {
+      constexpr size_t num_arg_flats = []<typename... As>(::psio1::TypeList<As...>) {
          return (flat_count_v<As> + ... + size_t{0});
       }(ArgTypes{});
       prog.emit(return_string, static_cast<uint8_t>(num_arg_flats));
    }
    else if constexpr (detail_dispatch::is_wit_vector<U>::value) {
       using E = typename detail_dispatch::is_wit_vector<U>::element_type;
-      constexpr size_t num_arg_flats = []<typename... As>(::psio::TypeList<As...>) {
+      constexpr size_t num_arg_flats = []<typename... As>(::psio1::TypeList<As...>) {
          return (flat_count_v<As> + ... + size_t{0});
       }(ArgTypes{});
       prog.emit(return_list, static_cast<uint8_t>(num_arg_flats), 0,
@@ -265,12 +265,12 @@ void emit_return(bridge_program& prog) {
    }
    else {
       // Record/optional return via retarea
-      constexpr size_t num_arg_flats = []<typename... As>(::psio::TypeList<As...>) {
+      constexpr size_t num_arg_flats = []<typename... As>(::psio1::TypeList<As...>) {
          return (flat_count_v<As> + ... + size_t{0});
       }(ArgTypes{});
       prog.emit(return_record, static_cast<uint8_t>(num_arg_flats), 0,
-                static_cast<uint8_t>(psio::canonical_align_v<U>),
-                static_cast<uint32_t>(psio::canonical_size_v<U>));
+                static_cast<uint8_t>(psio1::canonical_align_v<U>),
+                static_cast<uint32_t>(psio1::canonical_size_v<U>));
    }
 }
 
@@ -288,17 +288,17 @@ bridge_program compile_bridge(std::string_view export_name) {
    prog.export_name = std::string(export_name);
 
    // 1. Emit arg forwarding/copying instructions
-   [&]<typename... As>(::psio::TypeList<As...>) {
-      detail_bridge::emit_args(prog, ::psio::TypeList<As...>{});
+   [&]<typename... As>(::psio1::TypeList<As...>) {
+      detail_bridge::emit_args(prog, ::psio1::TypeList<As...>{});
    }(ArgTypes{});
 
    // 2. If return needs a retarea pointer, emit set_retptr before the call
    using U = std::remove_cvref_t<Ret>;
-   if constexpr (!std::is_void_v<U> && flat_count_v<U> > psio::MAX_FLAT_RESULTS) {
+   if constexpr (!std::is_void_v<U> && flat_count_v<U> > psio1::MAX_FLAT_RESULTS) {
       // Need a retptr — figure out which provider slot it goes into
       // The retptr slot is always the next slot after all arg flats in
       // the provider's arg array.
-      constexpr size_t num_arg_flats = []<typename... As>(::psio::TypeList<As...>) {
+      constexpr size_t num_arg_flats = []<typename... As>(::psio1::TypeList<As...>) {
          return (flat_count_v<As> + ... + size_t{0});
       }(ArgTypes{});
 
@@ -306,20 +306,20 @@ bridge_program compile_bridge(std::string_view export_name) {
       // wit-owned strings and vectors have a {ptr, len} return area (8 bytes, align 4).
       // Plain records use their canonical size/align.
       constexpr uint32_t ret_size = [] {
-         if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>)
+         if constexpr (std::is_same_v<U, psio1::owned<std::string, psio1::wit>>)
             return uint32_t{8};
          else if constexpr (detail_dispatch::is_wit_vector<U>::value)
             return uint32_t{8};
          else
-            return psio::canonical_size_v<U>;
+            return psio1::canonical_size_v<U>;
       }();
       constexpr uint32_t ret_align = [] {
-         if constexpr (std::is_same_v<U, psio::owned<std::string, psio::wit>>)
+         if constexpr (std::is_same_v<U, psio1::owned<std::string, psio1::wit>>)
             return uint32_t{4};
          else if constexpr (detail_dispatch::is_wit_vector<U>::value)
             return uint32_t{4};
          else
-            return psio::canonical_align_v<U>;
+            return psio1::canonical_align_v<U>;
       }();
 
       prog.emit(set_retptr, 0,

@@ -23,7 +23,7 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
 - [x] `u8` `i8` `u16` `i16` `u32` `i32` `u64` `i64` → LE bytes ✅ done
 - [x] `f32` `f64` → IEEE-754 LE bytes ✅ done
 - [ ] `u128` / `i128` → 16-byte LE (C++ `__int128` / `unsigned __int128`)
-- [ ] `Uint256` newtype → 32-byte LE (C++ `psio::uint256` = 4 × u64 LE)
+- [ ] `Uint256` newtype → 32-byte LE (C++ `psio1::uint256` = 4 × u64 LE)
 
 ### Phase B — bit types (fixed-size + delimiter encoding)
 
@@ -46,7 +46,7 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
 - [ ] `BoundedString<N>` → C++ `bounded_string<N>` — same wire as `String`
 - [ ] `BoundedBytes<N>` → alias `BoundedList<u8, N>`
 - [ ] Generic `Bounded<T, N>` wrapper (Rust counterpart of the C++
-      `psio::bounded<T, N>` added in Phase 5b) — generic over any T
+      `psio1::bounded<T, N>` added in Phase 5b) — generic over any T
       with `.len()` method, enforces bound on decode
 
 ### Phase D — Optional / Union
@@ -105,7 +105,7 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
       based on `MAX_ENCODED_SIZE`. Rust can't do this at the type level
       as cleanly as C++ `std::conditional_t`; likely needs a const-eval
       helper that returns a format tag enum at compile time.
-- [ ] `PSIO_MAX_ENCODED_SIZE!(T, N)` attribute override — mirrors C++
+- [ ] `PSIO1_MAX_ENCODED_SIZE!(T, N)` attribute override — mirrors C++
       macro for types whose compile-time deduction is `None` but the
       user commits to a manual bound.
 
@@ -131,10 +131,10 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
 ### Phase K — Cross-validation fixture maintenance
 
 - [ ] Move `/tmp/xval/emit_fixtures.cpp` into
-      `libraries/psio/cpp/tools/emit_xval_fixtures.cpp` (tracked in git)
+      `libraries/psio1/cpp/tools/emit_xval_fixtures.cpp` (tracked in git)
 - [ ] CMake target `psio-xval-fixtures` that emits hex to stdout
 - [ ] Rust `build.rs` invokes the C++ tool if available → regenerates
-      `libraries/psio/rust/psio/src/xval_fixtures.rs` at build time
+      `libraries/psio1/rust/psio/src/xval_fixtures.rs` at build time
 - [ ] Fallback: committed golden fixtures file with a "last regenerated"
       timestamp. Rust tests always read the committed file — never the
       live-generated one — so Rust-only builds still pass.
@@ -144,7 +144,7 @@ the same bytes. If they diverge, the Rust side is broken and must be fixed.
 - [ ] Rename pssz → psiSSZ in C++ (user's note), mirror rename in Rust
 - [ ] Update `.issues/pssz-format-design.md` with final Rust parity table
 - [ ] Update `.issues/format-parity-audit.md` → all rows green
-- [ ] Publish API reference: `psio::ssz::{SszPack, SszUnpack, SszView, …}`
+- [ ] Publish API reference: `psio1::ssz::{SszPack, SszUnpack, SszView, …}`
 - [ ] Rust doc tests for each public trait/function
 
 ## Execution order
@@ -193,7 +193,7 @@ Before declaring Rust parity complete, **every row below must be green**:
 | max_encoded_size trait | ✅ | ✅ `MAX_ENCODED_SIZE: Option<usize>` (Phase H) |
 | auto_pssz_format_t | ✅ | ✅ `choose_pssz_format_width` + `PsszWidth` (Phase H) |
 | ssz_view / pssz_view | ✅ | ✅ **both sides** — `SszView<'a, T>` and `PsszView<'a, T, F>` |
-| ssz_view named field accessors | ✅ | ✅ via `ssz_struct!` macro (matches PSIO_REFLECT proxy) |
+| ssz_view named field accessors | ✅ | ✅ via `ssz_struct!` macro (matches PSIO1_REFLECT proxy) |
 | pssz_view named field accessors | ✅ | ✅ via `pssz_struct!` / `pssz_struct_dwnc!` |
 | ssz_validate / pssz_validate | ✅ | ✅ **full coverage** — primitives, arrays, bounded, bitvector, bitlist, uint256, u128/i128, reflected, Option |
 | Cross-val vs C++ for each type | ✅ (fixture) | ✅ **17+ shapes, incl. BeaconState Validator** |
@@ -203,7 +203,7 @@ Before declaring Rust parity complete, **every row below must be green**:
 
 **Phases complete**: I, C, B, H, E, F, G, J, K, L. **574 Rust tests** (up
 from 528), **703 C++ tests**. Fixture emitters live in
-`libraries/psio/cpp/tools/emit_xval_*.cpp`.
+`libraries/psio1/cpp/tools/emit_xval_*.cpp`.
 
 **Remaining deferred work** (see comment column above):
 - DWNC memcpy fast path (requires detecting packed layout at compile time)

@@ -8,7 +8,7 @@ psi_add_wasm_module(runtime_resource_contract
 psi_add_wasm_module(runtime_resource_blockchain
    SOURCES blockchain_guest.cpp
    OUTPUT  blockchain.wasm
-   DEPS    psio psizam wasi-cpp)
+   DEPS    psio1 psizam wasi-cpp)
 
 if(NOT TARGET runtime_resource_contract OR NOT TARGET runtime_resource_blockchain)
    return()

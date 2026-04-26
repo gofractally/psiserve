@@ -1,7 +1,7 @@
 #pragma once
 #include <pfs/cid.hpp>
 #include <pfs/config.hpp>
-#include <psio/name.hpp>
+#include <psio1/name.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -34,7 +34,7 @@ inline std::string cas_key(const cid& c)
    return k;
 }
 
-inline std::string fs_key(psio::name_id tenant, std::string_view path)
+inline std::string fs_key(psio1::name_id tenant, std::string_view path)
 {
    std::string k;
    k.reserve(9 + path.size());
@@ -44,7 +44,7 @@ inline std::string fs_key(psio::name_id tenant, std::string_view path)
    return k;
 }
 
-inline std::string fs_tenant_prefix(psio::name_id tenant)
+inline std::string fs_tenant_prefix(psio1::name_id tenant)
 {
    std::string k;
    k.reserve(9);
@@ -53,7 +53,7 @@ inline std::string fs_tenant_prefix(psio::name_id tenant)
    return k;
 }
 
-inline std::string fs_dir_prefix(psio::name_id tenant, std::string_view dir_path)
+inline std::string fs_dir_prefix(psio1::name_id tenant, std::string_view dir_path)
 {
    std::string k;
    k.reserve(9 + dir_path.size());
@@ -85,7 +85,7 @@ inline uint32_t cas_shard(const cid& c, uint32_t shard_count)
    return shard_of(v, shard_count);
 }
 
-inline uint32_t fs_shard(psio::name_id tenant, uint32_t shard_count)
+inline uint32_t fs_shard(psio1::name_id tenant, uint32_t shard_count)
 {
    return shard_of(tenant.value, shard_count);
 }

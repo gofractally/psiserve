@@ -9,7 +9,7 @@
 #include <pfs/unixfs.hpp>
 
 #include <pcrypt/sha256.hpp>
-#include <psio/fracpack.hpp>
+#include <psio1/fracpack.hpp>
 
 #include <psitri/database.hpp>
 #include <psitri/database_impl.hpp>
@@ -127,14 +127,14 @@ TEST_CASE("cas_key encoding", "[keys]")
 
 TEST_CASE("fs_key encoding", "[keys]")
 {
-   auto k = pfs::fs_key(psio::name_id(42), "photos/cat.jpg");
+   auto k = pfs::fs_key(psio1::name_id(42), "photos/cat.jpg");
    REQUIRE(k.size() == 9 + 14);
    CHECK(k[0] == 'F');
 }
 
 TEST_CASE("fs_key sort order preserves path order", "[keys]")
 {
-   using namespace psio::literals;
+   using namespace psio1::literals;
    auto k1 = pfs::fs_key("alice"_n, "a.txt");
    auto k2 = pfs::fs_key("alice"_n, "b.txt");
    CHECK(k1 < k2);
@@ -159,8 +159,8 @@ TEST_CASE("cas_entry fracpack round-trip", "[schema]")
    e.total_size = 1024 * 1024;
    e.inline_data = {1, 2, 3, 4, 5};
 
-   auto packed   = psio::to_frac(e);
-   auto unpacked = psio::from_frac<pfs::cas_entry>(packed);
+   auto packed   = psio1::to_frac(e);
+   auto unpacked = psio1::from_frac<pfs::cas_entry>(packed);
 
    CHECK(unpacked.refcount == 3);
    CHECK(unpacked.total_size == 1024 * 1024);
@@ -170,7 +170,7 @@ TEST_CASE("cas_entry fracpack round-trip", "[schema]")
 
 TEST_CASE("fs_entry fracpack round-trip", "[schema]")
 {
-   pfs::cid c = pfs::cid::from_digest(pcrypt::sha256(psio::bytes_view{}));
+   pfs::cid c = pfs::cid::from_digest(pcrypt::sha256(psio1::bytes_view{}));
 
    pfs::fs_entry e;
    e.type        = pfs::entry_type::file;
@@ -180,8 +180,8 @@ TEST_CASE("fs_entry fracpack round-trip", "[schema]")
    e.size        = 999;
    e.content_cid = c;
 
-   auto packed   = psio::to_frac(e);
-   auto unpacked = psio::from_frac<pfs::fs_entry>(packed);
+   auto packed   = psio1::to_frac(e);
+   auto unpacked = psio1::from_frac<pfs::fs_entry>(packed);
 
    CHECK(unpacked.type == pfs::entry_type::file);
    CHECK(unpacked.mode == 0755);
@@ -197,8 +197,8 @@ TEST_CASE("fs_quota fracpack round-trip", "[schema]")
    q.limit = 1024 * 1024;
    q.used  = 512;
 
-   auto packed   = psio::to_frac(q);
-   auto unpacked = psio::from_frac<pfs::fs_quota>(packed);
+   auto packed   = psio1::to_frac(q);
+   auto unpacked = psio1::from_frac<pfs::fs_quota>(packed);
 
    CHECK(unpacked.limit == q.limit);
    CHECK(unpacked.used == q.used);
@@ -240,7 +240,7 @@ TEST_CASE("store write and read small file", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    std::vector<uint8_t> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
    auto c = fs.write("alice"_n, "hello.txt", data);
 
@@ -251,7 +251,7 @@ TEST_CASE("store write and read small file", "[store]")
 
    // Read content
    std::vector<uint8_t> read_data;
-   h.read([&](psio::bytes_view chunk) {
+   h.read([&](psio1::bytes_view chunk) {
       read_data.insert(read_data.end(), chunk.begin(), chunk.end());
    });
    CHECK(read_data == data);
@@ -263,7 +263,7 @@ TEST_CASE("store stat returns entry", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    auto data = bytes({42});
    fs.write("bob"_n, "file.dat", data);
 
@@ -279,7 +279,7 @@ TEST_CASE("store stat returns nullopt for missing", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    auto s = fs.stat("nobody"_n, "nope.txt");
    CHECK(!s.has_value());
 }
@@ -290,7 +290,7 @@ TEST_CASE("store mkdir and ls", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    fs.mkdir("alice"_n, "photos");
    fs.write("alice"_n, "photos/a.jpg", bytes({1, 2, 3}));
    fs.write("alice"_n, "photos/b.jpg", bytes({4, 5, 6}));
@@ -315,7 +315,7 @@ TEST_CASE("store remove deletes file", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    fs.write("alice"_n, "temp.txt", bytes({1, 2, 3}));
    CHECK(fs.stat("alice"_n, "temp.txt").has_value());
 
@@ -329,7 +329,7 @@ TEST_CASE("store dedup: same content same CID", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    std::vector<uint8_t> data = {10, 20, 30};
    auto c1 = fs.write("alice"_n, "file1.txt", data);
    auto c2 = fs.write("alice"_n, "file2.txt", data);
@@ -343,7 +343,7 @@ TEST_CASE("store quota enforcement", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    fs.set_quota("alice"_n, 10);
 
    std::vector<uint8_t> data(5);
@@ -363,7 +363,7 @@ TEST_CASE("store share creates new ref", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    std::vector<uint8_t> data = {1, 2, 3, 4, 5};
    fs.write("alice"_n, "doc.txt", data);
 
@@ -374,7 +374,7 @@ TEST_CASE("store share creates new ref", "[store]")
 
    // Content should match
    std::vector<uint8_t> read_data;
-   h.read([&](psio::bytes_view chunk) {
+   h.read([&](psio1::bytes_view chunk) {
       read_data.insert(read_data.end(), chunk.begin(), chunk.end());
    });
    CHECK(read_data == data);
@@ -386,7 +386,7 @@ TEST_CASE("store chmod updates mode", "[store]")
    auto db      = psitri::database::open(db_path);
    pfs::store fs(db);
 
-   using namespace psio::literals;
+   using namespace psio1::literals;
    fs.write("alice"_n, "script.sh", bytes({1}));
    fs.chmod("alice"_n, "script.sh", 0755);
 

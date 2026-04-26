@@ -17,9 +17,9 @@ libraries/wasi/
 ```
 
 - `wit/` is language-neutral; any binding tree consumes it.
-- `cpp/` uses PSIO reflection (`PSIO_PACKAGE` / `PSIO_INTERFACE` /
-  `PSIO_REFLECT`) so `psio::emit_wit` round-trips back to the vendored
-  `.wit`, and psiserve `Linker<world>` can wire `PSIO_HOST_MODULE` host
+- `cpp/` uses PSIO reflection (`PSIO1_PACKAGE` / `PSIO1_INTERFACE` /
+  `PSIO1_REFLECT`) so `psio1::emit_wit` round-trips back to the vendored
+  `.wit`, and psiserve `Linker<world>` can wire `PSIO1_HOST_MODULE` host
   implementations against any import.
 
 Other language trees (Rust, Go, Python, JS, …) are out of scope.

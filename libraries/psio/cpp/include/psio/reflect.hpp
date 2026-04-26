@@ -1,1034 +1,331 @@
 #pragma once
-#include <map>
-#include <memory>
+//
+// psio3/reflect.hpp — Layer 1 reflection trait.
+//
+// Exposes per-type metadata through psio::reflect<T>:
+//
+//   psio::reflect<T>::name                           struct name (string_view)
+//   psio::reflect<T>::member_count                   number of fields
+//   psio::reflect<T>::member_pointer<I>              &T::field_I
+//   psio::reflect<T>::member_name<I>                 "field_I"
+//   psio::reflect<T>::field_number<I>                1-based ordinal (source order)
+//   psio::reflect<T>::member_type<I>                 type of field I
+//   psio::reflect<T>::index_of(name)                 runtime name → index
+//   psio::reflect<T>::index_of_field_number(n)       field-number → index
+//   psio::reflect<T>::visit_field_by_name(obj, name, fn)
+//   psio::reflect<T>::visit_field_by_number(obj, n, fn)
+//   psio::reflect<T>::for_each_field(obj, fn)        iterate all
+//   psio::reflect<T>::is_reflected                   SFINAE-style check
+//
+// Population: `PSIO_REFLECT(Type, field1, field2, ...)` macro, callable
+// at namespace scope right after the struct definition (no namespace
+// gymnastics needed — macro uses ADL to plug the metadata into the
+// user's namespace).
+//
+// Dispatch: `psio::reflect<T>` is a class template whose base is the
+// type returned by an ADL-found helper `psio3_reflect_helper(T*)`.
+// Unreflected types fall through to an empty default with
+// is_reflected = false.
+//
+// Reflection covers public non-static data members only (design § 5.2.5.4).
+
+#include <boost/preprocessor.hpp>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <optional>
-#include <span>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
-#include <variant>
-#include <vector>
-
-#include <boost/core/demangle.hpp>
-#include <boost/preprocessor/cat.hpp>
-#include <boost/preprocessor/control/iif.hpp>
-#include <boost/preprocessor/facilities/check_empty.hpp>
-#include <boost/preprocessor/logical/bitand.hpp>
-#include <boost/preprocessor/logical/compl.hpp>
-#include <boost/preprocessor/repetition/enum.hpp>
-#include <boost/preprocessor/repetition/enum_params.hpp>
-#include <boost/preprocessor/seq/filter.hpp>
-#include <boost/preprocessor/seq/for_each.hpp>
-#include <boost/preprocessor/seq/for_each_i.hpp>
-#include <boost/preprocessor/seq/to_tuple.hpp>
-#include <boost/preprocessor/seq/transform.hpp>
-#include <boost/preprocessor/stringize.hpp>
-#include <boost/preprocessor/tuple/eat.hpp>
-#include <boost/preprocessor/tuple/elem.hpp>
-#include <boost/preprocessor/tuple/push_front.hpp>
-#include <boost/preprocessor/tuple/rem.hpp>
-#include <boost/preprocessor/variadic/size.hpp>
-#include <boost/preprocessor/variadic/to_seq.hpp>
-
-#include <psio/get_type_name.hpp>
-
-namespace psio
-{
-   template <typename R, typename C, typename... Args>
-   constexpr std::tuple<std::remove_cvref_t<Args>...> args_as_tuple(
-       R (C::*)(Args...));  // { return ; }
-   template <typename R, typename C, typename... Args>
-   constexpr std::tuple<std::remove_cvref_t<Args>...> args_as_tuple(R (C::*)(Args...) const)
-   {
-      return {};
-   }
-   template <typename R, typename... Args>
-   constexpr std::tuple<std::remove_cvref_t<Args>...> args_as_tuple(R (*)(Args...))
-   {
-      return {};
-   }
-
-   template <typename Tuple, size_t... I>
-   constexpr auto get_tuple_args_h(Tuple t, std::index_sequence<I...>)
-   {
-      return std::make_tuple(args_as_tuple(std::get<I>(t))...);
-   }
-
-   template <typename... MPtrs>
-   constexpr auto get_tuple_args(std::tuple<MPtrs...> t)
-   {
-      return get_tuple_args_h(
-          t, std::make_index_sequence<std::tuple_size<std::tuple<MPtrs...>>::value>{});
-   }
-
-   template <typename... Ts>
-   constexpr std::variant<Ts...> tuple_to_variant(std::tuple<Ts...>);
-
-   template <typename F, typename T, std::size_t... I>
-   void tuple_foreach_impl(T&& t, F&& f, std::index_sequence<I...>*)
-   {
-      (f(std::get<I>(t)), ...);
-   }
-
-   template <typename... Ts, typename S>
-   void tuple_foreach(const std::tuple<Ts...>& obj, S&& s)
-   {
-      psio::tuple_foreach_impl(obj, s, (std::make_index_sequence<sizeof...(Ts)>*)nullptr);
-   }
-   template <typename... Ts, typename S>
-   void tuple_foreach(std::tuple<Ts...>& obj, S&& s)
-   {
-      psio::tuple_foreach_impl(obj, s, (std::make_index_sequence<sizeof...(Ts)>*)nullptr);
-   }
-
-   template <typename... T, typename F>
-   constexpr void tuple_foreach_type(const std::tuple<T...>* obj, F&& f)
-   {
-      (f((T*)nullptr), ...);
-   }
-
-   template <typename R, typename C, typename... Args>
-   R result_of(R (C::*)(Args...) const);
-   template <typename R, typename C, typename... Args>
-   R result_of(R (C::*)(Args...));
-   template <typename R, typename... Args>
-   R result_of(R (*)(Args...));
-
-   template <typename R, typename C>
-   constexpr R result_of_member(R(C::*));
-   template <typename R, typename C>
-   constexpr C class_of_member(R(C::*));
-   template <typename R, typename C, typename... Args>
-   constexpr C class_of_member(R (C::*)(Args...));
-   template <typename R, typename C, typename... Args>
-   constexpr C class_of_member(R (C::*)(Args...) const);
-
-   template <typename R, typename C, typename... Args>
-   void result_of_member(R (C::*)(Args...) const);
-   template <typename R, typename C, typename... Args>
-   void result_of_member(R (C::*)(Args...));
-
-   template <unsigned N>
-   struct FixedString
-   {
-      char buf[N + 1]{};
-
-      constexpr FixedString(const char (&s)[N + 1])
-      {
-         for (unsigned i = 0; i < N; ++i)
-            buf[i] = s[i];
-      }
-
-      template <unsigned N1, unsigned N2>
-      constexpr FixedString(const FixedString<N1>& a, const FixedString<N2>& b)
-      {
-         static_assert(N == N1 + N2);
-         for (unsigned i = 0; i < N1; ++i)
-            buf[i] = a.buf[i];
-         for (unsigned i = 0; i < N2; ++i)
-            buf[N1 + i] = b.buf[i];
-      }
-
-      constexpr operator const char*() const { return buf; }
-      constexpr operator const decltype(buf) & () const { return buf; }
-      constexpr operator std::string_view() const { return buf; }
-
-      constexpr const char* c_str() const { return buf; }
-      constexpr size_t      size() const { return N; }
-   };
-   template <unsigned N>
-   FixedString(char const (&)[N]) -> FixedString<N - 1>;
-
-   template <unsigned N1, unsigned N2>
-   constexpr FixedString<N1 + N2> operator+(const FixedString<N1>& a, const FixedString<N2>& b)
-   {
-      return {a, b};
-   }
-
-   template <unsigned N1, unsigned N2>
-   constexpr FixedString<N1 + N2 - 1> operator+(const FixedString<N1>& a, const char (&b)[N2])
-   {
-      return {a, FixedString{b}};
-   }
-
-   struct meta
-   {
-      const char*                        name;
-      uint64_t                           offset      = ~uint64_t(0);
-      std::initializer_list<const char*> param_names = {};
-      int32_t                            number      = 0;
-   };
-
-   template <typename QueryClass>
-   struct reflect_undefined
-   {
-      static constexpr bool is_defined              = false;
-      static constexpr bool is_struct               = false;
-      static constexpr bool definitionWillNotChange = false;
-      static constexpr bool canonical               = false;
-      static constexpr bool final                   = false;
-      template <typename L>
-      static void get(const std::string_view& m, L&& lambda);
-   };
-
-   namespace reflection_impl
-   {
-      // Ensures that all overloads of psio_get_reflect_impl in this namespace
-      // can be found by ADL.
-      struct ReflectDummyParam;
-   }  // namespace reflection_impl
-   using reflection_impl::ReflectDummyParam;
-
-   template <typename QueryClass>
-   reflect_undefined<QueryClass> psio_get_reflect_impl(const QueryClass&, ReflectDummyParam*);
-
-   template <typename QueryClass>
-   concept ReflectedAsMember = requires(QueryClass* v) { v->psio_get_reflect_impl(v, nullptr); };
-
-   template <ReflectedAsMember QueryClass>
-   auto psio_get_reflect_impl(QueryClass* v,
-                              ReflectDummyParam*) -> decltype(v->psio_get_reflect_impl(v, nullptr));
-
-   template <typename QueryClass>
-   using reflect =
-       decltype(psio_get_reflect_impl((QueryClass*)nullptr, (ReflectDummyParam*)nullptr));
-
-   template <typename>
-   struct is_std_vector : std::false_type
-   {
-   };
-
-   template <typename T, typename A>
-   struct is_std_vector<std::vector<T, A>> : std::true_type
-   {
-      using value_type = T;
-   };
-
-   template <typename T>
-   constexpr bool is_std_vector_v = is_std_vector<T>::value;
-
-   template <typename>
-   struct is_std_optional : std::false_type
-   {
-   };
-
-   template <typename T>
-   struct is_std_optional<std::optional<T>> : std::true_type
-   {
-      using value_type = T;
-   };
-
-   template <typename T>
-   constexpr bool is_std_optional_v = is_std_optional<T>::value;
-
-   template <typename>
-   struct is_std_unique_ptr : std::false_type
-   {
-   };
-
-   template <typename T>
-   struct is_std_unique_ptr<std::unique_ptr<T>> : std::true_type
-   {
-      using value_type = T;
-   };
-
-   template <typename T>
-   constexpr bool is_std_unique_ptr_v = is_std_unique_ptr<T>::value;
-
-   template <typename>
-   struct is_std_reference_wrapper : std::false_type
-   {
-   };
-
-   template <typename T>
-   struct is_std_reference_wrapper<std::reference_wrapper<T>> : std::true_type
-   {
-      using value_type = T;
-   };
-
-   template <typename T>
-   constexpr bool is_std_reference_wrapper_v = is_std_reference_wrapper<T>::value;
-
-   template <typename>
-   struct is_std_array : std::false_type
-   {
-   };
-
-   template <typename T, auto N>
-   struct is_std_array<std::array<T, N>> : std::true_type
-   {
-      using value_type                        = T;
-      constexpr static const std::size_t size = N;
-   };
-
-   template <typename T>
-   constexpr bool is_std_array_v = is_std_array<T>::value;
-
-   template <typename>
-   struct is_std_variant : std::false_type
-   {
-   };
-
-   template <typename... T>
-   struct is_std_variant<std::variant<T...>> : std::true_type
-   {
-   };
-
-   template <typename T>
-   constexpr bool is_std_variant_v = is_std_variant<T>::value;
-
-   template <typename>
-   struct is_std_tuple : std::false_type
-   {
-   };
-
-   template <typename... T>
-   struct is_std_tuple<std::tuple<T...>> : std::true_type
-   {
-   };
-
-   template <typename T>
-   constexpr bool is_std_tuple_v = is_std_tuple<T>::value;
-
-   template <typename>
-   struct is_std_map : std::false_type
-   {
-   };
-
-   template <typename K, typename V>
-   struct is_std_map<std::map<K, V>> : std::true_type
-   {
-   };
-
-   template <typename T>
-   constexpr bool is_std_map_v = is_std_map<T>::value;
-
-   template <typename... Ts>
-   struct TypeList
-   {
-      static constexpr int size = sizeof...(Ts);
-   };
-
-   template <typename... Ts>
-   std::tuple<Ts...> TupleFromTypeListImpl(TypeList<Ts...>&&);
-   template <typename T>
-   using TupleFromTypeList = decltype(TupleFromTypeListImpl(std::declval<T>()));
-
-   template <typename T>
-   struct MemberPtrType;
-
-   template <typename V, typename T>
-   struct MemberPtrType<V(T::*)>
-   {
-      static constexpr bool isFunction      = false;
-      static constexpr bool isConstFunction = false;
-      using ValueType                       = V;
-   };
-
-   template <typename R, typename T, typename... Args>
-   struct MemberPtrType<R (T::*)(Args...)>
-   {
-      static constexpr bool isFunction      = true;
-      static constexpr bool isConstFunction = false;
-      static constexpr int  numArgs         = sizeof...(Args);
-      using ClassType                       = T;
-      using ReturnType                      = R;
-      using ArgTypes                        = TypeList<Args...>;
-      using SimplifiedArgTypes              = TypeList<std::remove_cvref_t<Args>...>;
-   };
-
-   template <typename R, typename T, typename... Args>
-   struct MemberPtrType<R (T::*)(Args...) const>
-   {
-      static constexpr bool isFunction      = true;
-      static constexpr bool isConstFunction = true;
-      static constexpr int  numArgs         = sizeof...(Args);
-      using ClassType                       = T;
-      using ReturnType                      = R;
-      using ArgTypes                        = TypeList<Args...>;
-      using SimplifiedArgTypes              = TypeList<std::remove_cvref_t<Args>...>;
-   };
-
-   // Not really a member, but usable via std::invoke
-   template <typename R, typename T, typename... Args>
-   struct MemberPtrType<R (*)(T&, Args...)>
-   {
-      static constexpr bool isFunction      = true;
-      static constexpr bool isConstFunction = false;
-      static constexpr int  numArgs         = sizeof...(Args);
-      using ClassType                       = T;
-      using ReturnType                      = R;
-      using ArgTypes                        = TypeList<Args...>;
-      using SimplifiedArgTypes              = TypeList<std::remove_cvref_t<Args>...>;
-   };
-
-   // Not really a member, but usable via std::invoke
-   template <typename R, typename T, typename... Args>
-   struct MemberPtrType<R (*)(const T&, Args...)>
-   {
-      static constexpr bool isFunction      = true;
-      static constexpr bool isConstFunction = true;
-      static constexpr int  numArgs         = sizeof...(Args);
-      using ClassType                       = T;
-      using ReturnType                      = R;
-      using ArgTypes                        = TypeList<Args...>;
-      using SimplifiedArgTypes              = TypeList<std::remove_cvref_t<Args>...>;
-   };
-
-   template <typename F, typename... Args>
-   void forEachType(TypeList<Args...>, F&& f)
-   {
-      (f((std::remove_cvref_t<Args>*)nullptr), ...);
-   }
-
-   template <typename F, typename... Args>
-   void forEachNamedType(TypeList<Args...>, std::span<const char* const> names, F&& f)
-   {
-      size_t i = 0;
-      auto   g = [&](auto* p)
-      {
-         f(p, i < names.size() ? names.begin()[i] : nullptr);
-         ++i;
-      };
-      (g((std::remove_cvref_t<Args>*)nullptr), ...);
-   }
-
-   template <typename T>
-   concept Reflected = reflect<T>::is_defined;
-
-   template <Reflected T>
-   struct is_reflected<T> : std::true_type
-   {
-   };
-
-   template <typename T>
-      requires(is_reflected<T>::value)
-   constexpr const char* get_type_name(const T*)
-   {
-      return reflect<T>::name.c_str();
-   }
-
-   template <auto... F>
-   struct MemberList;
-
-   template <typename T>
-   struct get_struct_tuple_impl;
-
-   template <auto... F>
-   struct get_struct_tuple_impl<MemberList<F...>>
-   {
-      using type = std::tuple<std::remove_cvref_t<decltype(psio::result_of_member(F))>...>;
-   };
-
-   template <typename T>
-   using struct_tuple_t = get_struct_tuple_impl<typename reflect<T>::data_members>::type;
-
-   template <auto... M, typename F>
-   constexpr decltype(auto) apply_members(MemberList<M...>*, F&& f)
-   {
-      return f(M...);
-   }
-
-   // Like apply_members, but the callback receives the member pointers as a
-   // template parameter pack instead of a function parameter pack. Needed
-   // when the callback must use each member pointer in a compile-time context
-   // (e.g., as a non-type template argument).
-   template <auto... M, typename F>
-   constexpr decltype(auto) apply_member_templates(MemberList<M...>*, F&& f)
-   {
-      return static_cast<F&&>(f).template operator()<M...>();
-   }
-
-   template <typename T, auto... M, typename F>
-   constexpr F for_each_member(T* t, MemberList<M...>*, F&& f)
-   {
-      (f(t->*M), ...);
-      return static_cast<F&&>(f);
-   }
-
-   template <bool TypeOnly, typename T, auto... M, typename F>
-   constexpr F for_each_member_ptr(T* t, MemberList<M...>*, F&& f)
-   {
-      if constexpr (TypeOnly)
-      {
-         (f((decltype(&(t->*M)))nullptr), ...);
-      }
-      else
-      {
-         (f(&(t->*M)), ...);
-      }
-      return static_cast<F&&>(f);
-   }
-
-   template <typename T>
-   struct get_member_pointer_types;
-   template <auto... F>
-   struct get_member_pointer_types<MemberList<F...>>
-   {
-      using type = TypeList<decltype(F)...>;
-   };
-
-   template <auto... M, typename F>
-   constexpr F for_each_member_type(MemberList<M...>*, F&& f)
-   {
-      (f(static_cast<decltype(M)>(nullptr)), ...);
-      return static_cast<F&&>(f);
-   }
-
-   template <auto... M, typename F>
-   constexpr bool get_member(MemberList<M...>*,
-                             const char* const* names,
-                             std::string_view   name,
-                             F&&                f)
-   {
-      std::size_t i = 0;
-      return (false || ... || (name == names[i++] && (f(M), true)));
-   }
-
-   template <typename T, typename F>
-   constexpr bool get_data_member(std::string_view name, F&& f)
-   {
-      return get_member((typename reflect<T>::data_members*)nullptr, reflect<T>::data_member_names,
-                        name, f);
-   }
-
-   template <auto... M, typename F>
-   constexpr bool get_member(MemberList<M...>*,
-                             const std::initializer_list<const char*>* names,
-                             std::string_view                          name,
-                             F&&                                       f)
-   {
-      std::size_t i = 0;
-      return (false || ... || (name == *names[i++].begin() && (f(M, names[i - 1]), true)));
-   }
-
-   template <typename T, typename F>
-   constexpr bool get_member_function(std::string_view name, F&& f)
-   {
-      return get_member((typename reflect<T>::member_functions*)nullptr,
-                        reflect<T>::member_function_names, name, f);
-   }
-
-   template <auto... M, typename F>
-   constexpr bool get_member(MemberList<M...>*,
-                             const std::initializer_list<const char*>* names,
-                             std::uint64_t                             name,
-                             F&&                                       f)
-   {
-      std::size_t i = 0;
-      return (false || ... ||
-              (name == psio::hash_name(*names[i++].begin()) && (f(M, names[i - 1]), true)));
-   }
-
-   template <typename T, typename F>
-   constexpr bool get_member_function(std::uint64_t name, F&& f)
-   {
-      return get_member((typename reflect<T>::member_functions*)nullptr,
-                        reflect<T>::member_function_names, name, f);
-   }
-
-   template <auto... M, typename F>
-   constexpr bool get_member_type(MemberList<M...>*,
-                                  const std::initializer_list<const char*>* names,
-                                  std::uint64_t                             name,
-                                  F&&                                       f)
-   {
-      std::size_t i = 0;
-      return (false || ... ||
-              (name == psio::hash_name(*names[i++].begin()) &&
-               (f(static_cast<decltype(M)>(nullptr), names[i - 1]), true)));
-   }
-
-   template <typename T, typename F>
-   constexpr bool get_member_function_type(std::uint64_t name, F&& f)
-   {
-      return get_member_type((typename reflect<T>::member_functions*)nullptr,
-                             reflect<T>::member_function_names, name, f);
-   }
-
-}  // namespace psio
-
-#define PSIO_EMPTY(...)
-#define PSIO_FIRST(a, ...) a
-#define PSIO_APPLY_FIRST(a) PSIO_FIRST(a)
-#define PSIO_SKIP_SECOND(a, b, ...) (a, __VA_ARGS__)
-
-#define PSIO_REMOVE_PARENS(...) BOOST_PP_TUPLE_REM() __VA_ARGS__
-#define PSIO_SEQ_TO_VA_ARGS(seq) PSIO_REMOVE_PARENS(BOOST_PP_SEQ_TO_TUPLE(seq))
-
-#define PSIO_SEQ_FILTER(op, data, seq) \
-   BOOST_PP_IIF(BOOST_PP_CHECK_EMPTY(seq), PSIO_EMPTY, BOOST_PP_SEQ_FILTER)(op, data, seq)
-
-#define PSIO_SEQ_TRANSFORM(op, data, seq) \
-   BOOST_PP_IIF(BOOST_PP_CHECK_EMPTY(seq), PSIO_EMPTY, BOOST_PP_SEQ_TRANSFORM)(op, data, seq)
-
-#define PSIO_MATCH(base, x) PSIO_MATCH_CHECK(BOOST_PP_CAT(base, x))
-#define PSIO_MATCH_ADD_PAREN(base, x) PSIO_MATCH_CHECK(BOOST_PP_CAT(base, x)())
-#define PSIO_MATCH_CHECK(...) PSIO_MATCH_CHECK_N(__VA_ARGS__, 0, )
-#define PSIO_MATCH_CHECK_N(x, n, r, ...) BOOST_PP_BITAND(n, BOOST_PP_COMPL(BOOST_PP_CHECK_EMPTY(r)))
-
-// Handling of template(typename, int) etc.
-#define PSIO_REFLECT_NAME(STRUCT) BOOST_PP_TUPLE_ELEM(3, 2, PSIO_TEMPLATE_I(STRUCT))
-
-#define PSIO_REFLECT_TYPE(STRUCT) PSIO_REFLECT_TYPE_I(PSIO_TEMPLATE_I(STRUCT))
-#define PSIO_REFLECT_TYPE_I(STRUCT) PSIO_REFLECT_TYPE_II STRUCT
-#define PSIO_REFLECT_TYPE_II(c, params, name) \
-   BOOST_PP_IIF(c, PSIO_REFLECT_TYPE_TEMPLATE, PSIO_REFLECT_TYPE_NONTEMPLATE)(params, name)
-#define PSIO_REFLECT_TYPE_TEMPLATE(params, name) \
-   name<BOOST_PP_ENUM_PARAMS(BOOST_PP_VARIADIC_SIZE params, T)>
-#define PSIO_REFLECT_TYPE_NONTEMPLATE(params, name) name
-
-#define PSIO_REFLECT_TEMPLATE_DECL(STRUCT) PSIO_REFLECT_TEMPLATE_DECL_I(PSIO_TEMPLATE_I(STRUCT))
-#define PSIO_REFLECT_TEMPLATE_DECL_I(STRUCT) PSIO_REFLECT_TEMPLATE_DECL_II STRUCT
-#define PSIO_REFLECT_TEMPLATE_DECL_II(c, params, name) \
-   BOOST_PP_IIF(c, PSIO_REFLECT_TEMPLATE_DECL_TEMPLATE, BOOST_PP_TUPLE_EAT(42))(params)
-#define PSIO_REFLECT_TEMPLATE_DECL_TEMPLATE(params) \
-   template <BOOST_PP_ENUM(BOOST_PP_VARIADIC_SIZE params, PSIO_REFLECT_TPL_PARAM, params)>
-#define PSIO_REFLECT_TPL_PARAM(z, i, data) BOOST_PP_TUPLE_ELEM(i, data) T##i
-
-#define PSIO_TEMPLATE_I(STRUCT) PSIO_TEMPLATE_II(PSIO_MATCH_TEMPLATE##STRUCT, 0, STRUCT)
-#define PSIO_TEMPLATE_II(...) PSIO_TEMPLATE_III(__VA_ARGS__)
-#define PSIO_TEMPLATE_III(params, n, ...) \
-   BOOST_PP_IIF(n, PSIO_TEMPLATE_TEMPLATE, PSIO_TEMPLATE_NONTEMPLATE)(params, __VA_ARGS__)
-#define PSIO_MATCH_TEMPLATEtemplate(...) (__VA_ARGS__), 1, ~
-
-#define PSIO_TEMPLATE_NONTEMPLATE(blah, ...) (0, (), __VA_ARGS__)
-#define PSIO_TEMPLATE_TEMPLATE(params, n, z, args) (1, params, PSIO_REMOVE_TEMPLATE##args)
-
-#define PSIO_REMOVE_TEMPLATEtemplate(...)
-
-// Get seq of items. Each result is:
-//    base(ident)
-//    flag(ident)
-//    numbered(int, ident)
-//    unnumbered(ident)
-//    method(ident, arg1, ...)
-#define PSIO_REFLECT_ITEMS(...) \
-   PSIO_SEQ_TRANSFORM(PSIO_MATCH_ITEMS, _, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))
-#define PSIO_MATCH_ITEMS(r, STRUCT, item)                                           \
-   BOOST_PP_IIF(BOOST_PP_CHECK_EMPTY(item), ,                                       \
-                BOOST_PP_IIF(PSIO_MATCH(PSIO_MATCH_ITEMS, item), PSIO_MATCHED_ITEM, \
-                             PSIO_REFLECT_UNMATCHED_ITEM)(STRUCT, item))
-#define PSIO_MATCHED_ITEM(STRUCT, item)                                        \
-   PSIO_FIRST           PSIO_APPLY_FIRST(BOOST_PP_CAT(PSIO_MATCH_ITEMS, item)) \
-       PSIO_SKIP_SECOND BOOST_PP_TUPLE_PUSH_FRONT(                             \
-           PSIO_APPLY_FIRST(BOOST_PP_CAT(PSIO_MATCH_ITEMS, item)), STRUCT)
-#define PSIO_REFLECT_UNMATCHED_ITEM(STRUCT, member) unnumbered(member)
-
-#define PSIO_KEEP_BASE(_, ident, ...) base(ident)
-#define PSIO_KEEP_FLAG(_, ident, ...) flag(ident)
-#define PSIO_KEEP_NUMBERED(_, int, ident) numbered(int, ident)
-#define PSIO_KEEP_METHOD(_, ident, ...) method(ident, __VA_ARGS__)
-
-#define PSIO_MATCH_ITEMSbase(...) (PSIO_KEEP_BASE, __VA_ARGS__), 1
-#define PSIO_MATCH_ITEMSnumbered(...) (PSIO_KEEP_NUMBERED, __VA_ARGS__), 1
-#define PSIO_MATCH_ITEMSmethod(...) (PSIO_KEEP_METHOD, __VA_ARGS__), 1
-
-#define PSIO_MATCH_ITEMSdefinitionWillNotChange(...) (PSIO_KEEP_FLAG, definitionWillNotChange), 1
-#define PSIO_HAS_FLAG_IMPL_definitionWillNotChange_definitionWillNotChange(...) , 1
-
-#define PSIO_MATCH_ITEMSallowHashedMethods(...) (PSIO_KEEP_FLAG, allowHashedMethods), 1
-#define PSIO_HAS_FLAG_IMPL_allowHashedMethods_allowHashedMethods(...) , 1
-
-// WIT-attribute flags. See doc/wit-attributes.md.
-//  canonical() — this type has exactly one admissible wire form.
-//  final()     — this schema is closed; receivers reject trailing unknowns.
-// Distinct from definitionWillNotChange() (which is a wire-format
-// optimization choosing Struct over Object); final() is a semantic
-// contract, captured independently.
-#define PSIO_MATCH_ITEMScanonical(...) (PSIO_KEEP_FLAG, canonical), 1
-#define PSIO_HAS_FLAG_IMPL_canonical_canonical(...) , 1
-
-#define PSIO_MATCH_ITEMSfinal(...) (PSIO_KEEP_FLAG, final), 1
-#define PSIO_HAS_FLAG_IMPL_final_final(...) , 1
-
-// numbered(int, ident)
-// unnumbered(ident)
-// method(ident, arg1, ...)
-#define PSIO_FILTER_MEMBERS(seq) BOOST_PP_SEQ_FILTER(PSIO_FILTER_MEMBERS_IMPL, _, seq)
-#define PSIO_FILTER_MEMBERS_IMPL(s, _, elem) PSIO_MATCH(PSIO_FILTER_MEMBERS_IMPL, elem)
-#define PSIO_FILTER_MEMBERS_IMPLnumbered(...) , 1
-#define PSIO_FILTER_MEMBERS_IMPLunnumbered(...) , 1
-#define PSIO_FILTER_MEMBERS_IMPLmethod(...) , 1
-
-#define PSIO_REFLECT_MEMBERS(...) PSIO_FILTER_MEMBERS(PSIO_REFLECT_ITEMS(__VA_ARGS__))
-
-// numbered(int, ident)
-// unnumbered(ident)
-#define PSIO_FILTER_DATA_MEMBERS(seq) BOOST_PP_SEQ_FILTER(PSIO_FILTER_DATA_MEMBERS_IMPL, _, seq)
-#define PSIO_FILTER_DATA_MEMBERS_IMPL(s, _, elem) PSIO_MATCH(PSIO_FILTER_DATA_MEMBERS_IMPL, elem)
-#define PSIO_FILTER_DATA_MEMBERS_IMPLnumbered(...) , 1
-#define PSIO_FILTER_DATA_MEMBERS_IMPLunnumbered(...) , 1
-
-#define PSIO_REFLECT_DATA_MEMBERS(...) PSIO_FILTER_DATA_MEMBERS(PSIO_REFLECT_ITEMS(__VA_ARGS__))
-
-// method(ident, arg1, ...)
-#define PSIO_FILTER_METHODS(seq) BOOST_PP_SEQ_FILTER(PSIO_FILTER_METHODS_IMPL, _, seq)
-#define PSIO_FILTER_METHODS_IMPL(s, _, elem) PSIO_MATCH(PSIO_FILTER_METHODS_IMPL, elem)
-#define PSIO_FILTER_METHODS_IMPLmethod(...) , 1
-
-#define PSIO_REFLECT_METHODS(...) PSIO_FILTER_METHODS(PSIO_REFLECT_ITEMS(__VA_ARGS__))
-
-// flag(ident)
-#define PSIO_FILTER_FLAGS(seq) BOOST_PP_SEQ_FILTER(PSIO_FILTER_FLAGS_IMPL, _, seq)
-#define PSIO_FILTER_FLAGS_IMPL(s, _, elem) PSIO_MATCH(PSIO_FILTER_FLAGS_IMPL, elem)
-#define PSIO_FILTER_FLAGS_IMPLflag(...) , 1
-
-// flag(ident) => ident
-#define PSIO_REFLECT_FLAGS(...) \
-   PSIO_SEQ_TRANSFORM(PSIO_EXTRACT_FLAG, _, PSIO_FILTER_FLAGS(PSIO_REFLECT_ITEMS(__VA_ARGS__)))
-#define PSIO_EXTRACT_FLAG(r, _, flag) BOOST_PP_CAT(PSIO_EXTRACT_FLAG, flag)
-#define PSIO_EXTRACT_FLAGflag(flag) flag
-
-// 0 or 1
-#define PSIO_HAS_FLAG(flag, ...)        \
-   BOOST_PP_COMPL(BOOST_PP_CHECK_EMPTY( \
-       PSIO_SEQ_FILTER(PSIO_HAS_FLAG_IMPL, flag, PSIO_REFLECT_FLAGS(__VA_ARGS__))))
-#define PSIO_HAS_FLAG_IMPL(s, flag, elem) \
-   PSIO_MATCH_ADD_PAREN(BOOST_PP_CAT(BOOST_PP_CAT(PSIO_HAS_FLAG_IMPL_, flag), _), elem)
-
-// numbered(int, ident)       => ident
-// unnumbered(ident)          => ident
-// method(ident, arg1, ...)   => ident
-#define PSIO_GET_IDENT(x) BOOST_PP_CAT(PSIO_GET_IDENT, x)
-#define PSIO_GET_IDENTnumbered(int, ident) ident
-#define PSIO_GET_IDENTunnumbered(ident) ident
-#define PSIO_GET_IDENTmethod(ident, ...) ident
-
-// numbered(int, ident) => 1
-// unnumbered(ident)    => 0
-#define PSIO_IS_NUMBERED(x) BOOST_PP_CAT(PSIO_IS_NUMBERED, x)
-#define PSIO_IS_NUMBEREDnumbered(int, ident) 1
-#define PSIO_IS_NUMBEREDunnumbered(ident) 0
-
-// numbered(int, ident) => int
-#define PSIO_GET_NUMBER(x) BOOST_PP_CAT(PSIO_GET_NUMBER, x)
-#define PSIO_GET_NUMBERnumbered(int, ident) int
-
-// numbered(int, ident) => int
-// unnumbered(ident)    => i
-#define PSIO_NUMBER_OR_AUTO(i, elem) \
-   BOOST_PP_CAT(PSIO_NUMBER_OR_AUTO, PSIO_IS_NUMBERED(elem))(i, elem)
-#define PSIO_NUMBER_OR_AUTO0(i, ...) i + 1
-#define PSIO_NUMBER_OR_AUTO1(i, x) PSIO_GET_NUMBER(x)
-
-// method(ident, arg1, ...) => arg1, ...
-#define PSIO_GET_ARGS(x) BOOST_PP_CAT(PSIO_GET_ARGS, x)
-#define PSIO_GET_ARGSmethod(ident, ...) __VA_ARGS__
-
-// method(ident, arg1, ...) => "arg1", ...
-#define PSIO_GET_QUOTED_ARGS(elem)                                                                \
-   BOOST_PP_IIF(BOOST_PP_CHECK_EMPTY(PSIO_GET_ARGS(elem)), PSIO_EMPTY, PSIO_GET_QUOTED_ARGS_IMPL) \
-   (elem)
-#define PSIO_GET_QUOTED_ARGS_IMPL(elem)                                      \
-   PSIO_SEQ_TO_VA_ARGS(BOOST_PP_SEQ_TRANSFORM(PSIO_GET_QUOTED_ARGS_IMPL2, _, \
-                                              BOOST_PP_VARIADIC_TO_SEQ(PSIO_GET_ARGS(elem))))
-#define PSIO_GET_QUOTED_ARGS_IMPL2(r, _, arg) #arg
-
-#define PSIO_TUPLE_TYPE(s, STRUCT, elem) \
-   std::remove_cvref_t<decltype(psio::result_of_member(&STRUCT::PSIO_GET_IDENT(elem)))>
-
-#define PSIO_REFLECT_MEMBER_POINTER(r, STRUCT, elem) &STRUCT::PSIO_GET_IDENT(elem)
-
-// Emits `offsetof(STRUCT, field_name),` — used to populate a compile-time
-// array of member offsets. offsetof is a constant expression when STRUCT is
-// standard_layout; gated by static_assert at the reflection site.
-#define PSIO_REFLECT_DATA_MEMBER_OFFSET(r, STRUCT, elem) \
-   offsetof(STRUCT, PSIO_GET_IDENT(elem)),
-
-
-#define PSIO_REFLECT_DATA_MEMBER_NAME(r, STRUCT, elem) BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)),
-
-#define PSIO_REFLECT_MEMBER_FUNCTION_NAME(r, STRUCT, elem) \
-   {BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)), PSIO_GET_QUOTED_ARGS(elem)},
-
-#define PSIO_FOR_EACH_MEMBER(r, STRUCT, i, elem)                                               \
-   {                                                                                           \
-      /* TODO: fix or remove: auto off = __builtin_offsetof(STRUCT, PSIO_GET_IDENT(elem)); */  \
-      auto off = ~uint64_t(0);                                                                 \
-      (void)lambda(                                                                            \
-          psio::meta{                                                                          \
-              .name = BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)), .offset = off,                 \
-                                         .number = PSIO_NUMBER_OR_AUTO(i, elem)},              \
-              [](auto p) -> decltype(&std::remove_cvref_t<decltype(*p)>::PSIO_GET_IDENT(elem)) \
-              { return &std::remove_cvref_t<decltype(*p)>::PSIO_GET_IDENT(elem); });           \
-   }
-
-#define PSIO_FOR_EACH_METHOD(r, STRUCT, elem)                                                  \
-   (void)lambda(                                                                               \
-       psio::meta{                                                                             \
-           .name                                   = BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)), \
-                                      .param_names = {PSIO_GET_QUOTED_ARGS(elem)},             \
-           },                                                                                  \
-           [](auto p) -> decltype(&std::remove_cvref_t<decltype(*p)>::PSIO_GET_IDENT(elem))    \
-           { return &std::remove_cvref_t<decltype(*p)>::PSIO_GET_IDENT(elem); });
-
-#define PSIO_GET_BY_STR(r, STRUCT, elem)              \
-   if (BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)) == m) \
-   {                                                  \
-      (void)lambda(&STRUCT::PSIO_GET_IDENT(elem));    \
-      return true;                                    \
-   }
-
-#define PSIO_REQ_COMPRESS(r, STRUCT, elem)                             \
-   static_assert(                                                      \
-       allowHashedMethods or                                           \
-       psio::is_compressed_name(                                       \
-           psio::hash_name(BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)))), \
-           "method name '" BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)) "' does not compress");
-
-#define PSIO_GET_BY_NUMBER(r, STRUCT, i, elem)                              \
-   case BOOST_PP_CAT(PSIO_NUMBER_OR_AUTO, PSIO_IS_NUMBERED(elem))(i, elem): \
-      (void)lambda(&STRUCT::PSIO_GET_IDENT(elem));                          \
-      return true;
-
-#define PSIO_GET_MEMBER_BY_NAME(r, STRUCT, i, elem)                                            \
-   case psio::hash_name(BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem))):                             \
-      (void)lambda(                                                                            \
-          psio::meta{                                                                          \
-              .name                              = BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)),   \
-                                         .number = PSIO_NUMBER_OR_AUTO(i, elem)},              \
-              [](auto p) -> decltype(&std::remove_cvref_t<decltype(*p)>::PSIO_GET_IDENT(elem)) \
-              { return &std::remove_cvref_t<decltype(*p)>::PSIO_GET_IDENT(elem); });           \
-      return true;
-
-#define PSIO_GET_METHOD_BY_NAME(r, STRUCT, elem)                                                  \
-   case psio::hash_name(BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem))):                                \
-      (void)lambda(                                                                               \
-          psio::meta{                                                                             \
-              .name                                   = BOOST_PP_STRINGIZE(PSIO_GET_IDENT(elem)), \
-                                         .param_names = {PSIO_GET_QUOTED_ARGS(elem)}},            \
-              [](auto p) -> decltype(&std::remove_cvref_t<decltype(*p)>::PSIO_GET_IDENT(elem))    \
-              { return &std::remove_cvref_t<decltype(*p)>::PSIO_GET_IDENT(elem); });              \
-      return true;
-
-#define PSIO_MEMBER_POINTER_IMPL1(s, STRUCT, elem) &STRUCT::PSIO_GET_IDENT(elem)
-#define PSIO_MEMBER_POINTER_IMPL2(STRUCT, members) \
-   PSIO_SEQ_TO_VA_ARGS(BOOST_PP_SEQ_TRANSFORM(PSIO_MEMBER_POINTER_IMPL1, STRUCT, members))
-#define PSIO_MEMBER_POINTER(STRUCT, members)                                          \
-   BOOST_PP_IIF(BOOST_PP_CHECK_EMPTY(members), PSIO_EMPTY, PSIO_MEMBER_POINTER_IMPL2) \
-   (STRUCT, members)
-
-#define PSIO_PROXY_DATA(r, STRUCT, i, elem)                                    \
-   decltype(auto) PSIO_GET_IDENT(elem)()                                       \
-   {                                                                           \
-      return _psio_proxy_obj.template get<i, &STRUCT::PSIO_GET_IDENT(elem)>(); \
-   }                                                                           \
-   decltype(auto) PSIO_GET_IDENT(elem)() const                                 \
-   {                                                                           \
-      return _psio_proxy_obj.template get<i, &STRUCT::PSIO_GET_IDENT(elem)>(); \
-   }
-
-#define PSIO_PROXY_METHOD(r, STRUCT, i, elem)                                 \
-   template <typename... Args>                                                \
-   decltype(auto) PSIO_GET_IDENT(elem)(Args... args)                          \
-   {                                                                          \
-      return _psio_proxy_obj.template call<i, &STRUCT::PSIO_GET_IDENT(elem)>( \
-          std::forward<decltype(args)>(args)...);                             \
-   }
-
-/**
- * PSIO_REFLECT(<struct>, <member or base spec>...)
- * Each parameter may be one of the following:
- *    * ident                          non-static data member
- *    * definitionWillNotChange()      the struct's definition will not change in the future. This saves 2 bytes from the fracpack representation.
- *    * allowHashedMethods()           allow hashed method identifiers
- *    * base(ident)                    base class (not implemented)
- *    * method(ident, arg1, ...)       method
- *    * numbered(int, ident)           non-static data member with field number
- */
-#define PSIO_REFLECT(STRUCT, ...)                                                                                 \
-   template <typename ReflectedType>                                                                              \
-   struct BOOST_PP_CAT(psio_reflect_impl_, PSIO_REFLECT_NAME(STRUCT))                                             \
-   {                                                                                                              \
-      static constexpr bool is_defined = true;                                                                    \
-      static constexpr bool is_struct  = true;                                                                    \
-      static constexpr bool definitionWillNotChange =                                                             \
-          PSIO_HAS_FLAG(definitionWillNotChange, __VA_ARGS__);                                                    \
-      static constexpr bool canonical = PSIO_HAS_FLAG(canonical, __VA_ARGS__);                                    \
-      static constexpr bool final     = PSIO_HAS_FLAG(final, __VA_ARGS__);                                        \
-      static constexpr bool requires_compressed_method_names()                                                    \
-      {                                                                                                           \
-         constexpr bool allowHashedMethods = PSIO_HAS_FLAG(allowHashedMethods, __VA_ARGS__);                      \
-         BOOST_PP_SEQ_FOR_EACH(PSIO_REQ_COMPRESS, ReflectedType,                                                  \
-                               PSIO_REFLECT_METHODS(__VA_ARGS__));                                                \
-         return !allowHashedMethods;                                                                              \
-      }                                                                                                           \
-      static constexpr psio::FixedString name = BOOST_PP_STRINGIZE(PSIO_REFLECT_NAME(STRUCT));                    \
-      using data_members                      = psio::MemberList<BOOST_PP_IIF(                                    \
-          BOOST_PP_CHECK_EMPTY(PSIO_REFLECT_DATA_MEMBERS(__VA_ARGS__)),                      \
-          PSIO_EMPTY,                                                                        \
-          PSIO_SEQ_TO_VA_ARGS)(PSIO_SEQ_TRANSFORM(PSIO_REFLECT_MEMBER_POINTER,               \
-                                                                       ReflectedType,                             \
-                                                                       PSIO_REFLECT_DATA_MEMBERS(__VA_ARGS__)))>; \
-      static constexpr const char* data_member_names[] = {                                                        \
-          BOOST_PP_SEQ_FOR_EACH(PSIO_REFLECT_DATA_MEMBER_NAME,                                                    \
-                                ReflectedType,                                                                    \
-                                PSIO_REFLECT_DATA_MEMBERS(__VA_ARGS__))};                                         \
-      /* Compile-time field offsets (via offsetof). Requires standard_layout.                                     \
-         When the struct isn't standard_layout or offsetof isn't a constant                                       \
-         expression, these members are just not referenced — silently skip.  */                                   \
-      static constexpr std::size_t data_member_offsets[] = {                                                      \
-          BOOST_PP_SEQ_FOR_EACH(PSIO_REFLECT_DATA_MEMBER_OFFSET,                                                  \
-                                ReflectedType,                                                                    \
-                                PSIO_REFLECT_DATA_MEMBERS(__VA_ARGS__))};                                         \
-      static constexpr bool has_std_layout = std::is_standard_layout_v<ReflectedType>;                            \
-      using member_functions = psio::MemberList<BOOST_PP_IIF(                                                     \
-          BOOST_PP_CHECK_EMPTY(PSIO_REFLECT_METHODS(__VA_ARGS__)),                                                \
-          PSIO_EMPTY,                                                                                             \
-          PSIO_SEQ_TO_VA_ARGS)(PSIO_SEQ_TRANSFORM(PSIO_REFLECT_MEMBER_POINTER,                                    \
-                                                  ReflectedType,                                                  \
-                                                  PSIO_REFLECT_METHODS(__VA_ARGS__)))>;                           \
-      static constexpr std::initializer_list<const char*> member_function_names[] = {                             \
-          BOOST_PP_SEQ_FOR_EACH(PSIO_REFLECT_MEMBER_FUNCTION_NAME,                                                \
-                                ReflectedType,                                                                    \
-                                PSIO_REFLECT_METHODS(__VA_ARGS__))};                                              \
-      static constexpr auto member_pointers()                                                                     \
-      {                                                                                                           \
-         return std::make_tuple(                                                                                  \
-             PSIO_MEMBER_POINTER(ReflectedType, PSIO_REFLECT_MEMBERS(__VA_ARGS__)));                              \
-      }                                                                                                           \
-                                                                                                                  \
-      template <typename ProxyObject>                                                                             \
-      struct proxy                                                                                                \
-      {                                                                                                           \
-        private:                                                                                                  \
-         ProxyObject _psio_proxy_obj;                                                                             \
-                                                                                                                  \
-        public:                                                                                                   \
-         template <typename... Args>                                                                              \
-         explicit proxy(Args&&... args) : _psio_proxy_obj(std::forward<Args>(args)...)                            \
-         {                                                                                                        \
-         }                                                                                                        \
-         auto& psio_get_proxy()                                                                                   \
-         {                                                                                                        \
-            return _psio_proxy_obj;                                                                               \
-         }                                                                                                        \
-         auto& psio_get_proxy() const                                                                             \
-         {                                                                                                        \
-            return _psio_proxy_obj;                                                                               \
-         }                                                                                                        \
-         BOOST_PP_SEQ_FOR_EACH_I(PSIO_PROXY_DATA,                                                                 \
-                                 ReflectedType,                                                                   \
-                                 PSIO_REFLECT_DATA_MEMBERS(__VA_ARGS__))                                          \
-         BOOST_PP_SEQ_FOR_EACH_I(PSIO_PROXY_METHOD,                                                               \
-                                 ReflectedType,                                                                   \
-                                 PSIO_REFLECT_METHODS(__VA_ARGS__))                                               \
-      };                                                                                                          \
-   };                                                                                                             \
-   PSIO_REFLECT_TEMPLATE_DECL(STRUCT)                                                                             \
-   BOOST_PP_CAT(psio_reflect_impl_, PSIO_REFLECT_NAME(STRUCT))<PSIO_REFLECT_TYPE(STRUCT)>                         \
-   psio_get_reflect_impl(PSIO_REFLECT_TYPE(STRUCT)*, ::psio::ReflectDummyParam*);
-
-namespace psio::reflection_impl
-{
-   using std::pair;
-   PSIO_REFLECT(template(typename, typename) pair, first, second)
-}  // namespace psio::reflection_impl
-
-// ══════════════════════════════════════════════════════════════════════════
-// Compile-time FNV-1a hash for enum name lookup
-// ══════════════════════════════════════════════════════════════════════════
+#include <utility>
 
 namespace psio {
 
-constexpr uint64_t fnv1a(const char* s, size_t len)
-{
-   uint64_t h = 14695981039346656037ULL;
-   for (size_t i = 0; i < len; ++i)
-   {
-      h ^= static_cast<uint8_t>(s[i]);
-      h *= 1099511628211ULL;
+   namespace detail {
+      struct reflect_default_impl {
+         static constexpr bool is_reflected = false;
+      };
+
+      // Reasonable linear scan — sufficient for structs up to BeaconState
+      // scale (~20 fields) at no measurable runtime cost. A true
+      // perfect-hash backend lands in phase 13 (design § 5.2.5.1); the
+      // public surface does not change.
+      template <std::size_t N>
+      constexpr std::optional<std::size_t>
+      linear_index_of(const std::array<std::string_view, N>& names,
+                      std::string_view target) noexcept
+      {
+         for (std::size_t i = 0; i < N; ++i)
+            if (names[i] == target) return i;
+         return std::nullopt;
+      }
    }
-   return h;
-}
 
-constexpr uint64_t fnv1a(std::string_view s)
-{
-   return fnv1a(s.data(), s.size());
-}
+   // Fallback ADL hook: returns the default empty impl for unreflected
+   // types. Users' PSIO_REFLECT macro emits a more-specific overload
+   // in their namespace; ADL picks that one over this fallback.
+   template <typename T>
+   constexpr detail::reflect_default_impl psio3_reflect_helper(T*) noexcept
+   {
+      return {};
+   }
 
-constexpr uint64_t fnv1a(const char* s)
-{
-   size_t len = 0;
-   for (const char* p = s; *p; ++p)
-      ++len;
-   return fnv1a(s, len);
-}
+   // Public facade. Inherits from whatever the ADL dispatch returns —
+   // a detail::reflect_default_impl for unreflected types, or the
+   // user's generated struct for reflected types.
+   template <typename T>
+   struct reflect : decltype(psio3_reflect_helper(static_cast<T*>(nullptr)))
+   {
+   };
+
+   // Concept gate.
+   template <typename T>
+   concept Reflected = reflect<T>::is_reflected;
 
 }  // namespace psio
 
-// ══════════════════════════════════════════════════════════════════════════
-// PSIO_REFLECT_ENUM — compile-time enum reflection with fast conversion
+// ── Macro implementation ─────────────────────────────────────────────────
 //
-// Usage:
-//   enum class Color : uint8_t { Red = 0, Green = 1, Blue = 2 };
-//   PSIO_REFLECT_ENUM(Color, Red, Green, Blue)
+// PSIO_REFLECT(Type, f1, f2, ...) emits an ADL-found helper function
+// in the enclosing namespace:
 //
-// Provides:
-//   psio::reflect<Color>::name           → "Color"
-//   psio::reflect<Color>::is_enum        → true
-//   psio::reflect<Color>::count          → 3
-//   psio::reflect<Color>::labels[]       → {"Red", "Green", "Blue"}
-//   psio::reflect<Color>::values[]       → {Color::Red, Color::Green, Color::Blue}
-//   psio::reflect<Color>::to_string(e)   → "Red" | nullptr  (switch)
-//   psio::reflect<Color>::from_string(s) → Color::Red | nullopt  (hash+switch)
-// ══════════════════════════════════════════════════════════════════════════
+//     inline auto psio3_reflect_helper(Type*) noexcept { return … impl … ; }
+//
+// The returned unnamed struct carries all the metadata psio::reflect<T>
+// exposes. Because the helper lives in the same namespace as the struct,
+// users can call PSIO_REFLECT right after the struct definition without
+// leaving the namespace.
+//
+// Each per-field helper takes (r, data, I, FIELD).
 
-// Helper: stringify one enum value name for the labels array
-#define PSIO_ENUM_LABEL(r, data, elem) BOOST_PP_STRINGIZE(elem),
+#define PSIO_REFLECT_MEMBER_POINTER_CASE_(r, TYPE, I, FIELD) \
+   if constexpr (Idx == (I)) return &TYPE::FIELD;
 
-// Helper: qualify one enum value for the values array
-#define PSIO_ENUM_VALUE(r, ENUM, elem) ENUM::elem,
+#define PSIO_REFLECT_MEMBER_NAME_CASE_(r, _, I, FIELD) \
+   if constexpr (Idx == (I)) return ::std::string_view(BOOST_PP_STRINGIZE(FIELD));
 
-// Helper: generate a to_string switch case
-#define PSIO_ENUM_TO_CASE(r, ENUM, elem) \
-   case ENUM::elem: return BOOST_PP_STRINGIZE(elem);
+#define PSIO_REFLECT_MEMBER_TYPE_CASE_(r, TYPE, I, FIELD)                                    \
+   if constexpr (Idx == (I))                                                                  \
+      return ::std::type_identity<                                                            \
+         ::std::remove_reference_t<decltype(::std::declval<TYPE&>().FIELD)>>{};
 
-// Helper: generate a from_string hash-switch case
-#define PSIO_ENUM_FROM_CASE(r, ENUM, elem)                                   \
-   case ::psio::fnv1a(BOOST_PP_STRINGIZE(elem)):                             \
-      if (s == BOOST_PP_STRINGIZE(elem)) return ENUM::elem;                  \
-      break;
+#define PSIO_REFLECT_NAME_ARRAY_ELEM_(r, _, I, FIELD) \
+   BOOST_PP_COMMA_IF(I) ::std::string_view(BOOST_PP_STRINGIZE(FIELD))
 
-#define PSIO_REFLECT_ENUM(ENUM, ...)                                                                                  \
-   template <typename>                                                                                                \
-   struct BOOST_PP_CAT(psio_reflect_enum_impl_, ENUM)                                                                 \
-   {                                                                                                                  \
-      static constexpr bool             is_defined              = true;                                               \
-      static constexpr bool             is_struct               = false;                                              \
-      static constexpr bool             is_enum                 = true;                                               \
-      static constexpr bool             definitionWillNotChange = false;                                              \
-      static constexpr ::psio::FixedString name                 = BOOST_PP_STRINGIZE(ENUM);                           \
-      using underlying_type                                     = std::underlying_type_t<ENUM>;                       \
-                                                                                                                      \
-      static constexpr size_t count = BOOST_PP_VARIADIC_SIZE(__VA_ARGS__);                                            \
-                                                                                                                      \
-      static constexpr const char* labels[] = {                                                                       \
-          BOOST_PP_SEQ_FOR_EACH(PSIO_ENUM_LABEL, ~, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))};                          \
-                                                                                                                      \
-      static constexpr ENUM values[] = {                                                                              \
-          BOOST_PP_SEQ_FOR_EACH(PSIO_ENUM_VALUE, ENUM, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))};                       \
-                                                                                                                      \
-      /* int → string: switch (compiler turns contiguous cases into table) */                                         \
-      static constexpr const char* to_string(ENUM e)                                                                  \
-      {                                                                                                               \
-         switch (e)                                                                                                   \
-         {                                                                                                            \
-            BOOST_PP_SEQ_FOR_EACH(PSIO_ENUM_TO_CASE, ENUM, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))                     \
-            default: return nullptr;                                                                                  \
-         }                                                                                                            \
-      }                                                                                                               \
-                                                                                                                      \
-      /* string → int: FNV-1a hash + switch (one strcmp per case) */                                                  \
-      static constexpr std::optional<ENUM> from_string(std::string_view s)                                            \
-      {                                                                                                               \
-         switch (::psio::fnv1a(s))                                                                                    \
-         {                                                                                                            \
-            BOOST_PP_SEQ_FOR_EACH(PSIO_ENUM_FROM_CASE, ENUM, BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))                   \
-            default: break;                                                                                           \
-         }                                                                                                            \
-         return std::nullopt;                                                                                         \
-      }                                                                                                               \
-   };                                                                                                                 \
-   BOOST_PP_CAT(psio_reflect_enum_impl_, ENUM)<ENUM> psio_get_reflect_impl(ENUM*, ::psio::ReflectDummyParam*);
+#define PSIO_REFLECT_VISIT_NAME_CASE_(r, _, I, FIELD)                \
+   if (lookup_name == ::std::string_view(BOOST_PP_STRINGIZE(FIELD)))  \
+   {                                                                  \
+      ::std::invoke(::std::forward<F>(fn), obj.FIELD);                \
+      return true;                                                    \
+   }
+
+#define PSIO_REFLECT_VISIT_NUMBER_CASE_(r, _, I, FIELD)  \
+   if (lookup_num == static_cast<::std::uint32_t>((I) + 1)) \
+   {                                                      \
+      ::std::invoke(::std::forward<F>(fn), obj.FIELD);    \
+      return true;                                        \
+   }
+
+#define PSIO_REFLECT_FOR_EACH_CASE_(r, _, I, FIELD)              \
+   ::std::invoke(::std::forward<F>(fn),                           \
+                 ::std::integral_constant<::std::size_t, (I)>{},  \
+                 ::std::string_view(BOOST_PP_STRINGIZE(FIELD)),   \
+                 obj.FIELD);
+
+// NOTE: this macro takes an *unqualified* type identifier. Invoke
+// PSIO_REFLECT inside the namespace containing the type:
+//
+//     namespace eth {
+//        struct Validator { ... };
+//        PSIO_REFLECT(Validator, pubkey, withdrawal_credentials, ...)
+//     }
+//
+// The macro concatenates the type identifier into a helper struct
+// name, so TYPE must be a simple identifier (no `::`, no templates).
+// Templated types and qualified names will be supported via a larger
+// macro expansion in a later phase; today's phase-1 constraint covers
+// all of v1 psio's existing callers.
+
+// ── Keyword dispatch ──────────────────────────────────────────────────────
+//
+// PSIO_REFLECT accepts three kinds of arguments:
+//
+//   1. A bare identifier              `pubkey`
+//      → registered as a field, name = identifier
+//
+//   2. attr(name, spec_expr)          `attr(items, max<255> | field<3>)`
+//      → registered as a field AND emits the field's annotation
+//      specialisation. `spec_expr` is evaluated inside a constexpr lambda
+//      with `using namespace ::psio3;` in scope so spec helpers
+//      (`max<N>`, `field<N>`, `bytes<N>`, `utf8<N>`, `sorted`, `unique`,
+//      ...) are available unqualified.
+//
+//   3. definitionWillNotChange()      keyword
+//      → emits the type-level `psio::definition_will_not_change`
+//      annotation, contributes nothing to the field list.  Same name as
+//      v1 reflect's flag for source-compatibility.
+//
+// The dispatch uses the v1 PSIO1_MATCH cat-detect pattern: each keyword
+// is recognised by pasting its spelling onto a known prefix and seeing
+// whether the resulting macro is defined.  Bare identifiers fall through
+// to the "field" handler.  Adding a new keyword = one macro definition.
+//
+// `attr` and `definitionWillNotChange` are global preprocessor names.
+// If they collide with a user identifier in the same TU, `#undef` after
+// the REFLECT block.
+
+#define PSIO_PP_FIRST(a, ...) a
+#define PSIO_PP_APPLY_FIRST(a) PSIO_PP_FIRST(a)
+#define PSIO_PP_MATCH(prefix, x) PSIO_PP_MATCH_CHECK(BOOST_PP_CAT(prefix, x))
+#define PSIO_PP_MATCH_CHECK(...) PSIO_PP_MATCH_CHECK_N(__VA_ARGS__, 0, )
+#define PSIO_PP_MATCH_CHECK_N(x, n, r, ...) \
+   BOOST_PP_BITAND(n, BOOST_PP_COMPL(BOOST_PP_CHECK_EMPTY(r)))
+
+// Match table.  Each defined entry expands to `(KIND, payload...), 1`
+// where KIND is one of `attrfield` / `typeattr_dwnc`.
+//
+//   - attr(F, spec_expr)            → (attrfield, F, spec_expr), 1
+//   - definitionWillNotChange()     → (typeattr_dwnc), 1
+//
+// Bare identifiers leave the cat unexpanded → PSIO_PP_MATCH returns 0.
+#define PSIO_REFLECT_KW_attr(F, ...) (attrfield, F, __VA_ARGS__), 1
+#define PSIO_REFLECT_KW_definitionWillNotChange(...) (typeattr_dwnc), 1
+
+// Classify each item into `(KIND, payload...)`.  Bare ident → (field, ident).
+#define PSIO_REFLECT_CLASSIFY(s, _, item)                                  \
+   BOOST_PP_IIF(PSIO_PP_MATCH(PSIO_REFLECT_KW_, item),                    \
+                PSIO_REFLECT_CLASSIFY_KW,                                  \
+                PSIO_REFLECT_CLASSIFY_PLAIN)(item)
+#define PSIO_REFLECT_CLASSIFY_KW(item) \
+   PSIO_PP_APPLY_FIRST(BOOST_PP_CAT(PSIO_REFLECT_KW_, item))
+#define PSIO_REFLECT_CLASSIFY_PLAIN(item) (field, item)
+
+// Field-list filter: keep `field` and `attrfield`; drop `typeattr_*`.
+#define PSIO_REFLECT_KEEP_FIELD(s, _, kt) \
+   BOOST_PP_BITOR(BOOST_PP_EQUAL(0, BOOST_PP_CAT(PSIO_REFLECT_KIND_, BOOST_PP_TUPLE_ELEM(0, kt))), \
+                  BOOST_PP_EQUAL(1, BOOST_PP_CAT(PSIO_REFLECT_KIND_, BOOST_PP_TUPLE_ELEM(0, kt))))
+// Map kind tags to small integers so we can compare without strcmp.
+#define PSIO_REFLECT_KIND_field         0
+#define PSIO_REFLECT_KIND_attrfield     1
+#define PSIO_REFLECT_KIND_typeattr_dwnc 2
+
+// Field-name extractor.  For `(field, F)` and `(attrfield, F, ...)`
+// the name is element 1 of the tuple.
+#define PSIO_REFLECT_NAME_OF(s, _, kt) BOOST_PP_TUPLE_ELEM(1, kt)
+
+// Annotation emitter.  Per-tuple dispatch via cat to a kind-specific
+// emitter that takes (TYPE, kt).  For `field` kind, emits nothing.
+#define PSIO_REFLECT_EMIT_ANN(s, TYPE, kt) \
+   BOOST_PP_CAT(PSIO_REFLECT_EMIT_ANN_, BOOST_PP_TUPLE_ELEM(0, kt))(TYPE, kt)
+
+#define PSIO_REFLECT_EMIT_ANN_field(TYPE, kt) /* no-op */
+
+#define PSIO_REFLECT_EMIT_ANN_attrfield(TYPE, kt)                              \
+   template <>                                                                  \
+   inline constexpr auto ::psio::annotate<&TYPE::BOOST_PP_TUPLE_ELEM(1, kt)> = \
+      [] {                                                                      \
+         using namespace ::psio3;                                                \
+         return ::psio::to_spec_tuple(BOOST_PP_TUPLE_ELEM(2, kt));              \
+      }();
+
+#define PSIO_REFLECT_EMIT_ANN_typeattr_dwnc(TYPE, kt)                          \
+   template <>                                                                  \
+   inline constexpr auto ::psio::annotate<::psio::type<TYPE>{}> =             \
+      ::std::tuple{::psio::definition_will_not_change{}};
+
+#define PSIO_REFLECT(TYPE, ...)                                                          \
+   PSIO_REFLECT_DISPATCH_(                                                               \
+      TYPE,                                                                               \
+      BOOST_PP_SEQ_TRANSFORM(PSIO_REFLECT_CLASSIFY, _,                                   \
+                             BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__)))
+
+#define PSIO_REFLECT_DISPATCH_(TYPE, KIND_SEQ)                                           \
+   PSIO_REFLECT_IMPL_(                                                                   \
+      TYPE,                                                                               \
+      BOOST_PP_SEQ_TRANSFORM(                                                             \
+         PSIO_REFLECT_NAME_OF, _,                                                        \
+         BOOST_PP_SEQ_FILTER(PSIO_REFLECT_KEEP_FIELD, _, KIND_SEQ)))                     \
+   BOOST_PP_SEQ_FOR_EACH(PSIO_REFLECT_EMIT_ANN, TYPE, KIND_SEQ)
+
+#define PSIO_REFLECT_IMPL_(TYPE, SEQ)                                                   \
+   struct BOOST_PP_CAT(psio3_reflect_impl_, TYPE)                                        \
+   {                                                                                     \
+      using type = TYPE;                                                                 \
+      static constexpr bool               is_reflected = true;                           \
+      static constexpr ::std::string_view name         = BOOST_PP_STRINGIZE(TYPE);       \
+      static constexpr ::std::size_t      member_count = BOOST_PP_SEQ_SIZE(SEQ);         \
+                                                                                         \
+      template <::std::size_t Idx>                                                       \
+      static constexpr auto _member_pointer_impl_() noexcept                             \
+      {                                                                                  \
+         BOOST_PP_SEQ_FOR_EACH_I(PSIO_REFLECT_MEMBER_POINTER_CASE_, TYPE, SEQ)          \
+      }                                                                                  \
+      template <::std::size_t Idx>                                                       \
+      static constexpr auto member_pointer = _member_pointer_impl_<Idx>();               \
+                                                                                         \
+      template <::std::size_t Idx>                                                       \
+      static constexpr ::std::string_view _member_name_impl_() noexcept                  \
+      {                                                                                  \
+         BOOST_PP_SEQ_FOR_EACH_I(PSIO_REFLECT_MEMBER_NAME_CASE_, _, SEQ)                \
+      }                                                                                  \
+      template <::std::size_t Idx>                                                       \
+      static constexpr ::std::string_view member_name = _member_name_impl_<Idx>();       \
+                                                                                         \
+      template <::std::size_t Idx>                                                       \
+      static constexpr auto _member_type_impl_() noexcept                                \
+      {                                                                                  \
+         BOOST_PP_SEQ_FOR_EACH_I(PSIO_REFLECT_MEMBER_TYPE_CASE_, TYPE, SEQ)             \
+      }                                                                                  \
+      template <::std::size_t Idx>                                                       \
+      using member_type = typename decltype(_member_type_impl_<Idx>())::type;            \
+                                                                                         \
+      /* Source-order 1-based field numbers. Annotations (phase 2) */                    \
+      /* override per-field via psio::annotate<&T::m>.             */                   \
+      template <::std::size_t Idx>                                                       \
+      static constexpr ::std::uint32_t field_number                                      \
+         = static_cast<::std::uint32_t>(Idx + 1);                                        \
+                                                                                         \
+      static constexpr ::std::array<::std::string_view, member_count> _names_array_      \
+         = {BOOST_PP_SEQ_FOR_EACH_I(PSIO_REFLECT_NAME_ARRAY_ELEM_, _, SEQ)};             \
+                                                                                         \
+      static constexpr ::std::optional<::std::size_t>                                    \
+      index_of(::std::string_view name_) noexcept                                        \
+      {                                                                                  \
+         return ::psio::detail::linear_index_of(_names_array_, name_);                  \
+      }                                                                                  \
+                                                                                         \
+      static constexpr ::std::optional<::std::size_t>                                    \
+      index_of_field_number(::std::uint32_t n) noexcept                                  \
+      {                                                                                  \
+         if (n < 1 || n > member_count) return ::std::nullopt;                           \
+         return static_cast<::std::size_t>(n - 1);                                       \
+      }                                                                                  \
+                                                                                         \
+      template <typename Obj, typename F>                                                \
+      static constexpr bool visit_field_by_name(                                         \
+         Obj& obj, ::std::string_view lookup_name, F&& fn)                               \
+      {                                                                                  \
+         BOOST_PP_SEQ_FOR_EACH_I(PSIO_REFLECT_VISIT_NAME_CASE_, _, SEQ)                 \
+         return false;                                                                   \
+      }                                                                                  \
+                                                                                         \
+      template <typename Obj, typename F>                                                \
+      static constexpr bool visit_field_by_number(                                       \
+         Obj& obj, ::std::uint32_t lookup_num, F&& fn)                                   \
+      {                                                                                  \
+         BOOST_PP_SEQ_FOR_EACH_I(PSIO_REFLECT_VISIT_NUMBER_CASE_, _, SEQ)               \
+         return false;                                                                   \
+      }                                                                                  \
+                                                                                         \
+      template <typename Obj, typename F>                                                \
+      static constexpr void for_each_field(Obj& obj, F&& fn)                             \
+      {                                                                                  \
+         BOOST_PP_SEQ_FOR_EACH_I(PSIO_REFLECT_FOR_EACH_CASE_, _, SEQ)                   \
+      }                                                                                  \
+   };                                                                                    \
+   inline auto psio3_reflect_helper(TYPE*) noexcept                                      \
+   {                                                                                     \
+      return BOOST_PP_CAT(psio3_reflect_impl_, TYPE){};                                  \
+   }

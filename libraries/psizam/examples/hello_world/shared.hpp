@@ -31,15 +31,15 @@
 #include <optional>
 #include <string_view>
 #include <vector>
-#include <psio/guest_attrs.hpp>
-#include <psio/structural.hpp>
-#include <psio/wit_owned.hpp>
+#include <psio1/guest_attrs.hpp>
+#include <psio1/structural.hpp>
+#include <psio1/wit_owned.hpp>
 
-PSIO_PACKAGE(hello, "0.1.0");
-#undef  PSIO_CURRENT_PACKAGE_
-#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(hello)
+PSIO1_PACKAGE(hello, "0.1.0");
+#undef  PSIO1_CURRENT_PACKAGE_
+#define PSIO1_CURRENT_PACKAGE_ PSIO1_PACKAGE_TYPE_(hello)
 
-// point — record type shared across the host/guest boundary. PSIO_REFLECT
+// point — record type shared across the host/guest boundary. PSIO1_REFLECT
 // gives psio's canonical_* machinery the member list it needs to compute
 // size/align/flat_count and drive field-wise lower/lift.
 struct point
@@ -47,11 +47,11 @@ struct point
    uint32_t x{};
    uint32_t y{};
 };
-PSIO_REFLECT(point, x, y)
+PSIO1_REFLECT(point, x, y)
 
 struct env
 {
-   PSIO_IMPORT(env, log_u64)
+   PSIO1_IMPORT(env, log_u64)
    static void log_u64(uint64_t n);
 
    static void     log_string(std::string_view msg);
@@ -60,11 +60,11 @@ struct env
 
 struct clock_api
 {
-   PSIO_IMPORT(clock_api, now)
+   PSIO1_IMPORT(clock_api, now)
    static uint64_t now();
 };
 
-// greeter — declarations only. On the guest, PSIO_MODULE emits the
+// greeter — declarations only. On the guest, PSIO1_MODULE emits the
 // canonical-ABI export thunks from an impl class (see guest.cpp); on
 // the host, the reflected proxy invokes them via vm.as<greeter>().
 struct greeter
@@ -82,11 +82,11 @@ struct greeter
    static wit::vector<point>    make_grid(uint32_t w, uint32_t h);
 };
 
-PSIO_INTERFACE(env,       types(), funcs(func(log_u64,           value),
+PSIO1_INTERFACE(env,       types(), funcs(func(log_u64,           value),
                                         func(log_string,        msg),
                                         func(sum_points_host,   a, b)))
-PSIO_INTERFACE(clock_api, types(), funcs(func(now)))
-PSIO_INTERFACE(greeter,   types(point),
+PSIO1_INTERFACE(clock_api, types(), funcs(func(now)))
+PSIO1_INTERFACE(greeter,   types(point),
                           funcs(func(run,         count),
                                 func(concat,      a, b),
                                 func(add,         a, b, c),

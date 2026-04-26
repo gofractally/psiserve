@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "libraries/psio/rust/psio-macros",
+    "libraries/psio1/rust/psio1-macros",
+    "libraries/psio1/rust/psio1",
+    "libraries/psio1/rust/psio1-tool",
     "libraries/psio/rust/psio",
-    "libraries/psio/rust/psio-tool",
-    "libraries/psio3/rust/psio3",
     "libraries/wit-macro",
     "libraries/wit-test-component",
 ]

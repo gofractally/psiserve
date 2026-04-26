@@ -3,7 +3,7 @@
 // Symmetrical to guest.cpp: both files are impls against shared.hpp,
 // written (in real life) by different people. This one provides the
 // C++-native implementations of the `env` and `clock_api` interfaces
-// declared in shared.hpp, registers them with PSIO_HOST_MODULE, and drives
+// declared in shared.hpp, registers them with PSIO1_HOST_MODULE, and drives
 // the psizam engine that loads the guest wasm and calls into it.
 
 #include <psizam/hosted.hpp>
@@ -43,7 +43,7 @@ struct Host
    std::uint64_t now() { return fake_clock; }
 };
 
-PSIO_HOST_MODULE(Host,
+PSIO1_HOST_MODULE(Host,
           interface(env,       log_u64, log_string, sum_points_host),
           interface(clock_api, now))
 

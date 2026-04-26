@@ -49,7 +49,7 @@ struct RuntimeHost
    int           log_string_calls  = 0;
 };
 
-PSIO_HOST_MODULE(RuntimeHost, interface(env, log_u64, log_string))
+PSIO1_HOST_MODULE(RuntimeHost, interface(env, log_u64, log_string))
 
 // ── WASM loading helper ─────────────────────────────────────────────────────
 
@@ -128,7 +128,7 @@ struct live_runtime
       policy.initial = Tier::value;
 
       // Prepare + provide both sides. provide<>() walks
-      // PSIO_HOST_MODULE(RuntimeHost, ...) and registers env::log_u64 /
+      // PSIO1_HOST_MODULE(RuntimeHost, ...) and registers env::log_u64 /
       // env::log_string on each module's host function table.
       provider_mod = rt.prepare(psizam::wasm_bytes{provider_bytes}, policy);
       consumer_mod = rt.prepare(psizam::wasm_bytes{consumer_bytes}, policy);

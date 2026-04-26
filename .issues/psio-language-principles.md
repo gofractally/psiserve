@@ -148,8 +148,8 @@ Applies to every language implementation of psio:
    for that language. No "we're almost as fast" acceptance.
 
 6. **Schema definitions round-trip in each format.** Every format
-   provides parse-schema (text → `psio::schema`) and
-   emit-schema (`psio::schema` → text). A schema loaded from WIT,
+   provides parse-schema (text → `psio1::schema`) and
+   emit-schema (`psio1::schema` → text). A schema loaded from WIT,
    emitted back to WIT, re-parsed, re-emitted must byte-equal the
    original modulo whitespace/comments.
 
@@ -183,13 +183,13 @@ language and where status currently stands.
 
 | # | Principle | Realization | Status |
 |---|---|---|---|
-| 0 | Schema-is-contract | `psio schema-import x.wit > x.hpp` emits struct + PSIO_REFLECT; `static_assert(reflect<T>::schema() == parse_schema(path))` enforces contract; user-owned file | CLI not built; static_assert machinery is implied by § 5.2.6 |
-| 1 | Native reflection / codegen | C++26 `std::meta::` + `template for` when available; PSIO_REFLECT macro today with identical surface via `psio::reflect<T>` | design spec'd, step 1 pending |
-| 2 | Views mimic native access | `v.field()` direct; storage ops are free functions (`psio::bytes(v)`). No `operator->`. Rich wrapper types opt-in | spec'd, see `psio-v2-design.md` § 4.1, § 5.5 |
-| 3 | Perf + DX | Zero-cost templates; memcpy fast paths for POD layouts; single API surface via `psio::encode<Fmt>(v)` | partial: v1 has the perf; v2 unifies the surface |
-| 4 | Reflection → schema | `reflect<T>::schema()` consteval → `psio::schema`; schema emitters consteval → text | spec'd |
+| 0 | Schema-is-contract | `psio schema-import x.wit > x.hpp` emits struct + PSIO1_REFLECT; `static_assert(reflect<T>::schema() == parse_schema(path))` enforces contract; user-owned file | CLI not built; static_assert machinery is implied by § 5.2.6 |
+| 1 | Native reflection / codegen | C++26 `std::meta::` + `template for` when available; PSIO1_REFLECT macro today with identical surface via `psio1::reflect<T>` | design spec'd, step 1 pending |
+| 2 | Views mimic native access | `v.field()` direct; storage ops are free functions (`psio1::bytes(v)`). No `operator->`. Rich wrapper types opt-in | spec'd, see `psio-v2-design.md` § 4.1, § 5.5 |
+| 3 | Perf + DX | Zero-cost templates; memcpy fast paths for POD layouts; single API surface via `psio1::encode<Fmt>(v)` | partial: v1 has the perf; v2 unifies the surface |
+| 4 | Reflection → schema | `reflect<T>::schema()` consteval → `psio1::schema`; schema emitters consteval → text | spec'd |
 | 5 | Best-of-class perf | Bench parity vs sszpp (C++), capnp (C++), flatbuffers C++, protobuf C++ | v1 ahead of sszpp; others TBD |
-| 6 | Schema round-trip | `parse_wit`, `parse_capnp`, `parse_fbs` → `psio::schema` → `emit_*` → text. Byte-equal modulo whitespace | parsers exist (v1); unified via schema value in v2 |
+| 6 | Schema round-trip | `parse_wit`, `parse_capnp`, `parse_fbs` → `psio1::schema` → `emit_*` → text. Byte-equal modulo whitespace | parsers exist (v1); unified via schema value in v2 |
 
 ### 3.2 Rust (tier 1)
 

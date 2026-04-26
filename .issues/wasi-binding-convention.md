@@ -46,11 +46,11 @@ bindings for WASI Preview 2 (sockets, clocks, filesystem, http, cli,
 io, random). They map the WIT IDL to C++ types + static methods.
 
 What the psio macros do (and what they do not):
-- `PSIO_REFLECT(T, ...)` — records the shape of hand-authored enums
+- `PSIO1_REFLECT(T, ...)` — records the shape of hand-authored enums
   and structs for fracpack / JSON / schema emission.
-- `PSIO_PACKAGE(name, version)` — registers a package tag.
-- `PSIO_INTERFACE(name, types(...), funcs(...))` — expands (via
-  Boost.PP) into a `psio::detail::interface_info` specialization
+- `PSIO1_PACKAGE(name, version)` — registers a package tag.
+- `PSIO1_INTERFACE(name, types(...), funcs(...))` — expands (via
+  Boost.PP) into a `psio1::detail::interface_info` specialization
   that captures `decltype(&name::method)`, method names, param
   names, and synthesizes a proxy template. It does not emit the
   host-side method declarations or the types.
@@ -124,7 +124,7 @@ Whether the long-term WASI binding story is:
 2. **Adopt or build a WIT → C++ generator** — a C++-side analogue
    of `wit-macro`. Parse `.wit`, emit the enums, the struct +
    `static inline` method signatures, and the
-   `PSIO_PACKAGE` / `PSIO_INTERFACE` registration calls. Options:
+   `PSIO1_PACKAGE` / `PSIO1_INTERFACE` registration calls. Options:
    a. Upstream `wit-bindgen-cpp` — needs a post-pass to emit
       PSIO macros alongside the generated types.
    b. A psiserve-native Rust tool that reuses the `wit-parser`

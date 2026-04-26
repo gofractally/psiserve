@@ -9,9 +9,9 @@ Generated 2026-04-23. Updates whenever a format's Rust impl changes.
 | **fracpack** | ✅ full | ✅ full | — (psio-native) | ✅ 6 shapes byte-identical |
 | **pssz** | ✅ full | ✅ **full parity** (primitives, ext-int, arrays, bounded, bit types, structs, widths, min/max size, auto-format) | — (new) | ✅ **7+ shapes** incl. nested structs |
 | **ssz** | ✅ full + view + validate | ✅ **full parity** (primitives, ext-int, arrays, bounded, bit types, structs, views, validate) | OffchainLabs/sszpp (C++) benched: psio 1.47× enc, 2.04× dec | ✅ **14+ shapes byte-identical** incl. Phase 0 Validator |
-| **capnp** | ✅ psio views + native libcapnp | ✅ `psio::capnp` native | libcapnp (C++) benched: psio 3-45× faster | ⚠ Rust self-verify only |
-| **flatbuf** | ✅ psio reflect + native flatbuf | ✅ `psio::flatbuf` native | libflatbuffers benched: psio ≥ parity | ⚠ Rust self-verify only |
-| **wit** | ✅ canonical_abi | ✅ `psio::wit` full | wit-bindgen / wasm-tools — not benched | ⚠ Rust self-verify only |
+| **capnp** | ✅ psio views + native libcapnp | ✅ `psio1::capnp` native | libcapnp (C++) benched: psio 3-45× faster | ⚠ Rust self-verify only |
+| **flatbuf** | ✅ psio reflect + native flatbuf | ✅ `psio1::flatbuf` native | libflatbuffers benched: psio ≥ parity | ⚠ Rust self-verify only |
+| **wit** | ✅ canonical_abi | ✅ `psio1::wit` full | wit-bindgen / wasm-tools — not benched | ⚠ Rust self-verify only |
 | **bincode** | ✅ encoder + decoder | ❌ **missing** | `bincode` crate (rust) — not cross-checked | ⚠ C++ fixtures recorded only |
 | **borsh** | ✅ encoder + decoder | ❌ **missing** | `borsh` crate (rust) — not cross-checked | ⚠ C++ fixtures recorded only |
 | **avro** | ✅ encoder + decoder | ❌ **missing** | `apache-avro` crate (rust) — not cross-checked | ⚠ C++ fixtures recorded only |
@@ -20,12 +20,12 @@ Generated 2026-04-23. Updates whenever a format's Rust impl changes.
 
 "byte-identical" means the Rust encoder produces the exact same bytes as
 the C++ encoder for the same logical input, verified by a cross-validation
-test in `libraries/psio/rust/psio/src/cross_validation_tests.rs` (or the
+test in `libraries/psio1/rust/psio/src/cross_validation_tests.rs` (or the
 pssz test module).
 
 ## Test coverage details
 
-### C++ tests — `libraries/psio/cpp/tests/`
+### C++ tests — `libraries/psio1/cpp/tests/`
 
 | File | Subject | Cases |
 |---|---|---:|
@@ -35,7 +35,7 @@ pssz test module).
 | `validate_frac_tests.cpp` | validator edge cases | ~30 |
 | `view_tests.cpp` | frac_view zero-copy | ~25 |
 | `frac_ref_tests.cpp` | frac_ref mutable view | ~10 |
-| `psio_structural_tests.cpp` | PSIO_REFLECT coverage | ~20 |
+| `psio_structural_tests.cpp` | PSIO1_REFLECT coverage | ~20 |
 | `psio_attribute_tests.cpp` | field attributes | ~10 |
 | `ssz_tests.cpp` | SSZ round-trip | ~28 |
 | `pssz_tests.cpp` | pssz round-trip + view | 10 |
@@ -57,7 +57,7 @@ pssz test module).
 
 **Total: ~700 cases, 83K assertions.**
 
-### Rust tests — `libraries/psio/rust/psio/src/`
+### Rust tests — `libraries/psio1/rust/psio/src/`
 
 | File | Subject | Cases |
 |---|---|---:|
@@ -83,7 +83,7 @@ pssz test module).
 ### High-impact gaps
 
 1. **SSZ — bootstrap port now in place (2026-04-23).** Rust module
-   `libraries/psio/rust/psio/src/ssz.rs` covers primitives (int/uint
+   `libraries/psio1/rust/psio/src/ssz.rs` covers primitives (int/uint
    8/16/32/64, f32, f64, bool), String, Vec, Option. 11 tests total,
    6 cross-validate against C++ hex fixtures and produce byte-identical
    output.
@@ -194,9 +194,9 @@ All formats: `efbeadde`.
 ## Commits and files touched this audit
 
 - `/tmp/xval/emit_fixtures.cpp` — fixture generator (temp, not committed)
-- `libraries/psio/rust/psio/src/cross_validation_tests.rs` — new,
+- `libraries/psio1/rust/psio/src/cross_validation_tests.rs` — new,
   6 fracpack cross-val tests
-- `libraries/psio/rust/psio/src/lib.rs` — registered the module
+- `libraries/psio1/rust/psio/src/lib.rs` — registered the module
 - `.issues/format-parity-audit.md` — this file
 
 All 534 Rust tests pass (528 prior + 6 new cross-val). All 703 C++ tests pass.

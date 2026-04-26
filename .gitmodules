@@ -4,8 +4,8 @@
 [submodule "external/quill"]
 	path = external/quill
 	url = https://github.com/odygrd/quill.git
-[submodule "libraries/psio/cpp/external/rapidjson"]
-	path = libraries/psio/cpp/external/rapidjson
+[submodule "libraries/psio1/cpp/external/rapidjson"]
+	path = libraries/psio1/cpp/external/rapidjson
 	url = https://github.com/Tencent/rapidjson.git
 [submodule "libraries/psizam/tests/spec/testsuite"]
 	path = libraries/psizam/tests/spec/testsuite

@@ -1,5 +1,5 @@
 // contract_guest.cpp — minimal smart contract.
-// Pure C exports, no PSIO_MODULE, no guest_alloc, no std::vector.
+// Pure C exports, no PSIO1_MODULE, no guest_alloc, no std::vector.
 // Minimal memory footprint to avoid nested guard-page conflicts.
 
 #include <stdint.h>

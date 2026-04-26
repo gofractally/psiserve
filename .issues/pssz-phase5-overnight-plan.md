@@ -37,7 +37,7 @@ User went to bed 2026-04-23. Wants full report in the morning covering:
   - pssz encode/decode
   - Varint/bincode/borsh/avro if applicable
 - [ ] Port the highest-leverage missing piece (likely pssz since it's new and benefits from matched design)
-- [ ] Cargo test passes on `libraries/psio/rust/`
+- [ ] Cargo test passes on `libraries/psio1/rust/`
 - [ ] Round-trip compatibility test: encode in C++, decode in Rust (and vice-versa) for at least one pssz type
 
 ### 5d: Report

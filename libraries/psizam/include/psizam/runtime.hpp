@@ -294,7 +294,7 @@ public:
 
    // ── Host interface registration ─────────────────────────────────
    // Registers host C++ methods as imports for a prepared module.
-   // Uses PSIO_HOST_MODULE reflection to walk interfaces and register
+   // Uses PSIO1_HOST_MODULE reflection to walk interfaces and register
    // each method with the module's host function table.
    template <typename HostImpl>
    void provide(module_handle& mod, HostImpl& host);
@@ -356,14 +356,14 @@ auto instance::as() {
    // the proxy works for any backend kind (interpreter / jit / jit2 /
    // jit_llvm). The adapter no longer carries a typed Backend
    // parameter; it routes everything through the abstract base.
-   using info    = ::psio::detail::interface_info<Tag>;
+   using info    = ::psio1::detail::interface_info<Tag>;
    using adapter = detail::void_proxy_adapter_erased<info>;
    using proxy_t = typename info::template proxy<adapter>;
    return proxy_t{*get_instance_be(), host_ptr()};
 }
 
 // ── provide<HostImpl> ───────────────────────────────────────────────
-// Walks PSIO_HOST_MODULE interfaces and registers each method with the
+// Walks PSIO1_HOST_MODULE interfaces and registers each method with the
 // module's host function table. Scalar methods get fast trampolines
 // (natural arg count, direct call). Canonical methods (strings, records,
 // lists) get the 16-wide handler with type-specialized lift/lower.
@@ -401,7 +401,7 @@ namespace detail_runtime {
                std::remove_const_t<decltype(method_ptr)>>;
             using ReturnType = typename MType::ReturnType;
 
-            ::psio::native_value slots[16];
+            ::psio1::native_value slots[16];
             for (int i = 0; i < 16; ++i)
                slots[i].i64 = args[i].i64;
 
@@ -412,7 +412,7 @@ namespace detail_runtime {
             using MemPtrType = std::remove_const_t<decltype(method_ptr)>;
             auto fn_args = [&]<typename H, typename R, typename... As>(R (H::*)(As...)) {
                return detail::lift_canonical_args<method_ptr>(
-                  lift, ::psio::TypeList<std::remove_cvref_t<As>...>{});
+                  lift, ::psio1::TypeList<std::remove_cvref_t<As>...>{});
             }(MemPtrType{});
 
             if constexpr (std::is_void_v<ReturnType>) {
@@ -457,7 +457,7 @@ namespace detail_runtime {
    void register_one_interface(host_function_table& table, HostImpl* host_ptr)
    {
       using iface_tag  = typename IfaceImpl::tag;
-      using iface_info = ::psio::detail::interface_info<iface_tag>;
+      using iface_info = ::psio1::detail::interface_info<iface_tag>;
       constexpr auto n =
          std::tuple_size_v<std::remove_cvref_t<decltype(IfaceImpl::methods)>>;
       register_iface_methods<IfaceImpl>(
@@ -480,7 +480,7 @@ namespace detail_runtime {
    template <typename R, typename... Args>
    struct bind_fn_traits<R(*)(Args...)> {
       using ReturnType = R;
-      using ArgTypes   = ::psio::TypeList<std::remove_cvref_t<Args>...>;
+      using ArgTypes   = ::psio1::TypeList<std::remove_cvref_t<Args>...>;
       static constexpr bool all_scalar =
          detail::is_scalar_wasm_type_v<R> &&
          (detail::is_scalar_wasm_type_v<std::remove_cvref_t<Args>> && ...);
@@ -577,7 +577,7 @@ namespace detail_runtime {
       module_handle_impl* consumer_mod,
       std::index_sequence<Is...>)
    {
-      using info = ::psio::detail::interface_info<InterfaceTag>;
+      using info = ::psio1::detail::interface_info<InterfaceTag>;
       using func_types = typename info::func_types;
 
       (register_bind_entry<std::tuple_element_t<Is, func_types>>(
@@ -590,7 +590,7 @@ template <typename InterfaceTag>
 void runtime::bind(module_handle& consumer_mod, instance& provider) {
    if (!consumer_mod || !provider) return;
 
-   using info = ::psio::detail::interface_info<InterfaceTag>;
+   using info = ::psio1::detail::interface_info<InterfaceTag>;
    constexpr auto N = info::func_names.size();
 
    detail_runtime::bind_interface_methods<InterfaceTag>(
@@ -612,9 +612,9 @@ void runtime::provide(module_handle& mod, HostImpl& host) {
    // interpreter's slow_dispatch path tolerates null; JIT does not).
    mod.set_host_ptr(&host);
 
-   if constexpr (requires { typename ::psio::detail::impl_info<HostImpl>::interfaces; })
+   if constexpr (requires { typename ::psio1::detail::impl_info<HostImpl>::interfaces; })
    {
-      using interfaces = typename ::psio::detail::impl_info<HostImpl>::interfaces;
+      using interfaces = typename ::psio1::detail::impl_info<HostImpl>::interfaces;
       [&]<typename... IfaceImpls>(std::tuple<IfaceImpls...>*) {
          (detail_runtime::register_one_interface<IfaceImpls>(mod.table(), &host), ...);
       }(static_cast<interfaces*>(nullptr));

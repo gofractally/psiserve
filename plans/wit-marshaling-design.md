@@ -11,7 +11,7 @@ Two WASM modules need to call each other's functions with rich types (records, s
 
 ## Design Goals
 
-- **Single-macro developer experience** for C++ modules: `PSIO_REFLECT` + `PSIZAM_COMPONENT` generates WIT and embeds it in the WASM binary. No external code generation tools.
+- **Single-macro developer experience** for C++ modules: `PSIO1_REFLECT` + `PSIZAM_COMPONENT` generates WIT and embeds it in the WASM binary. No external code generation tools.
 - **Auto-detected calling conventions** so the host can wire up modules using different marshaling strategies without manual configuration.
 - **Zero-alloc dispatch for simple types** using stack-allocated C struct views into WASM memory.
 - **Fracpack fallback for complex types** when zero-alloc views aren't possible.
@@ -54,13 +54,13 @@ struct my_api {
     std::string greet(std::string name);
     uint64_t    add(uint32_t a, uint32_t b);
 };
-PSIO_REFLECT(my_api, method(greet, name), method(add, a, b))
+PSIO1_REFLECT(my_api, method(greet, name), method(add, a, b))
 PSIZAM_COMPONENT(my_api)
 ```
 
 `PSIZAM_COMPONENT` does two things:
 
-1. **Generates WIT at compile time** using `constexpr` functions over `psio::reflect<T>` and embeds it in a `component-type` custom section in the WASM binary.
+1. **Generates WIT at compile time** using `constexpr` functions over `psio1::reflect<T>` and embeds it in a `component-type` custom section in the WASM binary.
 2. **Emits a convention tag** alongside the WIT indicating how this module's exports encode their parameters (canonical, fracpack, or proxy_type).
 
 ### constexpr WIT Generation
@@ -76,7 +76,7 @@ template<typename T>
 consteval auto wit_string() {
     // C++23 allows transient constexpr std::string inside consteval
     std::string s;
-    // iterate psio::reflect<T>::data_members, member_functions
+    // iterate psio1::reflect<T>::data_members, member_functions
     // map C++ types to WIT types: uint32_t→u32, std::string→string, etc.
     // build .wit text
     std::array<char, wit_size<T>()> buf{};
@@ -85,7 +85,7 @@ consteval auto wit_string() {
 }
 ```
 
-PSIO_REFLECT's member names and type metadata are compile-time constants (string literals, member pointers). The type mapping is trivially constexpr:
+PSIO1_REFLECT's member names and type metadata are compile-time constants (string literals, member pointers). The type mapping is trivially constexpr:
 
 | C++ Type | WIT Type |
 |----------|----------|
@@ -97,7 +97,7 @@ PSIO_REFLECT's member names and type metadata are compile-time constants (string
 | `std::optional<T>` | `option<T>` |
 | `std::variant<T...>` | `variant { ... }` |
 | `std::tuple<T...>` | `tuple<T...>` |
-| PSIO_REFLECT struct | `record { field: type, ... }` |
+| PSIO1_REFLECT struct | `record { field: type, ... }` |
 
 ### Embedding in WASM Binary
 
@@ -362,8 +362,8 @@ For functions exceeding 16 flat values, `a0` is a pointer to a memory-spilled st
 
 ```cpp
 #define PZAM_COMPONENT(Class, ...) \
-    /* 1. PSIO_REFLECT for the class */ \
-    PSIO_REFLECT(Class, __VA_ARGS__) \
+    /* 1. PSIO1_REFLECT for the class */ \
+    PSIO1_REFLECT(Class, __VA_ARGS__) \
     /* 2. Static instance */ \
     static Class _pzam_impl; \
     /* 3. constexpr WIT embedded in custom section */ \
@@ -562,9 +562,9 @@ This is structural validation only. The host cannot verify that the module's cod
 
 ### Phase 2: constexpr WIT Generation + PZAM_COMPONENT Macro
 
-- Implement `consteval wit_string<T>()` using `psio::reflect<T>`
+- Implement `consteval wit_string<T>()` using `psio1::reflect<T>`
 - Implement `ComponentProxy<T>::call<MemberPtr>` — type-driven dispatch via member pointer introspection
-- Implement `PZAM_COMPONENT` macro: PSIO_REFLECT + constexpr WIT in custom section + `cabi_realloc` + 16-wide `extern "C"` exports
+- Implement `PZAM_COMPONENT` macro: PSIO1_REFLECT + constexpr WIT in custom section + `cabi_realloc` + 16-wide `extern "C"` exports
 - Test: compile calculator component to WASM, verify WIT readable by `wasm-tools component wit`, verify exports are callable
 
 ### Phase 3: Host-Side Marshaling

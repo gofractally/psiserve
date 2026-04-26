@@ -232,7 +232,7 @@ From native:
 
 ```cpp
 T obj;
-auto m = psio3::make_mutable<F>(obj);
+auto m = psio::make_mutable<F>(obj);
 ```
 
 - fixed fields can borrow native member addresses
@@ -242,7 +242,7 @@ auto m = psio3::make_mutable<F>(obj);
 From encoded bytes:
 
 ```cpp
-auto m = psio3::make_mutable<T>(F{}, bytes);
+auto m = psio::make_mutable<T>(F{}, bytes);
 ```
 
 - fixed fields borrow or own the wire fixed region
@@ -385,34 +385,34 @@ slots as user data.
 ## Public Surface Sketch
 
 ```cpp
-std::vector<char> bytes = psio3::encode(psio3::frac32{}, acct);
+std::vector<char> bytes = psio::encode(psio::frac32{}, acct);
 
-psio3::mutable<Account, psio3::frac32> m{
-   psio3::owned_buffer{std::move(bytes)}};
+psio::mutable<Account, psio::frac32> m{
+   psio::owned_buffer{std::move(bytes)}};
 
 m.name().assign("alice");
 m.balance().amount().set(100);
 
-auto canonical = psio3::canonicalize(m);
+auto canonical = psio::canonicalize(m);
 ```
 
 Borrowed mutable buffer:
 
 ```cpp
 std::span<char> bytes = ...;
-auto m = psio3::make_mutable<Account>(psio3::frac32{}, bytes);
+auto m = psio::make_mutable<Account>(psio::frac32{}, bytes);
 
 m.fixed_field().set(7);   // in-place if wire-fixed
 m.name().assign("bob");   // allocates side storage; original span cannot grow
 
-auto canonical = psio3::canonicalize(m);
+auto canonical = psio::canonicalize(m);
 ```
 
 Subfields return views/proxies:
 
 ```cpp
-psio3::mutable_view<std::string, psio3::frac32> name = m.name();
-psio3::mutable_view<Balance, psio3::frac32>     bal  = m.balance();
+psio::mutable_view<std::string, psio::frac32> name = m.name();
+psio::mutable_view<Balance, psio::frac32>     bal  = m.balance();
 ```
 
 ## Related Patterns

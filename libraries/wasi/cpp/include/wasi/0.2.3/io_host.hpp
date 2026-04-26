@@ -14,8 +14,8 @@
 #include <psiber/scheduler.hpp>
 #include <psiber/types.hpp>
 #include <psizam/handle_table.hpp>
-#include <psio/structural.hpp>
-#include <psio/wit_resource.hpp>
+#include <psio1/structural.hpp>
+#include <psio1/wit_resource.hpp>
 
 #include <cerrno>
 #include <cstring>
@@ -60,14 +60,14 @@ struct WasiIoHost
 
    // ── Factory methods (called by sockets/filesystem hosts) ──────────
 
-   psio::own<input_stream> create_input_stream(RealFd fd)
+   psio1::own<input_stream> create_input_stream(RealFd fd)
    {
-      return psio::own<input_stream>{istreams.create(stream_data{fd})};
+      return psio1::own<input_stream>{istreams.create(stream_data{fd})};
    }
 
-   psio::own<output_stream> create_output_stream(RealFd fd)
+   psio1::own<output_stream> create_output_stream(RealFd fd)
    {
-      return psio::own<output_stream>{ostreams.create(stream_data{fd})};
+      return psio1::own<output_stream>{ostreams.create(stream_data{fd})};
    }
 
    void close_stream_fd(RealFd fd)
@@ -78,7 +78,7 @@ struct WasiIoHost
 
    // ── wasi:io/error ─────────────────────────────────────────────────
 
-   std::vector<uint8_t> error_to_debug_string(psio::borrow<io_error> self)
+   std::vector<uint8_t> error_to_debug_string(psio1::borrow<io_error> self)
    {
       auto* e = errors.get(self.handle);
       if (!e)
@@ -88,7 +88,7 @@ struct WasiIoHost
 
    // ── wasi:io/poll ──────────────────────────────────────────────────
 
-   bool pollable_ready(psio::borrow<pollable> self)
+   bool pollable_ready(psio1::borrow<pollable> self)
    {
       auto* p = pollables.get(self.handle);
       if (!p)
@@ -106,7 +106,7 @@ struct WasiIoHost
       return r > 0;
    }
 
-   void pollable_block(psio::borrow<pollable> self)
+   void pollable_block(psio1::borrow<pollable> self)
    {
       auto* p = pollables.get(self.handle);
       if (!p)
@@ -114,7 +114,7 @@ struct WasiIoHost
       Scheduler::current().yield(p->fd, p->events);
    }
 
-   std::vector<uint32_t> poll(std::vector<psio::borrow<pollable>> in)
+   std::vector<uint32_t> poll(std::vector<psio1::borrow<pollable>> in)
    {
       auto check_ready = [&](uint32_t idx) -> bool {
          auto* p = pollables.get(in[idx].handle);
@@ -165,7 +165,7 @@ struct WasiIoHost
    // ── wasi:io/streams — input-stream ────────────────────────────────
 
    wasi_result<std::vector<uint8_t>> input_stream_read(
-       psio::borrow<input_stream> self, uint64_t len)
+       psio1::borrow<input_stream> self, uint64_t len)
    {
       auto* s = istreams.get(self.handle);
       if (!s || s->closed)
@@ -192,7 +192,7 @@ struct WasiIoHost
    }
 
    wasi_result<std::vector<uint8_t>> input_stream_blocking_read(
-       psio::borrow<input_stream> self, uint64_t len)
+       psio1::borrow<input_stream> self, uint64_t len)
    {
       auto* s = istreams.get(self.handle);
       if (!s || s->closed)
@@ -220,7 +220,7 @@ struct WasiIoHost
    }
 
    wasi_result<uint64_t> input_stream_skip(
-       psio::borrow<input_stream> self, uint64_t len)
+       psio1::borrow<input_stream> self, uint64_t len)
    {
       auto result = input_stream_read(self, len);
       if (result.index() == 0)
@@ -229,7 +229,7 @@ struct WasiIoHost
    }
 
    wasi_result<uint64_t> input_stream_blocking_skip(
-       psio::borrow<input_stream> self, uint64_t len)
+       psio1::borrow<input_stream> self, uint64_t len)
    {
       auto result = input_stream_blocking_read(self, len);
       if (result.index() == 0)
@@ -237,17 +237,17 @@ struct WasiIoHost
       return wasi_io_detail::err<uint64_t>(std::get<1>(result));
    }
 
-   psio::own<pollable> input_stream_subscribe(psio::borrow<input_stream> self)
+   psio1::own<pollable> input_stream_subscribe(psio1::borrow<input_stream> self)
    {
       auto* s = istreams.get(self.handle);
       if (!s || s->closed)
-         return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
-      return psio::own<pollable>{pollables.create(pollable_data{s->fd, Readable})};
+         return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+      return psio1::own<pollable>{pollables.create(pollable_data{s->fd, Readable})};
    }
 
    // ── wasi:io/streams — output-stream ───────────────────────────────
 
-   wasi_result<uint64_t> output_stream_check_write(psio::borrow<output_stream> self)
+   wasi_result<uint64_t> output_stream_check_write(psio1::borrow<output_stream> self)
    {
       auto* s = ostreams.get(self.handle);
       if (!s || s->closed)
@@ -257,7 +257,7 @@ struct WasiIoHost
    }
 
    wasi_result_void output_stream_write(
-       psio::borrow<output_stream> self, std::vector<uint8_t> contents)
+       psio1::borrow<output_stream> self, std::vector<uint8_t> contents)
    {
       auto* s = ostreams.get(self.handle);
       if (!s || s->closed)
@@ -290,12 +290,12 @@ struct WasiIoHost
    }
 
    wasi_result_void output_stream_blocking_write_and_flush(
-       psio::borrow<output_stream> self, std::vector<uint8_t> contents)
+       psio1::borrow<output_stream> self, std::vector<uint8_t> contents)
    {
       return output_stream_write(self, std::move(contents));
    }
 
-   wasi_result_void output_stream_flush(psio::borrow<output_stream> self)
+   wasi_result_void output_stream_flush(psio1::borrow<output_stream> self)
    {
       auto* s = ostreams.get(self.handle);
       if (!s || s->closed)
@@ -303,21 +303,21 @@ struct WasiIoHost
       return wasi_io_detail::ok();
    }
 
-   wasi_result_void output_stream_blocking_flush(psio::borrow<output_stream> self)
+   wasi_result_void output_stream_blocking_flush(psio1::borrow<output_stream> self)
    {
       return output_stream_flush(self);
    }
 
-   psio::own<pollable> output_stream_subscribe(psio::borrow<output_stream> self)
+   psio1::own<pollable> output_stream_subscribe(psio1::borrow<output_stream> self)
    {
       auto* s = ostreams.get(self.handle);
       if (!s || s->closed)
-         return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
-      return psio::own<pollable>{pollables.create(pollable_data{s->fd, Writable})};
+         return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+      return psio1::own<pollable>{pollables.create(pollable_data{s->fd, Writable})};
    }
 
    wasi_result_void output_stream_write_zeroes(
-       psio::borrow<output_stream> self, uint64_t len)
+       psio1::borrow<output_stream> self, uint64_t len)
    {
       uint64_t cap = len > 65536 ? 65536 : len;
       std::vector<uint8_t> zeroes(cap, 0);
@@ -325,13 +325,13 @@ struct WasiIoHost
    }
 
    wasi_result_void output_stream_blocking_write_zeroes_and_flush(
-       psio::borrow<output_stream> self, uint64_t len)
+       psio1::borrow<output_stream> self, uint64_t len)
    {
       return output_stream_write_zeroes(self, len);
    }
 
    wasi_result<uint64_t> output_stream_splice(
-       psio::borrow<output_stream> self, psio::borrow<input_stream> src, uint64_t len)
+       psio1::borrow<output_stream> self, psio1::borrow<input_stream> src, uint64_t len)
    {
       auto read_result = input_stream_read(src, len);
       if (read_result.index() == 1)
@@ -347,7 +347,7 @@ struct WasiIoHost
    }
 
    wasi_result<uint64_t> output_stream_blocking_splice(
-       psio::borrow<output_stream> self, psio::borrow<input_stream> src, uint64_t len)
+       psio1::borrow<output_stream> self, psio1::borrow<input_stream> src, uint64_t len)
    {
       auto read_result = input_stream_blocking_read(src, len);
       if (read_result.index() == 1)
@@ -365,7 +365,7 @@ struct WasiIoHost
 
 }  // namespace wasi_host
 
-PSIO_HOST_MODULE(wasi_host::WasiIoHost,
+PSIO1_HOST_MODULE(wasi_host::WasiIoHost,
    interface(wasi_io_error, error_to_debug_string),
    interface(wasi_io_poll, pollable_ready, pollable_block, poll),
    interface(wasi_io_streams,

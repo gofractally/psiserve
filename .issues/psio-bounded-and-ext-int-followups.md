@@ -4,8 +4,8 @@
 
 Phase A1–A2.5 (completed in the 2026-04-23 session) added:
 
-- `psio::uint128`, `psio::int128`, `psio::uint256` (ext int types)
-- `psio::bounded_list<T, N>`, `psio::bounded_string<N>`, `psio::bounded_bytes<N>`
+- `psio1::uint128`, `psio1::int128`, `psio1::uint256` (ext int types)
+- `psio1::bounded_list<T, N>`, `psio1::bounded_string<N>`, `psio1::bounded_bytes<N>`
 - `schema_types::BoundedList { type, maxCount }`
 - `SchemaBuilder` branches for all of the above
 - WIT emission for `BoundedList` via `list<T>/* @psio:max=N */` comment
@@ -43,7 +43,7 @@ formats losing the bound.
 
 ## 2. Rust `DynamicSchema` BoundedList variant
 
-`libraries/psio/rust/psio/src/dynamic_schema.rs` has a `DynamicType`
+`libraries/psio1/rust/psio/src/dynamic_schema.rs` has a `DynamicType`
 enum that currently lacks a bounded-list variant. Needs:
 
 - `DynamicType::BoundedList { inner: Box<DynamicType>, max_count: u64 }`
@@ -63,8 +63,8 @@ needs a decision on how to represent `BoundedList`:
 
 | Target | Proposal |
 |---|---|
-| cpp | `psio::bounded_list<T, N>` |
-| rust | `psio::bounded_list<T, N>` (needs Rust-side type; wraps `Vec<T>`) |
+| cpp | `psio1::bounded_list<T, N>` |
+| rust | `psio1::bounded_list<T, N>` (needs Rust-side type; wraps `Vec<T>`) |
 | go | `type FieldName struct { Items []T; MaxN uint64 }` — no generic bounds |
 | typescript | `class BoundedList<T> { items: T[]; readonly maxN: number }` |
 | python | `class BoundedList(List[T])` with `__init__` bound check |
@@ -110,7 +110,7 @@ Current gaps with `unsigned __int128` / `__int128`:
 
 - `std::numeric_limits` specialization: works on Clang under
   `-std=gnu++XX` but not reliably elsewhere. Provide our own
-  `psio::numeric_limits<psio::uint128>` etc. if users need it.
+  `psio1::numeric_limits<psio1::uint128>` etc. if users need it.
 - `std::hash` specialization: none today. Provide if container
   key usage becomes a pattern.
 - `std::is_integral`: returns `false` historically on both
@@ -118,7 +118,7 @@ Current gaps with `unsigned __int128` / `__int128`:
   Generic "is this an integer?" code using `is_integral_v` will
   miss them. Documented; likely doesn't need a workaround.
 - Printing: no `operator<<(std::ostream&, __int128)` in libc++/libstdc++.
-  Add `psio::to_string(uint128)` / `psio::to_string(int128)` helpers
+  Add `psio1::to_string(uint128)` / `psio1::to_string(int128)` helpers
   (base-10, optional base-16) if debug output becomes a pain.
 
 All minor. Open only if concrete friction appears.
@@ -134,7 +134,7 @@ If an in-psio arithmetic implementation becomes warranted (e.g., for
 Merkle root computation over validator balances, or SSZ hash_tree_root
 of uint256 lists), the cleanest add is:
 
-- `psio::uint256` arithmetic ops (+, -, *, /, %, shifts, bitwise)
+- `psio1::uint256` arithmetic ops (+, -, *, /, %, shifts, bitwise)
 - Explicit conversion from/to `intx::uint256` if we adopt it as a
   dependency
 
@@ -175,7 +175,7 @@ revisit as SSZ / bitvector / hash_tree_root land.
 The `psio_bench_ssz_beacon` CMake scaffold exists for head-to-head timing
 against OffchainLabs/sszpp. Current state (2026-04-23):
 
-- Default build (`PSIO_BENCH_SSZPP=OFF`) is psio-only and works everywhere
+- Default build (`PSIO1_BENCH_SSZPP=OFF`) is psio-only and works everywhere
 - Enabling the competitor requires **libstdc++ / GCC 15+**. sszpp uses
   `std::views::chunk` and `std::views::enumerate`, C++23 range adaptors
   libc++ (Apple Clang / LLVM libc++) doesn't ship yet (as of LLVM 22).

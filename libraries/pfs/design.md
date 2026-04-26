@@ -40,7 +40,7 @@ Shard selection:
 - cas: `hash(CID) % shard_count`
 - filesystem: `hash(tenant.value) % shard_count`
 
-Tenant is `psio::name_id` — a 64-bit arithmetic-encoded name with
+Tenant is `psio1::name_id` — a 64-bit arithmetic-encoded name with
 human-readable string conversion (`"alice"_n`). Fixed 8 bytes in the key,
 no separator needed.
 
@@ -67,7 +67,7 @@ ensure `root_base + shard_count` doesn't exceed psitri's root limit.
 
 ## Schemas (fracpack)
 
-All values are fracpack-serialized via `psio::to_frac()` / `psio::from_frac()`.
+All values are fracpack-serialized via `psio1::to_frac()` / `psio1::from_frac()`.
 Key bytes are hand-built (prefix + raw bytes), not fracpacked.
 
 ### Key helpers
@@ -101,7 +101,7 @@ inline std::string cas_key(const cid& c)
 }
 
 // Encode name_id as 8 big-endian bytes
-inline void encode_name(std::string& k, psio::name_id tenant)
+inline void encode_name(std::string& k, psio1::name_id tenant)
 {
     uint64_t v = tenant.value;
     for (int i = 0; i < 8; ++i)
@@ -110,7 +110,7 @@ inline void encode_name(std::string& k, psio::name_id tenant)
 
 // Build a filesystem key: 'F' + name_id (8 bytes BE) + path
 // Fixed 9-byte prefix per tenant, no separator needed.
-inline std::string fs_key(psio::name_id tenant, std::string_view path)
+inline std::string fs_key(psio1::name_id tenant, std::string_view path)
 {
     std::string k;
     k.reserve(9 + path.size());
@@ -121,7 +121,7 @@ inline std::string fs_key(psio::name_id tenant, std::string_view path)
 }
 
 // Prefix for scanning all FS entries of a given tenant
-inline std::string fs_tenant_prefix(psio::name_id tenant)
+inline std::string fs_tenant_prefix(psio1::name_id tenant)
 {
     std::string k;
     k.reserve(9);
@@ -131,7 +131,7 @@ inline std::string fs_tenant_prefix(psio::name_id tenant)
 }
 
 // Prefix for scanning a directory within a tenant
-inline std::string fs_dir_prefix(psio::name_id tenant, std::string_view dir_path)
+inline std::string fs_dir_prefix(psio1::name_id tenant, std::string_view dir_path)
 {
     std::string k;
     k.reserve(9 + dir_path.size());
@@ -159,7 +159,7 @@ value:  raw bytes (up to 4MB)
 
 ```cpp
 #pragma once
-#include <psio/reflect.hpp>
+#include <psio1/reflect.hpp>
 #include <cstdint>
 #include <vector>
 
@@ -170,7 +170,7 @@ struct chunk_ref {
     uint32_t              offset;      // byte offset within the block
     uint32_t              size;        // chunk size (usually 256KB, last may be smaller)
 };
-PSIO_REFLECT(chunk_ref, block_id, offset, size)
+PSIO1_REFLECT(chunk_ref, block_id, offset, size)
 
 struct cas_entry {
     uint32_t              refcount   = 0;
@@ -180,7 +180,7 @@ struct cas_entry {
     // Exactly one of inline_data/chunks is populated.
     // inline_data.empty() == true means chunked storage.
 };
-PSIO_REFLECT(cas_entry, refcount, total_size, inline_data, chunks)
+PSIO1_REFLECT(cas_entry, refcount, total_size, inline_data, chunks)
 
 } // namespace pfs
 ```
@@ -196,7 +196,7 @@ block_store — one psitri entry, one control_block, done.
 
 ```cpp
 #pragma once
-#include <psio/reflect.hpp>
+#include <psio1/reflect.hpp>
 #include <cstdint>
 #include <vector>
 
@@ -206,7 +206,7 @@ enum class entry_type : uint8_t {
     file      = 0,
     directory = 1,
 };
-PSIO_REFLECT(entry_type)
+PSIO1_REFLECT(entry_type)
 
 struct fs_entry {
     entry_type            type     = entry_type::file;
@@ -216,7 +216,7 @@ struct fs_entry {
     uint64_t              size        = 0;   // file size (0 for dirs)
     std::optional<cid>    content_cid;       // present for files, absent for dirs
 };
-PSIO_REFLECT(fs_entry, type, mode, owner, mtime_ns, size, content_cid)
+PSIO1_REFLECT(fs_entry, type, mode, owner, mtime_ns, size, content_cid)
 
 } // namespace pfs
 ```
@@ -230,7 +230,7 @@ struct fs_quota {
     uint64_t limit = 0;   // max bytes allowed
     uint64_t used  = 0;   // sum of logical file sizes
 };
-PSIO_REFLECT(fs_quota, limit, used)
+PSIO1_REFLECT(fs_quota, limit, used)
 
 } // namespace pfs
 ```
@@ -315,7 +315,7 @@ while (!cursor.is_end()) {
     auto slash = remainder.find('/');
     if (slash == std::string_view::npos || slash == remainder.size() - 1) {
         auto val = cursor.value<std::string>();
-        auto entry = psio::from_frac<fs_entry>(*val);
+        auto entry = psio1::from_frac<fs_entry>(*val);
         results.push_back({std::string(remainder), entry_to_stat(entry)});
     }
     // else: deeper nested entry, skip (not a direct child)
@@ -343,7 +343,7 @@ auto cursor = tree.read_cursor();
 cursor.first(prefix);
 while (!cursor.is_end()) {
     if (!starts_with(cursor.key(), prefix)) break;
-    auto entry = psio::from_frac<fs_entry>(cursor.value<std::string>());
+    auto entry = psio1::from_frac<fs_entry>(cursor.value<std::string>());
     if (entry.type == entry_type::file && !entry.cid.empty())
         cids_to_unpin.push_back(entry.cid);
     cursor.next();
@@ -371,7 +371,7 @@ for (uint32_t shard = 0; shard < config.shard_count; ++shard) {
     cursor.first("C");  // seek to first CAS entry in this shard
     while (!cursor.is_end()) {
         if (cursor.key()[0] != 'C') break;  // past CAS prefix
-        auto entry = psio::from_frac<cas_entry>(cursor.value<std::string>());
+        auto entry = psio1::from_frac<cas_entry>(cursor.value<std::string>());
         if (entry.refcount > 0) {
             auto key = cursor.key();
             auto c = cid::from_bytes(
@@ -534,7 +534,7 @@ static_assert(sizeof(cid) == 36);
 
 // Fracpack: serialize as flat 36 bytes (same as std::array<uint8_t, 36>).
 // No struct framing, no heap offset — just raw memcpy.
-namespace psio {
+namespace psio1 {
     template<> struct is_packable_memcpy<pfs::cid> : std::bool_constant<true> {};
 }
 
@@ -583,7 +583,7 @@ This is the user-facing layer.
 - Directories end with `/` in the key (e.g., `photos/`).
 - Files do not end with `/` (e.g., `photos/cat.jpg`).
 - `$meta` is reserved for quota metadata.
-- Tenant is `psio::name_id` (64-bit, fixed 8 bytes in key).
+- Tenant is `psio1::name_id` (64-bit, fixed 8 bytes in key).
 
 ### Write path
 
@@ -649,33 +649,33 @@ public:
     store(std::shared_ptr<psitri::database> db, config cfg = {});
 
     // ── File handles (read) ─────────────────────────────────────────
-    file_handle open(psio::name_id tenant, const path& p);
+    file_handle open(psio1::name_id tenant, const path& p);
     file_handle open(const cid& c);
 
     // ── Mutations ───────────────────────────────────────────────────
-    cid  write(psio::name_id tenant, const path& p,
+    cid  write(psio1::name_id tenant, const path& p,
                std::span<const uint8_t> data,
                uint16_t mode = 0644, uint32_t owner = 0);
-    void remove(psio::name_id tenant, const path& p);
-    void mkdir(psio::name_id tenant, const path& p,
+    void remove(psio1::name_id tenant, const path& p);
+    void mkdir(psio1::name_id tenant, const path& p,
                uint16_t mode = 0755, uint32_t owner = 0);
-    void chmod(psio::name_id tenant, const path& p, uint16_t mode);
+    void chmod(psio1::name_id tenant, const path& p, uint16_t mode);
 
     // ── Directory listing ───────────────────────────────────────────
-    void ls(psio::name_id tenant, const path& p,
+    void ls(psio1::name_id tenant, const path& p,
             std::function_ref<void(const dir_entry&)> cb);
 
     // ── Metadata ────────────────────────────────────────────────────
-    std::optional<fs_entry> stat(psio::name_id tenant, const path& p);
+    std::optional<fs_entry> stat(psio1::name_id tenant, const path& p);
 
     // ── Quota ───────────────────────────────────────────────────────
-    void       set_quota(psio::name_id tenant, uint64_t limit);
-    fs_quota   quota(psio::name_id tenant);
+    void       set_quota(psio1::name_id tenant, uint64_t limit);
+    fs_quota   quota(psio1::name_id tenant);
 
     // ── Sharing / snapshots ─────────────────────────────────────────
-    void share(psio::name_id src, const path& src_path,
-               psio::name_id dst, const path& dst_path);
-    void snapshot(psio::name_id tenant, psio::name_id snapshot_id);
+    void share(psio1::name_id src, const path& src_path,
+               psio1::name_id dst, const path& dst_path);
+    void snapshot(psio1::name_id tenant, psio1::name_id snapshot_id);
 
     // ── IPFS gateway ────────────────────────────────────────────────
     // Resolve /ipfs/<cid>/<subpath> — returns handle to the resolved file
@@ -787,7 +787,7 @@ libraries/pfs/
 ## Implementation order
 
 1. **schema.hpp** — fracpack types (cas_entry, fs_entry, fs_quota, chunk_ref)
-   with PSIO_REFLECT. Pure types, no logic.
+   with PSIO1_REFLECT. Pure types, no logic.
 2. **keys.hpp** — key builders and shard computation. Unit test key encoding
    round-trips and sort order.
 3. **cid.hpp/cpp** — CID computation (SHA-256 + multihash + multicodec + CIDv1).

@@ -151,7 +151,7 @@ function(psi_add_wasm_module name)
       COMMENT "Building wasm guest ${ARG_OUTPUT} (wasi-sdk)"
       VERBATIM)
 
-   # Post-link: promote PSIO_WIT blobs from data section to custom sections.
+   # Post-link: promote PSIO1_WIT blobs from data section to custom sections.
    # Use the native pzam tool from the build tree if available.
    set(_pzam ${CMAKE_BINARY_DIR}/bin/pzam)
    if(TARGET pzam)

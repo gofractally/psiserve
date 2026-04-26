@@ -1,4 +1,4 @@
-// host.cpp — uses psio::own<T>/borrow<T> with handle_table.
+// host.cpp — uses psio1::own<T>/borrow<T> with handle_table.
 
 #include <psizam/runtime.hpp>
 #include <psizam/hosted.hpp>
@@ -30,7 +30,7 @@ struct Host
 
    // ── wasm_runtime ────────────────────────────────────────────────
 
-   psio::own<wasm_module> module_create(std::string_view wasm_bytes)
+   psio1::own<wasm_module> module_create(std::string_view wasm_bytes)
    {
       std::vector<uint8_t> bytes(
          reinterpret_cast<const uint8_t*>(wasm_bytes.data()),
@@ -43,23 +43,23 @@ struct Host
       auto mod = rt.prepare(psizam::wasm_bytes{bytes}, psizam::instance_policy{
          .initial = psizam::instance_policy::compile_tier::interpret,
       });
-      return psio::own<wasm_module>{modules.create(module_resource{std::move(mod)})};
+      return psio1::own<wasm_module>{modules.create(module_resource{std::move(mod)})};
    }
 
-   psio::own<wasm_instance> module_instantiate(psio::borrow<wasm_module> mod)
+   psio1::own<wasm_instance> module_instantiate(psio1::borrow<wasm_module> mod)
    {
       auto* m = modules.get(mod.handle);
-      if (!m) return psio::own<wasm_instance>{UINT32_MAX};
+      if (!m) return psio1::own<wasm_instance>{UINT32_MAX};
       auto inst = rt.instantiate(m->mod);
-      return psio::own<wasm_instance>{instances.create(instance_resource{std::move(inst)})};
+      return psio1::own<wasm_instance>{instances.create(instance_resource{std::move(inst)})};
    }
 
-   void module_drop(psio::own<wasm_module> mod)
+   void module_drop(psio1::own<wasm_module> mod)
    {
       modules.destroy(mod.handle);
    }
 
-   uint32_t instance_resolve(psio::borrow<wasm_instance> inst, psio::name_id func_name)
+   uint32_t instance_resolve(psio1::borrow<wasm_instance> inst, psio1::name_id func_name)
    {
       auto* res = instances.get(inst.handle);
       if (!res) return UINT32_MAX;
@@ -68,7 +68,7 @@ struct Host
       return be->resolve_export(func_name.str());
    }
 
-   uint64_t instance_call(psio::borrow<wasm_instance> inst,
+   uint64_t instance_call(psio1::borrow<wasm_instance> inst,
                           uint32_t func_index,
                           uint64_t arg0, uint64_t arg1)
    {
@@ -82,14 +82,14 @@ struct Host
       return r ? static_cast<uint64_t>(r->to_ui32()) : 0;
    }
 
-   void instance_drop(psio::own<wasm_instance> inst)
+   void instance_drop(psio1::own<wasm_instance> inst)
    {
       instances.destroy(inst.handle);
    }
 
    // ── module_store ────────────────────────────────────────────────
 
-   std::string_view get_module(psio::name_id name)
+   std::string_view get_module(psio1::name_id name)
    {
       auto it = store.find(name.value);
       if (it == store.end()) return {};
@@ -104,7 +104,7 @@ struct Host
    }
 };
 
-PSIO_HOST_MODULE(Host,
+PSIO1_HOST_MODULE(Host,
    interface(wasm_runtime, module_create, module_instantiate, module_drop,
              instance_resolve, instance_call, instance_drop),
    interface(module_store, get_module),
@@ -112,7 +112,7 @@ PSIO_HOST_MODULE(Host,
 
 int main()
 {
-   using namespace psio::literals;
+   using namespace psio1::literals;
 
    Host host;
    host.store["calculator"_n.value] = std::vector<uint8_t>(

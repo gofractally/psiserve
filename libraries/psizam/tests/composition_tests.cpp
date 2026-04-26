@@ -43,7 +43,7 @@ struct CompHost
    int           log_string_calls = 0;
 };
 
-PSIO_HOST_MODULE(CompHost, interface(env, log_u64, log_string))
+PSIO1_HOST_MODULE(CompHost, interface(env, log_u64, log_string))
 
 // ── WASM loading helper ─────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@
 #include <pfs/config.hpp>
 #include <pfs/keys.hpp>
 
-#include <psio/bytes_view.hpp>
+#include <psio1/bytes_view.hpp>
 
 #include <psitri/database.hpp>
 #include <psitri/transaction.hpp>
@@ -23,7 +23,7 @@ class block_store
 
    // Allocate a block and write data. Returns the block_id.
    // Must be called within a transaction context (caller manages tx).
-   uint64_t alloc(psitri::transaction& tx, psio::bytes_view data);
+   uint64_t alloc(psitri::transaction& tx, psio1::bytes_view data);
 
    // Free a block. Caller manages the transaction.
    void free(psitri::transaction& tx, uint64_t block_id);

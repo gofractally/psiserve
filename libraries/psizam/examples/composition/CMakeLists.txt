@@ -5,12 +5,12 @@
 psi_add_wasm_module(composition_provider_guest
    SOURCES provider_guest.cpp
    OUTPUT  provider.wasm
-   DEPS    psio psizam wasi-cpp)
+   DEPS    psio1 psizam wasi-cpp)
 
 psi_add_wasm_module(composition_consumer_guest
    SOURCES consumer_guest.cpp
    OUTPUT  consumer.wasm
-   DEPS    psio psizam wasi-cpp)
+   DEPS    psio1 psizam wasi-cpp)
 
 if(NOT TARGET composition_provider_guest OR NOT TARGET composition_consumer_guest)
    return()

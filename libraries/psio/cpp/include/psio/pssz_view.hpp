@@ -1,437 +1,246 @@
 #pragma once
-// Zero-copy pSSZ views. See `.issues/pssz-format-design.md` for format spec.
 //
-// Given a pSSZ buffer, `pssz_view<T, F>` exposes the logical structure
-// without materializing std:: containers. Every accessor is span arithmetic
-// over the underlying bytes.
+// psio3/pssz_view.hpp — pSSZ's `view_layout::traits` specializations.
 //
-// Format F parameterizes offset/header widths (pssz8 / pssz16 / pssz32).
-// Call pssz_validate<T, F>(buf) before viewing untrusted input.
+// Two tags to cover:
+//   - `psio::pssz_<W>`   — explicit offset width (1, 2, or 4 bytes)
+//   - `psio::pssz`       — auto-W: W = auto_pssz_width_v<T>
 //
-// Differences from ssz_view:
-//   - F-parameterized offset width (u8 / u16 / u32)
-//   - Reflected containers: skip the extensibility header (sizeof F::header_type)
-//     before the fixed region when T is not DWNC
-//   - std::optional<T> with fixed T has no selector byte — presence derived
-//     from span == 0 (None) vs span == sizeof(T) (Some)
+// Wire layout (differs from SSZ only in a few places):
+//
+//   vector<fixed T>     — n × fixed_size<T> raw bytes, no prefix.
+//   vector<variable T>  — [uW offset_0][uW offset_1]...[payload],
+//                         n = offset_0 / W (offsets are W bytes, not
+//                         u32 like SSZ).
+//   optional<fixed V>   — span is either empty (None) or
+//                         fixed_size<V> bytes (Some). NO selector.
+//                         Length disambiguates.
+//   optional<variable V>— [u8 selector][payload if selector == 1].
+//                         Same as SSZ.
+//   variant<Ts...>      — [u8 selector][payload]. Same as SSZ.
+//
+// All three composite view templates from psio3/view.hpp are written
+// once and reused here; this header only plugs in the wire policy.
 
-#include <psio/bitset.hpp>
-#include <psio/bounded.hpp>
-#include <psio/check.hpp>
-#include <psio/ext_int.hpp>
-#include <psio/reflect.hpp>
-#include <psio/to_pssz.hpp>
-#include <psio/view.hpp>  // view_proxy, for the unified view<T, Fmt> plumbing
+#include <psio/pssz.hpp>
+#include <psio/view.hpp>
 
-#include <array>
-#include <bitset>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <optional>
 #include <span>
-#include <string_view>
 #include <type_traits>
 
-namespace psio
-{
-   template <typename T, typename F = frac_format_pssz32>
-   class pssz_view;
+namespace psio1::view_layout {
 
-   // ── Primitives ────────────────────────────────────────────────────────────
+   namespace detail_pssz {
 
-#define PSIO_PSSZ_VIEW_PRIMITIVE(T)                                         \
-   template <typename F>                                                    \
-   class pssz_view<T, F>                                                    \
-   {                                                                        \
-      const char* data_;                                                    \
-                                                                            \
-     public:                                                                \
-      pssz_view() = default;                                                \
-      pssz_view(const char* d, std::uint32_t = sizeof(T)) : data_(d) {}    \
-      T get() const noexcept                                                \
-      {                                                                     \
-         T v;                                                               \
-         std::memcpy(&v, data_, sizeof(T));                                 \
-         return v;                                                          \
-      }                                                                     \
-      operator T() const noexcept { return get(); }                         \
-   };
+      // Shared helpers parameterized on the explicit offset width W.
+      // The pssz / pssz_<W> traits both forward here; the only
+      // difference is how W is picked (compile-time constant for
+      // pssz_<W>, auto_pssz_width_v<T> for pssz).
 
-   PSIO_PSSZ_VIEW_PRIMITIVE(bool)
-   PSIO_PSSZ_VIEW_PRIMITIVE(std::int8_t)
-   PSIO_PSSZ_VIEW_PRIMITIVE(std::uint8_t)
-   PSIO_PSSZ_VIEW_PRIMITIVE(std::int16_t)
-   PSIO_PSSZ_VIEW_PRIMITIVE(std::uint16_t)
-   PSIO_PSSZ_VIEW_PRIMITIVE(std::int32_t)
-   PSIO_PSSZ_VIEW_PRIMITIVE(std::uint32_t)
-   PSIO_PSSZ_VIEW_PRIMITIVE(std::int64_t)
-   PSIO_PSSZ_VIEW_PRIMITIVE(std::uint64_t)
-   PSIO_PSSZ_VIEW_PRIMITIVE(float)
-   PSIO_PSSZ_VIEW_PRIMITIVE(double)
-   PSIO_PSSZ_VIEW_PRIMITIVE(unsigned __int128)
-   PSIO_PSSZ_VIEW_PRIMITIVE(__int128)
-#undef PSIO_PSSZ_VIEW_PRIMITIVE
-
-   template <typename F>
-   class pssz_view<uint256, F>
-   {
-      const char* data_;
-
-     public:
-      pssz_view() = default;
-      pssz_view(const char* d, std::uint32_t = 32) : data_(d) {}
-      uint256 get() const noexcept
+      // ── vector ─────────────────────────────────────────────────────────
+      template <std::size_t W, typename T>
+      constexpr std::size_t vector_count(std::span<const char> s) noexcept
       {
-         uint256 v;
-         std::memcpy(&v, data_, 32);
-         return v;
-      }
-      operator uint256() const noexcept { return get(); }
-   };
-
-   // ── Bit types ─────────────────────────────────────────────────────────────
-
-   template <std::size_t N, typename F>
-   class pssz_view<bitvector<N>, F>
-   {
-      const char* data_;
-
-     public:
-      pssz_view() = default;
-      pssz_view(const char* d, std::uint32_t = (N + 7) / 8) : data_(d) {}
-      bool test(std::size_t i) const noexcept
-      {
-         return (static_cast<std::uint8_t>(data_[i >> 3]) >> (i & 7u)) & 1u;
-      }
-      static constexpr std::size_t size() noexcept { return N; }
-   };
-
-   // ── std::string ───────────────────────────────────────────────────────────
-
-   template <typename F>
-   class pssz_view<std::string, F>
-   {
-      const char*   data_;
-      std::uint32_t span_;
-
-     public:
-      pssz_view() = default;
-      pssz_view(const char* d, std::uint32_t span) : data_(d), span_(span) {}
-      std::string_view view() const noexcept { return {data_, span_}; }
-      operator std::string_view() const noexcept { return view(); }
-      std::size_t size() const noexcept { return span_; }
-   };
-
-   template <std::size_t N, typename F>
-   class pssz_view<bounded_string<N>, F>
-   {
-      const char*   data_;
-      std::uint32_t span_;
-
-     public:
-      pssz_view() = default;
-      pssz_view(const char* d, std::uint32_t span) : data_(d), span_(span) {}
-      std::string_view view() const noexcept { return {data_, span_}; }
-      operator std::string_view() const noexcept { return view(); }
-      std::size_t size() const noexcept { return span_; }
-   };
-
-   // ── std::array<T, N> ──────────────────────────────────────────────────────
-
-   template <typename T, std::size_t N, typename F>
-   class pssz_view<std::array<T, N>, F>
-   {
-      const char*   data_;
-      std::uint32_t span_;
-
-     public:
-      pssz_view() = default;
-      pssz_view(const char* d, std::uint32_t span) : data_(d), span_(span) {}
-
-      static constexpr std::size_t size() noexcept { return N; }
-
-      pssz_view<T, F> operator[](std::size_t i) const
-      {
-         if constexpr (pssz_is_fixed_size_v<T>)
+         if constexpr (::psio::detail::pssz_impl::is_fixed_v<T>)
          {
-            constexpr std::uint32_t elem = pssz_fixed_size<T>::value;
-            return pssz_view<T, F>(data_ + i * elem, elem);
-         }
-         else
-         {
-            using off_t                   = typename F::offset_type;
-            constexpr std::size_t ob       = F::offset_bytes;
-            off_t off_i = 0, off_next = 0;
-            std::memcpy(&off_i, data_ + i * ob, ob);
-            if (i + 1 < N)
-               std::memcpy(&off_next, data_ + (i + 1) * ob, ob);
+            constexpr std::size_t esz =
+               ::psio::detail::pssz_impl::fixed_size_of<T>();
+            if constexpr (esz == 0)
+               return 0;
             else
-               off_next = static_cast<off_t>(span_);
-            return pssz_view<T, F>(data_ + off_i, off_next - off_i);
-         }
-      }
-   };
-
-   // ── std::vector<T> ────────────────────────────────────────────────────────
-
-   template <typename T, typename F>
-   class pssz_view<std::vector<T>, F>
-   {
-      const char*   data_;
-      std::uint32_t span_;
-
-     public:
-      pssz_view() = default;
-      pssz_view(const char* d, std::uint32_t span) : data_(d), span_(span) {}
-
-      std::uint32_t size() const noexcept
-      {
-         if (span_ == 0) return 0;
-         if constexpr (pssz_is_fixed_size_v<T>)
-            return span_ / pssz_fixed_size<T>::value;
-         else
-         {
-            using off_t                   = typename F::offset_type;
-            constexpr std::size_t ob       = F::offset_bytes;
-            off_t first = 0;
-            std::memcpy(&first, data_, ob);
-            return first / static_cast<std::uint32_t>(ob);
-         }
-      }
-
-      bool empty() const noexcept { return size() == 0; }
-
-      pssz_view<T, F> operator[](std::size_t i) const
-      {
-         if constexpr (pssz_is_fixed_size_v<T>)
-         {
-            constexpr std::uint32_t elem = pssz_fixed_size<T>::value;
-            return pssz_view<T, F>(data_ + i * elem, elem);
+               return s.size() / esz;
          }
          else
          {
-            using off_t                   = typename F::offset_type;
-            constexpr std::size_t ob       = F::offset_bytes;
-            std::uint32_t n    = size();
-            off_t off_i = 0, off_next = 0;
-            std::memcpy(&off_i, data_ + i * ob, ob);
+            if (s.size() < W)
+               return 0;
+            using O = typename ::psio::detail::pssz_impl::width_info<W>::offset_t;
+            O first{};
+            std::memcpy(&first, s.data(), W);
+            return static_cast<std::size_t>(first) / W;
+         }
+      }
+
+      template <std::size_t W, typename T>
+      std::span<const char>
+      vector_element_span(std::span<const char> s, std::size_t i) noexcept
+      {
+         if constexpr (::psio::detail::pssz_impl::is_fixed_v<T>)
+         {
+            constexpr std::size_t esz =
+               ::psio::detail::pssz_impl::fixed_size_of<T>();
+            return s.subspan(i * esz, esz);
+         }
+         else
+         {
+            const std::size_t n = vector_count<W, T>(s);
+            if (i >= n)
+               return {};
+            using O = typename ::psio::detail::pssz_impl::width_info<W>::offset_t;
+            O off_i{};
+            std::memcpy(&off_i, s.data() + i * W, W);
+            std::uint32_t off_next;
             if (i + 1 < n)
-               std::memcpy(&off_next, data_ + (i + 1) * ob, ob);
-            else
-               off_next = static_cast<off_t>(span_);
-            return pssz_view<T, F>(data_ + off_i, off_next - off_i);
-         }
-      }
-   };
-
-   template <typename T, std::size_t N, typename F>
-   class pssz_view<bounded_list<T, N>, F>
-   {
-      pssz_view<std::vector<T>, F> inner_;
-
-     public:
-      pssz_view() = default;
-      pssz_view(const char* d, std::uint32_t span) : inner_(d, span) {}
-      std::uint32_t   size() const noexcept { return inner_.size(); }
-      bool            empty() const noexcept { return inner_.empty(); }
-      pssz_view<T, F> operator[](std::size_t i) const { return inner_[i]; }
-   };
-
-   // ── std::optional<T> ──────────────────────────────────────────────────────
-   // If min_encoded_size<T> == 0: 1-byte selector + optional payload.
-   // Else: None == 0 bytes, Some == encoded T.
-
-   template <typename T, typename F>
-   class pssz_view<std::optional<T>, F>
-   {
-      const char*   data_;
-      std::uint32_t span_;
-
-     public:
-      pssz_view() = default;
-      pssz_view(const char* d, std::uint32_t span) : data_(d), span_(span) {}
-
-      bool has_value() const noexcept
-      {
-         if constexpr (pssz_optional_needs_selector<T>)
-         {
-            if (span_ == 0) return false;
-            return static_cast<std::uint8_t>(data_[0]) == 1;
-         }
-         else
-         {
-            return span_ > 0;
-         }
-      }
-
-      pssz_view<T, F> operator*() const
-      {
-         if constexpr (pssz_optional_needs_selector<T>)
-            return pssz_view<T, F>(data_ + 1, span_ - 1);
-         else
-            return pssz_view<T, F>(data_, span_);
-      }
-   };
-
-   // ── Reflected container ───────────────────────────────────────────────────
-
-   namespace pssz_view_detail
-   {
-      // Byte offset of the I-th field's slot within the FIXED REGION (not
-      // counting the extensibility header).
-      template <typename F, typename T, std::size_t I>
-      consteval std::size_t field_slot_offset()
-      {
-         using tuple_t = struct_tuple_t<T>;
-         return []<std::size_t... Js>(std::index_sequence<Js...>)
-         {
-            auto sz = []<std::size_t J>(std::integral_constant<std::size_t, J>)
             {
-               using FT = std::tuple_element_t<J, tuple_t>;
-               if constexpr (pssz_is_fixed_size_v<FT>)
-                  return pssz_fixed_size<FT>::value;
-               else
-                  return F::offset_bytes;
-            };
-            return (sz(std::integral_constant<std::size_t, Js>{}) + ... + std::size_t{0});
+               O tmp{};
+               std::memcpy(&tmp, s.data() + (i + 1) * W, W);
+               off_next = static_cast<std::uint32_t>(tmp);
+            }
+            else
+            {
+               off_next = static_cast<std::uint32_t>(s.size());
+            }
+            return s.subspan(static_cast<std::uint32_t>(off_i),
+                              off_next - static_cast<std::uint32_t>(off_i));
          }
-         (std::make_index_sequence<I>{});
       }
 
-      template <typename T, std::size_t I>
-      consteval std::size_t next_var_index_after()
+      // ── optional ───────────────────────────────────────────────────────
+      //
+      // pssz splits on the payload's fixed/variable status:
+      //   fixed V    — no selector. Empty span = None; fixed_size<V>
+      //                 bytes = Some.
+      //   variable V — [u8 selector][payload if selector != 0].
+      template <typename T>
+      bool optional_has_value(std::span<const char> s) noexcept
       {
-         using tuple_t        = struct_tuple_t<T>;
-         constexpr std::size_t N = std::tuple_size_v<tuple_t>;
-         std::size_t result = N;
-         [&]<std::size_t... Js>(std::index_sequence<Js...>)
+         using V = typename T::value_type;
+         if constexpr (::psio::detail::pssz_impl::is_fixed_v<V>)
+            return !s.empty();
+         else
          {
-            (
-                [&]<std::size_t J>(std::integral_constant<std::size_t, J>)
-                {
-                   if constexpr (J > I)
-                   {
-                      using FT = std::tuple_element_t<J, tuple_t>;
-                      if constexpr (!pssz_is_fixed_size_v<FT>)
-                      {
-                         if (result == N) result = J;
-                      }
-                   }
-                }(std::integral_constant<std::size_t, Js>{}),
-                ...);
-         }(std::make_index_sequence<N>{});
-         return result;
+            if (s.empty())
+               return false;
+            return static_cast<unsigned char>(s[0]) != 0;
+         }
       }
-   }  // namespace pssz_view_detail
 
-   // ── pssz_fmt<F>: adapter plugging pSSZ into the unified view<T, Fmt> ─
+      template <typename T>
+      std::span<const char>
+      optional_payload_span(std::span<const char> s) noexcept
+      {
+         using V = typename T::value_type;
+         if constexpr (::psio::detail::pssz_impl::is_fixed_v<V>)
+            return s;
+         else
+            return s.empty() ? std::span<const char>{} : s.subspan(1);
+      }
+
+      // ── variant ────────────────────────────────────────────────────────
+      inline std::size_t variant_index(std::span<const char> s) noexcept
+      {
+         if (s.empty())
+            return 0;
+         return static_cast<std::size_t>(
+            static_cast<unsigned char>(s[0]));
+      }
+
+      inline std::span<const char>
+      variant_payload_span(std::span<const char> s) noexcept
+      {
+         return s.empty() ? std::span<const char>{} : s.subspan(1);
+      }
+
+   }  // namespace detail_pssz
+
+   // ── pssz_<W> — explicit width ─────────────────────────────────────────
+   template <std::size_t W>
+   struct traits<::psio::pssz_<W>>
+   {
+      template <typename T>
+      static std::size_t vector_count(std::span<const char> s) noexcept
+      {
+         return detail_pssz::vector_count<W, T>(s);
+      }
+
+      template <typename T>
+      static std::span<const char>
+      vector_element_span(std::span<const char> s, std::size_t i) noexcept
+      {
+         return detail_pssz::vector_element_span<W, T>(s, i);
+      }
+
+      template <typename T>
+      static bool optional_has_value(std::span<const char> s) noexcept
+      {
+         return detail_pssz::optional_has_value<std::optional<T>>(s);
+      }
+
+      template <typename T>
+      static std::span<const char>
+      optional_payload_span(std::span<const char> s) noexcept
+      {
+         return detail_pssz::optional_payload_span<std::optional<T>>(s);
+      }
+
+      template <typename... Ts>
+      static std::size_t variant_index(std::span<const char> s) noexcept
+      {
+         return detail_pssz::variant_index(s);
+      }
+
+      template <typename... Ts>
+      static std::span<const char>
+      variant_payload_span(std::span<const char> s) noexcept
+      {
+         return detail_pssz::variant_payload_span(s);
+      }
+   };
+
+   // ── pssz — auto-W (W chosen from ViewedType) ──────────────────────────
    //
-   // Parallel to ssz_fmt: provides `ptr_t`, `root<T>()`, `field<T, N>()`
-   // so `view<T, pssz_fmt<F>>` inherits the PSIO_REFLECT-generated
-   // named-accessor proxy. `pssz_view<T, F>` is the thin wrapper below.
-
-   template <typename F>
-   struct pssz_fmt
+   // The view knows the outer shape it represents (std::vector<T> /
+   // std::optional<T> / std::variant<Ts...>) and picks W to match what
+   // the encoder picked for that shape via auto_pssz_width_v.
+   template <>
+   struct traits<::psio::pssz>
    {
-      struct ptr_t
-      {
-         const char*   data;  // start of whole T (including extensibility hdr)
-         std::uint32_t span;  // whole T span
-         bool operator==(const ptr_t&) const = default;
-         operator bool() const { return data != nullptr; }
-      };
-
       template <typename T>
-      static ptr_t root(const void* buf)
+      static std::size_t vector_count(std::span<const char> s) noexcept
       {
-         return ptr_t{static_cast<const char*>(buf), 0};
+         constexpr std::size_t W =
+            ::psio::auto_pssz_width_v<std::vector<T>>;
+         return detail_pssz::vector_count<W, T>(s);
       }
 
       template <typename T>
-      static ptr_t root_with_span(const char* buf, std::uint32_t span)
+      static std::span<const char>
+      vector_element_span(std::span<const char> s, std::size_t i) noexcept
       {
-         return ptr_t{buf, span};
+         constexpr std::size_t W =
+            ::psio::auto_pssz_width_v<std::vector<T>>;
+         return detail_pssz::vector_element_span<W, T>(s, i);
       }
 
-      template <typename T, std::size_t N>
-      static auto field(ptr_t p)
+      template <typename T>
+      static bool optional_has_value(std::span<const char> s) noexcept
       {
-         using tuple_t = struct_tuple_t<T>;
-         static_assert(N < std::tuple_size_v<tuple_t>, "field index out of range");
-         using FT = std::tuple_element_t<N, tuple_t>;
-         constexpr std::size_t slot =
-             pssz_view_detail::field_slot_offset<F, T, N>();
+         return detail_pssz::optional_has_value<std::optional<T>>(s);
+      }
 
-         // Skip the extensibility header for non-DWNC structs.
-         const char* fs =
-             pssz_detail::is_dwnc<T>() ? p.data : p.data + F::header_bytes;
-         std::uint32_t fs_span =
-             pssz_detail::is_dwnc<T>()
-                 ? p.span
-                 : p.span - static_cast<std::uint32_t>(F::header_bytes);
+      template <typename T>
+      static std::span<const char>
+      optional_payload_span(std::span<const char> s) noexcept
+      {
+         return detail_pssz::optional_payload_span<std::optional<T>>(s);
+      }
 
-         if constexpr (pssz_is_fixed_size_v<FT>)
-         {
-            return pssz_view<FT, F>(fs + slot, pssz_fixed_size<FT>::value);
-         }
-         else
-         {
-            using off_t                   = typename F::offset_type;
-            constexpr std::size_t ob       = F::offset_bytes;
-            off_t off = 0;
-            std::memcpy(&off, fs + slot, ob);
-            constexpr std::size_t next =
-                pssz_view_detail::next_var_index_after<T, N>();
-            std::uint32_t stop = 0;
-            if constexpr (next < std::tuple_size_v<tuple_t>)
-            {
-               constexpr std::size_t next_slot =
-                   pssz_view_detail::field_slot_offset<F, T, next>();
-               off_t nxt = 0;
-               std::memcpy(&nxt, fs + next_slot, ob);
-               stop = static_cast<std::uint32_t>(nxt);
-            }
-            else
-            {
-               stop = fs_span;
-            }
-            return pssz_view<FT, F>(fs + off,
-                                     static_cast<std::uint32_t>(stop - off));
-         }
+      template <typename... Ts>
+      static std::size_t variant_index(std::span<const char> s) noexcept
+      {
+         return detail_pssz::variant_index(s);
+      }
+
+      template <typename... Ts>
+      static std::span<const char>
+      variant_payload_span(std::span<const char> s) noexcept
+      {
+         return detail_pssz::variant_payload_span(s);
       }
    };
 
-   template <typename T, typename F>
-      requires(Reflected<T> && !is_bitvector_v<T> && !is_bitlist_v<T> &&
-               !is_std_bitset_v<T>)
-   class pssz_view<T, F>
-       : public reflect<T>::template proxy<view_proxy<T, pssz_fmt<F>>>
-   {
-      using base = typename reflect<T>::template proxy<view_proxy<T, pssz_fmt<F>>>;
-
-     public:
-      pssz_view() : base(typename pssz_fmt<F>::ptr_t{}) {}
-      pssz_view(const char* d, std::uint32_t span)
-          : base(typename pssz_fmt<F>::ptr_t{d, span})
-      {
-      }
-
-      const char* raw_data() const noexcept { return this->psio_get_proxy().ptr().data; }
-      std::uint32_t raw_span() const noexcept { return this->psio_get_proxy().ptr().span; }
-   };
-
-   // ── Entry point ───────────────────────────────────────────────────────────
-
-   template <typename T, typename F = frac_format_pssz32>
-   pssz_view<T, F> pssz_view_of(std::span<const char> buf)
-   {
-      return pssz_view<T, F>(buf.data(), static_cast<std::uint32_t>(buf.size()));
-   }
-
-   template <typename T, typename F = frac_format_pssz32>
-   pssz_view<T, F> pssz_view_of(const std::vector<char>& buf)
-   {
-      return pssz_view_of<T, F>(std::span<const char>(buf.data(), buf.size()));
-   }
-
-}  // namespace psio
+}  // namespace psio1::view_layout

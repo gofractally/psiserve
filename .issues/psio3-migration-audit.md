@@ -15,8 +15,8 @@ before they're closed.
 
 | v1 header | v3 location | notes |
 |---|---|---|
-| `bitset.hpp` | `wrappers.hpp` (`psio3::bitvector<N>` / `bitlist<N>`) | folded with other size-bounded wrappers |
-| `bounded.hpp` | `wrappers.hpp` (`psio3::bounded<T,N>`, `utf8_string<N>`, `byte_array<N>`) | richer types; codecs need to recognise them (followup task) |
+| `bitset.hpp` | `wrappers.hpp` (`psio::bitvector<N>` / `bitlist<N>`) | folded with other size-bounded wrappers |
+| `bounded.hpp` | `wrappers.hpp` (`psio::bounded<T,N>`, `utf8_string<N>`, `byte_array<N>`) | richer types; codecs need to recognise them (followup task) |
 | `ext_int.hpp` | `ext_int.hpp` | direct port |
 | `from_avro.hpp` + `to_avro.hpp` | `avro.hpp` | one tag header per format; encode + decode + validate via CPOs |
 | `from_bin.hpp` + `to_bin.hpp` | `bin.hpp` | as above |
@@ -57,7 +57,7 @@ equivalent.  No reason to drop them.
       lowercase-alphanum-hyphen strings into a u64 via context-dependent
       arithmetic coding (445 lines, MIT-licensed from Mark Thomas Nelson,
       adapted by you).  **Used in `pfs/keys.hpp`, `pfs/store.hpp` as
-      `psio::name_id` for the universal tenant identifier.**  Likely
+      `psio1::name_id` for the universal tenant identifier.**  Likely
       also load-bearing in psizam / psiserve / psitri / psi-api.
       Direct port — no dependencies on the rest of v1 beyond stdlib.
 
@@ -76,8 +76,8 @@ equivalent.  No reason to drop them.
       port, mechanical.  Earlier classification as "SUPERSEDED" was
       wrong.
 
-- [ ] **`structural.hpp`** — `PSIO_PACKAGE(name, version)`,
-      `PSIO_INTERFACE`, etc. — L2 schema declaration macros (437 lines).
+- [ ] **`structural.hpp`** — `PSIO1_PACKAGE(name, version)`,
+      `PSIO1_INTERFACE`, etc. — L2 schema declaration macros (437 lines).
       **Keystone for both WIT-generation flows** — defines
       `interface_info<Tag>` which is the input to both
       `wit_gen.hpp` (runtime) and `wit_constexpr.hpp` (compile-time
@@ -86,12 +86,12 @@ equivalent.  No reason to drop them.
 - [ ] **`wit_constexpr.hpp`** — **compile-time** WIT text generator
       (354 lines).  Walks reflection at consteval time, produces a
       fixed-size `std::array<char, N>` containing
-      `PSIO_WIT\x01` magic + u32 length + WIT text.  The output
+      `PSIO1_WIT\x01` magic + u32 length + WIT text.  The output
       array is placed via clang `__attribute__((section("...")))`
       directly in the wasm guest's data section; `pzam_wit` tool
       promotes it to a `component-type:NAME` custom section.  This
       is the **embedding flow** psizam/module.hpp uses via
-      `PSIO_WIT_SECTION(IFACE)`.  Critical for guest builds — no
+      `PSIO1_WIT_SECTION(IFACE)`.  Critical for guest builds — no
       heap, no runtime, the wasm artifact carries its own schema.
       Depends on `structural.hpp::interface_info<Tag>`.
 
@@ -115,7 +115,7 @@ equivalent.  No reason to drop them.
       Walks PSIO-reflected types at runtime, builds a `wit_world`,
       emits `std::string` (text) or `std::vector<uint8_t>` (Component
       Model binary).  Public API:
-      `psio::generate_wit_text<T>(package)` /
+      `psio1::generate_wit_text<T>(package)` /
       `generate_wit_binary<T>(package)`.  Used by:
         - `psizam/component.hpp` (host-side component definition)
         - `psi-api/db.hpp` (database API generates its own WIT)
@@ -127,15 +127,15 @@ equivalent.  No reason to drop them.
       (13 primitives), `wit_type_kind` enum (11 kinds including
       resource/own/borrow), `wit_attribute` / `wit_named_type` /
       `wit_type_def` / `wit_func` / `wit_interface` / `wit_world`
-      aggregate structs all reflected via PSIO3_REFLECT.  Foundation
+      aggregate structs all reflected via PSIO_REFLECT.  Foundation
       for the rest of the WIT toolchain.  Test: psio3_wit_types_tests
       (74 assertions / 10 cases — primitive idx round-trip, kind enum
       stability, reflection wiring on every struct, in-memory
       construction sample).  Includes `pzam_wit_world` back-compat
       alias for psizam consumers.
 
-- [x] **`wit_resource.hpp`** — `psio3::wit_resource`, `psio3::own<T>`,
-      `psio3::borrow<T>`.  Ported as `psio3/wit_resource.hpp`.  The
+- [x] **`wit_resource.hpp`** — `psio::wit_resource`, `psio::own<T>`,
+      `psio::borrow<T>`.  Ported as `psio3/wit_resource.hpp`.  The
       "real surface area" is ~50 lines of code (vs 299 of doc):
       empty marker base, is_wit_resource_v trait, RAII own<T>,
       bare borrow<T>, and a wit_resource_drop<T> customisation point
@@ -174,9 +174,9 @@ equivalent.  No reason to drop them.
       types in `annotate.hpp`: `final_spec`, `canonical_spec`,
       `unique_keys_spec`, `flags_spec`, `padding_spec`, `since_spec`,
       `unstable_spec`, `deprecated_spec`.  Helper variables:
-      `psio3::final_v` (named with `_v` suffix because `final` is a
-      C++ keyword), `psio3::canonical`, `psio3::unique_keys`,
-      `psio3::flags`, `psio3::padding`.  String-arg specs
+      `psio::final_v` (named with `_v` suffix because `final` is a
+      C++ keyword), `psio::canonical`, `psio::unique_keys`,
+      `psio::flags`, `psio::padding`.  String-arg specs
       (`since`/`unstable`/`deprecated`) constructed at call site.
       Built-in `inherent_annotations` for stdlib types in
       `wrappers.hpp`: `std::map<K,V>` and `std::set<K>` carry
@@ -239,10 +239,10 @@ equivalent.  No reason to drop them.
       One alias; trivial.  Ported as `psio3/bytes_view.hpp` (with
       `mutable_bytes_view` sibling).  Test in `util_tests.cpp`.
 
-- [~] **`check.hpp`** — `psio::check(cond, msg)` and `abort_error`
+- [~] **`check.hpp`** — `psio1::check(cond, msg)` and `abort_error`
       helpers.  Used internally by v1 codecs (bitset, from_avro,
       from_json, etc.).  **SUPERSEDED**: zero downstream callers
-      (`grep -rn psio::check libraries/` outside `/psio/cpp/` returns
+      (`grep -rn psio1::check libraries/` outside `/psio/cpp/` returns
       empty); v3 has `codec_status` / `codec_exception` /
       `validate_or_throw` for the same role with a richer error model.
       No port — confirmed.
@@ -285,7 +285,7 @@ equivalent.  No reason to drop them.
 - [x] **`get_type_name.hpp`** — compile-time type-name string for
       arbitrary T.  Earlier classification as "SUPERSEDED" was wrong
       — it's actually **load-bearing** for schema/WIT generation.
-      `psio3::reflect<T>::name` only handles reflected user types;
+      `psio::reflect<T>::name` only handles reflected user types;
       `get_type_name` handles the full universe: primitives
       (`int32`, `uint64`, `f64`), `std::vector<T>`, `std::optional<T>`,
       `std::variant<...>`, `std::tuple<...>`, `std::chrono::duration`,
@@ -401,16 +401,16 @@ The original capabilities to preserve through the v1→v3 migration:
 | **Type-name strings** (for schema emission) | `get_type_name.hpp` | ✅ ported |
 | **Method-name encoding** (for RPC dispatch) | `compress_name.hpp` | ✅ ported |
 | **WIT attributes** (`@final`, `@since`, ...) | `attributes.hpp` | ✅ ported (folded into annotation system) |
-| **`PSIO_PACKAGE`/`PSIO_INTERFACE` macros** | `structural.hpp` | ❌ **next milestone** |
+| **`PSIO1_PACKAGE`/`PSIO1_INTERFACE` macros** | `structural.hpp` | ❌ **next milestone** |
 | **Runtime WIT text/binary generation** (`generate_wit_text<T>`) | `wit_gen.hpp` | ❌ blocked on structural |
-| **Compile-time WIT embedding in wasm guest** (`PSIO_WIT_SECTION`) | `wit_constexpr.hpp` | ❌ blocked on structural |
+| **Compile-time WIT embedding in wasm guest** (`PSIO1_WIT_SECTION`) | `wit_constexpr.hpp` | ❌ blocked on structural |
 | **WIT text parser** (`wit_parse(text)`) | `wit_parser.hpp` | ❌ |
 | **Component Model binary encoder** | `wit_encode.hpp` | ❌ |
 | **`emit_wit(Schema)` text formatter** | `emit_wit.hpp` (impl in schema.hpp) | ❌ |
 | **SchemaBuilder + schema diff** | `schema.hpp` full | ❌ |
 
 **The compile-time embedding flow** (last group) is non-negotiable for
-psizam guest builds — without `wit_constexpr.hpp`, `PSIO_WIT_SECTION`
+psizam guest builds — without `wit_constexpr.hpp`, `PSIO1_WIT_SECTION`
 in `psizam/module.hpp` cannot embed WIT in the compiled `.wasm`
 artifact.  Both runtime *and* compile-time generators must port.
 

@@ -15,7 +15,7 @@ struct test_host {
    uint32_t last_logged = 0;
    uint64_t counter = 42;
 };
-PSIO_REFLECT(test_host,
+PSIO1_REFLECT(test_host,
    method(add, a, b),
    method(log_value, v),
    method(get_counter))
@@ -26,7 +26,7 @@ struct test_exports {
    uint32_t compute(uint32_t x, uint32_t y);
    void cleanup();
 };
-PSIO_REFLECT(test_exports,
+PSIO1_REFLECT(test_exports,
    method(init),
    method(compute, x, y),
    method(cleanup))

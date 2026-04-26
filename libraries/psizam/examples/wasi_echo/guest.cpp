@@ -14,25 +14,25 @@
 #include <wasi/0.2.3/sockets.hpp>
 #include <wasi/0.2.3/io.hpp>
 
-#include <psio/guest_alloc.hpp>
+#include <psio1/guest_alloc.hpp>
 #include <psizam/module.hpp>
 
 // ── WIT custom sections ────────────────────────────────────────────
-PSIO_WIT_SECTION(wasi_echo_service)
-PSIO_WIT_SECTION(wasi_io_streams)
-PSIO_WIT_SECTION(wasi_io_poll)
-PSIO_WIT_SECTION(wasi_sockets_tcp)
-PSIO_WIT_SECTION(wasi_sockets_tcp_create_socket)
-PSIO_WIT_SECTION(wasi_sockets_instance_network)
+PSIO1_WIT_SECTION(wasi_echo_service)
+PSIO1_WIT_SECTION(wasi_io_streams)
+PSIO1_WIT_SECTION(wasi_io_poll)
+PSIO1_WIT_SECTION(wasi_sockets_tcp)
+PSIO1_WIT_SECTION(wasi_sockets_tcp_create_socket)
+PSIO1_WIT_SECTION(wasi_sockets_instance_network)
 
 // ── Raw WASM import declarations ───────────────────────────────────
-// PSIO_IMPORT_IMPL generates extern "C" [[clang::import_module(...)]]
+// PSIO1_IMPORT_IMPL generates extern "C" [[clang::import_module(...)]]
 // thunks for each method. We call through ImportProxy, not the struct
 // methods, so the inline stubs in the WASI headers don't conflict.
 
-PSIO_IMPORT_IMPL(wasi_sockets_instance_network, instance_network)
-PSIO_IMPORT_IMPL(wasi_sockets_tcp_create_socket, create_tcp_socket)
-PSIO_IMPORT_IMPL(wasi_sockets_tcp,
+PSIO1_IMPORT_IMPL(wasi_sockets_instance_network, instance_network)
+PSIO1_IMPORT_IMPL(wasi_sockets_tcp_create_socket, create_tcp_socket)
+PSIO1_IMPORT_IMPL(wasi_sockets_tcp,
    tcp_socket_start_bind,
    tcp_socket_finish_bind,
    tcp_socket_start_listen,
@@ -40,7 +40,7 @@ PSIO_IMPORT_IMPL(wasi_sockets_tcp,
    tcp_socket_accept,
    tcp_socket_local_address,
    tcp_socket_shutdown)
-PSIO_IMPORT_IMPL(wasi_io_streams,
+PSIO1_IMPORT_IMPL(wasi_io_streams,
    input_stream_blocking_read,
    output_stream_blocking_write_and_flush)
 
@@ -52,7 +52,7 @@ PSIO_IMPORT_IMPL(wasi_io_streams,
 #define WASI_CALL(IFACE, METHOD, ...) \
    ::psizam::ImportProxy::call_impl<decltype(&IFACE::METHOD)>( \
       reinterpret_cast<::psizam::raw_import_fn>( \
-         &PSIO_IMPORT_RAW_NAME(IFACE, METHOD)) \
+         &PSIO1_IMPORT_RAW_NAME(IFACE, METHOD)) \
       __VA_OPT__(,) __VA_ARGS__)
 
 // ── Error checking helpers ─────────────────────────────────────────
@@ -105,33 +105,33 @@ struct wasi_echo_impl
 
       check_sock(
          WASI_CALL(wasi_sockets_tcp, tcp_socket_start_bind,
-                   psio::borrow<tcp_socket>{sock.handle},
-                   psio::borrow<network>{net.handle},
+                   psio1::borrow<tcp_socket>{sock.handle},
+                   psio1::borrow<network>{net.handle},
                    bind_addr));
 
       check_sock(
          WASI_CALL(wasi_sockets_tcp, tcp_socket_finish_bind,
-                   psio::borrow<tcp_socket>{sock.handle}));
+                   psio1::borrow<tcp_socket>{sock.handle}));
 
       // Read back the assigned address (port may differ if 0 was passed)
       auto local = unwrap_sock(
          WASI_CALL(wasi_sockets_tcp, tcp_socket_local_address,
-                   psio::borrow<tcp_socket>{sock.handle}));
+                   psio1::borrow<tcp_socket>{sock.handle}));
 
       // Listen
       check_sock(
          WASI_CALL(wasi_sockets_tcp, tcp_socket_start_listen,
-                   psio::borrow<tcp_socket>{sock.handle}));
+                   psio1::borrow<tcp_socket>{sock.handle}));
 
       check_sock(
          WASI_CALL(wasi_sockets_tcp, tcp_socket_finish_listen,
-                   psio::borrow<tcp_socket>{sock.handle}));
+                   psio1::borrow<tcp_socket>{sock.handle}));
 
       // Accept loop
       for (;;)
       {
          auto accept_r = WASI_CALL(wasi_sockets_tcp, tcp_socket_accept,
-                                   psio::borrow<tcp_socket>{sock.handle});
+                                   psio1::borrow<tcp_socket>{sock.handle});
          if (accept_r.index() == 1)
             break;
 
@@ -141,7 +141,7 @@ struct wasi_echo_impl
          for (;;)
          {
             auto read_r = WASI_CALL(wasi_io_streams, input_stream_blocking_read,
-                                    psio::borrow<input_stream>{is.handle},
+                                    psio1::borrow<input_stream>{is.handle},
                                     uint64_t{4096});
             if (read_r.index() == 1)
                break;
@@ -152,17 +152,17 @@ struct wasi_echo_impl
 
             auto write_r = WASI_CALL(wasi_io_streams,
                                      output_stream_blocking_write_and_flush,
-                                     psio::borrow<output_stream>{os.handle},
+                                     psio1::borrow<output_stream>{os.handle},
                                      std::move(data));
             if (write_r.index() == 1)
                break;
          }
 
          WASI_CALL(wasi_sockets_tcp, tcp_socket_shutdown,
-                   psio::borrow<tcp_socket>{client_sock.handle},
+                   psio1::borrow<tcp_socket>{client_sock.handle},
                    shutdown_type::both);
       }
    }
 };
 
-PSIO_MODULE(wasi_echo_impl, run)
+PSIO1_MODULE(wasi_echo_impl, run)

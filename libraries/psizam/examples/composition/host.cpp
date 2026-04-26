@@ -19,7 +19,7 @@ struct Host
    }
 };
 
-PSIO_HOST_MODULE(Host,
+PSIO1_HOST_MODULE(Host,
          interface(env, log_u64, log_string))
 
 int main()

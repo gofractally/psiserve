@@ -1,264 +1,191 @@
-// pSSZ (PsiSSZ) round-trip and size-trait tests. See .issues/pssz-
-// format-design.md for the format spec.
+// Phase 7 — pSSZ format tag family (pssz8 / pssz16 / pssz32).
+//
+// Same shape coverage as ssz_tests.cpp but verifies:
+//   1. All three widths round-trip primitives, arrays, vectors, strings,
+//      optionals, and reflected records.
+//   2. Narrower offsets produce smaller wire output.
+//   3. Each width's codec agrees with itself on its own output.
 
-#include <catch2/catch.hpp>
-
-#include <psio/bitset.hpp>
-#include <psio/bounded.hpp>
-#include <psio/from_pssz.hpp>
-#include <psio/pssz_view.hpp>
+#include <psio/pssz.hpp>
 #include <psio/reflect.hpp>
-#include <psio/to_pssz.hpp>
 
+#include <catch.hpp>
+
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
-using psio::frac_format_pssz16;
-using psio::frac_format_pssz32;
-using psio::frac_format_pssz8;
-
-TEST_CASE("pssz: primitive round-trip", "[pssz]")
+struct PssPoint
 {
-   auto rt = [](auto val) {
-      auto b = psio::convert_to_pssz<frac_format_pssz32>(val);
-      return psio::convert_from_pssz<frac_format_pssz32, decltype(val)>(b);
-   };
-   REQUIRE(rt(std::uint32_t{0xDEADBEEF}) == 0xDEADBEEF);
-   REQUIRE(rt(std::int64_t{-42}) == -42);
-   REQUIRE(rt(3.14159) == 3.14159);
-   REQUIRE(rt(true) == true);
-   REQUIRE(rt(false) == false);
+   std::int32_t x;
+   std::int32_t y;
+};
+PSIO_REFLECT(PssPoint, x, y)
+
+struct PssLabelled
+{
+   std::int32_t id;
+   std::string  name;
+};
+PSIO_REFLECT(PssLabelled, id, name)
+
+struct PssPacket
+{
+   std::uint16_t             version;
+   std::vector<std::int32_t> payload;
+};
+PSIO_REFLECT(PssPacket, version, payload)
+
+TEMPLATE_TEST_CASE("pssz round-trips primitives across widths",
+                   "[pssz][primitive]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
+{
+   using F = TestType;
+   auto b  = psio::encode(F{}, std::uint32_t{0xDEADBEEF});
+   REQUIRE(b.size() == 4);
+   auto v =
+      psio::decode<std::uint32_t>(F{}, std::span<const char>{b});
+   REQUIRE(v == 0xDEADBEEF);
 }
 
-TEST_CASE("pssz: string / vector — no length prefix, size from span", "[pssz]")
+TEMPLATE_TEST_CASE("pssz round-trips std::string across widths",
+                   "[pssz][string]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   std::string s = "hello";
-   auto        b = psio::convert_to_pssz<frac_format_pssz32>(s);
-   REQUIRE(b.size() == 5);  // no length prefix
-   REQUIRE(psio::convert_from_pssz<frac_format_pssz32, std::string>(b) == s);
-
-   std::vector<std::uint64_t> v = {1, 2, 3};
-   auto                       bv = psio::convert_to_pssz<frac_format_pssz32>(v);
-   REQUIRE(bv.size() == 24);  // 3 × 8 bytes, no offsets needed (fixed element)
-   REQUIRE(psio::convert_from_pssz<frac_format_pssz32, decltype(v)>(bv) == v);
+   using F = TestType;
+   auto b = psio::encode(F{}, std::string{"hi"});
+   auto v = psio::decode<std::string>(F{}, std::span<const char>{b});
+   REQUIRE(v == "hi");
 }
 
-TEST_CASE("pssz: optional needs selector iff min == 0", "[pssz]")
+TEMPLATE_TEST_CASE("pssz round-trips fixed records across widths",
+                   "[pssz][record]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   // Fixed-size inner T — no selector byte. None = 0 bytes, Some =
-   // sizeof(T). Span adjacency disambiguates.
-   static_assert(!psio::pssz_optional_needs_selector<std::uint32_t>);
-   // Variable inner T — selector required.
-   static_assert(psio::pssz_optional_needs_selector<std::string>);
-   static_assert(psio::pssz_optional_needs_selector<std::vector<std::uint8_t>>);
-
-   // std::optional<uint32_t> at top level: wrapped in... well, we need an
-   // enclosing container so the span boundary is meaningful. Top-level
-   // from_pssz doesn't differentiate None from empty for no-selector
-   // optionals — by design, that's the enclosing-container's job.
-
-   // std::optional<string> at top level: selector IS present.
-   std::optional<std::string> some = std::string("x");
-   auto                       sb   = psio::convert_to_pssz<frac_format_pssz32>(some);
-   REQUIRE(sb.size() == 2);  // 1 selector + 1 char
-   auto rt_some =
-       psio::convert_from_pssz<frac_format_pssz32, std::optional<std::string>>(sb);
-   REQUIRE(rt_some.has_value());
-   REQUIRE(*rt_some == "x");
-
-   std::optional<std::string> none;
-   auto                       nb = psio::convert_to_pssz<frac_format_pssz32>(none);
-   REQUIRE(nb.size() == 1);  // just the selector
-   auto rt_none =
-       psio::convert_from_pssz<frac_format_pssz32, std::optional<std::string>>(nb);
-   REQUIRE(!rt_none.has_value());
+   using F = TestType;
+   PssPoint p{2, 5};
+   auto     b = psio::encode(F{}, p);
+   REQUIRE(b.size() == 8);
+   auto v = psio::decode<PssPoint>(F{}, std::span<const char>{b});
+   REQUIRE(v.x == 2);
+   REQUIRE(v.y == 5);
 }
 
-namespace pssz_test
+TEST_CASE("pssz8 record-with-variable-field uses 1-byte offsets",
+          "[pssz][record][variable]")
 {
-   struct BPoint
-   {
-      double x, y;
-   };
-   PSIO_REFLECT(BPoint, definitionWillNotChange(), x, y)
+   PssLabelled l{7, "abc"};
+   auto        b8  = psio::encode(psio::pssz8{}, l);
+   auto        b16 = psio::encode(psio::pssz16{}, l);
+   auto        b32 = psio::encode(psio::pssz32{}, l);
 
-   struct UserProfile
-   {
-      std::uint64_t              id;
-      std::string                name;
-      std::optional<std::string> bio;
-      std::uint32_t              age;
-      double                     score;
-      std::vector<std::string>   tags;
-      bool                       verified;
-   };
-   PSIO_REFLECT(UserProfile, id, name, bio, age, score, tags, verified)
-
-   struct BoundedProfile
-   {
-      std::uint64_t                              id;
-      psio::bounded_string<64>                    name;
-      psio::bounded_string<256>                   bio;
-      std::uint32_t                              age;
-      psio::bounded_list<psio::bounded_string<32>, 8> tags;
-   };
-   PSIO_REFLECT(BoundedProfile, id, name, bio, age, tags)
-}  // namespace pssz_test
-
-TEST_CASE("pssz: reflected DWNC memcpy fast path", "[pssz]")
-{
-   pssz_test::BPoint p{1.5, -2.5};
-   auto              b = psio::convert_to_pssz<frac_format_pssz32>(p);
-   REQUIRE(b.size() == 16);  // DWNC: no header, memcpy sizeof(BPoint)
-   auto rt = psio::convert_from_pssz<frac_format_pssz32, pssz_test::BPoint>(b);
-   REQUIRE(rt.x == 1.5);
-   REQUIRE(rt.y == -2.5);
+   // Fixed id(4) + offset (1/2/4) + tail "abc" (3).
+   REQUIRE(b8.size() == 4 + 1 + 3);
+   REQUIRE(b16.size() == 4 + 2 + 3);
+   REQUIRE(b32.size() == 4 + 4 + 3);
 }
 
-TEST_CASE("pssz: reflected extensible container round-trip", "[pssz]")
+TEMPLATE_TEST_CASE("pssz round-trips records with variable fields",
+                   "[pssz][record][variable]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   pssz_test::UserProfile u{42,
-                            "Alice",
-                            std::string("Bio"),
-                            30,
-                            99.5,
-                            {"t1", "t2"},
-                            true};
-   auto                   b = psio::convert_to_pssz<frac_format_pssz32>(u);
-   auto                   rt =
-       psio::convert_from_pssz<frac_format_pssz32, pssz_test::UserProfile>(b);
-   REQUIRE(rt.id == u.id);
-   REQUIRE(rt.name == u.name);
-   REQUIRE(rt.bio.has_value());
-   REQUIRE(*rt.bio == *u.bio);
-   REQUIRE(rt.age == u.age);
-   REQUIRE(rt.score == u.score);
-   REQUIRE(rt.tags == u.tags);
-   REQUIRE(rt.verified == u.verified);
-
-   // None optional round-trip.
-   pssz_test::UserProfile u2   = u;
-   u2.bio                      = std::nullopt;
-   u2.tags                     = {};
-   auto                   b2   = psio::convert_to_pssz<frac_format_pssz32>(u2);
-   auto                   rt2  =
-       psio::convert_from_pssz<frac_format_pssz32, pssz_test::UserProfile>(b2);
-   REQUIRE(!rt2.bio.has_value());
-   REQUIRE(rt2.tags.empty());
+   using F = TestType;
+   PssLabelled l{42, "alice"};
+   auto        b = psio::encode(F{}, l);
+   auto        v = psio::decode<PssLabelled>(F{}, std::span<const char>{b});
+   REQUIRE(v.id == 42);
+   REQUIRE(v.name == "alice");
 }
 
-TEST_CASE("pssz: auto_pssz_format picks narrowest width", "[pssz]")
+TEMPLATE_TEST_CASE("pssz round-trips vectors of fixed elements",
+                   "[pssz][vector]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   // Unbounded types fall back to pssz32.
-   static_assert(std::is_same_v<psio::auto_pssz_format_t<pssz_test::UserProfile>,
-                                 frac_format_pssz32>);
-
-   // DWNC all-fixed small struct → max = sizeof(T) = 16, fits in pssz8.
-   static_assert(std::is_same_v<psio::auto_pssz_format_t<pssz_test::BPoint>,
-                                 frac_format_pssz8>);
-
-   // Fully bounded extensible struct → pssz16 or pssz32 based on total.
-   constexpr auto bp_max = psio::max_encoded_size<pssz_test::BoundedProfile>();
-   static_assert(bp_max.has_value());
-   // id(8) + age(4) + 4 header + 4+64 name + 4+256 bio + 4+ (8*(4+32)) tags
-   //  = 12 + 4 + 68 + 260 + 4 + 288 = 636 — fits in pssz16 (< 64 KiB).
-   static_assert(std::is_same_v<psio::auto_pssz_format_t<pssz_test::BoundedProfile>,
-                                 frac_format_pssz16>);
+   using F = TestType;
+   std::vector<std::uint32_t> v{1, 2, 3};
+   auto                       b = psio::encode(F{}, v);
+   REQUIRE(b.size() == 12);
+   auto back = psio::decode<std::vector<std::uint32_t>>(
+      F{}, std::span<const char>{b});
+   REQUIRE(back == v);
 }
 
-TEST_CASE("generic bounded<T,N> basic usage", "[bounded]")
+TEMPLATE_TEST_CASE("pssz round-trips records with a vector field",
+                   "[pssz][record][vector]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   // String variant.
-   psio::bounded<std::string, 64> s{std::string("hello")};
-   REQUIRE(s.size() == 5);
-   REQUIRE(s.view() == "hello");
-   REQUIRE_THROWS(psio::bounded<std::string, 4>(std::string("too long")));
-
-   // Vector variant.
-   psio::bounded<std::vector<int>, 8> v{std::vector<int>{1, 2, 3}};
-   REQUIRE(v.size() == 3);
-   REQUIRE(v.storage() == std::vector<int>{1, 2, 3});
-
-   // Detection trait.
-   static_assert(psio::is_bounded_v<psio::bounded<std::string, 32>>);
-   static_assert(!psio::is_bounded_v<std::string>);
-   static_assert(!psio::is_bounded_v<int>);
+   using F = TestType;
+   PssPacket p{9, {100, 200, 300}};
+   auto      b    = psio::encode(F{}, p);
+   auto      back = psio::decode<PssPacket>(F{}, std::span<const char>{b});
+   REQUIRE(back.version == 9);
+   REQUIRE(back.payload == std::vector<std::int32_t>{100, 200, 300});
 }
 
-TEST_CASE("pssz: view primitive and string", "[pssz][view]")
+TEMPLATE_TEST_CASE("pssz round-trips std::optional across widths",
+                   "[pssz][optional]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   auto b_u32 = psio::convert_to_pssz<frac_format_pssz32>(std::uint32_t{0xCAFEBABE});
-   auto v_u32 = psio::pssz_view_of<std::uint32_t, frac_format_pssz32>(b_u32);
-   REQUIRE(v_u32.get() == 0xCAFEBABE);
+   using F = TestType;
+   std::optional<std::uint32_t> some = 123;
+   auto                         b    = psio::encode(F{}, some);
+   REQUIRE(b.size() == 4);
+   auto back = psio::decode<std::optional<std::uint32_t>>(
+      F{}, std::span<const char>{b});
+   REQUIRE(back.has_value());
+   REQUIRE(*back == 123);
 
-   std::string s = "hello, world";
-   auto        bs = psio::convert_to_pssz<frac_format_pssz32>(s);
-   auto        vs = psio::pssz_view_of<std::string, frac_format_pssz32>(bs);
-   REQUIRE(vs.view() == s);
-   REQUIRE(vs.size() == s.size());
+   std::optional<std::uint32_t> none;
+   auto                         b2 = psio::encode(F{}, none);
+   REQUIRE(b2.size() == 0);
 }
 
-TEST_CASE("pssz: view reflected DWNC struct (BPoint)", "[pssz][view]")
+TEMPLATE_TEST_CASE("pssz size_of agrees with encode output size",
+                   "[pssz][size_of]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   pssz_test::BPoint p{1.5, -2.5};
-   auto              buf = psio::convert_to_pssz<frac_format_pssz32>(p);
-   auto              v   = psio::pssz_view_of<pssz_test::BPoint,
-                                   frac_format_pssz32>(buf);
-   // Named accessors from PSIO_REFLECT (v.x(), v.y() etc.) — same
-   // proxy pattern as frac_view / ssz_view. No field<I>() needed.
-   REQUIRE(double(v.x()) == 1.5);
-   REQUIRE(double(v.y()) == -2.5);
+   using F = TestType;
+   PssLabelled l{1, "hello"};
+   auto        b = psio::encode(F{}, l);
+   REQUIRE(psio::size_of(F{}, l) == b.size());
 }
 
-TEST_CASE("pssz: view reflected extensible struct (UserProfile)", "[pssz][view]")
+TEMPLATE_TEST_CASE("pssz validate accepts well-formed buffers",
+                   "[pssz][validate]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   pssz_test::UserProfile u{42,
-                            "Alice Johnson",
-                            std::string("Bio text here"),
-                            30,
-                            99.5,
-                            {"tag1", "tag2", "tag3"},
-                            true};
-   auto buf = psio::convert_to_pssz<frac_format_pssz32>(u);
-   auto v   = psio::pssz_view_of<pssz_test::UserProfile,
-                                   frac_format_pssz32>(buf);
-
-   REQUIRE(std::uint64_t(v.id()) == 42);
-   REQUIRE(v.name().view() == "Alice Johnson");
-   auto opt_bio = v.bio();
-   REQUIRE(opt_bio.has_value());
-   REQUIRE((*opt_bio).view() == "Bio text here");
-   REQUIRE(std::uint32_t(v.age()) == 30);
-   REQUIRE(double(v.score()) == 99.5);
-   auto tags = v.tags();
-   REQUIRE(tags.size() == 3);
-   REQUIRE(tags[0].view() == "tag1");
-   REQUIRE(tags[2].view() == "tag3");
-   REQUIRE(bool(v.verified()) == true);
+   using F = TestType;
+   auto b  = psio::encode(F{}, std::uint32_t{0xCAFEBABE});
+   auto s = psio::validate<std::uint32_t>(F{}, std::span<const char>{b});
+   REQUIRE(s.ok());
 }
 
-TEST_CASE("pssz: bounded type uses narrower pssz16 successfully", "[pssz]")
+TEMPLATE_TEST_CASE("pssz validate rejects truncated primitives",
+                   "[pssz][validate]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
 {
-   pssz_test::BoundedProfile bp{
-       42, psio::bounded_string<64>{std::string("Alice Johnson")},
-       psio::bounded_string<256>{std::string("Software engineer")},
-       30,
-       psio::bounded_list<psio::bounded_string<32>, 8>{
-           std::vector<psio::bounded_string<32>>{
-               psio::bounded_string<32>{std::string("tag1")},
-               psio::bounded_string<32>{std::string("tag2")}}}};
+   using F = TestType;
+   char tiny[2]{};
+   auto s =
+      psio::validate<std::uint32_t>(F{}, std::span<const char>{tiny, 2});
+   REQUIRE(!s.ok());
+   REQUIRE(s.error().format_name == "pssz");
+}
 
-   using F = psio::auto_pssz_format_t<pssz_test::BoundedProfile>;
-   static_assert(std::is_same_v<F, frac_format_pssz16>);
+TEMPLATE_TEST_CASE("pssz scoped sugar matches generic CPO",
+                   "[pssz][format_tag_base]", psio::pssz8, psio::pssz16,
+                   psio::pssz32)
+{
+   using F = TestType;
+   PssPoint p{8, -4};
+   auto     a = psio::encode(F{}, p);
+   auto     b = F::encode(p);
+   REQUIRE(a == b);
 
-   auto b = psio::convert_to_pssz<F>(bp);
-   auto rt =
-       psio::convert_from_pssz<F, pssz_test::BoundedProfile>(b);
-   REQUIRE(rt.id == bp.id);
-   REQUIRE(rt.name.storage() == bp.name.storage());
-   REQUIRE(rt.bio.storage() == bp.bio.storage());
-   REQUIRE(rt.age == bp.age);
-   REQUIRE(rt.tags.size() == bp.tags.size());
+   auto v  = psio::decode<PssPoint>(F{}, std::span<const char>{a});
+   auto v2 = F::template decode<PssPoint>(std::span<const char>{a});
+   REQUIRE(v.x == v2.x);
+   REQUIRE(v.y == v2.y);
 }

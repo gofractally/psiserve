@@ -27,7 +27,7 @@ Bonus that fell out of the work:
 
 ### Phase 5a — `pssz_view<T, F>`
 
-New header `libraries/psio/cpp/include/psio/pssz_view.hpp`. Mirrors
+New header `libraries/psio1/cpp/include/psio/pssz_view.hpp`. Mirrors
 `ssz_view` but:
 - Format-parameterized (internal 8-bit / pssz16 / pssz32 offset widths)
 - Reflected containers skip the `F::header_bytes` extensibility header
@@ -45,7 +45,7 @@ All field-access patterns are span-arithmetic; no allocations.
 
 ### Phase 5b — `bounded<T, N>`
 
-Added `psio::bounded<T, N>` in `bounded.hpp` — a generic wrapper that
+Added `psio1::bounded<T, N>` in `bounded.hpp` — a generic wrapper that
 takes any container-like `T` (String, Vec, Array, …) with a compile-time
 cap. Provides `storage()`, `size()`, `empty()`, `data()`, and a
 SFINAE-gated `view()` for string-T.
@@ -63,10 +63,10 @@ enforcement via `REQUIRE_THROWS` on overflow, storage access, and the
 
 ### Phase 5c — Rust pssz port
 
-New module `libraries/psio/rust/psio/src/pssz.rs` (~350 lines). API:
+New module `libraries/psio1/rust/psio/src/pssz.rs` (~350 lines). API:
 
 ```rust
-use psio::pssz::{Pssz32, to_pssz, from_pssz};
+use psio1::pssz::{Pssz32, to_pssz, from_pssz};
 let bytes = to_pssz::<Pssz32, _>(&42u32);
 let back: u32 = from_pssz::<Pssz32, u32>(&bytes)?;
 ```
@@ -157,25 +157,25 @@ extensibility header). Round-trip byte-identical.
 ## Files changed / added tonight
 
 **C++ (new):**
-- `libraries/psio/cpp/include/psio/pssz_view.hpp`
-- `libraries/psio/cpp/tests/pssz_tests.cpp` (bounded + view test sections)
+- `libraries/psio1/cpp/include/psio/pssz_view.hpp`
+- `libraries/psio1/cpp/tests/pssz_tests.cpp` (bounded + view test sections)
 
 **C++ (modified):**
-- `libraries/psio/cpp/include/psio/bounded.hpp` — added `bounded<T, N>`
-- `libraries/psio/cpp/include/psio/to_ssz.hpp` — backpatching rewrites
+- `libraries/psio1/cpp/include/psio/bounded.hpp` — added `bounded<T, N>`
+- `libraries/psio1/cpp/include/psio/to_ssz.hpp` — backpatching rewrites
   for reflected containers, `std::vector`, `std::array`
-- `libraries/psio/cpp/include/psio/to_pssz.hpp` — single-pass backpatching
-- `libraries/psio/cpp/include/psio/to_avro.hpp` + `from_avro.hpp` —
+- `libraries/psio1/cpp/include/psio/to_pssz.hpp` — single-pass backpatching
+- `libraries/psio1/cpp/include/psio/to_avro.hpp` + `from_avro.hpp` —
   added `bounded_string<N>` / `bounded_list<T,N>` delegating overloads
-- `libraries/psio/cpp/benchmarks/bench_fracpack.cpp` — bounded bench
+- `libraries/psio1/cpp/benchmarks/bench_fracpack.cpp` — bounded bench
   section (BToken / BUserProfile / BOrder / BSensorReading), unbounded
   bench gained pssz columns
 
 **Rust (new):**
-- `libraries/psio/rust/psio/src/pssz.rs`
+- `libraries/psio1/rust/psio/src/pssz.rs`
 
 **Rust (modified):**
-- `libraries/psio/rust/psio/src/lib.rs` — registered `pub mod pssz;`
+- `libraries/psio1/rust/psio/src/lib.rs` — registered `pub mod pssz;`
 
 **Docs:**
 - `.issues/pssz-format-design.md` — completed-items section, trimmed

@@ -3,7 +3,7 @@
 // Subcommands:
 //   pzam wit embed <module.wasm> [-o output.wasm]
 //       Scan the data section for constexpr-generated WIT blobs (magic
-//       prefix PSIO_WIT\x01), promote each to a component-wit:NAME
+//       prefix PSIO1_WIT\x01), promote each to a component-wit:NAME
 //       custom section, and excise the blobs from the data section
 //       (splitting segments to leave no gap in linear memory init).
 //
@@ -73,7 +73,7 @@ static std::vector<uint8_t> sleb128(int32_t n) {
 
 // ── Constants ───────────────────────────────────────────────────────
 
-static constexpr char    WIT_MAGIC[]   = "PSIO_WIT\x01";
+static constexpr char    WIT_MAGIC[]   = "PSIO1_WIT\x01";
 static constexpr size_t  WIT_MAGIC_LEN = sizeof(WIT_MAGIC) - 1;
 static constexpr uint8_t SECTION_DATA  = 11;
 
@@ -366,7 +366,7 @@ static int wit_embed(int argc, char** argv) {
       // No blobs — just copy input to output
       std::ofstream ofs(output, std::ios::binary);
       ofs.write(reinterpret_cast<const char*>(wasm.raw.data()), wasm.raw.size());
-      std::cerr << "No PSIO_WIT blobs found in " << input << "\n";
+      std::cerr << "No PSIO1_WIT blobs found in " << input << "\n";
       return 0;
    }
 
@@ -443,7 +443,7 @@ static int wit_show(int argc, char** argv) {
    auto segments = wasm.parse_data_segments();
    auto blobs = find_blobs_in_segments(segments);
    if (!blobs.empty()) {
-      std::cout << "── Un-promoted PSIO_WIT blobs in data section ──\n";
+      std::cout << "── Un-promoted PSIO1_WIT blobs in data section ──\n";
       for (auto& b : blobs)
          std::cout << "  " << b.interface_name
                    << " (" << b.wit_text.size() << " bytes in segment "

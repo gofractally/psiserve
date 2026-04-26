@@ -1,206 +1,172 @@
-# PSIO
+# psio3
 
-**A serialization library for people who want to own their types.**
+v2-architecture port of `libraries/psio1/`. Header-only C++23 serialization
+library implementing the design in `.issues/psio-v2-design.md`.
 
-PSIO inverts the default assumption of every schema-driven serialization system.
-You keep your types. The codegen gives you proofs and a head start — not a
-prison.
-
----
-
-## The idea in one diagram
-
-Every other serialization library fuses three things into one pipeline:
-
-```
-  schema  ──→  codegen  ──→  generated types  ──→  wire format
-                              (do not edit)
-```
-
-PSIO treats them as three orthogonal axes:
-
-```
-    native representation          abstract shape              wire format
-    ─────────────────────          ──────────────              ───────────
-    std::vector<Point>                                         FracPack
-    std::list<Point>          ←→   list<Point>          ←→    Cap'n Proto
-    boost::small_vector<P>                                    FlatBuffers
-    MyArenaList<Point>                                        JSON
-```
-
-You pick the native type. You pick the wire format. PSIO derives the abstract
-shape from your type via reflection, and validates that it matches whatever
-schema you're working against.
-
-## What follows from this
-
-### 1. Duck typing for bytes
-
-A schema doesn't define the bytes on the wire — it defines a *shape* that any
-compatible type can inhabit. `std::vector<u8>`, `std::string`, and
-`std::array<u8, N>` all satisfy `bytes`. The serializer doesn't care which one
-you chose; it only cares about the shape.
-
-This is the same duck typing Python gives you at the function-call level,
-applied to the serialization boundary.
-
-### 2. One vocabulary, many surface syntaxes
-
-FracPack, WIT, Cap'n Proto, FlatBuffers, Protobuf, Avro — these are alternate
-spellings of the same underlying type algebra (scalars, structs, tuples,
-options, variants, lists, maps). PSIO parses all of them into a shared IR and
-normalizes away the cosmetic differences. Your team authors in whichever schema
-language you prefer; PSIO handles the rest.
-
-### 3. Codegen produces proofs, not code
-
-This is the part that makes the whole thing safe for polyglot production
-environments.
-
-Given `schema.wit`, PSIO generates two files:
-
-```
-types.hpp           ←  a starting point. Edit freely.
-types.contract.hpp  ←  generated, never edited.
-                       Embeds the schema + static_asserts that
-                       shape(YourType) conforms to the schema.
-```
-
-You own `types.hpp`. The contract file is regeneratable from the schema at any
-time — CI can regen and diff it. If you change `std::vector<Point>` to
-`llvm::SmallVector<Point>`, the static_assert still passes because both have
-shape `list<Point>`. If you rename a field or change its type incompatibly, the
-compiler fires a `static_assert` pointing exactly at the violation.
-
-**The generated file is a proof, not an implementation.** The implementation is
-your own code.
-
-### 4. Codegen bootstraps your initial implementation
-
-`types.hpp` isn't empty — codegen writes a reasonable default
-(`std::vector` for lists, `std::optional` for options, `std::variant` for
-unions, `std::string` for strings). That's your starting point. You're free
-to:
-
-- Leave it alone. Works out of the box.
-- Swap `std::vector` → `boost::small_vector` for cache-friendliness.
-- Replace a `std::string` with a custom interned-string type.
-- Wrap a field in a smart pointer, an arena handle, whatever your codebase
-  needs.
-
-As long as the shape survives, the contract passes. You get the ergonomics of
-generated code without the straitjacket.
-
-### 5. Schema evolution becomes a `static_assert` diff
-
-Bump the schema → regenerate `types.contract.hpp` → the compiler enumerates
-every site that breaks. Code review of the contract file's diff *is* the
-migration plan. No runtime `ParseError` surprises in production — the build
-fails at the exact line where the type drifted.
-
-### 6. Graded compatibility, not boolean
-
-Given a schema and a binary, PSIO returns a classification:
-
-| Result                     | Meaning                                              |
-|----------------------------|------------------------------------------------------|
-| **Exact & canonical**      | Bytes match the schema precisely, in canonical form  |
-| **Exact**                  | Bytes match the schema                               |
-| **Forward compatible**     | Binary has fields the schema doesn't know about      |
-| **Backward compatible**    | Schema expects optional fields the binary omits      |
-| **Incompatible**           | Structural mismatch; diff included                   |
-
-This is the output shape a database table, RPC ingress, or consensus layer
-actually needs — not a bool.
-
-### 7. No converter layer
-
-The original sin of protobuf, FlatBuf, and Cap'n Proto: `PointPb` vs `Point`,
-and a conversion function in every file. With PSIO there is one `Point`, in
-your namespace, with the types you chose. The schema is satisfied in place.
-
-### 8. Extends past data types to RPC
-
-The same trick applies to service interfaces. Given a WIT interface, the
-generated contract header `static_assert`s that your handler signatures
-satisfy the interface — no base class, no virtual dispatch, no vtable.
-Just a compile-time shape check against your free functions or methods.
-
-### 9. Cross-language, uniformly
-
-Every target language enforces the contract in its own idiom:
-
-- C++ — `static_assert` over reflection-derived shape
-- Rust — `const _: () = assert!(…)` or trait-bound checks
-- TypeScript — type-level `AssertShape<T, Schema>`
-- Python — import-time `assert_shape(T, schema)`
-
-All enforce the same abstract shape against the same schema text. A type change
-in one language that breaks the shape fails that language's build without
-touching anyone else's toolchain.
-
----
-
-## Answering the obvious objection
-
-> "But in a polyglot codebase, we *need* codegen to enforce the cross-language
-> contract. If anyone changes a type, the schema forces every other language to
-> update."
-
-PSIO keeps that discipline. You still have a schema. The schema is still the
-source of truth for cross-language compatibility. The compiler still fails the
-build if your types drift from the schema.
-
-What you lose is the generated-code prison: the `do not edit` file, the
-converter layer, the 4000-line protoc output, the runtime `ParseError` in prod.
-
-What you keep is the contract.
-
----
-
-## Supported schema languages
-
-| Schema         | Parse | Emit | Notes                                     |
-|----------------|-------|------|-------------------------------------------|
-| FracPack       | ✓     | ✓    | Self-hosting — schema is itself FracPack  |
-| WIT            | ✓     | ✓    | W3C WASI Component Model                  |
-| Cap'n Proto    | ✓     | ✓    | `.capnp` IDL                              |
-| FlatBuffers    | ✓     | ✓    | `.fbs` IDL                                |
-| Protobuf       | —     | ~    | (planned)                                 |
-| Avro           | ✓     | ✓    | JSON schema form                          |
-
-## Supported wire formats
-
-| Format         | Encode | Decode | Views | In-place mutate | Canonical |
-|----------------|--------|--------|-------|-----------------|-----------|
-| FracPack       | ✓      | ✓      | ✓     | ✓               | ✓         |
-| Cap'n Proto    | ✓      | ✓      | ✓     | ✓               | ~         |
-| FlatBuffers    | ✓      | ✓      | ✓     | unsafe          | —         |
-| WIT ABI        | ✓      | ✓      | ✓     | ✓               | ✓         |
-| JSON           | ✓      | ✓      | —     | —               | ✓         |
-| Bincode, Borsh | ✓      | ✓      | —     | —               | Borsh: ✓  |
-
-See `doc/fracpack-spec.md` for the FracPack wire format specification and
-`CompetitionReport.md` for a detailed comparison against every major binary
-serialization format.
-
----
+Lives alongside `libraries/psio1/` (v1) until every format passes
+byte-parity + perf gates; at that point v1 is archived and `psio3/` is
+renamed to `psio/`.
 
 ## Status
 
-Early. The C++ core (`cpp/`) is working and has test coverage. Bindings for
-Rust, Go, Zig, Moonbit, Python, and JS live alongside (`rust/`, `go/`, etc.)
-at varying maturity. The cross-schema validator described above is the
-north-star goal documented in `design_todo.md`.
+**Formats** (v1 byte-parity tested): ssz, pssz, frac, bin, borsh,
+bincode, key, avro, json, flatbuf (native), flatbuf_lib (Google adapter).
 
-## Building
+**Formats** (Phase 14 MVP, round-trip via conformance sweep): capnp,
+wit. MVP shape set is primitives + strings + vectors + reflected
+records; variants / optionals / resources land in a follow-up once the
+psio3 annotation surface is complete.
 
-See the top-level `BUILDING.md`. Short version on macOS:
+**33 ctest targets, all green.** Conformance harness sweeps 11 fixtures
+× 9 symmetric binary formats (capnp-aware) + 8 record-only binary
+formats for variant / bitvector / uint256 coverage. Cross-format
+transcode hits every pair.
+
+## The four DX patterns
+
+### 1. End user — encode and decode
+
+```cpp
+#include <psio/ssz.hpp>
+
+struct Point { std::int32_t x, y; };
+PSIO_REFLECT(Point, x, y)
+
+Point p{3, -7};
+auto bytes = psio::encode(psio::ssz{}, p);        // generic CPO
+auto bytes2 = psio::ssz::encode(p);                // scoped sugar
+
+auto back  = psio::decode<Point>(psio::ssz{}, std::span{bytes});
+auto back2 = psio::ssz::decode<Point>(std::span{bytes});
+
+if (auto st = psio::validate<Point>(psio::ssz{}, std::span{bytes});
+    !st.ok())
+   return st.error();
+```
+
+All per-format operations flow through six CPOs: `encode`, `decode`,
+`size_of`, `validate`, `validate_strict`, `make_boxed`. The tag type
+carries the format identity; CPO selects the tag_invoke overload.
+
+### 2. Type author — annotations without touching the struct
+
+```cpp
+struct Validator {
+   std::string pubkey;
+   std::uint64_t effective_balance;
+   bool slashed;
+};
+PSIO_REFLECT(Validator, pubkey, effective_balance, slashed)
+
+// Add annotations after the fact:
+PSIO_FIELD_ATTRS(Validator, pubkey, psio::length_bound{.exact = 48})
+PSIO_ATTRS(Validator,
+   (effective_balance, (psio::field_num_spec{.value = 3})),
+   (slashed,           (psio::field_num_spec{.value = 4})))
+PSIO_TYPE_ATTRS(Validator, psio::definition_will_not_change{})
+```
+
+The struct stays clean. Size bounds, field numbers, and wire-stability
+commitments live on the reflection, not on the type.
+
+### 3. Format author — add a new format
+
+```cpp
+struct myfmt : psio::format_tag_base<myfmt>
+{
+   // Hidden-friend tag_invoke overloads. encode/decode/size_of/
+   // validate/validate_strict/make_boxed. See psio3/bin.hpp for the
+   // simplest working template.
+   template <typename T>
+   friend std::vector<char> tag_invoke(
+      decltype(::psio::encode), myfmt, const T& v) { … }
+   template <typename T>
+   friend T tag_invoke(decltype(::psio::decode<T>), myfmt, T*,
+                       std::span<const char> bytes) { … }
+   // …
+};
+```
+
+Adding the tag to `PSIO_FOR_EACH_SYMMETRIC_BINARY_FMT` in
+`psio3/conformance.hpp` auto-extends the conformance harness — every
+fixture round-trips through the new format with no per-format test code.
+
+### 4. Dynamic / schema-driven — bytes without a compile-time T
+
+```cpp
+auto schema = psio::schema_of<Validator>();
+auto dv     = psio::to_dynamic(validator);
+
+auto bytes  = psio::encode_dynamic(psio::json{}, schema, dv);
+auto decoded = psio::decode_dynamic(psio::json{}, schema, bytes);
+
+// Cross-format transcode through the dynamic path:
+auto frac_bytes = psio::transcode(schema, psio::json{}, in,
+                                   psio::frac32{}, out);
+```
+
+Gateway / RPC services that receive schemas at runtime use the same
+CPOs — `encode_dynamic` / `decode_dynamic` / `transcode` — and get
+byte-identical output to the static path.
+
+## Architecture — five layers
+
+```
+Layer 5: Sugar                  scoped sugar via format_tag_base
+Layer 4: CPOs                   psio::encode / decode / size_of / …
+Layer 3: Format dispatch        tag_invoke on the format tag
+Layer 2: Storage                buffer<T, F>, view<T, F>, mutable_view<T, F>
+Layer 1: Shape concepts         Primitive / FixedSequence / …
+                                + reflection annotations
+```
+
+Every layer is monomorphized at compile time. No virtuals, no type
+erasure in hot paths.
+
+## Wire guarantees
+
+Each format specifies its wire contract; psio3 encoders are
+**byte-identical to v1 psio** on the shape set both support.
+
+| Format  | Wire                                                 |
+| ------- | ---------------------------------------------------- |
+| ssz     | Ethereum SSZ (raw LE / offset tables / union tag)    |
+| pssz    | SSZ variant with parametric offset width W ∈ {1,2,4} |
+| frac    | fracpack v1 (u16 header + pointer-rel offsets)       |
+| bin     | raw LE primitives + u32-length-prefixed containers   |
+| borsh   | NEAR/Solana Borsh (u32 lengths, u8 variant tags)     |
+| bincode | Rust bincode default (u64 lengths, u32 variant tags) |
+| key     | memcmp-sortable: BE + sign-flip + \0\0 terminator   |
+| avro    | Apache Avro (zig-zag varint integers)                |
+| json    | JSON (positional variants: `[index, value]`)         |
+| flatbuf | FlatBuffers — native + Google-runtime adapter        |
+
+## Directory layout
+
+```
+cpp/include/psio3/
+  <format>.hpp          — tag + encode/decode/... for one format
+  dynamic_<format>.hpp  — runtime schema-driven codec
+  reflect.hpp           — Layer-1 reflection
+  annotate.hpp          — annotations + PSIO_ATTRS / PSIO_FIELD_ATTRS
+  ext_int.hpp           — uint128 / int128 / uint256
+  wrappers.hpp          — bounded<T,N> / utf8_string<N> / bitvector<N> / …
+  schema.hpp            — runtime psio::schema value
+  dynamic_value.hpp     — runtime dynamic_value variant
+  transcode.hpp         — format-to-format conversion
+  conformance.hpp       — PSIO_FOR_EACH_SYMMETRIC_BINARY_FMT harness
+
+cpp/tests/
+  <format>_tests.cpp            — per-format MVP coverage
+  v1_parity_<format>_tests.cpp  — byte-identical to v1 on every fixture
+  conformance_tests.cpp         — format-neutral sweep
+  static_dynamic_parity_tests.cpp — encode == encode_dynamic
+```
+
+## Build
 
 ```bash
-export CC=$(brew --prefix llvm)/bin/clang
-export CXX=$(brew --prefix llvm)/bin/clang++
-cmake -B build -G Ninja -DPSIO_ENABLE_TESTS=ON
-cmake --build build
-./build/bin/psio_tests
+cmake -B build/Debug -G Ninja -DPSIO3_ENABLE_TESTS=ON
+cmake --build build/Debug
+cd build/Debug && ctest -R '^psio3_' -j$(nproc)
 ```

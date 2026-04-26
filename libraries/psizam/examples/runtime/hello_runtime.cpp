@@ -7,9 +7,9 @@
 #include <psizam/runtime.hpp>
 
 // Interface declarations from the hello_world example
-#include <psio/structural.hpp>
-#include <psio/wit_owned.hpp>
-#include <psio/guest_attrs.hpp>
+#include <psio1/structural.hpp>
+#include <psio1/wit_owned.hpp>
+#include <psio1/guest_attrs.hpp>
 
 #include <cstdint>
 #include <fstream>
@@ -20,15 +20,15 @@
 
 // ── Shared interface declarations (same as hello_world/shared.hpp) ──
 
-PSIO_PACKAGE(hello, "0.1.0");
-#undef  PSIO_CURRENT_PACKAGE_
-#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(hello)
+PSIO1_PACKAGE(hello, "0.1.0");
+#undef  PSIO1_CURRENT_PACKAGE_
+#define PSIO1_CURRENT_PACKAGE_ PSIO1_PACKAGE_TYPE_(hello)
 
 struct point {
    uint32_t x{};
    uint32_t y{};
 };
-PSIO_REFLECT(point, x, y)
+PSIO1_REFLECT(point, x, y)
 
 struct env {
    static void log_u64(uint64_t n);
@@ -54,11 +54,11 @@ struct greeter {
    static wit::vector<point>    make_grid(uint32_t w, uint32_t h);
 };
 
-PSIO_INTERFACE(env,       types(), funcs(func(log_u64, value),
+PSIO1_INTERFACE(env,       types(), funcs(func(log_u64, value),
                                          func(log_string, msg),
                                          func(sum_points_host, a, b)))
-PSIO_INTERFACE(clock_api, types(), funcs(func(now)))
-PSIO_INTERFACE(greeter,   types(point),
+PSIO1_INTERFACE(clock_api, types(), funcs(func(now)))
+PSIO1_INTERFACE(greeter,   types(point),
                           funcs(func(run,         count),
                                 func(concat,      a, b),
                                 func(add,         a, b, c),
@@ -92,7 +92,7 @@ struct Host {
    uint64_t now() { return fake_clock; }
 };
 
-PSIO_HOST_MODULE(Host,
+PSIO1_HOST_MODULE(Host,
    interface(env,       log_u64, log_string, sum_points_host),
    interface(clock_api, now))
 

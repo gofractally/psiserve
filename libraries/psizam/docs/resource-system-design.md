@@ -119,7 +119,7 @@ The handle table itself is stack-allocated (or embedded in the host
 struct) at a fixed capacity. No heap allocation even when the guest
 creates resources at the maximum allowed rate.
 
-## C++ Surface: PSIO_RESOURCE
+## C++ Surface: PSIO1_RESOURCE
 
 ```cpp
 // Declaration (shared header):
@@ -161,26 +161,26 @@ class wasm_instance_resource {
    uint32_t cabi_realloc_idx;  // pre-resolved
 public:
    explicit wasm_instance_resource(psizam::instance i);
-   uint32_t resolve_export(psio::name_id func_name);
+   uint32_t resolve_export(psio1::name_id func_name);
    uint64_t call_by_index(uint32_t func_index,
                           uint64_t arg0, uint64_t arg1);
    ~wasm_instance_resource();
 };
 
-PSIO_RESOURCE(wasm_module_resource,
+PSIO1_RESOURCE(wasm_module_resource,
    constructor(wasm_bytes),
    method(instantiate),
    drop)
 
-PSIO_RESOURCE(wasm_instance_resource,
+PSIO1_RESOURCE(wasm_instance_resource,
    method(resolve_export, func_name),
    method(call_by_index, func_index, arg0, arg1),
    drop)
 ```
 
-### What PSIO_RESOURCE generates
+### What PSIO1_RESOURCE generates
 
-On the **host side** (inside PSIO_HOST_MODULE):
+On the **host side** (inside PSIO1_HOST_MODULE):
 
 ```cpp
 // For each resource:
@@ -208,7 +208,7 @@ void wasm_module_resource_drop(uint32_t handle) {
 }
 ```
 
-On the **guest side** (via PSIO_IMPORT):
+On the **guest side** (via PSIO1_IMPORT):
 
 ```cpp
 // A thin RAII wrapper around the u32 handle.
@@ -313,7 +313,7 @@ the index (array lookup).
 The same handle_table pattern extends to psitri cursors:
 
 ```cpp
-PSIO_RESOURCE(db_cursor_resource,
+PSIO1_RESOURCE(db_cursor_resource,
    constructor(table_name, index_id, lower_bound, upper_bound),
    method(next),        // → optional<row>
    method(prev),        // → optional<row>

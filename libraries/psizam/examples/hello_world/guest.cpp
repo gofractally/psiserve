@@ -3,23 +3,23 @@
 // Cross-compiled to wasm32 (wasi-sdk reactor mode) by the example's
 // CMakeLists. shared.hpp declares the interfaces; this file provides an
 // impl class and binds it to canonical-ABI export thunks via
-// PSIO_MODULE.
+// PSIO1_MODULE.
 
 #include "shared.hpp"
 
-#include <psio/guest_alloc.hpp>   // cabi_realloc (single-TU export)
-#include <psizam/module.hpp>      // PSIO_MODULE
+#include <psio1/guest_alloc.hpp>   // cabi_realloc (single-TU export)
+#include <psizam/module.hpp>      // PSIO1_MODULE
 
 #include <span>       // zero-alloc borrowed list view
 #include <string.h>   // memcpy — libc, not libc++: no fd_write pull-in
 
 // ── WIT custom sections — embedded type metadata for the linker ─────
-PSIO_WIT_SECTION(greeter)
-PSIO_WIT_SECTION(env)
-PSIO_WIT_SECTION(clock_api)
+PSIO1_WIT_SECTION(greeter)
+PSIO1_WIT_SECTION(env)
+PSIO1_WIT_SECTION(clock_api)
 
 // ── Guest-side import thunks for canonical types ────────────────────
-PSIO_GUEST_IMPORTS(env, log_string, sum_points_host)
+PSIO1_GUEST_IMPORTS(env, log_string, sum_points_host)
 
 void env::log_string(std::string_view msg) {
    _psio_import_call_env_log_string(msg);
@@ -47,7 +47,7 @@ struct greeter_impl
 
    // concat — borrowed string views in, owning wit::string out. The
    // size-only ctor reserves an n-byte buffer we fill via data(); the
-   // return goes out through PSIO_MODULE's return-area thunk as a
+   // return goes out through PSIO1_MODULE's return-area thunk as a
    // canonical {ptr,len} pair.
    wit::string concat(std::string_view a, std::string_view b)
    {
@@ -120,7 +120,7 @@ struct greeter_impl
    }
 };
 
-PSIO_MODULE(greeter_impl,
+PSIO1_MODULE(greeter_impl,
             run, concat,
             add, sum_point, make_point, translate,
             sum_list, find_first,

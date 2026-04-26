@@ -282,18 +282,18 @@ End-to-end checks the format must pass before declaring "ready":
 
 ## Critical files (when implementation begins, not in this plan)
 
-- `libraries/psio3/cpp/include/psio3/<format>.hpp` — new format
+- `libraries/psio/cpp/include/psio3/<format>.hpp` — new format
   tag, encode / decode / validate / validate_or_throw tag_invokes.
   Mirrors the shape of `pssz.hpp`.
-- `libraries/psio3/cpp/include/psio3/cpo.hpp` — already has the
+- `libraries/psio/cpp/include/psio3/cpo.hpp` — already has the
   validate / validate_or_throw CPO pair this format will plug
   into. No changes expected.
-- `libraries/psio3/cpp/include/psio3/error.hpp` — `codec_status`
+- `libraries/psio/cpp/include/psio3/error.hpp` — `codec_status`
   (already `unique_ptr`-based, suitable as-is).
-- `libraries/psio3/cpp/include/psio3/json.hpp` — existing JSON
+- `libraries/psio/cpp/include/psio3/json.hpp` — existing JSON
   encoder / decoder. The canonical-JSON I/O paths likely share its
   tokenizer.
-- `libraries/psio3/cpp/include/psio3/dynamic_value.hpp` — existing
+- `libraries/psio/cpp/include/psio3/dynamic_value.hpp` — existing
   runtime-typed value representation. The decoder may produce
   these as the natural in-memory shape for fully-dynamic readers.
 

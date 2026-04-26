@@ -7,7 +7,7 @@
 psi_add_wasm_module(wasi_echo_guest
    SOURCES guest.cpp
    OUTPUT  guest.wasm
-   DEPS    psio psizam wasi-cpp)
+   DEPS    psio1 psizam wasi-cpp)
 
 if(NOT TARGET wasi_echo_guest)
    return()

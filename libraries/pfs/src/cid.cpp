@@ -30,7 +30,7 @@ namespace
 {
    constexpr char b32_alphabet[] = "abcdefghijklmnopqrstuvwxyz234567";
 
-   std::string base32_encode(psio::bytes_view data)
+   std::string base32_encode(psio1::bytes_view data)
    {
       std::string out;
       out.reserve((data.size() * 8 + 4) / 5);
@@ -109,7 +109,7 @@ cid cid::from_string(std::string_view s)
    return c;
 }
 
-cid compute_cid(psio::bytes_view data)
+cid compute_cid(psio1::bytes_view data)
 {
    if (data.size() <= chunk_size)
    {

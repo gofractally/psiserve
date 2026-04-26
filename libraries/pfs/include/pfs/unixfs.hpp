@@ -1,5 +1,5 @@
 #pragma once
-#include <psio/bytes_view.hpp>
+#include <psio1/bytes_view.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -9,7 +9,7 @@ namespace pfs::unixfs
 
 // Wrap raw data bytes as a UnixFS File data block (dag-pb encoded).
 // Returns the serialized dag-pb block ready for CID hashing.
-std::vector<uint8_t> encode_file_block(psio::bytes_view data);
+std::vector<uint8_t> encode_file_block(psio1::bytes_view data);
 
 // Build a UnixFS directory link entry for a dag-pb Links array.
 // Used to construct intermediate DAG nodes for multi-chunk files.
