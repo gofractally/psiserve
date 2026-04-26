@@ -96,6 +96,17 @@ equivalent.  No reason to drop them.
       types.  Used by `psi-api/db.hpp` (`psio::generate_wit_binary<store>`).
       Foundational for the "API definition is C++ types" pattern.
 
+- [x] **`wit_types.hpp`** — WIT IR data structures.  `wit_prim` enum
+      (13 primitives), `wit_type_kind` enum (11 kinds including
+      resource/own/borrow), `wit_attribute` / `wit_named_type` /
+      `wit_type_def` / `wit_func` / `wit_interface` / `wit_world`
+      aggregate structs all reflected via PSIO3_REFLECT.  Foundation
+      for the rest of the WIT toolchain.  Test: psio3_wit_types_tests
+      (74 assertions / 10 cases — primitive idx round-trip, kind enum
+      stability, reflection wiring on every struct, in-memory
+      construction sample).  Includes `pzam_wit_world` back-compat
+      alias for psizam consumers.
+
 - [x] **`wit_resource.hpp`** — `psio3::wit_resource`, `psio3::own<T>`,
       `psio3::borrow<T>`.  Ported as `psio3/wit_resource.hpp`.  The
       "real surface area" is ~50 lines of code (vs 299 of doc):

@@ -107,6 +107,9 @@ target_include_directories(psio3_type_name_tests PRIVATE ${PSIO3_CATCH2_INCLUDE}
 target_compile_features(psio3_type_name_tests PRIVATE cxx_std_23)
 add_test(NAME psio3_type_name_tests COMMAND psio3_type_name_tests)
 
+# WIT IR data structures (wit_types.hpp).
+psio3_add_test(psio3_wit_types_tests wit_types_tests.cpp)
+
 # Phase 6b partial: v1 ↔ psio3 SSZ byte-parity tests. Links BOTH psio
 # (v1) and psio3 into the same executable so we can encode the same
 # value through both codecs and assert identical bytes.
