@@ -71,6 +71,7 @@ endif()
 
 # ── Libraries ──────────────────────────────────────────────────────────────────
 add_subdirectory(libraries/psio)
+add_subdirectory(libraries/psio3)
 if(NOT PSISERVE_WASI)
    # Embed psitri as a subdirectory so its headers / libraries (sal, psitri,
    # hash, ucc, art) are available to psiserve. Psitri's own test suite and
