@@ -10,6 +10,7 @@
 #include <psizam/types.hpp>
 
 #include <cstring>
+#include <span>
 
 namespace psizam {
 
@@ -154,7 +155,7 @@ namespace psizam {
    }
 
    /// Deserialize raw WASM constant expression bytes into an init_expr.
-   inline init_expr deserialize_init_expr(const std::vector<uint8_t>& raw) {
+   inline init_expr deserialize_init_expr(std::span<const uint8_t> raw) {
       init_expr ie{};
       if (raw.empty()) return ie;
 
@@ -197,11 +198,15 @@ namespace psizam {
 
       // Check for extended constant expression (more instructions before end)
       if (pos < raw.size() && raw[pos] != opcodes::end) {
-         ie.raw_expr = raw;
+         ie.raw_expr.assign(raw.begin(), raw.end());
          ie.opcode = opcodes::i32_const; // placeholder, raw_expr triggers evaluate()
       }
 
       return ie;
+   }
+
+   inline init_expr deserialize_init_expr(const std::vector<uint8_t>& raw) {
+      return deserialize_init_expr(std::span<const uint8_t>{raw.data(), raw.size()});
    }
 
    // =========================================================================

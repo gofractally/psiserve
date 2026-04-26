@@ -5,6 +5,8 @@
 #include <psizam/types.hpp>
 #include <catch2/catch.hpp>
 
+#include <span>
+
 using namespace psizam;
 using namespace psizam::detail;
 
@@ -447,6 +449,19 @@ TEST_CASE("pzam_metadata: init_expr round-trip for all opcode types", "[pzam_met
       CHECK(restored.opcode == opcodes::ref_func);
       CHECK(restored.value.i32 == 7);
    }
+}
+
+TEST_CASE("pzam_metadata: init_expr deserializes from zero-copy span", "[pzam_metadata]") {
+   init_expr ie{};
+   ie.opcode = opcodes::i32_const;
+   ie.value.i32 = 12345;
+
+   auto raw = serialize_init_expr(ie);
+   std::span<const uint8_t> view{raw.data(), raw.size()};
+   auto restored = deserialize_init_expr(view);
+
+   CHECK(restored.opcode == opcodes::i32_const);
+   CHECK(restored.value.i32 == 12345);
 }
 
 TEST_CASE("pzam_metadata: init_expr edge cases", "[pzam_metadata]") {
