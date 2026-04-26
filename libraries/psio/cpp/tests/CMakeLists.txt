@@ -51,6 +51,10 @@ psio3_add_test(psio3_frac_tests frac_tests.cpp)
 # Phase 10: bin codec (simplest length-prefixed binary).
 psio3_add_test(psio3_bin_tests bin_tests.cpp)
 
+# pjson: schemaless self-describing format. Spec in
+# .issues/psio3-schemaless-jsonb.md.
+psio3_add_test(psio_pjson_tests pjson_tests.cpp)
+
 # §4.4 format-neutral conformance harness — one fixture, all formats.
 psio3_add_test(psio3_conformance_tests conformance_tests.cpp)
 
@@ -112,6 +116,9 @@ psio3_add_test(psio3_wit_types_tests wit_types_tests.cpp)
 
 # Structural metadata macros (structural.hpp): PSIO_PACKAGE + PSIO_INTERFACE.
 psio3_add_test(psio3_structural_tests structural_tests.cpp)
+
+# Runtime WIT generator (wit_gen.hpp).
+psio3_add_test(psio3_wit_gen_tests wit_gen_tests.cpp)
 
 # Phase 6b partial: v1 ↔ psio SSZ byte-parity tests. Links BOTH psio
 # (v1) and psio into the same executable so we can encode the same
