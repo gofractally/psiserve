@@ -1,6 +1,8 @@
 // Phase 2 — annotation system tests.
 
 #include <psio3/annotate.hpp>
+#include <psio3/reflect.hpp>
+#include <psio3/wrappers.hpp>
 
 #include <catch.hpp>
 
@@ -213,4 +215,46 @@ TEST_CASE("PSIO3_TYPE_ATTRS emits a type-level annotation",
    auto d =
       psio3::find_spec<psio3::definition_will_not_change>(type_anns);
    REQUIRE(d.has_value());
+}
+
+// ── length_bound on optional<T> propagates to inner T ────────────────
+//
+// The applicability check unwraps transparent wrappers — a spec attached
+// to an `optional<U>` field is also accepted if it would apply to U.
+// This allows annotation-form bounds to reach into common wrapper types
+// without separate codec plumbing per wrapper.
+
+struct OptBoundForm {
+   std::optional<std::string>                title;
+   std::optional<std::vector<std::uint32_t>> tags;
+};
+PSIO3_REFLECT(OptBoundForm, title, tags)
+PSIO3_FIELD_ATTRS(OptBoundForm, title,
+   psio3::length_bound{.max = 64})
+PSIO3_FIELD_ATTRS(OptBoundForm, tags,
+   psio3::length_bound{.max = 16})
+
+TEST_CASE("length_bound on optional<T> reaches the inner T",
+          "[annotate][optional]")
+{
+   // Compiling these effective_annotations_for instantiations exercises
+   // the static_assert in all_specs_apply.  Before the fix this failed
+   // with "spec is attached to a field whose shape is not in the spec's
+   // applies_to set" because OptionalShape isn't in length_bound's
+   // applies_to.  After the fix, applicability sees through optional<>
+   // and finds the inner ByteString / VariableSequence shape.
+   using TitleEff = psio3::effective_annotations_for<
+      OptBoundForm, std::optional<std::string>, &OptBoundForm::title>;
+   constexpr auto title_lb =
+      psio3::find_spec<psio3::length_bound>(TitleEff::value);
+   REQUIRE(title_lb.has_value());
+   REQUIRE(title_lb->max == 64);
+
+   using TagsEff = psio3::effective_annotations_for<
+      OptBoundForm, std::optional<std::vector<std::uint32_t>>,
+      &OptBoundForm::tags>;
+   constexpr auto tags_lb =
+      psio3::find_spec<psio3::length_bound>(TagsEff::value);
+   REQUIRE(tags_lb.has_value());
+   REQUIRE(tags_lb->max == 16);
 }

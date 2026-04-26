@@ -375,21 +375,55 @@ namespace psio3 {
          }
       };
 
+      // ── Transparent wrapper unwrap ─────────────────────────────────────
+      //
+      // Some types are "transparent" w.r.t. annotations: a spec attached
+      // to such a field is meaningful for the inner type, not the
+      // wrapper itself.  `std::optional<U>` is the first member of this
+      // family — saying `length_bound{.max=N}` on `optional<string>`
+      // naturally means "the inner string has length ≤ N".  The unwrap
+      // is applied recursively so `optional<optional<U>>` resolves to U.
+      //
+      // Future entries may include `std::expected<T, E>` (forward to T)
+      // and `std::variant<T, monostate>` (forward to T when monostate
+      // represents absence).  `std::variant<A, B>` with two real
+      // alternatives stays opaque — there's no canonical inner type.
+
+      template <typename T>
+      struct unwrap_transparent
+      {
+         using type = T;
+      };
+      template <typename U>
+      struct unwrap_transparent<std::optional<U>>
+      {
+         using type = typename unwrap_transparent<U>::type;
+      };
+
       // ── Applicability check ────────────────────────────────────────────
       //
       // For each spec in the effective tuple, static_assert that it's
-      // applicable to FieldShape — i.e. either declares no applies_to
-      // (permissive) or includes FieldShape in its shape_set.
+      // applicable to either the field's shape directly OR — when the
+      // field is a transparent wrapper — to the inner type's shape.
+      // Most specs declare `applies_to = shape_set<...>`; those without
+      // it are permissive (apply everywhere).
 
-      template <typename FieldShape, typename Tuple>
+      template <typename Spec, typename FieldT>
+      inline static constexpr bool spec_applies_to_field_v =
+         ::psio3::spec_applies_to_shape_v<Spec, ::psio3::shape_tag_of<FieldT>>
+         || ::psio3::spec_applies_to_shape_v<
+               Spec, ::psio3::shape_tag_of<
+                        typename unwrap_transparent<FieldT>::type>>;
+
+      template <typename FieldT, typename Tuple>
       struct all_specs_apply;
 
-      template <typename FieldShape, typename... Specs>
-      struct all_specs_apply<FieldShape, std::tuple<Specs...>>
+      template <typename FieldT, typename... Specs>
+      struct all_specs_apply<FieldT, std::tuple<Specs...>>
       {
          static constexpr bool value =
-            (::psio3::spec_applies_to_shape_v<std::remove_cvref_t<Specs>,
-                                              FieldShape> && ...);
+            (spec_applies_to_field_v<std::remove_cvref_t<Specs>, FieldT>
+             && ...);
       };
 
    }  // namespace detail
@@ -472,7 +506,7 @@ namespace psio3 {
       // by declaring no applies_to set). Catches "max_size on a record"
       // and similar mistakes at annotation time, not at wire time.
       static_assert(
-         detail::all_specs_apply<shape_tag_of<field_t>, value_t>::value,
+         detail::all_specs_apply<field_t, value_t>::value,
          "psio3: a spec in the effective annotations is attached to a "
          "field whose shape is not in the spec's applies_to set. Check "
          "the spec's `applies_to = shape_set<...>` declaration and the "

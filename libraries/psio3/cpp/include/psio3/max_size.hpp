@@ -61,6 +61,14 @@ namespace psio3 {
          using element_type             = E;
       };
 
+      template <typename T>
+      struct is_std_optional : std::false_type {};
+      template <typename U>
+      struct is_std_optional<std::optional<U>> : std::true_type
+      {
+         using inner_type = U;
+      };
+
       // Extract the effective count cap from a length_bound: exact wins,
       // then max. min alone does not bound the upper side.
       constexpr std::optional<std::uint32_t>
@@ -129,6 +137,30 @@ namespace psio3 {
                return std::nullopt;
             return static_cast<std::size_t>(*n) * *e +
                    kVariableFieldOverhead;
+         }
+         // Optional → transparent w.r.t. annotations.  The bound
+         // applies to the inner U, not the optional itself.  Wire
+         // overhead is conservatively billed as: U's max payload
+         // (computed via the same field machinery, so a length_bound
+         // on the optional<U> field reaches U) + 1-byte union tag
+         // (always added — it over-counts by 1 byte for fixed-U
+         // cases where pssz uses span equality instead of a selector,
+         // which is acceptable for an upper bound) + the optional's
+         // own offset slot (kVariableFieldOverhead).
+         else if constexpr (is_std_optional<F>::value)
+         {
+            using U = typename F::value_type;
+            // Recurse via max_field_with_annots so length_bound
+            // propagates to U.  If U is itself a string/vector, the
+            // recursion will add U's own kVariableFieldOverhead — for
+            // an outer optional<string> with W=4 this conservatively
+            // bills two slots (the outer and the inner), one of which
+            // is fictitious in pssz but not in frac/bin.  Slack is
+            // acceptable for an upper bound.
+            auto inner = max_field_with_annots<U>(annots);
+            if (!inner)
+               return std::nullopt;
+            return *inner + 1u + kVariableFieldOverhead;
          }
          else
          {
