@@ -75,9 +75,10 @@ namespace psio1::run_detail
          return K;
       else
       {
-         constexpr std::size_t prev_off = reflect<T>::data_member_offsets[I + K - 1];
+         constexpr auto&       offsets  = reflect<T>::data_member_offsets;
+         constexpr std::size_t prev_off = offsets[I + K - 1];
          constexpr std::size_t prev_sz  = nth_field_size<T, I + K - 1>();
-         constexpr std::size_t my_off   = reflect<T>::data_member_offsets[I + K];
+         constexpr std::size_t my_off   = offsets[I + K];
          if constexpr (my_off != prev_off + prev_sz)
             return K;
          else
