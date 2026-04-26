@@ -110,6 +110,9 @@ add_test(NAME psio3_type_name_tests COMMAND psio3_type_name_tests)
 # WIT IR data structures (wit_types.hpp).
 psio3_add_test(psio3_wit_types_tests wit_types_tests.cpp)
 
+# Structural metadata macros (structural.hpp): PSIO_PACKAGE + PSIO_INTERFACE.
+psio3_add_test(psio3_structural_tests structural_tests.cpp)
+
 # Phase 6b partial: v1 ↔ psio SSZ byte-parity tests. Links BOTH psio
 # (v1) and psio into the same executable so we can encode the same
 # value through both codecs and assert identical bytes.
