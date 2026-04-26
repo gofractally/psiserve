@@ -78,11 +78,30 @@ equivalent.  No reason to drop them.
 
 - [ ] **`structural.hpp`** — `PSIO_PACKAGE(name, version)`,
       `PSIO_INTERFACE`, etc. — L2 schema declaration macros (437 lines).
-      Required for the schema-as-contract workflow (the "single source
-      of truth" path that emits WIT and validates against it).
+      **Keystone for both WIT-generation flows** — defines
+      `interface_info<Tag>` which is the input to both
+      `wit_gen.hpp` (runtime) and `wit_constexpr.hpp` (compile-time
+      embedding).  Required for the schema-as-contract workflow.
 
-- [ ] **`emit_wit.hpp`** — schema IR → WIT text emitter.  Required if
-      we want C++ types → WIT files.
+- [ ] **`wit_constexpr.hpp`** — **compile-time** WIT text generator
+      (354 lines).  Walks reflection at consteval time, produces a
+      fixed-size `std::array<char, N>` containing
+      `PSIO_WIT\x01` magic + u32 length + WIT text.  The output
+      array is placed via clang `__attribute__((section("...")))`
+      directly in the wasm guest's data section; `pzam_wit` tool
+      promotes it to a `component-type:NAME` custom section.  This
+      is the **embedding flow** psizam/module.hpp uses via
+      `PSIO_WIT_SECTION(IFACE)`.  Critical for guest builds — no
+      heap, no runtime, the wasm artifact carries its own schema.
+      Depends on `structural.hpp::interface_info<Tag>`.
+
+- [ ] **`emit_wit.hpp`** — schema IR → WIT text emitter (41 lines
+      of declarations; impl lives in `schema.hpp` body).  Cannot ship
+      standalone — bundled with full `schema.hpp` port.  Different
+      from `wit_constexpr.hpp` (constexpr embedding) and `wit_gen.hpp`
+      (C++ types → wit_world) — this one runs at runtime, walking a
+      pre-built `wit_world` IR and producing text.  Used by host-side
+      tools that already have a populated `Schema`.
 
 - [ ] **`wit_parser.hpp`** — recursive-descent WIT text parser.
       `wit_parse(text) → wit_world`.  Required for schema-import
@@ -92,9 +111,17 @@ equivalent.  No reason to drop them.
       Required for emitting deployable Component artefacts (vs only
       consuming the canonical ABI which `wit.hpp` already does).
 
-- [ ] **`wit_gen.hpp`** — generate WIT text from PSIO-reflected C++
-      types.  Used by `psi-api/db.hpp` (`psio::generate_wit_binary<store>`).
-      Foundational for the "API definition is C++ types" pattern.
+- [ ] **`wit_gen.hpp`** — **runtime** WIT generator (630 lines).
+      Walks PSIO-reflected types at runtime, builds a `wit_world`,
+      emits `std::string` (text) or `std::vector<uint8_t>` (Component
+      Model binary).  Public API:
+      `psio::generate_wit_text<T>(package)` /
+      `generate_wit_binary<T>(package)`.  Used by:
+        - `psizam/component.hpp` (host-side component definition)
+        - `psi-api/db.hpp` (database API generates its own WIT)
+        - `pzam_wit` tool (display component-type sections)
+      Depends on `structural.hpp::interface_info<Tag>`,
+      `get_type_name`, `wit_resource`.
 
 - [x] **`wit_types.hpp`** — WIT IR data structures.  `wit_prim` enum
       (13 primitives), `wit_type_kind` enum (11 kinds including
@@ -361,6 +388,31 @@ strict superset of psio v1.  Of those:
   `untagged`, `to_hex`, `get_type_name`, `tuple`, `compress_name`).
 - **3 are internal helpers** (`fpconv`/`powers`, possibly
   superseded; `ctype` shim).
+
+## WIT capability matrix — what we're protecting
+
+The original capabilities to preserve through the v1→v3 migration:
+
+| Capability | v1 path | v3 status |
+|---|---|---|
+| **Wire codec** (encode/decode canonical ABI bytes) | `canonical_abi.hpp` | ✅ `wit.hpp` (1010 lines, format tag) |
+| **IR for WIT schema** (`wit_world`, `wit_func`, ...) | `wit_types.hpp` | ✅ ported |
+| **Resource types** (`own<T>`, `borrow<T>`) | `wit_resource.hpp` | ✅ ported |
+| **Type-name strings** (for schema emission) | `get_type_name.hpp` | ✅ ported |
+| **Method-name encoding** (for RPC dispatch) | `compress_name.hpp` | ✅ ported |
+| **WIT attributes** (`@final`, `@since`, ...) | `attributes.hpp` | ✅ ported (folded into annotation system) |
+| **`PSIO_PACKAGE`/`PSIO_INTERFACE` macros** | `structural.hpp` | ❌ **next milestone** |
+| **Runtime WIT text/binary generation** (`generate_wit_text<T>`) | `wit_gen.hpp` | ❌ blocked on structural |
+| **Compile-time WIT embedding in wasm guest** (`PSIO_WIT_SECTION`) | `wit_constexpr.hpp` | ❌ blocked on structural |
+| **WIT text parser** (`wit_parse(text)`) | `wit_parser.hpp` | ❌ |
+| **Component Model binary encoder** | `wit_encode.hpp` | ❌ |
+| **`emit_wit(Schema)` text formatter** | `emit_wit.hpp` (impl in schema.hpp) | ❌ |
+| **SchemaBuilder + schema diff** | `schema.hpp` full | ❌ |
+
+**The compile-time embedding flow** (last group) is non-negotiable for
+psizam guest builds — without `wit_constexpr.hpp`, `PSIO_WIT_SECTION`
+in `psizam/module.hpp` cannot embed WIT in the compiled `.wasm`
+artifact.  Both runtime *and* compile-time generators must port.
 
 ## Recommended ordering
 
