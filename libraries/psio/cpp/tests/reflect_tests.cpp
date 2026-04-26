@@ -199,3 +199,30 @@ TEST_CASE("reflect<T> mutating visitor writes through to the object",
    REQUIRE(p.x == 7);
    REQUIRE(p.y == 13);
 }
+
+namespace {
+   // PSIO_REFLECT with no fields — used for resource markers like
+   // wasi:io/poll's `pollable` (an empty struct deriving wit_resource).
+   struct EmptyMarker {};
+   PSIO_REFLECT(EmptyMarker)
+}
+
+TEST_CASE("reflect<T> with zero fields", "[reflect]")
+{
+   using R = psio::reflect<EmptyMarker>;
+
+   STATIC_REQUIRE(R::is_reflected);
+   STATIC_REQUIRE(R::name == std::string_view{"EmptyMarker"});
+   STATIC_REQUIRE(R::member_count == 0);
+
+   CHECK_FALSE(R::index_of("anything").has_value());
+   CHECK_FALSE(R::index_of_field_number(1).has_value());
+
+   EmptyMarker m;
+   CHECK_FALSE(R::visit_field_by_name(m, "x", [](auto&) {}));
+   CHECK_FALSE(R::visit_field_by_number(m, 1, [](auto&) {}));
+
+   int touches = 0;
+   R::for_each_field(m, [&](auto&&...) { ++touches; });
+   CHECK(touches == 0);
+}

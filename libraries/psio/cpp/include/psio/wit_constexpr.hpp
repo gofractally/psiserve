@@ -242,6 +242,18 @@ namespace psio
       template <typename T>
       constexpr void emit_record(buffer& buf)
       {
+         if constexpr (is_wit_resource_v<T>)
+         {
+            // Resources are opaque handles — runtime wit_gen emits a
+            // bare `resource T;` when no methods are registered for T.
+            // Match that shape exactly.  Resource methods themselves
+            // are picked up via a separate PSIO_INTERFACE on T (the
+            // tag is the resource type itself).
+            buf.append("  resource ");
+            emit_kebab(buf, std::string_view{reflect<T>::name});
+            buf.append(";\n\n");
+            return;
+         }
          buf.append("  record ");
          emit_kebab(buf, std::string_view{reflect<T>::name});
          buf.append(" {\n");

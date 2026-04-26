@@ -123,6 +123,10 @@ psio3_add_test(psio3_wit_gen_tests wit_gen_tests.cpp)
 # Consteval WIT generator (wit_constexpr.hpp).
 psio3_add_test(psio3_wit_constexpr_tests wit_constexpr_tests.cpp)
 
+# Production-shaped WASI 2.3 inputs through wit_gen + wit_constexpr +
+# wit_encode (resources, own/borrow, multi-interface).
+psio3_add_test(psio3_wit_wasi_shapes_tests wit_wasi_shapes_tests.cpp)
+
 # WIT Component Model binary encoder (wit_encode.hpp).
 # Links psio1 too — the byte-parity test compares v3 output against v1.
 add_executable(psio3_wit_encode_tests wit_encode_tests.cpp main.cpp)

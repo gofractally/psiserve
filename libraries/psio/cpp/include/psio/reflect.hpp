@@ -235,11 +235,74 @@ namespace psio {
    inline constexpr auto ::psio::annotate<::psio::type<TYPE>{}> =             \
       ::std::tuple{::psio::definition_will_not_change{}};
 
-#define PSIO_REFLECT(TYPE, ...)                                                          \
-   PSIO_REFLECT_DISPATCH_(                                                               \
-      TYPE,                                                                               \
-      BOOST_PP_SEQ_TRANSFORM(PSIO_REFLECT_CLASSIFY, _,                                   \
+// PSIO_REFLECT(TYPE)             — zero-field marker (resource opt-in)
+// PSIO_REFLECT(TYPE, f1, f2, …)  — record / struct
+//
+// Dispatch on __VA_OPT__: BOOST_PP_VARIADIC_TO_SEQ on truly-empty input
+// produces a one-element seq with empty content, which then trips the
+// downstream macros. Splitting on emptiness avoids the issue.
+#define PSIO_REFLECT(TYPE, ...) \
+   BOOST_PP_CAT(PSIO_REFLECT_DISPATCH_, \
+                BOOST_PP_CAT(0, __VA_OPT__(_HAS)))(TYPE, __VA_ARGS__)
+
+#define PSIO_REFLECT_DISPATCH_0(TYPE, ...) PSIO_REFLECT_NO_FIELDS_(TYPE)
+#define PSIO_REFLECT_DISPATCH_0_HAS(TYPE, ...)                                         \
+   PSIO_REFLECT_DISPATCH_(                                                              \
+      TYPE,                                                                             \
+      BOOST_PP_SEQ_TRANSFORM(PSIO_REFLECT_CLASSIFY, _,                                  \
                              BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__)))
+
+// Zero-field reflection — used for resource markers like
+//
+//    struct pollable : psio::wit_resource {};
+//    PSIO_REFLECT(pollable)
+//
+// The reflected metadata reports member_count = 0 and short-circuits
+// the visit / for_each entry points.  No member_pointer / member_name
+// / member_type templates are instantiated (Idx has no valid value),
+// so callers gating on member_count > 0 stay correct.
+#define PSIO_REFLECT_NO_FIELDS_(TYPE)                                                  \
+   struct BOOST_PP_CAT(psio3_reflect_impl_, TYPE)                                      \
+   {                                                                                   \
+      using type = TYPE;                                                               \
+      static constexpr bool               is_reflected = true;                         \
+      static constexpr ::std::string_view name         = BOOST_PP_STRINGIZE(TYPE);     \
+      static constexpr ::std::size_t      member_count = 0;                            \
+      static constexpr ::std::array<::std::string_view, 0> _names_array_{};            \
+                                                                                       \
+      static constexpr ::std::optional<::std::size_t>                                  \
+      index_of(::std::string_view) noexcept                                            \
+      {                                                                                \
+         return ::std::nullopt;                                                        \
+      }                                                                                \
+                                                                                       \
+      static constexpr ::std::optional<::std::size_t>                                  \
+      index_of_field_number(::std::uint32_t) noexcept                                  \
+      {                                                                                \
+         return ::std::nullopt;                                                        \
+      }                                                                                \
+                                                                                       \
+      template <typename Obj, typename F>                                              \
+      static constexpr bool visit_field_by_name(Obj&, ::std::string_view, F&&)         \
+      {                                                                                \
+         return false;                                                                 \
+      }                                                                                \
+                                                                                       \
+      template <typename Obj, typename F>                                              \
+      static constexpr bool visit_field_by_number(Obj&, ::std::uint32_t, F&&)          \
+      {                                                                                \
+         return false;                                                                 \
+      }                                                                                \
+                                                                                       \
+      template <typename Obj, typename F>                                              \
+      static constexpr void for_each_field(Obj&, F&&)                                  \
+      {                                                                                \
+      }                                                                                \
+   };                                                                                  \
+   inline auto psio3_reflect_helper(TYPE*) noexcept                                    \
+   {                                                                                   \
+      return BOOST_PP_CAT(psio3_reflect_impl_, TYPE){};                                \
+   }
 
 #define PSIO_REFLECT_DISPATCH_(TYPE, KIND_SEQ)                                           \
    PSIO_REFLECT_IMPL_(                                                                   \
