@@ -61,10 +61,13 @@ equivalent.  No reason to drop them.
       also load-bearing in psizam / psiserve / psitri / psi-api.
       Direct port — no dependencies on the rest of v1 beyond stdlib.
 
-- [ ] **`compress_name.hpp`** — older name-encoding variant.  Likely
-      superseded by `name.hpp` itself but worth confirming whether any
-      caller still uses it.  **REVIEW**: probably mark as superseded
-      once `name.hpp` is ported, but verify no downstream call sites.
+- [~] **`compress_name.hpp`** — method-name compressor (different
+      alphabet from `name.hpp`'s general name encoding).  503 lines,
+      MIT-licensed.  Used internally by v1's `get_type_name.hpp`;
+      no other downstream callers (`grep -rn method_to_number
+      libraries/` outside `/psio/cpp/` and `/psio2/cpp/` returns
+      empty).  **SUPERSEDED** along with `get_type_name.hpp`.  No
+      port — flagged in REVIEW.
 
 - [ ] **`structural.hpp`** — `PSIO_PACKAGE(name, version)`,
       `PSIO_INTERFACE`, etc. — L2 schema declaration macros (437 lines).
@@ -163,8 +166,9 @@ equivalent.  No reason to drop them.
 
 ### Needs port (low priority — small utilities)
 
-- [ ] **`bytes_view.hpp`** — `using bytes_view = std::span<const uint8_t>`.
-      One alias; trivial.
+- [x] **`bytes_view.hpp`** — `using bytes_view = std::span<const uint8_t>`.
+      One alias; trivial.  Ported as `psio3/bytes_view.hpp` (with
+      `mutable_bytes_view` sibling).  Test in `util_tests.cpp`.
 
 - [ ] **`check.hpp`** — `psio::check(cond, msg)` and `abort_error`
       helpers.  Bridges to `psibase::abortMessage` under WASM.  Trivial
@@ -173,10 +177,11 @@ equivalent.  No reason to drop them.
       reporting — may be that v3 callers should use those instead and
       `check.hpp` is superseded.
 
-- [ ] **`ctype.hpp`** — backward-compat alias for `CView` / `COwned`
-      (renamed `WView` / `WOwned` in `wview.hpp`).  10-line shim.
-      **Likely supersede when wview.hpp lands** since this is just an
-      alias.
+- [~] **`ctype.hpp`** — backward-compat alias for `CView` / `COwned`
+      (renamed `WView` / `WOwned` in `wview.hpp`).  6-line shim.
+      **SUPERSEDED**: psio3 has no `CView` / `COwned` legacy to
+      preserve; the rename happened pre-v3.  No port — flagged in
+      REVIEW.
 
 - [ ] **`chrono.hpp`** (413 lines) — `std::chrono::duration` /
       `time_point` packing for fracpack.  Will need a v3 equivalent
@@ -189,16 +194,27 @@ equivalent.  No reason to drop them.
       ADL hook for marking variants as untagged.  Trivial port; the
       v3 variant codec needs to consult this hook.
 
-- [ ] **`to_hex.hpp`** (82 lines) — hex string conversion utility.
-      Standalone; trivial port.
+- [x] **`to_hex.hpp`** (82 lines) — hex string conversion utility.
+      Standalone; trivial port.  Ported as `psio3/to_hex.hpp`
+      (`hex`, `to_hex`, `from_hex` free functions).  Test in
+      `util_tests.cpp`.
 
-- [ ] **`get_type_name.hpp`** — compile-time type-name string for
-      arbitrary T.  Used by schema generation and JSON pretty-print.
-      Direct port.
+- [x] **`untagged.hpp`** — ADL hook for marking variants as untagged.
+      Ported as `psio3/untagged.hpp` (`psio3_is_untagged` primary
+      template).  Codec wiring (variant codec consults the hook) is a
+      separate follow-up — for now the marker is registerable.
 
-- [ ] **`tuple.hpp`** — `std::tuple` reflection helpers.  Already
-      partially folded into format codecs but the standalone helper
-      may have callers.  **REVIEW**: confirm no orphaned callers.
+- [~] **`get_type_name.hpp`** — compile-time type-name string for
+      arbitrary T.  **SUPERSEDED**: zero downstream callers
+      (`grep -rn psio::get_type_name libraries/` outside `/psio/cpp/`
+      and `/psio2/cpp/` returns empty).  v3 reflection exposes the
+      type name via `psio3::reflect<T>::name` directly.  No port —
+      flagged in REVIEW for sign-off.
+
+- [~] **`tuple.hpp`** — `std::tuple` reflection helpers
+      (`tuple_get`, `tuple_for_each`).  **SUPERSEDED**: zero
+      downstream callers; v3 codecs handle tuples directly via
+      `tag_invoke` dispatch.  No port — flagged in REVIEW.
 
 ### Internal helpers (likely supersede)
 
