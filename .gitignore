@@ -51,6 +51,19 @@ __pycache__/
 *.dylib
 *.dll
 
+# Fuzz harness outputs (psizam wasm crash / mismatch reproducers).
+# Reproducers worth checking in should be moved into a tracked
+# corpus directory — drop-them-where-the-fuzzer-runs is artifact
+# territory, not source.
+libraries/psizam/tests/fuzz/*.wasm
+libraries/psizam/tests/fuzz/wasm-gen/*.wasm
+libraries/psizam/tests/fuzz/wasm-gen/reproducers/
+
+# Stray fuzz outputs at any path. The fuzzer occasionally drops
+# crashes at the working directory rather than the fuzz dir; catch
+# both at top level and in any subtree.
+crash_*.wasm
+mismatch_*.wasm
 
 # Added by cargo
 
