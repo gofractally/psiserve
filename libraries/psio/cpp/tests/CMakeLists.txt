@@ -123,6 +123,14 @@ psio3_add_test(psio3_wit_gen_tests wit_gen_tests.cpp)
 # Consteval WIT generator (wit_constexpr.hpp).
 psio3_add_test(psio3_wit_constexpr_tests wit_constexpr_tests.cpp)
 
+# WIT Component Model binary encoder (wit_encode.hpp).
+# Links psio1 too — the byte-parity test compares v3 output against v1.
+add_executable(psio3_wit_encode_tests wit_encode_tests.cpp main.cpp)
+target_link_libraries(psio3_wit_encode_tests PRIVATE psio psio1)
+target_include_directories(psio3_wit_encode_tests PRIVATE ${PSIO_CATCH2_INCLUDE})
+target_compile_features(psio3_wit_encode_tests PRIVATE cxx_std_23)
+add_test(NAME psio3_wit_encode_tests COMMAND psio3_wit_encode_tests)
+
 # Phase 6b partial: v1 ↔ psio SSZ byte-parity tests. Links BOTH psio
 # (v1) and psio into the same executable so we can encode the same
 # value through both codecs and assert identical bytes.
