@@ -28,6 +28,11 @@
 // shape_tag_of<T> lives in shapes.hpp
 
 #include <array>
+#include <map>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -283,6 +288,49 @@ namespace psio3 {
    {
       static constexpr auto value = std::tuple{
          length_bound{.exact = static_cast<std::uint32_t>(N)}};
+   };
+
+   // ── stdlib associative containers carry sorted/unique semantics ────
+   //
+   // Map-shaped types in the stdlib have intrinsic ordering and key-
+   // uniqueness invariants.  Ported from psio v1's
+   // `attributes.hpp`, where these registrations lived in the parallel
+   // type_attrs_of<T> registry.  v3 routes them through the unified
+   // annotation channel.
+
+   template <typename K, typename V, typename C, typename A>
+   struct inherent_annotations<std::map<K, V, C, A>>
+   {
+      static constexpr auto value =
+         std::tuple{sorted_spec{.unique = true}, unique_keys_spec{}};
+   };
+
+   template <typename K, typename C, typename A>
+   struct inherent_annotations<std::set<K, C, A>>
+   {
+      static constexpr auto value =
+         std::tuple{sorted_spec{.unique = true}, unique_keys_spec{}};
+   };
+
+   template <typename K, typename V, typename H, typename E, typename A>
+   struct inherent_annotations<std::unordered_map<K, V, H, E, A>>
+   {
+      // Keyed but unordered.  Uniqueness still applies.
+      static constexpr auto value = std::tuple{unique_keys_spec{}};
+   };
+
+   template <typename K, typename H, typename E, typename A>
+   struct inherent_annotations<std::unordered_set<K, H, E, A>>
+   {
+      static constexpr auto value = std::tuple{unique_keys_spec{}};
+   };
+
+   template <typename A>
+   struct inherent_annotations<
+      std::basic_string<char8_t, std::char_traits<char8_t>, A>>
+   {
+      // u8string is UTF-8 by definition.
+      static constexpr auto value = std::tuple{utf8_spec{}};
    };
 
    // ── effective_annotations — 3-way merge with precedence ──

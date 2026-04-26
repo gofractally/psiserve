@@ -327,3 +327,73 @@ TEST_CASE("length_bound on optional<T> reaches the inner T",
    REQUIRE(tags_lb.has_value());
    REQUIRE(tags_lb->max == 16);
 }
+
+// ── WIT attribute specs (final, canonical, unique_keys, flags, ...) ──
+
+#include <map>
+#include <set>
+#include <string>
+#include <unordered_map>
+
+struct WitAttrRecord
+{
+   std::int32_t v = 0;
+};
+PSIO3_REFLECT(WitAttrRecord, v)
+PSIO3_TYPE_ATTRS(WitAttrRecord,
+   psio3::canonical | psio3::final_v
+   | psio3::since_spec{.version = "0.2.0"})
+
+TEST_CASE("WIT attribute specs available + composable",
+          "[annotate][wit_attrs]")
+{
+   STATIC_REQUIRE(std::is_same_v<
+      decltype(psio3::canonical), const psio3::canonical_spec>);
+   STATIC_REQUIRE(std::is_same_v<
+      decltype(psio3::final_v), const psio3::final_spec>);
+
+   constexpr auto type_anns =
+      psio3::annotate<psio3::type<WitAttrRecord>{}>;
+   REQUIRE(psio3::find_spec<psio3::canonical_spec>(type_anns)
+              .has_value());
+   REQUIRE(psio3::find_spec<psio3::final_spec>(type_anns)
+              .has_value());
+   auto since = psio3::find_spec<psio3::since_spec>(type_anns);
+   REQUIRE(since.has_value());
+   REQUIRE(std::string_view{since->version} == "0.2.0");
+}
+
+TEST_CASE("std::map carries sorted + unique_keys via inherent_annotations",
+          "[annotate][inherent]")
+{
+   using M = std::map<std::int32_t, std::string>;
+   constexpr auto anns = psio3::inherent_annotations<M>::value;
+   auto srt = psio3::find_spec<psio3::sorted_spec>(anns);
+   auto uk  = psio3::find_spec<psio3::unique_keys_spec>(anns);
+   REQUIRE(srt.has_value());
+   REQUIRE(srt->unique == true);
+   REQUIRE(uk.has_value());
+}
+
+TEST_CASE("std::unordered_map carries unique_keys only", "[annotate][inherent]")
+{
+   using M = std::unordered_map<std::int32_t, std::string>;
+   constexpr auto anns = psio3::inherent_annotations<M>::value;
+   REQUIRE(psio3::find_spec<psio3::unique_keys_spec>(anns).has_value());
+   REQUIRE_FALSE(psio3::find_spec<psio3::sorted_spec>(anns).has_value());
+}
+
+TEST_CASE("std::set carries sorted + unique_keys", "[annotate][inherent]")
+{
+   using S = std::set<std::int64_t>;
+   constexpr auto anns = psio3::inherent_annotations<S>::value;
+   REQUIRE(psio3::find_spec<psio3::sorted_spec>(anns).has_value());
+   REQUIRE(psio3::find_spec<psio3::unique_keys_spec>(anns).has_value());
+}
+
+TEST_CASE("std::u8string carries utf8", "[annotate][inherent]")
+{
+   constexpr auto anns =
+      psio3::inherent_annotations<std::u8string>::value;
+   REQUIRE(psio3::find_spec<psio3::utf8_spec>(anns).has_value());
+}

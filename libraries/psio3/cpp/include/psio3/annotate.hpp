@@ -380,6 +380,91 @@ namespace psio3 {
       constexpr bool operator==(const definition_will_not_change&) const = default;
    };
 
+   // ── WIT attribute specs ────────────────────────────────────────────
+   //
+   // These specs map onto the WIT @-attribute vocabulary at schema
+   // emission time.  v1 maintained a parallel `type_attrs_of<T>()` /
+   // `member_attrs_of<MP>()` ADL registry; v3 unifies them into the
+   // single annotation channel by registering the same information
+   // as specs.  The WIT generator (wit_gen.hpp) reads them from
+   // `effective_annotations_for<T, F, &T::F>` and emits `@final`,
+   // `@sorted`, etc.
+
+   // @final — the record is closed; receivers reject trailing unknown
+   // fields.  Distinct from definition_will_not_change (which is a
+   // wire-format optimisation choosing Struct over Object); @final
+   // is a semantic contract about future schema evolution.
+   struct final_spec
+   {
+      using spec_category = static_spec_tag;
+      using applies_to    = shape_set<RecordShape>;
+      constexpr bool operator==(const final_spec&) const = default;
+   };
+
+   // @canonical — there is exactly one admissible wire form for this
+   // type.  Decoders may reject any other byte sequence that round-
+   // trips to the same value.
+   struct canonical_spec
+   {
+      using spec_category = static_spec_tag;
+      constexpr bool operator==(const canonical_spec&) const = default;
+   };
+
+   // @unique-keys — the keys (or elements, for sets) are unique.
+   // sorted_spec.unique covers the same logical claim but only on
+   // sequence types; this version applies to map-shaped types and
+   // any future associative containers.
+   struct unique_keys_spec
+   {
+      using spec_category = static_spec_tag;
+      constexpr bool operator==(const unique_keys_spec&) const = default;
+   };
+
+   // @flags — emit this enum-shaped type as WIT `flags` (bitset)
+   // rather than `enum` (single-discriminant choice).
+   struct flags_spec
+   {
+      using spec_category = static_spec_tag;
+      using applies_to    = shape_set<EnumShape>;
+      constexpr bool operator==(const flags_spec&) const = default;
+   };
+
+   // @padding — this member is reserved/padding and should not be
+   // exposed in schema output (parsers preserve the slot for binary
+   // compatibility but generators skip it from the API surface).
+   struct padding_spec
+   {
+      using spec_category = static_spec_tag;
+      constexpr bool operator==(const padding_spec&) const = default;
+   };
+
+   // @since(version="X.Y.Z") — earliest version this item appears in.
+   // Stored as a runtime string to keep the annotation expression
+   // ergonomic; constexpr-string templating would require a custom
+   // FixedString and complicate user-side instantiation.
+   struct since_spec
+   {
+      using spec_category = runtime_spec_tag;
+      const char* version = "";
+      constexpr bool operator==(const since_spec&) const = default;
+   };
+
+   // @unstable(feature="name") — guarded by a feature flag.
+   struct unstable_spec
+   {
+      using spec_category = runtime_spec_tag;
+      const char* feature = "";
+      constexpr bool operator==(const unstable_spec&) const = default;
+   };
+
+   // @deprecated(version="X.Y.Z") — version this item is deprecated as of.
+   struct deprecated_spec
+   {
+      using spec_category = runtime_spec_tag;
+      const char* version = "";
+      constexpr bool operator==(const deprecated_spec&) const = default;
+   };
+
    // ── Presentation tag types (§5.3.7) ────────────────────────────────────
    //
    // Nominal tag structs used by `as_spec<Tag>` annotations and as the
@@ -564,6 +649,18 @@ namespace psio3 {
    inline constexpr sorted_spec sorted_unique{.unique = true};
 
    inline constexpr definition_will_not_change dwnc{};
+
+   // WIT attribute helpers — used inside attr(field, ...) expressions.
+   inline constexpr final_spec        final_v{};        // `final` is a C++ keyword
+   inline constexpr canonical_spec    canonical{};
+   inline constexpr unique_keys_spec  unique_keys{};
+   inline constexpr flags_spec        flags{};
+   inline constexpr padding_spec      padding{};
+
+   // `since`, `unstable`, `deprecated` carry string args, so they're
+   // constructed at the call site rather than pre-instantiated:
+   //   attr(field, since_spec{.version = "0.2.0"})
+   // (No bare `since`/etc. helpers because they need an argument.)
 
 }  // namespace psio3
 

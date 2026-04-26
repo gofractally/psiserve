@@ -141,9 +141,24 @@ equivalent.  No reason to drop them.
       v1 canonical_abi.hpp surface against v3 wit.hpp; port any
       missing operations.
 
-- [ ] **`attributes.hpp`** — WIT attribute registries (231 lines).
-      Two registries opt-in via ADL overloads.  Needed before the
-      WIT generator side can attach C++-side attribute metadata.
+- [x] **`attributes.hpp`** — WIT attribute vocabulary.  Ported by
+      *folding into v3's annotation system* rather than replicating
+      v1's parallel `type_attrs_of<T>()` ADL registry.  Added spec
+      types in `annotate.hpp`: `final_spec`, `canonical_spec`,
+      `unique_keys_spec`, `flags_spec`, `padding_spec`, `since_spec`,
+      `unstable_spec`, `deprecated_spec`.  Helper variables:
+      `psio3::final_v` (named with `_v` suffix because `final` is a
+      C++ keyword), `psio3::canonical`, `psio3::unique_keys`,
+      `psio3::flags`, `psio3::padding`.  String-arg specs
+      (`since`/`unstable`/`deprecated`) constructed at call site.
+      Built-in `inherent_annotations` for stdlib types in
+      `wrappers.hpp`: `std::map<K,V>` and `std::set<K>` carry
+      `sorted_spec{.unique=true} | unique_keys_spec`,
+      `std::unordered_map`/`std::unordered_set` carry `unique_keys`,
+      `std::u8string` carries `utf8_spec`.  Test:
+      psio3_annotate_tests gains 5 cases / 9 assertions covering
+      composability, type-level `attr` block usage, and inherent
+      annotations on stdlib containers.
 
 - [→psizam] **`guest_alloc.hpp`** — `cabi_realloc` for WASM guest.
       Pure WASM concern (`__heap_base` + `__builtin_wasm_memory_grow`),
