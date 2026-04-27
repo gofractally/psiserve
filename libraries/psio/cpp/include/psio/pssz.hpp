@@ -50,6 +50,16 @@
 #include <type_traits>
 #include <vector>
 
+namespace psio::schema_types
+{
+   // Fwd decl: Box<T> is the unique_ptr-backed cycle-breaker that lives
+   // in schema_ir.hpp; declared here so pssz can recognise it as a
+   // transparent wrapper without taking a circular dependency on the
+   // schema header.
+   template <typename T>
+   struct Box;
+}  // namespace psio::schema_types
+
 namespace psio {
 
    struct pssz;  // fwd — used by adapter-dispatch trait below.
@@ -77,6 +87,25 @@ namespace psio {
       {
          using offset_t = std::uint32_t;
       };
+
+      // ── Box<T> detector ───────────────────────────────────────────────
+      //
+      // psio::schema_types::Box<T> is the unique_ptr-backed wrapper that
+      // breaks recursive cycles in the Schema IR.  pssz treats Box<T>
+      // as fully transparent — every CPO forwards to T, wire bytes are
+      // identical to what `T` alone produces.  Defined up here so
+      // is_fixed<Box<T>> and fixed_size_of<Box<T>> below see it.
+      template <typename T>
+      struct is_psio_box : std::false_type
+      {
+      };
+      template <typename U>
+      struct is_psio_box<::psio::schema_types::Box<U>> : std::true_type
+      {
+         using elem = U;
+      };
+      template <typename T>
+      inline constexpr bool is_psio_box_v = is_psio_box<T>::value;
 
       // ── Shape classification (same as SSZ) ────────────────────────────────
 
@@ -114,6 +143,15 @@ namespace psio {
       };
       template <>
       struct is_fixed<::psio::uint256> : std::true_type
+      {
+      };
+
+      // Box<T> is transparent for fixed-ness: a Box<fixed-T> is fixed,
+      // a Box<variable-T> is variable.  The forward declaration above
+      // is enough for is_fixed specialisation; the inner type's
+      // fixed-ness drives the result.
+      template <typename T>
+      struct is_fixed<::psio::schema_types::Box<T>> : is_fixed<T>
       {
       };
 
@@ -203,7 +241,9 @@ namespace psio {
       template <typename T>
       constexpr std::size_t fixed_size_of() noexcept
       {
-         if constexpr (std::is_same_v<T, bool>)
+         if constexpr (is_psio_box_v<T>)
+            return fixed_size_of<typename is_psio_box<T>::elem>();
+         else if constexpr (std::is_same_v<T, bool>)
             return 1;
          else if constexpr (std::is_same_v<T, ::psio::uint256>)
             return 32;
@@ -297,7 +337,9 @@ namespace psio {
       template <std::size_t W, typename T>
       std::size_t size_of_v(const T& v) noexcept
       {
-         if constexpr (is_fixed_v<T>)
+         if constexpr (is_psio_box_v<T>)
+            return size_of_v<W>(*v.value);
+         else if constexpr (is_fixed_v<T>)
             return fixed_size_of<T>();
          else if constexpr (is_std_array_v<T>)
          {
@@ -403,7 +445,12 @@ namespace psio {
             return;
          }
 
-         if constexpr (std::is_same_v<T, bool>)
+         if constexpr (is_psio_box_v<T>)
+         {
+            encode_value<W>(*v.value, s);
+            return;
+         }
+         else if constexpr (std::is_same_v<T, bool>)
             s.write(v ? '\x01' : '\x00');
          else if constexpr (std::is_same_v<T, ::psio::uint256>)
             s.write(v.limb, 32);
@@ -978,7 +1025,12 @@ namespace psio {
                std::span<const char>(src.data() + pos, end - pos));
          }
 
-         if constexpr (std::is_same_v<T, bool>)
+         if constexpr (is_psio_box_v<T>)
+         {
+            using E = typename is_psio_box<T>::elem;
+            return T{decode_value<W, E>(src, pos, end)};
+         }
+         else if constexpr (std::is_same_v<T, bool>)
             return static_cast<unsigned char>(src[pos]) != 0;
          else if constexpr (std::is_same_v<T, ::psio::uint256>)
          {

@@ -2,33 +2,19 @@
 //
 // pSSZ is the canonical schema-schema wire format: every IR type is
 // PSIO_REFLECT'd so a populated Schema is just another reflected
-// struct as far as the codec is concerned.  This file pins the
-// progress so far + flags the codec gaps that block a full Schema
-// round-trip.
+// struct as far as the codec is concerned.
 //
-// Currently working: every flat IR record (Package, Int, Float,
-// Member-without-AnyType, etc.) round-trips through pssz cleanly.
+// Currently working: flat IR records (Package, Int, Float,
+// Attribute, etc.) round-trip cleanly, AND any IR type that recurses
+// through AnyType — Member, Func, Object containing variable-shape
+// members — round-trip through Box<T> as a transparent wrapper.
 //
-// Currently blocked: the full Schema round-trip needs two pssz codec
-// extensions:
-//
-//   1. Box<T> support — pssz must recognise psio::schema_types::Box<T>
-//      and treat it as transparent (encode forwards to T; decode
-//      reads T into a fresh Box).  Box<T> is the cycle-breaker on
-//      Member::type / Func::result, so any IR type that recurses
-//      through AnyType hits this gap.
-//
-//   2. std::map<K, V> support — pssz currently has no case for
-//      associative containers (size_of_v / encode_value /
-//      decode_value all hit `unsupported type` static_asserts).
-//      Schema::types is a std::map; either pssz adds a case
-//      mirroring std::vector<std::pair<K, V>>, or Schema swaps the
-//      map for a vector<pair> with the map's invariant
-//      (sorted-by-key, unique-keys) enforced at the IR layer.
-//
-// Both are real codec extensions touching the offset-table /
-// fixed-vs-variable lane machinery.  Tracked separately; this file
-// pins the boundary and is updated as those land.
+// Still blocked on a full Schema round-trip: pssz has no case for
+// std::map<K, V> (size_of_v / encode_value / decode_value all hit
+// `unsupported type` static_asserts).  Schema::types is a std::map;
+// either pssz adds a case mirroring vector<pair<K, V>>, or Schema
+// swaps the map for a vector<pair> with the map invariants
+// (sorted-by-key, unique-keys) enforced at the IR layer.
 
 #include <psio/schema_ir.hpp>
 #include <psio/pssz.hpp>
@@ -93,6 +79,57 @@ TEST_CASE("pssz: Package with multiple attributes round-trips",
    CHECK_FALSE(decoded.attributes[1].value.has_value());
 }
 
-// Full-Schema round-trip lands here once Box<T> + std::map cases are
-// added to pssz.  A failing/skipped case isn't useful; this comment
-// is the note.
+// ─── Box<T> as transparent wrapper ───────────────────────────────────
+
+TEST_CASE("pssz: Box<int> encodes identically to inner int",
+          "[schema_pssz][box]")
+{
+   using psio::schema_types::Box;
+   std::int32_t plain = 42;
+   Box<std::int32_t> boxed{42};
+
+   auto plain_bytes = psio::encode(psio::pssz{}, plain);
+   auto boxed_bytes = psio::encode(psio::pssz{}, boxed);
+   CHECK(plain_bytes == boxed_bytes);
+
+   auto decoded = psio::decode<Box<std::int32_t>>(psio::pssz{}, boxed_bytes);
+   CHECK(*decoded == 42);
+}
+
+TEST_CASE("pssz: Box<Int> round-trips inside an IR record",
+          "[schema_pssz][box]")
+{
+   using psio::Member;
+   using psio::schema_types::AnyType;
+   using psio::schema_types::Box;
+   using psio::schema_types::Int;
+
+   Member original{
+      .name       = "seconds",
+      .type       = Box<AnyType>{AnyType{Int{64, false}}},
+      .attributes = {}};
+
+   auto bytes   = psio::encode(psio::pssz{}, original);
+   auto decoded = psio::decode<Member>(psio::pssz{}, bytes);
+
+   CHECK(decoded.name == "seconds");
+   REQUIRE(decoded.type.value);
+   CHECK(decoded == original);
+}
+
+TEST_CASE("pssz: nested Box<AnyType> recursive shape round-trips",
+          "[schema_pssz][box]")
+{
+   using psio::schema_types::AnyType;
+   using psio::schema_types::Box;
+   using psio::schema_types::Int;
+   using psio::schema_types::List;
+
+   // list<list<u8>> — one Box layer for List, one for the inner list.
+   AnyType original{List{Box<AnyType>{
+      List{Box<AnyType>{Int{8, false}}}}}};
+
+   auto bytes   = psio::encode(psio::pssz{}, original);
+   auto decoded = psio::decode<AnyType>(psio::pssz{}, bytes);
+   CHECK(decoded == original);
+}
