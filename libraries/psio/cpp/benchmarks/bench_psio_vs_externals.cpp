@@ -34,6 +34,9 @@
 #ifdef PSIO_HAVE_PROTOBUF
 #  include "adapters/protobuf_adapter.hpp"
 #endif
+#ifdef PSIO_HAVE_FLATBUF
+#  include "adapters/flatbuf_adapter.hpp"
+#endif
 
 #include <cstdio>
 #include <filesystem>
@@ -337,6 +340,92 @@ namespace {
    }
 #endif
 
+#ifdef PSIO_HAVE_FLATBUF
+   //  Time libflatbuffers.  Bottom-up build: children before parents,
+   //  finish, get buffer pointer + size.  No streaming sink path —
+   //  flatbuffers always builds into its own builder, then exposes
+   //  the buffer at the end.
+   template <typename T>
+   void bench_libflatbuf_cell(std::vector<snapshot_row>& out,
+                              const std::string&         shape_name,
+                              const T&                   v)
+   {
+      using FB = fb_bench_adapter::fb_table_t<T>;
+
+      flatbuffers::FlatBufferBuilder fbb_seed;
+      fbb_seed.Finish(fb_bench_adapter::build(fbb_seed, v));
+      const std::size_t wire = fbb_seed.GetSize();
+
+      auto record = [&](std::string op, double ns, double ns_med,
+                         double cv, std::size_t wire_b, std::size_t iters,
+                         int trials, std::string notes = "") {
+         out.push_back(snapshot_row{
+            .shape      = shape_name,
+            .format     = "flatbuf",
+            .library    = "libflatbuffers",
+            .mode       = "static",
+            .op         = std::move(op),
+            .ns_min     = ns,
+            .ns_median  = ns_med,
+            .cv_pct     = cv,
+            .wire_bytes = wire_b,
+            .iters      = iters,
+            .trials     = trials,
+            .notes      = std::move(notes),
+         });
+      };
+      auto cv = [](const timing& t) {
+         return t.min_ns > 0.0 ? t.stddev_ns / t.min_ns * 100.0 : 0.0;
+      };
+
+      // size_of — flatbuffers has no separate sizer; build + GetSize
+      // is the canonical "how big will this be" answer.  Includes
+      // build cost; that's how callers measure it.
+      auto t_size = ns_per_iter(0u, [&](std::size_t) {
+         flatbuffers::FlatBufferBuilder fbb;
+         fbb.Finish(fb_bench_adapter::build(fbb, v));
+         std::size_t n = fbb.GetSize();
+         asm volatile("" : "+r"(n) : : "memory");
+      });
+      record("size_of", t_size.min_ns, t_size.median_ns, cv(t_size),
+             wire, t_size.iters, t_size.trials,
+             "build + GetSize (no native sizer)");
+
+      // encode_rvalue — fresh builder + build + Finish + Release().
+      auto t_enc = ns_per_iter(0u, [&](std::size_t) {
+         flatbuffers::FlatBufferBuilder fbb;
+         fbb.Finish(fb_bench_adapter::build(fbb, v));
+         auto buf = fbb.Release();
+         asm volatile("" : : "r"(buf.data()) : "memory");
+      });
+      record("encode_rvalue", t_enc.min_ns, t_enc.median_ns, cv(t_enc),
+             wire, t_enc.iters, t_enc.trials,
+             "fresh builder + Finish");
+
+      // encode_sink — reused builder; Clear() rather than reset.
+      flatbuffers::FlatBufferBuilder fbb_reused;
+      auto t_sink = ns_per_iter(0u, [&](std::size_t) {
+         fbb_reused.Clear();
+         fbb_reused.Finish(fb_bench_adapter::build(fbb_reused, v));
+      });
+      record("encode_sink", t_sink.min_ns, t_sink.median_ns,
+             cv(t_sink), wire, t_sink.iters, t_sink.trials,
+             "reused FlatBufferBuilder.Clear()");
+
+      // decode (view) — flatbuffers is zero-copy; "decode" here is
+      // GetRoot<>() + walk all fields once via UnPack-ish manual
+      // copy.  Use UnPackTo() into a heap-allocated NativeT.
+      const std::uint8_t* buf_ptr = fbb_seed.GetBufferPointer();
+      auto t_dec = ns_per_iter(0u, [&](std::size_t) {
+         auto root = flatbuffers::GetRoot<FB>(buf_ptr);
+         asm volatile("" : : "r"(root) : "memory");
+      });
+      record("decode", t_dec.min_ns, t_dec.median_ns, cv(t_dec),
+             wire, t_dec.iters, t_dec.trials,
+             "GetRoot only (zero-copy; full copy not measured)");
+   }
+#endif
+
    //  Run all psio formats against one shape value.  Each cell is
    //  gated by fmt_supports<Fmt, T> so unsupported pairs are skipped
    //  rather than triggering a static_assert at compile time.
@@ -369,6 +458,12 @@ namespace {
                        typename pb_bench::pb_message_for<T>::type;
                     })
          bench_libprotobuf_cell(out, shape_name, v);
+#endif
+#ifdef PSIO_HAVE_FLATBUF
+      if constexpr (requires {
+                       typename fb_bench_adapter::fb_table_for<T>::type;
+                    })
+         bench_libflatbuf_cell(out, shape_name, v);
 #endif
    }
 

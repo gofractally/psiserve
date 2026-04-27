@@ -50,6 +50,37 @@ else()
       "psio_bench_vs_externals: msgpack-cxx not found — skipping")
 endif()
 
+find_package(flatbuffers QUIET CONFIG)
+if(flatbuffers_FOUND)
+   #  flatc generates one bench_schemas_generated.h next to the
+   #  consuming source.  We invoke flatc manually because the cmake
+   #  module's `flatbuffers_generate_headers()` macro is finicky.
+   set(FB_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/adapters/bench_schemas.fbs)
+   set(FB_GEN
+      ${CMAKE_CURRENT_BINARY_DIR}/adapters/bench_schemas_generated.h)
+   add_custom_command(
+      OUTPUT ${FB_GEN}
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+               ${CMAKE_CURRENT_BINARY_DIR}/adapters
+      COMMAND flatc --cpp -o ${CMAKE_CURRENT_BINARY_DIR}/adapters
+               --gen-name-strings ${FB_SCHEMA}
+      DEPENDS ${FB_SCHEMA}
+      COMMENT "flatc bench_schemas.fbs")
+   add_custom_target(psio_bench_fb_gen DEPENDS ${FB_GEN})
+   add_dependencies(psio_bench_vs_externals psio_bench_fb_gen)
+   target_include_directories(psio_bench_vs_externals PRIVATE
+      ${CMAKE_CURRENT_BINARY_DIR}/adapters)
+   target_link_libraries(psio_bench_vs_externals PRIVATE
+      flatbuffers::flatbuffers)
+   target_compile_definitions(psio_bench_vs_externals PRIVATE
+      PSIO_HAVE_FLATBUF=1)
+   message(STATUS
+      "psio_bench_vs_externals: flatbuffers found — enabled")
+else()
+   message(STATUS
+      "psio_bench_vs_externals: flatbuffers not found — skipping")
+endif()
+
 find_package(Protobuf QUIET CONFIG)
 if(Protobuf_FOUND)
    #  Modern protobuf provides `protobuf_generate` (per-target) which
