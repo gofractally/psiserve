@@ -27,17 +27,16 @@
 //
 // Tag types:
 //   0  null              raw = 0 bytes
-//   1  bool_false        raw = 0
-//   2  bool_true         raw = 0
-//   3  int_inline        raw = 0;  value in low nibble (0..15)
+//   1  bool              raw = 0;  low nibble: 0=false, 1=true
+//   3  uint_inline       raw = 0;  unsigned value in low nibble (0..15)
 //   4  int               raw = (low_nibble+1) bytes;  zigzag-LE mantissa
 //   5  decimal           raw = (low_nibble+1) mantissa bytes + varscale (1..4)
 //   6  ieee_float        raw = 8 bytes
-//   8  string            raw = (size - 1) UTF-8 bytes (length implicit)
-//   A  bytes             raw = (size - 1) bytes
+//   8  string            raw = (size - 1) bytes; low nibble flag:
+//                          0=raw_text, 1=escape_form, 2=binary
 //   B  array             raw = container content
 //   C  object            raw = container content
-//   7, 9, D..F           reserved
+//   2, 7, 9, A, D..F     reserved
 //
 // No magic, no version, no flags. Versioning lives in the application
 // wrapper (HTTP content-type, file header, RPC envelope). Buffer length
@@ -259,22 +258,38 @@ namespace psio {
       };
 
       // Tag-byte type codes (high nibble of the tag byte).
-      // Low-nibble usage is per-type; for `t_bool` the low nibble
-      // carries the boolean value itself (0 = false, 1 = true) so
-      // we don't burn two type codes on a 1-bit value.
+      // Low-nibble usage is per-type; see notes below.
       enum : std::uint8_t
       {
          t_null        = 0,
-         t_bool        = 1,   // low nibble: 0 = false, 1 = true
+         t_bool        = 1,    // low nibble: 0 = false, 1 = true
          // 2 reserved
-         t_int_inline  = 3,
-         t_int         = 4,
-         t_decimal     = 5,
+         t_uint_inline = 3,    // low nibble: unsigned value 0..15
+         t_int         = 4,    // low nibble: byte_count - 1 (1..16)
+         t_decimal     = 5,    // low nibble: mantissa byte_count - 1
          t_ieee_float  = 6,
-         t_string      = 8,
-         t_bytes       = 0xA,
+         t_string      = 8,    // low nibble: encoding flag (see below)
+         // 9, 10 (was bytes), reserved — bytes is now t_string with
+         //                              string_flag_binary
          t_array       = 0xB,
          t_object      = 0xC,
+      };
+
+      // Sub-encoding flags for t_string (low nibble of the tag).
+      // Tells the JSON emitter what to do with the stored bytes;
+      // tells consumers how to interpret them.
+      enum : std::uint8_t
+      {
+         // Text bytes that have NOT been JSON-escaped — JSON emit
+         // must run a per-character escape pass.
+         string_flag_raw_text       = 0,
+         // Text bytes already in JSON-escape form (`\n`, `\"`,
+         // `\uXXXX` etc are LITERAL bytes in the buffer). JSON emit
+         // wraps in quotes verbatim, no escape work.
+         string_flag_escape_form    = 1,
+         // Binary bytes — JSON emit must base64-encode them.
+         string_flag_binary         = 2,
+         // 3..15: reserved
       };
 
       // Strip a trailing ".tag" suffix from a key for the prefilter hash.
@@ -424,7 +439,7 @@ namespace psio {
       // ── value sizing (recursion over pjson_value) ─────────────────────
       inline std::size_t value_size(const pjson_value& v) noexcept;
 
-      inline std::size_t int_inline_size() noexcept { return 1; }
+      inline std::size_t uint_inline_size() noexcept { return 1; }
       inline std::size_t int_size(std::int64_t i) noexcept
       {
          if (i >= 0 && i <= 15) return 1;
@@ -548,7 +563,7 @@ namespace psio {
          if (i >= 0 && i <= 15)
          {
             dst[pos] = static_cast<std::uint8_t>(
-                (t_int_inline << 4) | static_cast<std::uint8_t>(i));
+                (t_uint_inline << 4) | static_cast<std::uint8_t>(i));
             return 1;
          }
          std::uint64_t zz =
@@ -568,7 +583,7 @@ namespace psio {
          if (n.scale == 0 && n.mantissa >= 0 && n.mantissa <= 15)
          {
             dst[pos] = static_cast<std::uint8_t>(
-                (t_int_inline << 4) | static_cast<std::uint8_t>(n.mantissa));
+                (t_uint_inline << 4) | static_cast<std::uint8_t>(n.mantissa));
             return 1;
          }
          __uint128_t  zz = zz128_encode(n.mantissa);
@@ -603,19 +618,28 @@ namespace psio {
          if (dec < 9) return encode_number_at(dst, pos, n);
          return encode_double_raw_at(dst, pos, d);
       }
+      // Encode a text string. Default flag is raw_text (caller didn't
+      // pre-escape the bytes; JSON emit will run a per-char escape).
+      // Callers that already have escape-form bytes (e.g., from
+      // simdjson's escaped_key()) should pass flag=escape_form to skip
+      // emitter work later.
       inline std::size_t encode_string_at(std::uint8_t*    dst,
                                           std::size_t      pos,
-                                          std::string_view s) noexcept
+                                          std::string_view s,
+                                          std::uint8_t     flag =
+                                              string_flag_raw_text) noexcept
       {
-         dst[pos] = static_cast<std::uint8_t>(t_string << 4);
+         dst[pos] = static_cast<std::uint8_t>((t_string << 4) | flag);
          if (!s.empty()) std::memcpy(dst + pos + 1, s.data(), s.size());
          return 1u + s.size();
       }
+      // Encode raw binary bytes. JSON emit will base64-encode.
       inline std::size_t encode_bytes_at(std::uint8_t*      dst,
                                          std::size_t        pos,
                                          const pjson_bytes& b) noexcept
       {
-         dst[pos] = static_cast<std::uint8_t>(t_bytes << 4);
+         dst[pos] = static_cast<std::uint8_t>(
+             (t_string << 4) | string_flag_binary);
          if (!b.empty()) std::memcpy(dst + pos + 1, b.data(), b.size());
          return 1u + b.size();
       }
@@ -856,7 +880,7 @@ namespace psio {
                if (size != 1 || low > 1) return false;
                out = pjson_value{low == 1};
                return true;
-            case t_int_inline:
+            case t_uint_inline:
                out = pjson_value{static_cast<std::int64_t>(low)};
                return size == 1;
             case t_int:
@@ -923,13 +947,15 @@ namespace psio {
             }
             case t_string:
             {
-               out = pjson_value{std::string(
-                   reinterpret_cast<const char*>(p + 1), size - 1)};
-               return true;
-            }
-            case t_bytes:
-            {
-               out = pjson_value{pjson_bytes(p + 1, p + size)};
+               // Low-nibble flag tells us whether the bytes are
+               // text (variant: std::string) or binary (variant:
+               // pjson_bytes). Reject reserved flag values.
+               if (low > string_flag_binary) return false;
+               if (low == string_flag_binary)
+                  out = pjson_value{pjson_bytes(p + 1, p + size)};
+               else
+                  out = pjson_value{std::string(
+                      reinterpret_cast<const char*>(p + 1), size - 1)};
                return true;
             }
             case t_array:  return decode_array(p, size, out);

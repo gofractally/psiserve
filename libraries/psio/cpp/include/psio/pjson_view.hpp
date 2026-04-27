@@ -71,12 +71,15 @@ namespace psio {
          {
             case t_null:        return kind::null;
             case t_bool:        return kind::boolean;
-            case t_int_inline:
+            case t_uint_inline:
             case t_int:         return kind::integer;
             case t_decimal:     return kind::decimal;
             case t_ieee_float:  return kind::floating;
-            case t_string:      return kind::string;
-            case t_bytes:       return kind::bytes;
+            case t_string:
+               // Low-nibble flag distinguishes text vs binary.
+               return ((data_[0] & 0x0F) == string_flag_binary)
+                          ? kind::bytes
+                          : kind::string;
             case t_array:       return kind::array;
             case t_object:      return kind::object;
             default:            return kind::invalid;
@@ -113,7 +116,7 @@ namespace psio {
       {
          using namespace pjson_detail;
          std::uint8_t t = data_[0] >> 4;
-         if (t == t_int_inline) return static_cast<std::int64_t>(data_[0] & 0x0F);
+         if (t == t_uint_inline) return static_cast<std::int64_t>(data_[0] & 0x0F);
          if (t == t_int)
          {
             std::uint8_t bc =
@@ -137,7 +140,7 @@ namespace psio {
       {
          using namespace pjson_detail;
          std::uint8_t t = data_[0] >> 4;
-         if (t == t_int_inline)
+         if (t == t_uint_inline)
             return static_cast<__int128>(data_[0] & 0x0F);
          if (t == t_int)
          {
@@ -195,6 +198,19 @@ namespace psio {
       {
          require_(kind::bytes);
          return {data_ + 1, size_ - 1};
+      }
+
+      // String encoding flag (low nibble of the t_string tag).
+      //   0 = raw_text       — bytes are unescaped text; emit must
+      //                        run JSON escape detection
+      //   1 = escape_form    — bytes are JSON-escape form already;
+      //                        emit verbatim with surrounding quotes
+      //   2 = binary         — bytes are raw binary; emit must base64
+      // Caller must check `is_string()` or `is_bytes()` first;
+      // calling this on a non-string value is undefined.
+      std::uint8_t string_flag() const noexcept
+      {
+         return data_[0] & 0x0F;
       }
 
       // ── container access ────────────────────────────────────────────

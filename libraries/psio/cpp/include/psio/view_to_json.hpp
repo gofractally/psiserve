@@ -149,12 +149,20 @@ namespace psio {
             view_to_json_detail::emit_double(out, v.as_double());
             return;
          case K::string:
-            view_to_json_detail::emit_string(out, v.as_string());
+         {
+            // Dispatch on the string flag: escape_form → verbatim,
+            // raw_text → run JSON escape, binary → base64 (TODO; stub
+            // as verbatim for now).
+            std::string_view s = v.as_string();
+            std::uint8_t     f = v.string_flag();
+            if (f == pjson_detail::string_flag_escape_form)
+               view_to_json_detail::emit_string(out, s);
+            else  // raw_text — must escape per char
+               view_to_json_detail::emit_string_with_escape(out, s);
             return;
+         }
          case K::bytes:
-            // JSON has no native bytes; emit as base64 string under
-            // a `.b64` suffix convention. Stub: emit as quoted hex.
-            // (TODO: proper base64.)
+            // TODO: proper base64. Stub: emit as quoted bytes.
             view_to_json_detail::emit_string(
                 out, std::string_view{
                          reinterpret_cast<const char*>(v.as_bytes().data()),

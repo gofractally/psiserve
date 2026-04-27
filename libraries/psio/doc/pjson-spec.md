@@ -75,21 +75,21 @@ The high nibble (`bits 7..4`) is the **type code**. The low nibble
 (`bits 3..0`) is **payload-specific** — for some types it carries
 encoded data; for others it is reserved.
 
-| code | type         | low nibble use                                 | raw bits after tag |
-|------|--------------|------------------------------------------------|--------------------|
-| 0    | `null`       | reserved (must be 0)                           | 0 bytes |
-| 1    | `bool`       | the boolean value: 0 = false, 1 = true (others reserved) | 0 bytes |
-| 2    | reserved     |                                                | — |
-| 3    | `int_inline` | unsigned value 0..15 (the integer)             | 0 bytes |
-| 4    | `int`        | mantissa byte count − 1 (range 1..16)          | `bc` bytes (zigzag-LE) |
-| 5    | `decimal`    | mantissa byte count − 1 (range 1..16)          | `bc` mantissa bytes + varscale (1..4 bytes) |
-| 6    | `ieee_float` | reserved (must be 0)                           | 8 bytes (raw IEEE-754 binary64, LE) |
-| 7    | reserved     |                                                | — |
-| 8    | `string`     | reserved (must be 0)                           | (size − 1) UTF-8 bytes (length implicit from `size`) |
-| 9    | reserved     |                                                | — |
-| 10 (A) | `bytes`    | reserved (must be 0)                           | (size − 1) raw bytes (length implicit from `size`) |
-| 11 (B) | `array`    | reserved (must be 0)                           | container body — see §5 |
-| 12 (C) | `object`   | reserved (must be 0)                           | container body — see §5 |
+| code | type          | low nibble use                                 | raw bits after tag |
+|------|---------------|------------------------------------------------|--------------------|
+| 0    | `null`        | reserved (must be 0)                           | 0 bytes |
+| 1    | `bool`        | the boolean value: 0 = false, 1 = true (others reserved) | 0 bytes |
+| 2    | reserved      |                                                | — |
+| 3    | `uint_inline` | unsigned value 0..15 (the integer)             | 0 bytes |
+| 4    | `int`         | mantissa byte count − 1 (range 1..16)          | `bc` bytes (zigzag-LE) |
+| 5    | `decimal`     | mantissa byte count − 1 (range 1..16)          | `bc` mantissa bytes + varscale (1..4 bytes) |
+| 6    | `ieee_float`  | reserved (must be 0)                           | 8 bytes (raw IEEE-754 binary64, LE) |
+| 7    | reserved      |                                                | — |
+| 8    | `string`      | encoding flag (see §4.7); 0..2 valid, others reserved | (size − 1) bytes (length implicit from `size`) |
+| 9    | reserved      |                                                | — |
+| 10 (A) | reserved   |                                                | — |
+| 11 (B) | `array`     | reserved (must be 0)                           | container body — see §5 |
+| 12 (C) | `object`    | reserved (must be 0)                           | container body — see §5 |
 | 13–15  | reserved   |                                                | — |
 
 Implementations must reject (return error) on any reserved tag code or
@@ -115,10 +115,14 @@ Single byte. The low nibble carries the boolean value:
 Low-nibble values 2..15 are reserved and must cause a parse error.
 Container `size` is exactly 1 byte.
 
-### 4.3 `int_inline` (code 3)
+### 4.3 `uint_inline` (code 3)
 
-Tag byte alone. The value is the unsigned integer encoded in the low
-nibble (range `0..15`). Container `size` is exactly 1 byte.
+Tag byte alone. The value is the **unsigned** integer encoded in the
+low nibble (range `0..15`). Container `size` is exactly 1 byte.
+
+The name reflects the encoding: only non-negative values 0..15 fit
+this form. Negative integers and values ≥ 16 use the `int` tag (code
+4).
 
 ### 4.4 `int` (code 4)
 
@@ -143,7 +147,7 @@ the value. Decoders must accept any `bc ∈ 1..16`. There is no
 canonical-encoding requirement; both `bc = 2` and `bc = 8` are valid
 encodings of the value 200, but encoders should pick `bc = 1`.
 
-The `int_inline` form (code 3) is preferred over `int` for values
+The `uint_inline` form (code 3) is preferred over `int` for values
 0..15.
 
 ### 4.5 `decimal` (code 5)
@@ -212,33 +216,41 @@ pjson encoders sourced from non-JSON inputs may emit them.
 ### 4.7 `string` (code 8)
 
 ```
-tag (1 B): high = 8, low = 0
-content (size − 1 B): UTF-8 bytes, length implicit from caller-provided size
+tag (1 B): high = 8, low = encoding flag
+content (size − 1 B): bytes; interpretation per the flag
 ```
 
-The string content is the bytes between the JSON quotes: it **may**
-contain JSON escape sequences (`\"`, `\\`, `\b`, `\f`, `\n`, `\r`,
-`\t`, `\uXXXX`) as **literal text bytes**. This form is bit-identical
-to the source between-quotes bytes when the value originates from
-JSON. When emitting JSON, the bytes are wrapped in `"..."` with no
-per-byte escape pass.
+The low nibble carries an **encoding flag** that tells the JSON
+emitter what to do with the stored bytes. This collapses what would
+otherwise need two distinct types (text and binary) into one tag with
+a sub-flag.
 
-A consumer needing the unescaped (decoded) form runs a JSON-string
-unescape over the content bytes.
+| flag | name          | meaning                                                       |
+|------|---------------|---------------------------------------------------------------|
+| 0    | `raw_text`    | UTF-8 text NOT in JSON-escape form. JSON emit must run a per-character escape pass (handle `"`, `\`, control chars, etc.). |
+| 1    | `escape_form` | Text already in JSON-escape form (`\"`, `\n`, `\uXXXX` etc are LITERAL bytes). JSON emit just wraps in surrounding quotes — no per-byte work. |
+| 2    | `binary`      | Raw binary bytes. JSON emit must base64-encode them. The encoded JSON typically uses a `.b64` key-suffix convention (see §7) so consumers know to base64-decode on input. |
+| 3..15 | reserved     | Implementations must reject.                                  |
 
-The string length is `size − 1` where `size` is the caller-provided
-byte length of the value. Strings carry no length prefix.
+The string length is always `size − 1` (no length prefix).
 
-### 4.8 `bytes` (code 10)
+**Encoder choices.** A producer should set the flag according to its
+source:
 
-```
-tag (1 B): high = 10 (0xA), low = 0
-content (size − 1 B): raw binary bytes
-```
+* JSON parser → `escape_form` (the bytes between quotes are taken
+  verbatim from the source JSON).
+* Typed value of `std::string` (or equivalent) where the producer
+  doesn't know whether escape characters are present → `raw_text`.
+* Typed value that the producer has already validated to contain no
+  characters needing escape → `escape_form` (cheaper emit later).
+* Raw binary blob (image, hash digest, etc.) → `binary`.
 
-Same length convention as `string`: the byte count is `size − 1`. The
-JSON text round-trip emits these as base64-encoded strings under a
-key-suffix convention (e.g., `"foo.b64"` → `bytes`); see §7.
+**Decoder behavior.** On `flag = binary` the value is conceptually
+binary data, not text. Implementations may expose it via a separate
+"bytes" accessor (returning a span of bytes) versus a "string"
+accessor (returning a string view). The reference C++ implementation
+uses both `view::as_string()` and `view::as_bytes()`, with the kind
+discriminated by the flag.
 
 ---
 

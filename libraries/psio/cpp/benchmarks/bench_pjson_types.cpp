@@ -98,7 +98,7 @@ int main(int argc, char** argv)
    bench_one<int>("bool true", iters, pjson_value{true},
                   [](pjson_view v) { return v.as_bool() ? 1 : 0; });
 
-   bench_one<std::int64_t>("int_inline (5)", iters,
+   bench_one<std::int64_t>("uint_inline (5)", iters,
                            pjson_value{static_cast<std::int64_t>(5)},
                            [](pjson_view v) { return v.as_int64(); });
 

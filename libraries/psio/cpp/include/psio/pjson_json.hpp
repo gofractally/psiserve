@@ -276,7 +276,10 @@ namespace psio {
                       "pjson_json: malformed string token");
                std::string_view content = raw.substr(1, end - 2);
                std::size_t tp = reserve_bytes(out, 1u + content.size());
-               out.data()[tp] = static_cast<std::uint8_t>(t_string << 4);
+               // simdjson handed us escape-form bytes — set flag so
+               // JSON emit later can skip the per-char escape pass.
+               out.data()[tp] = static_cast<std::uint8_t>(
+                   (t_string << 4) | string_flag_escape_form);
                if (!content.empty())
                   std::memcpy(out.data() + tp + 1, content.data(),
                               content.size());

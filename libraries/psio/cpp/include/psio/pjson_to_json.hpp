@@ -37,6 +37,38 @@ namespace psio {
 
    namespace pjson_detail {
 
+      // Cold path for raw_text: per-character JSON escape pass. Out
+      // of line so the hot path (escape_form / binary memcpy) stays
+      // tight.
+      [[gnu::noinline]] inline void emit_string_escaping(
+          std::string& out, std::string_view s)
+      {
+         for (char c : s)
+         {
+            switch (c)
+            {
+               case '"':  out.append("\\\"", 2); break;
+               case '\\': out.append("\\\\", 2); break;
+               case '\b': out.append("\\b", 2); break;
+               case '\f': out.append("\\f", 2); break;
+               case '\n': out.append("\\n", 2); break;
+               case '\r': out.append("\\r", 2); break;
+               case '\t': out.append("\\t", 2); break;
+               default:
+                  if (static_cast<unsigned char>(c) < 0x20)
+                  {
+                     char buf[8];
+                     auto n = std::snprintf(buf, sizeof(buf),
+                                            "\\u%04x", c);
+                     out.append(buf, n);
+                  }
+                  else
+                     out.push_back(c);
+                  break;
+            }
+         }
+      }
+
       // Render an i128 mantissa as base-10 digits to a small buffer.
       // Returns chars written.
       inline std::size_t i128_to_chars(char* buf, std::size_t cap,
@@ -78,7 +110,7 @@ namespace psio {
                out.append((low & 1) ? "true" : "false",
                           (low & 1) ? 4 : 5);
                return;
-            case t_int_inline:
+            case t_uint_inline:
                // Value 0..15.
                if (low < 10)
                   out.push_back(static_cast<char>('0' + low));
@@ -144,19 +176,16 @@ namespace psio {
             }
             case t_string:
             {
-               // pjson stores escape-form bytes; just wrap in quotes.
+               std::string_view s(
+                   reinterpret_cast<const char*>(p + 1), size - 1);
                out.push_back('"');
-               out.append(reinterpret_cast<const char*>(p + 1),
-                          size - 1);
-               out.push_back('"');
-               return;
-            }
-            case t_bytes:
-            {
-               // Stub: emit as quoted hex (TODO: proper base64).
-               out.push_back('"');
-               out.append(reinterpret_cast<const char*>(p + 1),
-                          size - 1);
+               // Hot path: escape_form (JSON-coming-from-JSON pipeline)
+               // — verbatim memcpy. Same for binary stub (TODO: base64).
+               // Cold path: raw_text — escape per char (out-of-line).
+               if (low != string_flag_raw_text) [[likely]]
+                  out.append(s);
+               else
+                  emit_string_escaping(out, s);
                out.push_back('"');
                return;
             }
