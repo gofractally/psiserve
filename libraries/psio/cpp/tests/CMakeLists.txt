@@ -164,6 +164,34 @@ target_link_libraries(psio3_format_perf PRIVATE psio)
 target_compile_features(psio3_format_perf PRIVATE cxx_std_23)
 target_compile_options(psio3_format_perf PRIVATE -O3 -DNDEBUG)
 
+# ── Optional: head-to-head vs msgpack-cxx ─────────────────────────────
+#
+# When msgpack-cxx is available (e.g. `brew install msgpack-cxx` on
+# macOS, `apt install libmsgpack-cxx-dev` on Debian/Ubuntu, or any
+# CMake-package-config-locatable install), build a separate perf
+# binary that links it.  Compares:
+#   - typed encode/decode (psio::msgpack vs msgpack::pack /
+#     msgpack::unpack with MSGPACK_DEFINE'd struct)
+#   - schemaless dynamic walk (msgpack::object tagged tree vs psio's
+#     pjson_view, since psio's native schemaless self-describing
+#     format is pjson — different wire, same use case).
+#
+# Run manually:  ./bin/psio3_format_perf_external
+find_package(msgpack-cxx QUIET CONFIG)
+if(msgpack-cxx_FOUND)
+   add_executable(psio3_format_perf_external format_perf_external.cpp)
+   target_link_libraries(psio3_format_perf_external
+      PRIVATE psio msgpack-cxx)
+   target_compile_features(psio3_format_perf_external PRIVATE cxx_std_23)
+   target_compile_options(psio3_format_perf_external
+      PRIVATE -O3 -DNDEBUG)
+   message(STATUS
+      "psio: msgpack-cxx found — psio3_format_perf_external enabled")
+else()
+   message(STATUS
+      "psio: msgpack-cxx not found — skipping psio3_format_perf_external")
+endif()
+
 # Production-shaped WASI 2.3 inputs through wit_gen + wit_constexpr +
 # wit_encode (resources, own/borrow, multi-interface).
 psio3_add_test(psio3_wit_wasi_shapes_tests wit_wasi_shapes_tests.cpp)
