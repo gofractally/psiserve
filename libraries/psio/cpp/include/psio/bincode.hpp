@@ -568,8 +568,13 @@ namespace psio {
       friend void tag_invoke(decltype(::psio::encode), bincode, const T& v,
                              std::vector<char>& sink)
       {
-         ::psio::vector_stream vs{sink};
-         detail::bincode_impl::write_value(v, vs);
+         //  Pre-size + fast_buf_stream beats vector_stream's grow-as-
+         //  you-write on nested data: one resize beats N reallocations.
+         const std::size_t       n     = detail::bincode_impl::packed_size_of(v);
+         const std::size_t       orig  = sink.size();
+         sink.resize(orig + n);
+         ::psio::fast_buf_stream fbs{sink.data() + orig, n};
+         detail::bincode_impl::write_value(v, fbs);
       }
 
       template <typename T>
