@@ -17,7 +17,7 @@
 // {ptr, len} pairs, which the backing buffer happily stores — but
 // each nested allocation is a SEPARATE cabi_realloc call, and the
 // ctor we expose here only reserves the top-level array. Producing
-// nested-string lists goes through psio1::canonical_lower_fields +
+// nested-string lists goes through psio::canonical_lower_fields +
 // the return-area policy in component_proxy.hpp (not this class).
 
 #include <cstddef>
@@ -42,7 +42,7 @@ struct list
    static_assert(std::is_trivially_copyable_v<T>,
                  "wasi::list<T>: v1 only supports trivially-copyable T; "
                  "for records with nested strings/lists, use canonical "
-                 "return-area lowering via psio1::canonical_lower_fields");
+                 "return-area lowering via psio::canonical_lower_fields");
 
  private:
    T*          _ptr = nullptr;

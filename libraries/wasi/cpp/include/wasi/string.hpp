@@ -21,7 +21,7 @@
 // Allocator split:
 //   • __wasm__ guest — buffer lives in the guest's linear memory and
 //     is produced/freed through `cabi_realloc`. Calling TU must also
-//     include <psio1/guest_alloc.hpp> (single-TU export) so the symbol
+//     include <psio/guest_alloc.hpp> (single-TU export) so the symbol
 //     resolves. wasi/string.hpp only forward-declares cabi_realloc to
 //     avoid dragging the export definition into every TU.
 //   • Host (native build) — buffer lives in host heap, backed by

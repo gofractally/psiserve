@@ -12,9 +12,9 @@
 // at runtime — psiserve's Linker wires the imports to host_function
 // closures before instantiation.
 
-#include <psio1/reflect.hpp>
-#include <psio1/structural.hpp>
-#include <psio1/wit_resource.hpp>
+#include <psio/reflect.hpp>
+#include <psio/structural.hpp>
+#include <psio/wit_resource.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -25,15 +25,15 @@
 // wasi:io/error — resource error
 // =====================================================================
 
-struct io_error : psio1::wit_resource {};
-PSIO1_REFLECT(io_error)
+struct io_error : psio::wit_resource {};
+PSIO_REFLECT(io_error)
 
 // =====================================================================
 // wasi:io/poll — resource pollable, free function poll
 // =====================================================================
 
-struct pollable : psio1::wit_resource {};
-PSIO1_REFLECT(pollable)
+struct pollable : psio::wit_resource {};
+PSIO_REFLECT(pollable)
 
 // =====================================================================
 // wasi:io/streams — stream-error variant, input-stream, output-stream
@@ -51,13 +51,13 @@ struct stream_error
    // Stores the handle of the associated io_error resource.
    uint32_t error_handle = 0;
 };
-PSIO1_REFLECT(stream_error, tag, error_handle)
+PSIO_REFLECT(stream_error, tag, error_handle)
 
-struct input_stream : psio1::wit_resource {};
-PSIO1_REFLECT(input_stream)
+struct input_stream : psio::wit_resource {};
+PSIO_REFLECT(input_stream)
 
-struct output_stream : psio1::wit_resource {};
-PSIO1_REFLECT(output_stream)
+struct output_stream : psio::wit_resource {};
+PSIO_REFLECT(output_stream)
 
 // ── WIT result<T, E> as std::variant ────────────────────────────────
 // WIT result<ok-type, err-type> maps to std::variant<OkType, ErrType>:
@@ -90,7 +90,7 @@ struct wasi_io_error
 {
    // [method] error.to-debug-string: func() -> string
    static inline std::vector<uint8_t> error_to_debug_string(
-       psio1::borrow<io_error> /*self*/)
+       psio::borrow<io_error> /*self*/)
    {
       return {};
    }
@@ -103,17 +103,17 @@ struct wasi_io_error
 struct wasi_io_poll
 {
    // [method] pollable.ready: func() -> bool
-   static inline bool pollable_ready(psio1::borrow<pollable> /*self*/)
+   static inline bool pollable_ready(psio::borrow<pollable> /*self*/)
    {
       return false;
    }
 
    // [method] pollable.block: func()
-   static inline void pollable_block(psio1::borrow<pollable> /*self*/) {}
+   static inline void pollable_block(psio::borrow<pollable> /*self*/) {}
 
    // poll: func(in: list<borrow<pollable>>) -> list<u32>
    static inline std::vector<uint32_t> poll(
-       std::vector<psio1::borrow<pollable>> /*in*/)
+       std::vector<psio::borrow<pollable>> /*in*/)
    {
       return {};
    }
@@ -128,93 +128,93 @@ struct wasi_io_streams
    // ── input-stream methods ──────────────────────────────────────────
 
    static inline wasi_result<std::vector<uint8_t>> input_stream_read(
-       psio1::borrow<input_stream>, uint64_t)
+       psio::borrow<input_stream>, uint64_t)
    {
       return wasi_io_detail::err<std::vector<uint8_t>>({stream_error::closed});
    }
 
    static inline wasi_result<std::vector<uint8_t>> input_stream_blocking_read(
-       psio1::borrow<input_stream>, uint64_t)
+       psio::borrow<input_stream>, uint64_t)
    {
       return wasi_io_detail::err<std::vector<uint8_t>>({stream_error::closed});
    }
 
    static inline wasi_result<uint64_t> input_stream_skip(
-       psio1::borrow<input_stream>, uint64_t)
+       psio::borrow<input_stream>, uint64_t)
    {
       return wasi_io_detail::err<uint64_t>({stream_error::closed});
    }
 
    static inline wasi_result<uint64_t> input_stream_blocking_skip(
-       psio1::borrow<input_stream>, uint64_t)
+       psio::borrow<input_stream>, uint64_t)
    {
       return wasi_io_detail::err<uint64_t>({stream_error::closed});
    }
 
-   static inline psio1::own<pollable> input_stream_subscribe(
-       psio1::borrow<input_stream>)
+   static inline psio::own<pollable> input_stream_subscribe(
+       psio::borrow<input_stream>)
    {
-      return psio1::own<pollable>{0};
+      return psio::own<pollable>{0};
    }
 
    // ── output-stream methods ─────────────────────────────────────────
 
    static inline wasi_result<uint64_t> output_stream_check_write(
-       psio1::borrow<output_stream>)
+       psio::borrow<output_stream>)
    {
       return wasi_io_detail::err<uint64_t>({stream_error::closed});
    }
 
    static inline wasi_result_void output_stream_write(
-       psio1::borrow<output_stream>, std::vector<uint8_t>)
+       psio::borrow<output_stream>, std::vector<uint8_t>)
    {
       return wasi_io_detail::err({stream_error::closed});
    }
 
    static inline wasi_result_void output_stream_blocking_write_and_flush(
-       psio1::borrow<output_stream>, std::vector<uint8_t>)
+       psio::borrow<output_stream>, std::vector<uint8_t>)
    {
       return wasi_io_detail::err({stream_error::closed});
    }
 
    static inline wasi_result_void output_stream_flush(
-       psio1::borrow<output_stream>)
+       psio::borrow<output_stream>)
    {
       return wasi_io_detail::err({stream_error::closed});
    }
 
    static inline wasi_result_void output_stream_blocking_flush(
-       psio1::borrow<output_stream>)
+       psio::borrow<output_stream>)
    {
       return wasi_io_detail::err({stream_error::closed});
    }
 
-   static inline psio1::own<pollable> output_stream_subscribe(
-       psio1::borrow<output_stream>)
+   static inline psio::own<pollable> output_stream_subscribe(
+       psio::borrow<output_stream>)
    {
-      return psio1::own<pollable>{0};
+      return psio::own<pollable>{0};
    }
 
    static inline wasi_result_void output_stream_write_zeroes(
-       psio1::borrow<output_stream>, uint64_t)
+       psio::borrow<output_stream>, uint64_t)
    {
       return wasi_io_detail::err({stream_error::closed});
    }
 
    static inline wasi_result_void output_stream_blocking_write_zeroes_and_flush(
-       psio1::borrow<output_stream>, uint64_t)
+       psio::borrow<output_stream>, uint64_t)
    {
       return wasi_io_detail::err({stream_error::closed});
    }
 
    static inline wasi_result<uint64_t> output_stream_splice(
-       psio1::borrow<output_stream>, psio1::borrow<input_stream>, uint64_t)
+       psio::borrow<output_stream>, psio::borrow<input_stream>, uint64_t)
    {
       return wasi_io_detail::err<uint64_t>({stream_error::closed});
    }
 
    static inline wasi_result<uint64_t> output_stream_blocking_splice(
-       psio1::borrow<output_stream>, psio1::borrow<input_stream>, uint64_t)
+       psio::borrow<output_stream>, psio::borrow<input_stream>, uint64_t)
    {
       return wasi_io_detail::err<uint64_t>({stream_error::closed});
    }
@@ -224,21 +224,21 @@ struct wasi_io_streams
 // Package and interface registration
 // =====================================================================
 
-PSIO1_PACKAGE(wasi_io, "0.2.3");
-#undef  PSIO1_CURRENT_PACKAGE_
-#define PSIO1_CURRENT_PACKAGE_ PSIO1_PACKAGE_TYPE_(wasi_io)
+PSIO_PACKAGE(wasi_io, "0.2.3");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(wasi_io)
 
-PSIO1_INTERFACE(wasi_io_error,
+PSIO_INTERFACE(wasi_io_error,
                types(io_error),
                funcs(func(error_to_debug_string, self)))
 
-PSIO1_INTERFACE(wasi_io_poll,
+PSIO_INTERFACE(wasi_io_poll,
                types(pollable),
                funcs(func(pollable_ready, self),
                      func(pollable_block, self),
                      func(poll, in)))
 
-PSIO1_INTERFACE(wasi_io_streams,
+PSIO_INTERFACE(wasi_io_streams,
                types(stream_error, input_stream, output_stream),
                funcs(func(input_stream_read, self, len),
                      func(input_stream_blocking_read, self, len),

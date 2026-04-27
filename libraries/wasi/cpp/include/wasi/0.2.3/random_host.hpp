@@ -2,7 +2,7 @@
 
 #include <wasi/0.2.3/random.hpp>
 
-#include <psio1/structural.hpp>
+#include <psio/structural.hpp>
 
 #include <cstdint>
 #include <random>
@@ -50,7 +50,7 @@ struct WasiRandomHost
 
 }  // namespace wasi_host
 
-PSIO1_HOST_MODULE(wasi_host::WasiRandomHost,
+PSIO_HOST_MODULE(wasi_host::WasiRandomHost,
    interface(wasi_random_random, get_random_bytes, get_random_u64),
    interface(wasi_random_insecure, get_insecure_random_bytes, get_insecure_random_u64),
    interface(wasi_random_insecure_seed, insecure_seed))

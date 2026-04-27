@@ -3,7 +3,7 @@
 #include <wasi/0.2.3/clocks.hpp>
 #include <wasi/0.2.3/io_host.hpp>
 
-#include <psio1/structural.hpp>
+#include <psio/structural.hpp>
 
 #include <chrono>
 
@@ -45,25 +45,25 @@ struct WasiClocksHost
       return 1;
    }
 
-   psio1::own<pollable> subscribe_instant(instant when)
+   psio::own<pollable> subscribe_instant(instant when)
    {
       // Timer pollables are not yet backed by real timer fds.
       // For now, create a pollable that's always ready if the
       // deadline has passed, or never ready otherwise.
       (void)when;
-      return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+      return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
    }
 
-   psio1::own<pollable> subscribe_duration(duration when)
+   psio::own<pollable> subscribe_duration(duration when)
    {
       (void)when;
-      return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+      return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
    }
 };
 
 }  // namespace wasi_host
 
-PSIO1_HOST_MODULE(wasi_host::WasiClocksHost,
+PSIO_HOST_MODULE(wasi_host::WasiClocksHost,
    interface(wasi_clocks_wall_clock, now, resolution),
    interface(wasi_clocks_monotonic_clock, mono_now, mono_resolution,
              subscribe_instant, subscribe_duration))

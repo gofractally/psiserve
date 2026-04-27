@@ -11,9 +11,9 @@
 // at runtime — psiserve's Linker wires the imports to host_function
 // closures before instantiation.
 
-#include <psio1/reflect.hpp>
-#include <psio1/structural.hpp>
-#include <psio1/wit_resource.hpp>
+#include <psio/reflect.hpp>
+#include <psio/structural.hpp>
+#include <psio/wit_resource.hpp>
 
 #include <wasi/0.2.3/io.hpp>
 #include <wasi/0.2.3/clocks.hpp>
@@ -47,7 +47,7 @@ enum class descriptor_type : uint8_t
    regular_file,
    socket,
 };
-PSIO1_REFLECT(descriptor_type)
+PSIO_REFLECT(descriptor_type)
 
 /// Descriptor flags (bitfield).
 struct descriptor_flags
@@ -59,7 +59,7 @@ struct descriptor_flags
    bool requested_write_sync = false;
    bool mutate_directory     = false;
 };
-PSIO1_REFLECT(descriptor_flags,
+PSIO_REFLECT(descriptor_flags,
              read, write, file_integrity_sync, data_integrity_sync,
              requested_write_sync, mutate_directory)
 
@@ -73,7 +73,7 @@ struct descriptor_stat
    std::optional<datetime>   data_modification_timestamp = std::nullopt;
    std::optional<datetime>   status_change_timestamp     = std::nullopt;
 };
-PSIO1_REFLECT(descriptor_stat,
+PSIO_REFLECT(descriptor_stat,
              type, link_count_val, size,
              data_access_timestamp, data_modification_timestamp,
              status_change_timestamp)
@@ -83,7 +83,7 @@ struct path_flags
 {
    bool symlink_follow = false;
 };
-PSIO1_REFLECT(path_flags, symlink_follow)
+PSIO_REFLECT(path_flags, symlink_follow)
 
 /// Open flags used by open-at.
 struct open_flags
@@ -93,7 +93,7 @@ struct open_flags
    bool exclusive = false;
    bool truncate  = false;
 };
-PSIO1_REFLECT(open_flags, create, directory, exclusive, truncate)
+PSIO_REFLECT(open_flags, create, directory, exclusive, truncate)
 
 /// When setting a timestamp, this gives the value to set it to.
 struct new_timestamp
@@ -107,7 +107,7 @@ struct new_timestamp
    tag_t    tag  = no_change;
    datetime value{};
 };
-PSIO1_REFLECT(new_timestamp, tag, value)
+PSIO_REFLECT(new_timestamp, tag, value)
 
 /// A directory entry.
 struct directory_entry
@@ -115,7 +115,7 @@ struct directory_entry
    descriptor_type type = descriptor_type::unknown;
    std::string     name;
 };
-PSIO1_REFLECT(directory_entry, type, name)
+PSIO_REFLECT(directory_entry, type, name)
 
 /// Error codes returned by functions, similar to errno in POSIX.
 enum class filesystem_error_code : uint8_t
@@ -158,7 +158,7 @@ enum class filesystem_error_code : uint8_t
    text_file_busy,
    cross_device,
 };
-PSIO1_REFLECT(filesystem_error_code)
+PSIO_REFLECT(filesystem_error_code)
 
 /// File or memory access pattern advisory information.
 enum class advice : uint8_t
@@ -170,7 +170,7 @@ enum class advice : uint8_t
    dont_need,
    no_reuse,
 };
-PSIO1_REFLECT(advice)
+PSIO_REFLECT(advice)
 
 /// A 128-bit hash value, split into parts.
 struct metadata_hash_value
@@ -178,7 +178,7 @@ struct metadata_hash_value
    uint64_t lower = 0;
    uint64_t upper = 0;
 };
-PSIO1_REFLECT(metadata_hash_value, lower, upper)
+PSIO_REFLECT(metadata_hash_value, lower, upper)
 
 // ── WIT result<T, error-code> as std::variant ───────────────────────
 // index 0 = ok, index 1 = err (filesystem_error_code)
@@ -209,15 +209,15 @@ namespace fs_detail {
 // wasi:filesystem/types — resource descriptor
 // =====================================================================
 
-struct descriptor : psio1::wit_resource {};
-PSIO1_REFLECT(descriptor)
+struct descriptor : psio::wit_resource {};
+PSIO_REFLECT(descriptor)
 
 // =====================================================================
 // wasi:filesystem/types — resource directory-entry-stream
 // =====================================================================
 
-struct directory_entry_stream : psio1::wit_resource {};
-PSIO1_REFLECT(directory_entry_stream)
+struct directory_entry_stream : psio::wit_resource {};
+PSIO_REFLECT(directory_entry_stream)
 
 // =====================================================================
 // Interface: wasi:filesystem/types
@@ -228,31 +228,31 @@ struct wasi_filesystem_types
    // ── descriptor methods ────────────────────────────────────────────
 
    // [method] descriptor.read-via-stream: func(offset: filesize) -> result<input-stream, error-code>
-   static inline fs_result<psio1::own<input_stream>> descriptor_read_via_stream(
-       psio1::borrow<descriptor> /*self*/,
+   static inline fs_result<psio::own<input_stream>> descriptor_read_via_stream(
+       psio::borrow<descriptor> /*self*/,
        filesize /*offset*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.write-via-stream: func(offset: filesize) -> result<output-stream, error-code>
-   static inline fs_result<psio1::own<output_stream>> descriptor_write_via_stream(
-       psio1::borrow<descriptor> /*self*/,
+   static inline fs_result<psio::own<output_stream>> descriptor_write_via_stream(
+       psio::borrow<descriptor> /*self*/,
        filesize /*offset*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.append-via-stream: func() -> result<output-stream, error-code>
-   static inline fs_result<psio1::own<output_stream>> descriptor_append_via_stream(
-       psio1::borrow<descriptor> /*self*/)
+   static inline fs_result<psio::own<output_stream>> descriptor_append_via_stream(
+       psio::borrow<descriptor> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.advise: func(offset: filesize, length: filesize, advice: advice) -> result<_, error-code>
    static inline fs_result_void descriptor_advise(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        filesize /*offset*/,
        filesize /*length*/,
        advice /*advice*/)
@@ -262,28 +262,28 @@ struct wasi_filesystem_types
 
    // [method] descriptor.sync-data: func() -> result<_, error-code>
    static inline fs_result_void descriptor_sync_data(
-       psio1::borrow<descriptor> /*self*/)
+       psio::borrow<descriptor> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.get-flags: func() -> result<descriptor-flags, error-code>
    static inline fs_result<descriptor_flags> descriptor_get_flags(
-       psio1::borrow<descriptor> /*self*/)
+       psio::borrow<descriptor> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.get-type: func() -> result<descriptor-type, error-code>
    static inline fs_result<descriptor_type> descriptor_get_type(
-       psio1::borrow<descriptor> /*self*/)
+       psio::borrow<descriptor> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.set-size: func(size: filesize) -> result<_, error-code>
    static inline fs_result_void descriptor_set_size(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        filesize /*size*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
@@ -291,7 +291,7 @@ struct wasi_filesystem_types
 
    // [method] descriptor.set-times: func(data-access-timestamp: new-timestamp, data-modification-timestamp: new-timestamp) -> result<_, error-code>
    static inline fs_result_void descriptor_set_times(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        new_timestamp /*data_access_timestamp*/,
        new_timestamp /*data_modification_timestamp*/)
    {
@@ -300,7 +300,7 @@ struct wasi_filesystem_types
 
    // [method] descriptor.read: func(length: filesize, offset: filesize) -> result<tuple<list<u8>, bool>, error-code>
    static inline fs_result<std::tuple<std::vector<uint8_t>, bool>> descriptor_read(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        filesize /*length*/,
        filesize /*offset*/)
    {
@@ -309,7 +309,7 @@ struct wasi_filesystem_types
 
    // [method] descriptor.write: func(buffer: list<u8>, offset: filesize) -> result<filesize, error-code>
    static inline fs_result<filesize> descriptor_write(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        std::vector<uint8_t> /*buffer*/,
        filesize /*offset*/)
    {
@@ -317,22 +317,22 @@ struct wasi_filesystem_types
    }
 
    // [method] descriptor.read-directory: func() -> result<directory-entry-stream, error-code>
-   static inline fs_result<psio1::own<directory_entry_stream>> descriptor_read_directory(
-       psio1::borrow<descriptor> /*self*/)
+   static inline fs_result<psio::own<directory_entry_stream>> descriptor_read_directory(
+       psio::borrow<descriptor> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.sync: func() -> result<_, error-code>
    static inline fs_result_void descriptor_sync(
-       psio1::borrow<descriptor> /*self*/)
+       psio::borrow<descriptor> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.create-directory-at: func(path: string) -> result<_, error-code>
    static inline fs_result_void descriptor_create_directory_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        std::string /*path*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
@@ -340,14 +340,14 @@ struct wasi_filesystem_types
 
    // [method] descriptor.stat: func() -> result<descriptor-stat, error-code>
    static inline fs_result<descriptor_stat> descriptor_stat_fn(
-       psio1::borrow<descriptor> /*self*/)
+       psio::borrow<descriptor> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.stat-at: func(path-flags: path-flags, path: string) -> result<descriptor-stat, error-code>
    static inline fs_result<descriptor_stat> descriptor_stat_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        path_flags /*path_flags*/,
        std::string /*path*/)
    {
@@ -356,7 +356,7 @@ struct wasi_filesystem_types
 
    // [method] descriptor.set-times-at: func(path-flags, path, data-access-timestamp, data-modification-timestamp) -> result<_, error-code>
    static inline fs_result_void descriptor_set_times_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        path_flags /*path_flags*/,
        std::string /*path*/,
        new_timestamp /*data_access_timestamp*/,
@@ -367,18 +367,18 @@ struct wasi_filesystem_types
 
    // [method] descriptor.link-at: func(old-path-flags, old-path, new-descriptor, new-path) -> result<_, error-code>
    static inline fs_result_void descriptor_link_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        path_flags /*old_path_flags*/,
        std::string /*old_path*/,
-       psio1::borrow<descriptor> /*new_descriptor*/,
+       psio::borrow<descriptor> /*new_descriptor*/,
        std::string /*new_path*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.open-at: func(path-flags, path, open-flags, flags) -> result<descriptor, error-code>
-   static inline fs_result<psio1::own<descriptor>> descriptor_open_at(
-       psio1::borrow<descriptor> /*self*/,
+   static inline fs_result<psio::own<descriptor>> descriptor_open_at(
+       psio::borrow<descriptor> /*self*/,
        path_flags /*path_flags*/,
        std::string /*path*/,
        open_flags /*open_flags*/,
@@ -389,7 +389,7 @@ struct wasi_filesystem_types
 
    // [method] descriptor.readlink-at: func(path: string) -> result<string, error-code>
    static inline fs_result<std::string> descriptor_readlink_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        std::string /*path*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
@@ -397,7 +397,7 @@ struct wasi_filesystem_types
 
    // [method] descriptor.remove-directory-at: func(path: string) -> result<_, error-code>
    static inline fs_result_void descriptor_remove_directory_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        std::string /*path*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
@@ -405,9 +405,9 @@ struct wasi_filesystem_types
 
    // [method] descriptor.rename-at: func(old-path, new-descriptor, new-path) -> result<_, error-code>
    static inline fs_result_void descriptor_rename_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        std::string /*old_path*/,
-       psio1::borrow<descriptor> /*new_descriptor*/,
+       psio::borrow<descriptor> /*new_descriptor*/,
        std::string /*new_path*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
@@ -415,7 +415,7 @@ struct wasi_filesystem_types
 
    // [method] descriptor.symlink-at: func(old-path, new-path) -> result<_, error-code>
    static inline fs_result_void descriptor_symlink_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        std::string /*old_path*/,
        std::string /*new_path*/)
    {
@@ -424,7 +424,7 @@ struct wasi_filesystem_types
 
    // [method] descriptor.unlink-file-at: func(path: string) -> result<_, error-code>
    static inline fs_result_void descriptor_unlink_file_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        std::string /*path*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
@@ -432,22 +432,22 @@ struct wasi_filesystem_types
 
    // [method] descriptor.is-same-object: func(other: borrow<descriptor>) -> bool
    static inline bool descriptor_is_same_object(
-       psio1::borrow<descriptor> /*self*/,
-       psio1::borrow<descriptor> /*other*/)
+       psio::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*other*/)
    {
       return false;
    }
 
    // [method] descriptor.metadata-hash: func() -> result<metadata-hash-value, error-code>
    static inline fs_result<metadata_hash_value> descriptor_metadata_hash(
-       psio1::borrow<descriptor> /*self*/)
+       psio::borrow<descriptor> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
 
    // [method] descriptor.metadata-hash-at: func(path-flags, path) -> result<metadata-hash-value, error-code>
    static inline fs_result<metadata_hash_value> descriptor_metadata_hash_at(
-       psio1::borrow<descriptor> /*self*/,
+       psio::borrow<descriptor> /*self*/,
        path_flags /*path_flags*/,
        std::string /*path*/)
    {
@@ -458,7 +458,7 @@ struct wasi_filesystem_types
 
    // [method] directory-entry-stream.read-directory-entry: func() -> result<option<directory-entry>, error-code>
    static inline fs_result<std::optional<directory_entry>> directory_entry_stream_read_directory_entry(
-       psio1::borrow<directory_entry_stream> /*self*/)
+       psio::borrow<directory_entry_stream> /*self*/)
    {
       return fs_detail::err(filesystem_error_code::bad_descriptor);
    }
@@ -467,7 +467,7 @@ struct wasi_filesystem_types
 
    // filesystem-error-code: func(err: borrow<error>) -> option<error-code>
    static inline std::optional<filesystem_error_code> filesystem_error_code_fn(
-       psio1::borrow<io_error> /*err*/)
+       psio::borrow<io_error> /*err*/)
    {
       return std::nullopt;
    }
@@ -480,7 +480,7 @@ struct wasi_filesystem_types
 struct wasi_filesystem_preopens
 {
    // get-directories: func() -> list<tuple<descriptor, string>>
-   static inline std::vector<std::tuple<psio1::own<descriptor>, std::string>> get_directories()
+   static inline std::vector<std::tuple<psio::own<descriptor>, std::string>> get_directories()
    {
       return {};
    }
@@ -490,11 +490,11 @@ struct wasi_filesystem_preopens
 // Package and interface registration
 // =====================================================================
 
-PSIO1_PACKAGE(wasi_filesystem, "0.2.3");
-#undef  PSIO1_CURRENT_PACKAGE_
-#define PSIO1_CURRENT_PACKAGE_ PSIO1_PACKAGE_TYPE_(wasi_filesystem)
+PSIO_PACKAGE(wasi_filesystem, "0.2.3");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(wasi_filesystem)
 
-PSIO1_INTERFACE(wasi_filesystem_types,
+PSIO_INTERFACE(wasi_filesystem_types,
                types(descriptor_type, descriptor_flags, descriptor_stat,
                      path_flags, open_flags, new_timestamp, directory_entry,
                      filesystem_error_code, advice, metadata_hash_value,
@@ -529,6 +529,6 @@ PSIO1_INTERFACE(wasi_filesystem_types,
                      func(directory_entry_stream_read_directory_entry, self),
                      func(filesystem_error_code_fn, err)))
 
-PSIO1_INTERFACE(wasi_filesystem_preopens,
+PSIO_INTERFACE(wasi_filesystem_preopens,
                types(),
                funcs(func(get_directories)))

@@ -11,9 +11,9 @@
 // at runtime — psiserve's Linker wires the imports to host_function
 // closures before instantiation.
 
-#include <psio1/reflect.hpp>
-#include <psio1/structural.hpp>
-#include <psio1/wit_resource.hpp>
+#include <psio/reflect.hpp>
+#include <psio/structural.hpp>
+#include <psio/wit_resource.hpp>
 
 #include <wasi/0.2.3/io.hpp>
 
@@ -29,7 +29,7 @@ struct datetime
    uint64_t seconds      = 0;
    uint32_t nanoseconds  = 0;
 };
-PSIO1_REFLECT(datetime, seconds, nanoseconds)
+PSIO_REFLECT(datetime, seconds, nanoseconds)
 
 // =====================================================================
 // Interface: wasi:clocks/wall-clock
@@ -78,15 +78,15 @@ struct wasi_clocks_monotonic_clock
    }
 
    // subscribe-instant: func(when: instant) -> pollable
-   static inline psio1::own<pollable> subscribe_instant(instant /*when*/)
+   static inline psio::own<pollable> subscribe_instant(instant /*when*/)
    {
-      return psio1::own<pollable>{0};
+      return psio::own<pollable>{0};
    }
 
    // subscribe-duration: func(when: duration) -> pollable
-   static inline psio1::own<pollable> subscribe_duration(duration /*when*/)
+   static inline psio::own<pollable> subscribe_duration(duration /*when*/)
    {
-      return psio1::own<pollable>{0};
+      return psio::own<pollable>{0};
    }
 };
 
@@ -94,16 +94,16 @@ struct wasi_clocks_monotonic_clock
 // Package and interface registration
 // =====================================================================
 
-PSIO1_PACKAGE(wasi_clocks, "0.2.3");
-#undef  PSIO1_CURRENT_PACKAGE_
-#define PSIO1_CURRENT_PACKAGE_ PSIO1_PACKAGE_TYPE_(wasi_clocks)
+PSIO_PACKAGE(wasi_clocks, "0.2.3");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(wasi_clocks)
 
-PSIO1_INTERFACE(wasi_clocks_wall_clock,
+PSIO_INTERFACE(wasi_clocks_wall_clock,
                types(datetime),
                funcs(func(now),
                      func(resolution)))
 
-PSIO1_INTERFACE(wasi_clocks_monotonic_clock,
+PSIO_INTERFACE(wasi_clocks_monotonic_clock,
                types(),
                funcs(func(now),
                      func(resolution),

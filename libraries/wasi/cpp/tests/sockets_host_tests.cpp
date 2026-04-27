@@ -53,17 +53,17 @@ TEST_CASE("WasiSocketsHost TCP bind and local address", "[wasi][sockets]")
    ip_socket_address addr = ipv4_socket_address{0, ipv4_address{{127, 0, 0, 1}}};
 
    auto bind_start = sockets.tcp_socket_start_bind(
-       psio1::borrow<tcp_socket>{tcp.handle},
-       psio1::borrow<network>{net.handle},
+       psio::borrow<tcp_socket>{tcp.handle},
+       psio::borrow<network>{net.handle},
        addr);
    REQUIRE(bind_start.index() == 0);
 
    auto bind_finish = sockets.tcp_socket_finish_bind(
-       psio1::borrow<tcp_socket>{tcp.handle});
+       psio::borrow<tcp_socket>{tcp.handle});
    REQUIRE(bind_finish.index() == 0);
 
    auto local = sockets.tcp_socket_local_address(
-       psio1::borrow<tcp_socket>{tcp.handle});
+       psio::borrow<tcp_socket>{tcp.handle});
    REQUIRE(local.index() == 0);
    auto& local_addr = std::get<0>(local);
    REQUIRE(std::holds_alternative<ipv4_socket_address>(local_addr));
@@ -83,21 +83,21 @@ TEST_CASE("WasiSocketsHost TCP listen lifecycle", "[wasi][sockets]")
    ip_socket_address addr = ipv4_socket_address{0, ipv4_address{{127, 0, 0, 1}}};
 
    REQUIRE(sockets.tcp_socket_start_bind(
-       psio1::borrow<tcp_socket>{tcp.handle},
-       psio1::borrow<network>{net.handle}, addr).index() == 0);
+       psio::borrow<tcp_socket>{tcp.handle},
+       psio::borrow<network>{net.handle}, addr).index() == 0);
    REQUIRE(sockets.tcp_socket_finish_bind(
-       psio1::borrow<tcp_socket>{tcp.handle}).index() == 0);
+       psio::borrow<tcp_socket>{tcp.handle}).index() == 0);
 
    REQUIRE_FALSE(sockets.tcp_socket_is_listening(
-       psio1::borrow<tcp_socket>{tcp.handle}));
+       psio::borrow<tcp_socket>{tcp.handle}));
 
    REQUIRE(sockets.tcp_socket_start_listen(
-       psio1::borrow<tcp_socket>{tcp.handle}).index() == 0);
+       psio::borrow<tcp_socket>{tcp.handle}).index() == 0);
    REQUIRE(sockets.tcp_socket_finish_listen(
-       psio1::borrow<tcp_socket>{tcp.handle}).index() == 0);
+       psio::borrow<tcp_socket>{tcp.handle}).index() == 0);
 
    REQUIRE(sockets.tcp_socket_is_listening(
-       psio1::borrow<tcp_socket>{tcp.handle}));
+       psio::borrow<tcp_socket>{tcp.handle}));
 }
 
 TEST_CASE("WasiSocketsHost TCP socket options", "[wasi][sockets]")
@@ -108,7 +108,7 @@ TEST_CASE("WasiSocketsHost TCP socket options", "[wasi][sockets]")
    auto tcp_result = sockets.create_tcp_socket(ip_address_family::ipv4);
    REQUIRE(tcp_result.index() == 0);
    auto tcp = std::get<0>(std::move(tcp_result));
-   auto b   = psio1::borrow<tcp_socket>{tcp.handle};
+   auto b   = psio::borrow<tcp_socket>{tcp.handle};
 
    SECTION("keepalive")
    {
@@ -155,7 +155,7 @@ TEST_CASE("WasiSocketsHost TCP state machine rejects invalid transitions", "[was
    auto tcp_result = sockets.create_tcp_socket(ip_address_family::ipv4);
    REQUIRE(tcp_result.index() == 0);
    auto tcp = std::get<0>(std::move(tcp_result));
-   auto b   = psio1::borrow<tcp_socket>{tcp.handle};
+   auto b   = psio::borrow<tcp_socket>{tcp.handle};
 
    REQUIRE(sockets.tcp_socket_finish_bind(b).index() == 1);
    REQUIRE(sockets.tcp_socket_start_listen(b).index() == 1);
@@ -176,13 +176,13 @@ TEST_CASE("WasiSocketsHost UDP bind and local address", "[wasi][sockets]")
    ip_socket_address addr = ipv4_socket_address{0, ipv4_address{{127, 0, 0, 1}}};
 
    REQUIRE(sockets.udp_socket_start_bind(
-       psio1::borrow<udp_socket>{udp.handle},
-       psio1::borrow<network>{net.handle}, addr).index() == 0);
+       psio::borrow<udp_socket>{udp.handle},
+       psio::borrow<network>{net.handle}, addr).index() == 0);
    REQUIRE(sockets.udp_socket_finish_bind(
-       psio1::borrow<udp_socket>{udp.handle}).index() == 0);
+       psio::borrow<udp_socket>{udp.handle}).index() == 0);
 
    auto local = sockets.udp_socket_local_address(
-       psio1::borrow<udp_socket>{udp.handle});
+       psio::borrow<udp_socket>{udp.handle});
    REQUIRE(local.index() == 0);
    REQUIRE(std::get<ipv4_socket_address>(std::get<0>(local)).port != 0);
 }
@@ -196,6 +196,6 @@ TEST_CASE("WasiSocketsHost TCP subscribe returns pollable", "[wasi][sockets]")
    REQUIRE(tcp_result.index() == 0);
    auto tcp = std::get<0>(std::move(tcp_result));
 
-   auto p = sockets.tcp_socket_subscribe(psio1::borrow<tcp_socket>{tcp.handle});
+   auto p = sockets.tcp_socket_subscribe(psio::borrow<tcp_socket>{tcp.handle});
    REQUIRE(p.handle != psizam::handle_table<pollable_data, 256>::invalid_handle);
 }

@@ -12,8 +12,8 @@
 // at runtime — psiserve's Linker wires the imports to host_function
 // closures before instantiation.
 
-#include <psio1/reflect.hpp>
-#include <psio1/structural.hpp>
+#include <psio/reflect.hpp>
+#include <psio/structural.hpp>
 
 #include <cstdint>
 #include <tuple>
@@ -74,20 +74,20 @@ struct wasi_random_insecure_seed
 // Package and interface registration
 // =====================================================================
 
-PSIO1_PACKAGE(wasi_random, "0.2.3");
-#undef  PSIO1_CURRENT_PACKAGE_
-#define PSIO1_CURRENT_PACKAGE_ PSIO1_PACKAGE_TYPE_(wasi_random)
+PSIO_PACKAGE(wasi_random, "0.2.3");
+#undef  PSIO_CURRENT_PACKAGE_
+#define PSIO_CURRENT_PACKAGE_ PSIO_PACKAGE_TYPE_(wasi_random)
 
-PSIO1_INTERFACE(wasi_random_random,
+PSIO_INTERFACE(wasi_random_random,
                types(),
                funcs(func(get_random_bytes, len),
                      func(get_random_u64)))
 
-PSIO1_INTERFACE(wasi_random_insecure,
+PSIO_INTERFACE(wasi_random_insecure,
                types(),
                funcs(func(get_insecure_random_bytes, len),
                      func(get_insecure_random_u64)))
 
-PSIO1_INTERFACE(wasi_random_insecure_seed,
+PSIO_INTERFACE(wasi_random_insecure_seed,
                types(),
                funcs(func(insecure_seed)))

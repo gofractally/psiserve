@@ -1,6 +1,6 @@
 # ── wasi-cpp tests ────────────────────────────────────────────────────────────
 #
-# Round-trip golden diff: reflect the C++ bindings into a psio1::Schema,
+# Round-trip golden diff: reflect the C++ bindings into a psio::Schema,
 # run emit_wit, and compare against the vendored canonical WIT in
 # ../../../wit/. Any divergence is a contract failure.
 
@@ -10,7 +10,7 @@ add_executable(wasi_cpp_tests
    string_tests.cpp
 )
 
-target_link_libraries(wasi_cpp_tests PRIVATE wasi-cpp psio1)
+target_link_libraries(wasi_cpp_tests PRIVATE wasi-cpp psio)
 
 target_include_directories(wasi_cpp_tests PRIVATE
    ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include
@@ -36,7 +36,7 @@ add_executable(wasi_host_tests
    filesystem_host_tests.cpp
 )
 
-target_link_libraries(wasi_host_tests PRIVATE wasi-host psio1)
+target_link_libraries(wasi_host_tests PRIVATE wasi-host psio)
 
 target_include_directories(wasi_host_tests PRIVATE
    ${CMAKE_SOURCE_DIR}/libraries/psizam/external/Catch2/single_include

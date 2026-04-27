@@ -3,7 +3,7 @@
 #include <wasi/0.2.3/filesystem.hpp>
 #include <wasi/0.2.3/io_host.hpp>
 
-#include <psio1/structural.hpp>
+#include <psio/structural.hpp>
 
 #include <cerrno>
 #include <cstring>
@@ -127,9 +127,9 @@ struct WasiFilesystemHost
 
    // ── wasi:filesystem/preopens ──────────────────────────────────────
 
-   std::vector<std::tuple<psio1::own<descriptor>, std::string>> get_directories()
+   std::vector<std::tuple<psio::own<descriptor>, std::string>> get_directories()
    {
-      std::vector<std::tuple<psio1::own<descriptor>, std::string>> result;
+      std::vector<std::tuple<psio::own<descriptor>, std::string>> result;
       for (auto& [guest, host] : preopens)
       {
          int fd = ::open(host.c_str(), O_RDONLY | O_DIRECTORY);
@@ -137,7 +137,7 @@ struct WasiFilesystemHost
          {
             auto h = descriptors.create(descriptor_data{
                 RealFd{fd}, descriptor_type::directory, host});
-            result.emplace_back(psio1::own<descriptor>{h}, guest);
+            result.emplace_back(psio::own<descriptor>{h}, guest);
          }
       }
       return result;
@@ -145,8 +145,8 @@ struct WasiFilesystemHost
 
    // ── wasi:filesystem/types — descriptor methods ────────────────────
 
-   fs_result<psio1::own<input_stream>> descriptor_read_via_stream(
-       psio1::borrow<descriptor> self, filesize offset)
+   fs_result<psio::own<input_stream>> descriptor_read_via_stream(
+       psio::borrow<descriptor> self, filesize offset)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -160,8 +160,8 @@ struct WasiFilesystemHost
       return fs_detail::ok(io.create_input_stream(RealFd{fd2}));
    }
 
-   fs_result<psio1::own<output_stream>> descriptor_write_via_stream(
-       psio1::borrow<descriptor> self, filesize offset)
+   fs_result<psio::own<output_stream>> descriptor_write_via_stream(
+       psio::borrow<descriptor> self, filesize offset)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -175,8 +175,8 @@ struct WasiFilesystemHost
       return fs_detail::ok(io.create_output_stream(RealFd{fd2}));
    }
 
-   fs_result<psio1::own<output_stream>> descriptor_append_via_stream(
-       psio1::borrow<descriptor> self)
+   fs_result<psio::own<output_stream>> descriptor_append_via_stream(
+       psio::borrow<descriptor> self)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -189,7 +189,7 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_advise(
-       psio1::borrow<descriptor> self, filesize /*offset*/,
+       psio::borrow<descriptor> self, filesize /*offset*/,
        filesize /*length*/, advice /*adv*/)
    {
       auto* d = descriptors.get(self.handle);
@@ -198,7 +198,7 @@ struct WasiFilesystemHost
       return fs_detail::ok();
    }
 
-   fs_result_void descriptor_sync_data(psio1::borrow<descriptor> self)
+   fs_result_void descriptor_sync_data(psio::borrow<descriptor> self)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -213,7 +213,7 @@ struct WasiFilesystemHost
    }
 
    fs_result<descriptor_flags> descriptor_get_flags(
-       psio1::borrow<descriptor> self)
+       psio::borrow<descriptor> self)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -226,7 +226,7 @@ struct WasiFilesystemHost
    }
 
    fs_result<descriptor_type> descriptor_get_type(
-       psio1::borrow<descriptor> self)
+       psio::borrow<descriptor> self)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -238,7 +238,7 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_set_size(
-       psio1::borrow<descriptor> self, filesize size)
+       psio::borrow<descriptor> self, filesize size)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -249,7 +249,7 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_set_times(
-       psio1::borrow<descriptor> self,
+       psio::borrow<descriptor> self,
        new_timestamp /*data_access*/, new_timestamp /*data_mod*/)
    {
       auto* d = descriptors.get(self.handle);
@@ -259,7 +259,7 @@ struct WasiFilesystemHost
    }
 
    fs_result<std::tuple<std::vector<uint8_t>, bool>> descriptor_read(
-       psio1::borrow<descriptor> self, filesize length, filesize offset)
+       psio::borrow<descriptor> self, filesize length, filesize offset)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -275,7 +275,7 @@ struct WasiFilesystemHost
    }
 
    fs_result<filesize> descriptor_write(
-       psio1::borrow<descriptor> self,
+       psio::borrow<descriptor> self,
        std::vector<uint8_t> buffer, filesize offset)
    {
       auto* d = descriptors.get(self.handle);
@@ -288,8 +288,8 @@ struct WasiFilesystemHost
       return fs_detail::ok(static_cast<filesize>(n));
    }
 
-   fs_result<psio1::own<directory_entry_stream>> descriptor_read_directory(
-       psio1::borrow<descriptor> self)
+   fs_result<psio::own<directory_entry_stream>> descriptor_read_directory(
+       psio::borrow<descriptor> self)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -304,10 +304,10 @@ struct WasiFilesystemHost
          return fs_detail::err(errno_to_fs_error());
       }
       auto h = dir_streams.create(dir_stream_data{dir, d->path});
-      return fs_detail::ok(psio1::own<directory_entry_stream>{h});
+      return fs_detail::ok(psio::own<directory_entry_stream>{h});
    }
 
-   fs_result_void descriptor_sync(psio1::borrow<descriptor> self)
+   fs_result_void descriptor_sync(psio::borrow<descriptor> self)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -318,7 +318,7 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_create_directory_at(
-       psio1::borrow<descriptor> self, std::string path)
+       psio::borrow<descriptor> self, std::string path)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -329,7 +329,7 @@ struct WasiFilesystemHost
    }
 
    fs_result<descriptor_stat> descriptor_stat_fn(
-       psio1::borrow<descriptor> self)
+       psio::borrow<descriptor> self)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -341,7 +341,7 @@ struct WasiFilesystemHost
    }
 
    fs_result<descriptor_stat> descriptor_stat_at(
-       psio1::borrow<descriptor> self, path_flags pf, std::string path)
+       psio::borrow<descriptor> self, path_flags pf, std::string path)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -354,7 +354,7 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_set_times_at(
-       psio1::borrow<descriptor> self, path_flags /*pf*/,
+       psio::borrow<descriptor> self, path_flags /*pf*/,
        std::string /*path*/, new_timestamp /*dat*/, new_timestamp /*dmt*/)
    {
       auto* d = descriptors.get(self.handle);
@@ -364,8 +364,8 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_link_at(
-       psio1::borrow<descriptor> self, path_flags /*pf*/,
-       std::string old_path, psio1::borrow<descriptor> new_desc,
+       psio::borrow<descriptor> self, path_flags /*pf*/,
+       std::string old_path, psio::borrow<descriptor> new_desc,
        std::string new_path)
    {
       auto* d  = descriptors.get(self.handle);
@@ -377,8 +377,8 @@ struct WasiFilesystemHost
       return fs_detail::ok();
    }
 
-   fs_result<psio1::own<descriptor>> descriptor_open_at(
-       psio1::borrow<descriptor> self, path_flags pf,
+   fs_result<psio::own<descriptor>> descriptor_open_at(
+       psio::borrow<descriptor> self, path_flags pf,
        std::string path, open_flags ofl, descriptor_flags dfl)
    {
       auto* d = descriptors.get(self.handle);
@@ -411,11 +411,11 @@ struct WasiFilesystemHost
       ::fstat(fd, &st);
       auto h = descriptors.create(descriptor_data{
           RealFd{fd}, stat_mode_to_type(st.st_mode), d->path + "/" + path});
-      return fs_detail::ok(psio1::own<descriptor>{h});
+      return fs_detail::ok(psio::own<descriptor>{h});
    }
 
    fs_result<std::string> descriptor_readlink_at(
-       psio1::borrow<descriptor> self, std::string path)
+       psio::borrow<descriptor> self, std::string path)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -428,7 +428,7 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_remove_directory_at(
-       psio1::borrow<descriptor> self, std::string path)
+       psio::borrow<descriptor> self, std::string path)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -439,8 +439,8 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_rename_at(
-       psio1::borrow<descriptor> self, std::string old_path,
-       psio1::borrow<descriptor> new_desc, std::string new_path)
+       psio::borrow<descriptor> self, std::string old_path,
+       psio::borrow<descriptor> new_desc, std::string new_path)
    {
       auto* d  = descriptors.get(self.handle);
       auto* nd = descriptors.get(new_desc.handle);
@@ -452,7 +452,7 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_symlink_at(
-       psio1::borrow<descriptor> self, std::string old_path,
+       psio::borrow<descriptor> self, std::string old_path,
        std::string new_path)
    {
       auto* d = descriptors.get(self.handle);
@@ -464,7 +464,7 @@ struct WasiFilesystemHost
    }
 
    fs_result_void descriptor_unlink_file_at(
-       psio1::borrow<descriptor> self, std::string path)
+       psio::borrow<descriptor> self, std::string path)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -475,7 +475,7 @@ struct WasiFilesystemHost
    }
 
    bool descriptor_is_same_object(
-       psio1::borrow<descriptor> self, psio1::borrow<descriptor> other)
+       psio::borrow<descriptor> self, psio::borrow<descriptor> other)
    {
       auto* a = descriptors.get(self.handle);
       auto* b = descriptors.get(other.handle);
@@ -488,7 +488,7 @@ struct WasiFilesystemHost
    }
 
    fs_result<metadata_hash_value> descriptor_metadata_hash(
-       psio1::borrow<descriptor> self)
+       psio::borrow<descriptor> self)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -503,7 +503,7 @@ struct WasiFilesystemHost
    }
 
    fs_result<metadata_hash_value> descriptor_metadata_hash_at(
-       psio1::borrow<descriptor> self, path_flags pf, std::string path)
+       psio::borrow<descriptor> self, path_flags pf, std::string path)
    {
       auto* d = descriptors.get(self.handle);
       if (!d)
@@ -522,7 +522,7 @@ struct WasiFilesystemHost
 
    fs_result<std::optional<directory_entry>>
    directory_entry_stream_read_directory_entry(
-       psio1::borrow<directory_entry_stream> self)
+       psio::borrow<directory_entry_stream> self)
    {
       auto* ds = dir_streams.get(self.handle);
       if (!ds || !ds->dir)
@@ -556,7 +556,7 @@ struct WasiFilesystemHost
    // ── filesystem-error-code ─────────────────────────────────────────
 
    std::optional<filesystem_error_code> filesystem_error_code_fn(
-       psio1::borrow<io_error> /*err*/)
+       psio::borrow<io_error> /*err*/)
    {
       return std::nullopt;
    }
@@ -564,7 +564,7 @@ struct WasiFilesystemHost
 
 }  // namespace wasi_host
 
-PSIO1_HOST_MODULE(wasi_host::WasiFilesystemHost,
+PSIO_HOST_MODULE(wasi_host::WasiFilesystemHost,
    interface(wasi_filesystem_preopens, get_directories),
    interface(wasi_filesystem_types,
       descriptor_read_via_stream, descriptor_write_via_stream,

@@ -3,7 +3,7 @@
 #include <wasi/0.2.3/sockets.hpp>
 #include <wasi/0.2.3/io_host.hpp>
 
-#include <psio1/structural.hpp>
+#include <psio/structural.hpp>
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -150,22 +150,22 @@ struct WasiSocketsHost
 
    // ── wasi:sockets/instance-network ─────────────────────────────────
 
-   psio1::own<network> instance_network()
+   psio::own<network> instance_network()
    {
-      return psio1::own<network>{networks.create(network_data{})};
+      return psio::own<network>{networks.create(network_data{})};
    }
 
    // ── wasi:sockets/network ─────────────────────────────────────────
 
    std::optional<::error_code> network_error_code(
-       psio1::borrow<io_error> /*err*/)
+       psio::borrow<io_error> /*err*/)
    {
       return std::nullopt;
    }
 
    // ── wasi:sockets/tcp-create-socket ────────────────────────────────
 
-   socket_result<psio1::own<tcp_socket>> create_tcp_socket(
+   socket_result<psio::own<tcp_socket>> create_tcp_socket(
        ip_address_family family)
    {
       int af = (family == ip_address_family::ipv4) ? AF_INET : AF_INET6;
@@ -177,14 +177,14 @@ struct WasiSocketsHost
       ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
       auto handle = tcp_sockets.create(tcp_socket_data{RealFd{fd}, family});
-      return sock_detail::ok(psio1::own<tcp_socket>{handle});
+      return sock_detail::ok(psio::own<tcp_socket>{handle});
    }
 
    // ── wasi:sockets/tcp — lifecycle ──────────────────────────────────
 
    socket_result_void tcp_socket_start_bind(
-       psio1::borrow<tcp_socket>  self,
-       psio1::borrow<network>     /*net*/,
+       psio::borrow<tcp_socket>  self,
+       psio::borrow<network>     /*net*/,
        ip_socket_address         local_address)
    {
       auto* s = tcp_sockets.get(self.handle);
@@ -200,7 +200,7 @@ struct WasiSocketsHost
       return sock_detail::ok();
    }
 
-   socket_result_void tcp_socket_finish_bind(psio1::borrow<tcp_socket> self)
+   socket_result_void tcp_socket_finish_bind(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -212,8 +212,8 @@ struct WasiSocketsHost
    }
 
    socket_result_void tcp_socket_start_connect(
-       psio1::borrow<tcp_socket>  self,
-       psio1::borrow<network>     /*net*/,
+       psio::borrow<tcp_socket>  self,
+       psio::borrow<network>     /*net*/,
        ip_socket_address         remote_address)
    {
       auto* s = tcp_sockets.get(self.handle);
@@ -238,8 +238,8 @@ struct WasiSocketsHost
       return sock_detail::err(errno_to_network_error());
    }
 
-   socket_result<std::tuple<psio1::own<input_stream>, psio1::own<output_stream>>>
-   tcp_socket_finish_connect(psio1::borrow<tcp_socket> self)
+   socket_result<std::tuple<psio::own<input_stream>, psio::own<output_stream>>>
+   tcp_socket_finish_connect(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -272,7 +272,7 @@ struct WasiSocketsHost
       return sock_detail::ok(std::make_tuple(std::move(is), std::move(os)));
    }
 
-   socket_result_void tcp_socket_start_listen(psio1::borrow<tcp_socket> self)
+   socket_result_void tcp_socket_start_listen(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s || s->state != tcp_state::bound)
@@ -285,7 +285,7 @@ struct WasiSocketsHost
       return sock_detail::ok();
    }
 
-   socket_result_void tcp_socket_finish_listen(psio1::borrow<tcp_socket> self)
+   socket_result_void tcp_socket_finish_listen(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -296,10 +296,10 @@ struct WasiSocketsHost
       return sock_detail::ok();
    }
 
-   socket_result<std::tuple<psio1::own<tcp_socket>,
-                             psio1::own<input_stream>,
-                             psio1::own<output_stream>>>
-   tcp_socket_accept(psio1::borrow<tcp_socket> self)
+   socket_result<std::tuple<psio::own<tcp_socket>,
+                             psio::own<input_stream>,
+                             psio::own<output_stream>>>
+   tcp_socket_accept(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s || s->state != tcp_state::listening)
@@ -339,14 +339,14 @@ struct WasiSocketsHost
       auto os = io.create_output_stream(RealFd{fd2});
 
       return sock_detail::ok(std::make_tuple(
-          psio1::own<tcp_socket>{client_handle},
+          psio::own<tcp_socket>{client_handle},
           std::move(is), std::move(os)));
    }
 
    // ── tcp address queries ───────────────────────────────────────────
 
    socket_result<ip_socket_address> tcp_socket_local_address(
-       psio1::borrow<tcp_socket> self)
+       psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -360,7 +360,7 @@ struct WasiSocketsHost
    }
 
    socket_result<ip_socket_address> tcp_socket_remote_address(
-       psio1::borrow<tcp_socket> self)
+       psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -373,20 +373,20 @@ struct WasiSocketsHost
       return sock_detail::ok(from_sockaddr(ss));
    }
 
-   bool tcp_socket_is_listening(psio1::borrow<tcp_socket> self)
+   bool tcp_socket_is_listening(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       return s && s->state == tcp_state::listening;
    }
 
-   ip_address_family tcp_socket_address_family(psio1::borrow<tcp_socket> self)
+   ip_address_family tcp_socket_address_family(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       return s ? s->family : ip_address_family::ipv4;
    }
 
    socket_result_void tcp_socket_set_listen_backlog_size(
-       psio1::borrow<tcp_socket> self, uint64_t value)
+       psio::borrow<tcp_socket> self, uint64_t value)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -398,7 +398,7 @@ struct WasiSocketsHost
    // ── tcp socket options ────────────────────────────────────────────
 
    socket_result<bool> tcp_socket_keep_alive_enabled(
-       psio1::borrow<tcp_socket> self)
+       psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -410,7 +410,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void tcp_socket_set_keep_alive_enabled(
-       psio1::borrow<tcp_socket> self, bool value)
+       psio::borrow<tcp_socket> self, bool value)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -422,7 +422,7 @@ struct WasiSocketsHost
    }
 
    socket_result<wasi_duration> tcp_socket_keep_alive_idle_time(
-       psio1::borrow<tcp_socket> self)
+       psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -443,7 +443,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void tcp_socket_set_keep_alive_idle_time(
-       psio1::borrow<tcp_socket> self, wasi_duration value)
+       psio::borrow<tcp_socket> self, wasi_duration value)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -465,7 +465,7 @@ struct WasiSocketsHost
    }
 
    socket_result<wasi_duration> tcp_socket_keep_alive_interval(
-       psio1::borrow<tcp_socket> self)
+       psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -481,7 +481,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void tcp_socket_set_keep_alive_interval(
-       psio1::borrow<tcp_socket> self, wasi_duration value)
+       psio::borrow<tcp_socket> self, wasi_duration value)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -499,7 +499,7 @@ struct WasiSocketsHost
    }
 
    socket_result<uint32_t> tcp_socket_keep_alive_count(
-       psio1::borrow<tcp_socket> self)
+       psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -515,7 +515,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void tcp_socket_set_keep_alive_count(
-       psio1::borrow<tcp_socket> self, uint32_t value)
+       psio::borrow<tcp_socket> self, uint32_t value)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -530,7 +530,7 @@ struct WasiSocketsHost
 #endif
    }
 
-   socket_result<uint8_t> tcp_socket_hop_limit(psio1::borrow<tcp_socket> self)
+   socket_result<uint8_t> tcp_socket_hop_limit(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -545,7 +545,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void tcp_socket_set_hop_limit(
-       psio1::borrow<tcp_socket> self, uint8_t value)
+       psio::borrow<tcp_socket> self, uint8_t value)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -559,7 +559,7 @@ struct WasiSocketsHost
    }
 
    socket_result<uint64_t> tcp_socket_receive_buffer_size(
-       psio1::borrow<tcp_socket> self)
+       psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -572,7 +572,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void tcp_socket_set_receive_buffer_size(
-       psio1::borrow<tcp_socket> self, uint64_t value)
+       psio::borrow<tcp_socket> self, uint64_t value)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -584,7 +584,7 @@ struct WasiSocketsHost
    }
 
    socket_result<uint64_t> tcp_socket_send_buffer_size(
-       psio1::borrow<tcp_socket> self)
+       psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -597,7 +597,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void tcp_socket_set_send_buffer_size(
-       psio1::borrow<tcp_socket> self, uint64_t value)
+       psio::borrow<tcp_socket> self, uint64_t value)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -608,19 +608,19 @@ struct WasiSocketsHost
       return sock_detail::ok();
    }
 
-   psio1::own<pollable> tcp_socket_subscribe(psio1::borrow<tcp_socket> self)
+   psio::own<pollable> tcp_socket_subscribe(psio::borrow<tcp_socket> self)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
-         return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+         return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
       EventKind events = Readable;
       if (s->state == tcp_state::connect_started)
          events = Writable;
-      return psio1::own<pollable>{io.pollables.create(pollable_data{s->fd, events})};
+      return psio::own<pollable>{io.pollables.create(pollable_data{s->fd, events})};
    }
 
    socket_result_void tcp_socket_shutdown(
-       psio1::borrow<tcp_socket> self, shutdown_type how)
+       psio::borrow<tcp_socket> self, shutdown_type how)
    {
       auto* s = tcp_sockets.get(self.handle);
       if (!s)
@@ -639,7 +639,7 @@ struct WasiSocketsHost
 
    // ── wasi:sockets/udp-create-socket ────────────────────────────────
 
-   socket_result<psio1::own<udp_socket>> create_udp_socket(
+   socket_result<psio::own<udp_socket>> create_udp_socket(
        ip_address_family family)
    {
       int af = (family == ip_address_family::ipv4) ? AF_INET : AF_INET6;
@@ -647,14 +647,14 @@ struct WasiSocketsHost
       if (fd < 0)
          return sock_detail::err(errno_to_network_error());
       auto handle = udp_sockets.create(udp_socket_data{RealFd{fd}, family});
-      return sock_detail::ok(psio1::own<udp_socket>{handle});
+      return sock_detail::ok(psio::own<udp_socket>{handle});
    }
 
    // ── wasi:sockets/udp ─────────────────────────────────────────────
 
    socket_result_void udp_socket_start_bind(
-       psio1::borrow<udp_socket> self,
-       psio1::borrow<network>    /*net*/,
+       psio::borrow<udp_socket> self,
+       psio::borrow<network>    /*net*/,
        ip_socket_address        local_address)
    {
       auto* s = udp_sockets.get(self.handle);
@@ -668,7 +668,7 @@ struct WasiSocketsHost
       return sock_detail::ok();
    }
 
-   socket_result_void udp_socket_finish_bind(psio1::borrow<udp_socket> self)
+   socket_result_void udp_socket_finish_bind(psio::borrow<udp_socket> self)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -677,10 +677,10 @@ struct WasiSocketsHost
       return sock_detail::ok();
    }
 
-   socket_result<std::tuple<psio1::own<incoming_datagram_stream>,
-                             psio1::own<outgoing_datagram_stream>>>
+   socket_result<std::tuple<psio::own<incoming_datagram_stream>,
+                             psio::own<outgoing_datagram_stream>>>
    udp_socket_stream(
-       psio1::borrow<udp_socket>             self,
+       psio::borrow<udp_socket>             self,
        std::optional<ip_socket_address>     remote_address)
    {
       auto* s = udp_sockets.get(self.handle);
@@ -699,7 +699,7 @@ struct WasiSocketsHost
    }
 
    socket_result<ip_socket_address> udp_socket_local_address(
-       psio1::borrow<udp_socket> self)
+       psio::borrow<udp_socket> self)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -712,7 +712,7 @@ struct WasiSocketsHost
    }
 
    socket_result<ip_socket_address> udp_socket_remote_address(
-       psio1::borrow<udp_socket> self)
+       psio::borrow<udp_socket> self)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -724,14 +724,14 @@ struct WasiSocketsHost
       return sock_detail::ok(from_sockaddr(ss));
    }
 
-   ip_address_family udp_socket_address_family(psio1::borrow<udp_socket> self)
+   ip_address_family udp_socket_address_family(psio::borrow<udp_socket> self)
    {
       auto* s = udp_sockets.get(self.handle);
       return s ? s->family : ip_address_family::ipv4;
    }
 
    socket_result<uint8_t> udp_socket_unicast_hop_limit(
-       psio1::borrow<udp_socket> self)
+       psio::borrow<udp_socket> self)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -746,7 +746,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void udp_socket_set_unicast_hop_limit(
-       psio1::borrow<udp_socket> self, uint8_t value)
+       psio::borrow<udp_socket> self, uint8_t value)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -760,7 +760,7 @@ struct WasiSocketsHost
    }
 
    socket_result<uint64_t> udp_socket_receive_buffer_size(
-       psio1::borrow<udp_socket> self)
+       psio::borrow<udp_socket> self)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -773,7 +773,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void udp_socket_set_receive_buffer_size(
-       psio1::borrow<udp_socket> self, uint64_t value)
+       psio::borrow<udp_socket> self, uint64_t value)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -785,7 +785,7 @@ struct WasiSocketsHost
    }
 
    socket_result<uint64_t> udp_socket_send_buffer_size(
-       psio1::borrow<udp_socket> self)
+       psio::borrow<udp_socket> self)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -798,7 +798,7 @@ struct WasiSocketsHost
    }
 
    socket_result_void udp_socket_set_send_buffer_size(
-       psio1::borrow<udp_socket> self, uint64_t value)
+       psio::borrow<udp_socket> self, uint64_t value)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
@@ -809,73 +809,73 @@ struct WasiSocketsHost
       return sock_detail::ok();
    }
 
-   psio1::own<pollable> udp_socket_subscribe(psio1::borrow<udp_socket> self)
+   psio::own<pollable> udp_socket_subscribe(psio::borrow<udp_socket> self)
    {
       auto* s = udp_sockets.get(self.handle);
       if (!s)
-         return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
-      return psio1::own<pollable>{io.pollables.create(pollable_data{s->fd, Readable})};
+         return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+      return psio::own<pollable>{io.pollables.create(pollable_data{s->fd, Readable})};
    }
 
    // ── datagram stream stubs ─────────────────────────────────────────
 
    socket_result<std::vector<incoming_datagram>>
    incoming_datagram_stream_receive(
-       psio1::borrow<incoming_datagram_stream> /*self*/, uint64_t /*max*/)
+       psio::borrow<incoming_datagram_stream> /*self*/, uint64_t /*max*/)
    {
       return sock_detail::ok(std::vector<incoming_datagram>{});
    }
 
-   psio1::own<pollable> incoming_datagram_stream_subscribe(
-       psio1::borrow<incoming_datagram_stream> /*self*/)
+   psio::own<pollable> incoming_datagram_stream_subscribe(
+       psio::borrow<incoming_datagram_stream> /*self*/)
    {
-      return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+      return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
    }
 
    socket_result<uint64_t> outgoing_datagram_stream_check_send(
-       psio1::borrow<outgoing_datagram_stream> /*self*/)
+       psio::borrow<outgoing_datagram_stream> /*self*/)
    {
       return sock_detail::err(neterr::not_supported);
    }
 
    socket_result<uint64_t> outgoing_datagram_stream_send(
-       psio1::borrow<outgoing_datagram_stream> /*self*/,
+       psio::borrow<outgoing_datagram_stream> /*self*/,
        std::vector<outgoing_datagram>         /*datagrams*/)
    {
       return sock_detail::err(neterr::not_supported);
    }
 
-   psio1::own<pollable> outgoing_datagram_stream_subscribe(
-       psio1::borrow<outgoing_datagram_stream> /*self*/)
+   psio::own<pollable> outgoing_datagram_stream_subscribe(
+       psio::borrow<outgoing_datagram_stream> /*self*/)
    {
-      return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+      return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
    }
 
    // ── wasi:sockets/ip-name-lookup ───────────────────────────────────
 
-   socket_result<psio1::own<resolve_address_stream>> resolve_addresses(
-       psio1::borrow<network> /*net*/, std::string /*name*/)
+   socket_result<psio::own<resolve_address_stream>> resolve_addresses(
+       psio::borrow<network> /*net*/, std::string /*name*/)
    {
       return sock_detail::err(neterr::not_supported);
    }
 
    socket_result<std::optional<ip_address>>
    resolve_address_stream_resolve_next_address(
-       psio1::borrow<resolve_address_stream> /*self*/)
+       psio::borrow<resolve_address_stream> /*self*/)
    {
       return sock_detail::ok<std::optional<ip_address>>(std::nullopt);
    }
 
-   psio1::own<pollable> resolve_address_stream_subscribe(
-       psio1::borrow<resolve_address_stream> /*self*/)
+   psio::own<pollable> resolve_address_stream_subscribe(
+       psio::borrow<resolve_address_stream> /*self*/)
    {
-      return psio1::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
+      return psio::own<pollable>{psizam::handle_table<pollable_data, 256>::invalid_handle};
    }
 };
 
 }  // namespace wasi_host
 
-PSIO1_HOST_MODULE(wasi_host::WasiSocketsHost,
+PSIO_HOST_MODULE(wasi_host::WasiSocketsHost,
    interface(wasi_sockets_instance_network, instance_network),
    interface(wasi_sockets_network, network_error_code),
    interface(wasi_sockets_tcp_create_socket, create_tcp_socket),
