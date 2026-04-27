@@ -555,21 +555,26 @@ TEST_CASE("pjson typed_array: nested in object value",
    // typed_array; build the object bytes directly.
    //
    // Layout:
-   //   [0xC0][key 's'][typed_array_bytes][hash[1]][slot[1]][count u16]
+   //   [0xC0][width byte][key 's'][typed_array_bytes][hash[1]]
+   //   [slot[1]: offset(slot_w) + key_size(1)][count u16]
    std::string key = "s";
    std::size_t value_data = 1 /*key*/ + inner.size();
-   std::size_t total = 1 + value_data + 1 + 4 + 2;
+   std::uint8_t slot_w_code = psio::pjson_detail::width_code_for(value_data);
+   std::size_t  slot_w      = psio::pjson_detail::width_bytes(slot_w_code);
+   std::size_t  slot_stride = slot_w + 1;
+   std::size_t  total       = 1 + 1 + value_data + 1 + slot_stride + 2;
    std::vector<std::uint8_t> out(total);
    out[0] = static_cast<std::uint8_t>(psio::pjson_detail::t_object << 4);
-   out[1] = static_cast<std::uint8_t>('s');
-   std::memcpy(out.data() + 2, inner.data(), inner.size());
-   std::size_t hash_pos = 1 + value_data;
-   std::size_t slot_pos = hash_pos + 1;
-   std::size_t count_pos = slot_pos + 4;
+   out[1] = slot_w_code;
+   out[2] = static_cast<std::uint8_t>('s');
+   std::memcpy(out.data() + 3, inner.data(), inner.size());
+   std::size_t hash_pos  = 2 + value_data;
+   std::size_t slot_pos  = hash_pos + 1;
+   std::size_t count_pos = slot_pos + slot_stride;
    out[hash_pos] = psio::pjson_detail::key_hash8("s");
-   psio::pjson_detail::write_u32_le(
-       out.data() + slot_pos,
-       psio::pjson_detail::pack_slot(0, 1));
+   psio::pjson_detail::write_width(out.data() + slot_pos,
+                                   slot_w_code, 0);
+   out[slot_pos + slot_w] = 1;  // key_size
    out[count_pos]     = 1;
    out[count_pos + 1] = 0;
 

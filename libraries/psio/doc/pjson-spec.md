@@ -302,33 +302,36 @@ The remaining low-nibble values (11..15) are reserved.
 
 ```
 [tag: u8 = 0xB0]
+[width byte: u8]                 low 2 bits = slot_w_code (0=u8, 1=u16,
+                                  2=u24, 3=u32); bits 2..7 reserved (0)
 [value_data: variable]
    for each i in 0..N:
       [child value: tag + raw bits]
-[slot[N]: N × u32 LE]            packed { offset:24, unused:8 }
+[slot[N]: N × slot_w bytes]      offset within value_data, LE
 [count: u16 LE]                  N — number of children
 ```
 
 `count` is the **last 2 bytes** of the container.
 
-`slot[i]` packs:
-
-```
-bits 23..0  : offset (within value_data, i.e. relative to byte 1 of the container)
-bits 31..24 : unused for arrays — must be 0
-```
+The encoder picks `slot_w_code` from the actual `value_data` size of
+*this* container — independently of any outer container. A small
+sub-array inside a 1 MiB document still uses `slot_w = u8` if its own
+value_data fits in 256 bytes. This recursion is the highest-leverage
+size optimization in pjson: most overhead bytes are slot-table bytes,
+and most containers are small.
 
 Each child's byte range within the container is:
 
 ```
-child_i_start = container_start + 1 + slot[i].offset
-child_i_end   = container_start + 1 + (i + 1 < N
-                                       ? slot[i+1].offset
+child_i_start = container_start + 2 + slot[i]    // +2: skip tag + width byte
+child_i_end   = container_start + 2 + (i + 1 < N
+                                       ? slot[i+1]
                                        : value_data_size)
 child_i_size  = child_i_end − child_i_start
 ```
 
-where `value_data_size = container_size − 2 − 4·N − 1`.
+where `value_data_size = container_size − 2 − slot_w·N − 2`
+(subtracting tag, width byte, slot table, and count).
 
 ### 5.1.1 Typed homogeneous array layout (tag = 0xB{1..A})
 
@@ -414,6 +417,8 @@ that holds every element exactly. A canonical encoder (§15)
 
 ```
 [tag: u8 = 0xC0]
+[width byte: u8]                 low 2 bits = slot_w_code (0=u8, 1=u16,
+                                  2=u24, 3=u32); bits 2..7 reserved (0)
 [value_data: variable]
    for each i in 0..N (in encounter order):
       if slot[i].key_size <  0xFF:
@@ -422,32 +427,36 @@ that holds every element exactly. A canonical encoder (§15)
          [key_excess: 2-bit-prefix varuint]
          [key bytes (0xFF + key_excess B)][child value]
 [hash[N]: N × u8]
-[slot[N]: N × u32 LE]            packed { offset:24, key_size:8 }
+[slot[N]: N × (slot_w + 1) bytes]   offset (slot_w bytes LE) + key_size (1 byte)
 [count: u16 LE]                  N — number of fields
 ```
 
 `count` is the **last 2 bytes** of the container.
 
-`slot[i]` packs:
+Each `slot[i]` is `slot_w + 1` bytes:
 
 ```
-bits 23..0  : offset (within value_data, relative to byte 1 of the container)
-bits 31..24 : key_size — 0..0xFE for the key length in bytes;
-                          0xFF marks the long-key escape (see §5.4)
+bytes [0 .. slot_w):  offset within value_data (LE)
+byte  [slot_w]:       key_size (0..0xFE inline, 0xFF long-key escape)
 ```
+
+The encoder picks `slot_w_code` per container from this container's
+own value_data size. Recursive: a small sub-object inside a large
+document uses `slot_w = u8` regardless of the outer document's size.
 
 `hash[i]` is the 8-bit prefilter hash for field `i`'s key (see §5.3).
 
 Each entry's byte range:
 
 ```
-entry_i_start = container_start + 1 + slot[i].offset
-entry_i_end   = container_start + 1 + (i + 1 < N
+entry_i_start = container_start + 2 + slot[i].offset    // +2: skip tag + width
+entry_i_end   = container_start + 2 + (i + 1 < N
                                        ? slot[i+1].offset
                                        : value_data_size)
 ```
 
-where `value_data_size = container_size − 2 − 4·N − N − 1`.
+where `value_data_size = container_size − 2 − (slot_w + 1)·N − N − 2`
+(subtracting tag, width byte, slot table, hash table, and count).
 
 Within an entry:
 
@@ -1311,7 +1320,8 @@ left to a higher layer.
 |---|---|
 | **value_data** | the contiguous bytes between the container's tag byte and its tail index, holding all child values (and inline keys, for objects). |
 | **slot** | a packed `u32` per child holding `{ offset (24 bits), key_size (8 bits) }`. The high byte is the key length for objects, unused (must be 0) for arrays. |
-| **slot table** | the array of N slots, located at `container_end − 2 − 4·N`. |
+| **slot table** | the array of N slots at the tail of a generic container. Per-slot stride = `slot_w` for arrays, `slot_w + 1` for objects (offset + key_size). slot_w is encoded in the width byte at byte 1 of the container. |
+| **width byte** | byte 1 of every generic-array (`0xB0`) and generic-object (`0xC0`) container. Low 2 bits encode `slot_w_code` (0=u8 .. 3=u32); high 6 bits reserved. Picked per container from value_data size; recursive. |
 | **hash table** | the array of N hash bytes (objects only), located immediately before the slot table. |
 | **count** | the `u16 LE` at the last 2 bytes of every container, giving N. |
 | **canonical layout** | for an object, `hash[i] == key_hash8(field_i_name)` in declaration order matches a producer's expected order, enabling byte-equal fast-path validation against a precomputed hash array. |

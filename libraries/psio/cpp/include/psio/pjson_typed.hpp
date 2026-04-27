@@ -54,16 +54,17 @@ namespace psio {
    {
       using R = reflect<T>;
       if (v.type() != pjson_view::kind::object) return false;
-      if (v.size() < 3) return false;
+      if (v.size() < 4) return false;
       // count is the last 2 bytes (u16 LE).
       std::size_t N = static_cast<std::size_t>(v.data()[v.size() - 2]) |
                       (static_cast<std::size_t>(v.data()[v.size() - 1])
                        << 8);
       if (N != R::member_count) return false;
-      // hash_table is N bytes, sitting just before slot_table at the
-      // tail. slot_table_pos = size - 2 - 4*N; hash_table_pos =
-      // slot_table_pos - N.
-      std::size_t slot_table_pos = v.size() - 2 - 4 * N;
+      std::uint8_t slot_w_code = v.data()[1] & 0x03;
+      std::size_t  slot_w      =
+         pjson_detail::width_bytes(slot_w_code);
+      std::size_t  slot_stride = slot_w + 1;
+      std::size_t slot_table_pos = v.size() - 2 - slot_stride * N;
       std::size_t hash_table_pos = slot_table_pos - N;
       const auto& tmpl = pjson_hash_template<T>();
       return std::memcmp(v.data() + hash_table_pos, tmpl.data(),
@@ -123,19 +124,24 @@ namespace psio {
       {
          using namespace pjson_detail;
          constexpr std::size_t N = R::member_count;
-         std::size_t slot_table_pos   = raw_.size() - 2 - 4 * N;
-         std::size_t hash_table_pos   = slot_table_pos - N;
-         std::size_t value_data_start = 1;
-         std::size_t value_data_size  = hash_table_pos - 1;
+         std::uint8_t slot_w_code = raw_.data()[1] & 0x03;
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+         std::size_t  slot_stride = slot_w + 1;
+         std::size_t  slot_table_pos   = raw_.size() - 2 - slot_stride * N;
+         std::size_t  hash_table_pos   = slot_table_pos - N;
+         std::size_t  value_data_start = 2;
+         std::size_t  value_data_size  =
+            hash_table_pos - value_data_start;
          (void)hash_table_pos;
-         std::uint32_t s_i =
-             read_u32_le(raw_.data() + slot_table_pos + I * 4);
-         std::uint32_t off_i = slot_offset(s_i);
-         std::uint8_t  ks    = slot_key_size(s_i);
+         const std::uint8_t* slot =
+            raw_.data() + slot_table_pos + I * slot_stride;
+         std::uint32_t off_i = read_width(slot, slot_w_code);
+         std::uint8_t  ks    = slot[slot_w];
          std::uint32_t off_next;
          if constexpr (I + 1 < N)
-            off_next = slot_offset(read_u32_le(
-                raw_.data() + slot_table_pos + (I + 1) * 4));
+            off_next = read_width(
+               raw_.data() + slot_table_pos + (I + 1) * slot_stride,
+               slot_w_code);
          else
             off_next = static_cast<std::uint32_t>(value_data_size);
          const std::uint8_t* entry      = raw_.data() + value_data_start + off_i;
@@ -679,9 +685,11 @@ namespace psio {
               typed_field_size(t.*R::template member_pointer<Is>)),
           ...);
       }(std::make_index_sequence<R::member_count>{});
-      std::size_t N = R::member_count;
-      // Tail-indexed: 1 tag + value_data + N hash + 4N slot + 2 count.
-      return 1 + value_data_size + N + 4 * N + 2;
+      std::size_t  N = R::member_count;
+      std::uint8_t code = pjson_detail::width_code_for(value_data_size);
+      std::size_t  slot_w = pjson_detail::width_bytes(code);
+      // 1 tag + 1 width + value_data + N hash + (slot_w+1)*N slot + 2 count.
+      return 1 + 1 + value_data_size + N + (slot_w + 1) * N + 2;
    }
 
    // In-place reflected-object encoder.  Tail-indexed: writes
@@ -703,11 +711,27 @@ namespace psio {
       std::size_t           start = pos;
       dst[pos++] =
          static_cast<std::uint8_t>(pjson_detail::t_object << 4);
+      // value_data size derives from total - constant overhead. Use it
+      // to pick the slot_w_code, then emit the width byte.
+      std::size_t value_data_size  =
+         total - 1 /*tag*/ - 1 /*width*/ - N /*hash*/ - 2 /*count*/;
+      // Solve for slot_w by trying each width: total = 1+1+vd+N+(slot_w+1)*N+2,
+      // so (slot_w+1)*N = total - 4 - vd - N, thus slot_w = (total - 4 - vd - N)/N - 1.
+      // But pjson_encoded_size already picked slot_w from value_data_size.
+      // Recompute consistently here.
+      std::uint8_t slot_w_code =
+         pjson_detail::width_code_for(value_data_size);
+      std::size_t  slot_w      = pjson_detail::width_bytes(slot_w_code);
+      // Adjust value_data_size given the picked slot_w (the size formula
+      // depends on slot_w). pjson_encoded_size used the same formula so
+      // the totals agree; recompute vd from the remainder.
+      value_data_size =
+         total - 1 - 1 - N - (slot_w + 1) * N - 2;
+      dst[pos++] = slot_w_code;  // width byte
       std::size_t value_data_start = pos;
-      std::size_t value_data_size  = total - 1 - N - 4 * N - 2;
       std::size_t hash_table_pos   = value_data_start + value_data_size;
       std::size_t slot_table_pos   = hash_table_pos + N;
-      std::size_t count_pos        = slot_table_pos + 4 * N;
+      std::size_t count_pos        = slot_table_pos + (slot_w + 1) * N;
 
       const auto& tmpl = pjson_hash_template<T>();
       std::memcpy(dst + hash_table_pos, tmpl.data(), N);
@@ -721,9 +745,10 @@ namespace psio {
                 name.size() < 0xFFu
                    ? static_cast<std::uint8_t>(name.size())
                    : static_cast<std::uint8_t>(0xFFu);
-             pjson_detail::write_u32_le(
-                dst + slot_table_pos + Is * 4,
-                pjson_detail::pack_slot(off, ks));
+             std::uint8_t* slot =
+                dst + slot_table_pos + Is * (slot_w + 1);
+             pjson_detail::write_width(slot, slot_w_code, off);
+             slot[slot_w] = ks;
              std::memcpy(dst + pos, name.data(), name.size());
              pos += name.size();
              pos += pjson_detail::typed_field_encode(

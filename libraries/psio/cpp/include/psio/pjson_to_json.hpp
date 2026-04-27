@@ -203,23 +203,29 @@ namespace psio {
                // (low_nibble = 1..10 → element type code = low - 1).
                if (low == 0)
                {
+                  std::uint8_t  slot_w_code = p[1] & 0x03;
+                  std::size_t   slot_w      = width_bytes(slot_w_code);
                   std::uint16_t N =
                       static_cast<std::uint16_t>(p[size - 2]) |
                       (static_cast<std::uint16_t>(p[size - 1]) << 8);
-                  std::size_t slot_table_pos  = size - 2 - 4 * N;
-                  std::size_t value_data_size = slot_table_pos - 1;
+                  std::size_t slot_table_pos  = size - 2 - slot_w * N;
+                  std::size_t value_data_start = 2;
+                  std::size_t value_data_size  =
+                     slot_table_pos - value_data_start;
                   out.push_back('[');
                   for (std::uint16_t i = 0; i < N; ++i)
                   {
                      if (i) out.push_back(',');
-                     std::uint32_t off = slot_offset(
-                         read_u32_le(p + slot_table_pos + i * 4));
+                     std::uint32_t off = read_width(
+                        p + slot_table_pos + i * slot_w, slot_w_code);
                      std::uint32_t off_next =
                          i + 1 < N
-                             ? slot_offset(read_u32_le(
-                                   p + slot_table_pos + (i + 1) * 4))
+                             ? read_width(
+                                  p + slot_table_pos + (i + 1) * slot_w,
+                                  slot_w_code)
                              : static_cast<std::uint32_t>(value_data_size);
-                     direct_pjson_to_json(out, p + 1 + off,
+                     direct_pjson_to_json(out,
+                                          p + value_data_start + off,
                                           off_next - off);
                   }
                   out.push_back(']');
@@ -343,27 +349,39 @@ namespace psio {
             }
             case t_object:
             {
+               // low_nibble = 0: single object (handled below)
+               // low_nibble = 1: row_array — not handled by direct walker yet,
+               // fall through to error.
+               if (low != 0)
+                  throw std::runtime_error(
+                     "pjson_to_json: row_array direct walker NYI");
+               std::uint8_t  slot_w_code = p[1] & 0x03;
+               std::size_t   slot_w      = width_bytes(slot_w_code);
+               std::size_t   slot_stride = slot_w + 1;
                std::uint16_t N =
                    static_cast<std::uint16_t>(p[size - 2]) |
                    (static_cast<std::uint16_t>(p[size - 1]) << 8);
-               std::size_t slot_table_pos = size - 2 - 4 * N;
-               std::size_t hash_table_pos = slot_table_pos - N;
+               std::size_t slot_table_pos  = size - 2 - slot_stride * N;
+               std::size_t hash_table_pos  = slot_table_pos - N;
+               std::size_t value_data_start = 2;
+               std::size_t value_data_size  =
+                  hash_table_pos - value_data_start;
                (void)hash_table_pos;  // not needed for emission
-               std::size_t value_data_size = hash_table_pos - 1;
                out.push_back('{');
                for (std::uint16_t i = 0; i < N; ++i)
                {
                   if (i) out.push_back(',');
-                  std::uint32_t s_i =
-                      read_u32_le(p + slot_table_pos + i * 4);
-                  std::uint32_t off = slot_offset(s_i);
-                  std::uint8_t  ks  = slot_key_size(s_i);
+                  const std::uint8_t* slot =
+                     p + slot_table_pos + i * slot_stride;
+                  std::uint32_t off = read_width(slot, slot_w_code);
+                  std::uint8_t  ks  = slot[slot_w];
                   std::uint32_t off_next =
                       i + 1 < N
-                          ? slot_offset(read_u32_le(
-                                p + slot_table_pos + (i + 1) * 4))
+                          ? read_width(p + slot_table_pos +
+                                          (i + 1) * slot_stride,
+                                       slot_w_code)
                           : static_cast<std::uint32_t>(value_data_size);
-                  const std::uint8_t* entry = p + 1 + off;
+                  const std::uint8_t* entry = p + value_data_start + off;
                   std::size_t         entry_size = off_next - off;
                   std::size_t         klen, klen_bytes;
                   if (ks != 0xFF)

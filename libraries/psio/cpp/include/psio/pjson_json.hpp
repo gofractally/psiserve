@@ -83,6 +83,8 @@ namespace psio {
          std::size_t           N       = 0;
 
          out.push_back(static_cast<std::uint8_t>(t_array << 4));
+         std::size_t width_byte_pos = out.size();
+         out.push_back(0);  // placeholder; backfilled at end
          std::size_t value_data_start = out.size();
 
          for (auto el : a)
@@ -106,11 +108,17 @@ namespace psio {
             od_encode_value(out, v);
          }
 
-         // Append slot[N] then count u16 at the tail.
-         std::size_t slot_pos = reserve_bytes(out, 4 * N);
+         // Pick slot_w from value_data size, backfill width byte, then
+         // append slot[N] (adaptive width) + count u16.
+         std::uint32_t vd_size =
+            static_cast<std::uint32_t>(out.size() - value_data_start);
+         std::uint8_t slot_w_code = width_code_for(vd_size);
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+         out[width_byte_pos] = slot_w_code;
+         std::size_t slot_pos = reserve_bytes(out, slot_w * N);
          for (std::size_t i = 0; i < N; ++i)
-            write_u32_le(out.data() + slot_pos + i * 4,
-                         pack_slot(records[i].voff, 0));
+            write_width(out.data() + slot_pos + i * slot_w,
+                        slot_w_code, records[i].voff);
          std::size_t count_pos = reserve_bytes(out, 2);
          out[count_pos]     = static_cast<std::uint8_t>(N & 0xFF);
          out[count_pos + 1] = static_cast<std::uint8_t>((N >> 8) & 0xFF);
@@ -130,6 +138,8 @@ namespace psio {
          std::size_t           N       = 0;
 
          out.push_back(static_cast<std::uint8_t>(t_object << 4));
+         std::size_t width_byte_pos = out.size();
+         out.push_back(0);  // placeholder; backfilled at end
          std::size_t value_data_start = out.size();
 
          for (auto field : o)
@@ -170,14 +180,25 @@ namespace psio {
             od_encode_value(out, v);
          }
 
-         // Append index at the tail: hash[N], slot[N], count u16.
+         // Pick slot_w from value_data size, backfill width byte, then
+         // append hash[N] + slot[N] (adaptive width) + count u16.
+         std::uint32_t vd_size =
+            static_cast<std::uint32_t>(out.size() - value_data_start);
+         std::uint8_t slot_w_code = width_code_for(vd_size);
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+         std::size_t  slot_stride = slot_w + 1;  // offset + key_size byte
+         out[width_byte_pos] = slot_w_code;
+
          std::size_t hash_pos = reserve_bytes(out, N);
          for (std::size_t i = 0; i < N; ++i)
             out[hash_pos + i] = records[i].hash;
-         std::size_t slot_pos = reserve_bytes(out, 4 * N);
+         std::size_t slot_pos = reserve_bytes(out, slot_stride * N);
          for (std::size_t i = 0; i < N; ++i)
-            write_u32_le(out.data() + slot_pos + i * 4,
-                         pack_slot(records[i].voff, records[i].key_size));
+         {
+            std::uint8_t* slot = out.data() + slot_pos + i * slot_stride;
+            write_width(slot, slot_w_code, records[i].voff);
+            slot[slot_w] = records[i].key_size;
+         }
          std::size_t count_pos = reserve_bytes(out, 2);
          out[count_pos]     = static_cast<std::uint8_t>(N & 0xFF);
          out[count_pos + 1] = static_cast<std::uint8_t>((N >> 8) & 0xFF);

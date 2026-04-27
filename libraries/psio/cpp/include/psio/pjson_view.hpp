@@ -383,18 +383,20 @@ namespace psio {
             return row_array_record_view_(i);
          }
          require_(kind::array);
-         std::size_t N = count();
+         std::size_t   N           = count();
          if (i >= N)
             throw std::out_of_range("pjson_view::at: array index");
-         std::size_t slot_table_pos   = size_ - 2 - 4 * N;
-         std::size_t value_data_start = 1;
-         std::size_t value_data_size  = slot_table_pos - 1;
+         std::uint8_t  slot_w_code = data_[1] & 0x03;
+         std::size_t   slot_w      = width_bytes(slot_w_code);
+         std::size_t   slot_table_pos   = size_ - 2 - slot_w * N;
+         std::size_t   value_data_start = 2;
+         std::size_t   value_data_size  = slot_table_pos - value_data_start;
          std::uint32_t off_i =
-             slot_offset(read_u32_le(data_ + slot_table_pos + i * 4));
+             read_width(data_ + slot_table_pos + i * slot_w, slot_w_code);
          std::uint32_t off_next =
              i + 1 < N
-                 ? slot_offset(read_u32_le(
-                       data_ + slot_table_pos + (i + 1) * 4))
+                 ? read_width(data_ + slot_table_pos + (i + 1) * slot_w,
+                              slot_w_code)
                  : static_cast<std::uint32_t>(value_data_size);
          return dynamic_view{data_ + value_data_start + off_i,
                              static_cast<std::size_t>(off_next - off_i)};
@@ -580,10 +582,13 @@ namespace psio {
             return row_record_find_(key);
          if (type() != kind::object) return std::nullopt;
          std::size_t  N = count();
-         std::size_t  slot_table_pos   = size_ - 2 - 4 * N;
+         std::uint8_t slot_w_code = data_[1] & 0x03;
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+         std::size_t  slot_stride = slot_w + 1;
+         std::size_t  slot_table_pos   = size_ - 2 - slot_stride * N;
          std::size_t  hash_table_pos   = slot_table_pos - N;
-         std::size_t  value_data_start = 1;
-         std::size_t  value_data_size  = hash_table_pos - 1;
+         std::size_t  value_data_start = 2;
+         std::size_t  value_data_size  = hash_table_pos - value_data_start;
          std::uint8_t want = key_hash8(key);
 
          const std::uint8_t* hashes    = data_ + hash_table_pos;
@@ -594,14 +599,15 @@ namespace psio {
             int hit = ucc::find_byte(hashes + base, remaining, want);
             if (hit >= static_cast<int>(remaining)) return std::nullopt;
             std::size_t i = base + static_cast<std::size_t>(hit);
-            std::uint32_t s_i =
-                read_u32_le(data_ + slot_table_pos + i * 4);
-            std::uint32_t off_i = slot_offset(s_i);
-            std::uint8_t  ks    = slot_key_size(s_i);
+            const std::uint8_t* slot =
+                data_ + slot_table_pos + i * slot_stride;
+            std::uint32_t off_i = read_width(slot, slot_w_code);
+            std::uint8_t  ks    = slot[slot_w];
             std::uint32_t off_next =
                 i + 1 < N
-                    ? slot_offset(read_u32_le(
-                          data_ + slot_table_pos + (i + 1) * 4))
+                    ? read_width(data_ + slot_table_pos +
+                                     (i + 1) * slot_stride,
+                                 slot_w_code)
                     : static_cast<std::uint32_t>(value_data_size);
             const std::uint8_t* entry = data_ + value_data_start + off_i;
             std::size_t         entry_size = off_next - off_i;
@@ -651,22 +657,26 @@ namespace psio {
             return;
          }
          require_(kind::object);
-         std::size_t N = count();
-         std::size_t slot_table_pos   = size_ - 2 - 4 * N;
-         std::size_t hash_table_pos   = slot_table_pos - N;
-         std::size_t value_data_start = 1;
-         std::size_t value_data_size  = hash_table_pos - 1;
+         std::size_t  N = count();
+         std::uint8_t slot_w_code = data_[1] & 0x03;
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+         std::size_t  slot_stride = slot_w + 1;
+         std::size_t  slot_table_pos   = size_ - 2 - slot_stride * N;
+         std::size_t  hash_table_pos   = slot_table_pos - N;
+         std::size_t  value_data_start = 2;
+         std::size_t  value_data_size  = hash_table_pos - value_data_start;
          (void)hash_table_pos;
          for (std::size_t i = 0; i < N; ++i)
          {
-            std::uint32_t s_i =
-                read_u32_le(data_ + slot_table_pos + i * 4);
-            std::uint32_t off_i = slot_offset(s_i);
-            std::uint8_t  ks    = slot_key_size(s_i);
+            const std::uint8_t* slot =
+                data_ + slot_table_pos + i * slot_stride;
+            std::uint32_t off_i = read_width(slot, slot_w_code);
+            std::uint8_t  ks    = slot[slot_w];
             std::uint32_t off_next =
                 i + 1 < N
-                    ? slot_offset(read_u32_le(
-                          data_ + slot_table_pos + (i + 1) * 4))
+                    ? read_width(data_ + slot_table_pos +
+                                     (i + 1) * slot_stride,
+                                 slot_w_code)
                     : static_cast<std::uint32_t>(value_data_size);
             const std::uint8_t* entry = data_ + value_data_start + off_i;
             std::size_t         entry_size = off_next - off_i;
@@ -700,19 +710,22 @@ namespace psio {
                fn(at(i));
             return;
          }
-         std::size_t N = count();
-         std::size_t slot_table_pos   = size_ - 2 - 4 * N;
-         std::size_t value_data_start = 1;
-         std::size_t value_data_size  = slot_table_pos - 1;
+         std::size_t  N = count();
+         std::uint8_t slot_w_code = data_[1] & 0x03;
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+         std::size_t  slot_table_pos   = size_ - 2 - slot_w * N;
+         std::size_t  value_data_start = 2;
+         std::size_t  value_data_size  = slot_table_pos - value_data_start;
          for (std::size_t i = 0; i < N; ++i)
          {
             std::uint32_t off_i =
-                slot_offset(read_u32_le(
-                    data_ + slot_table_pos + i * 4));
+                read_width(data_ + slot_table_pos + i * slot_w,
+                           slot_w_code);
             std::uint32_t off_next =
                 i + 1 < N
-                    ? slot_offset(read_u32_le(
-                          data_ + slot_table_pos + (i + 1) * 4))
+                    ? read_width(data_ + slot_table_pos +
+                                     (i + 1) * slot_w,
+                                 slot_w_code)
                     : static_cast<std::uint32_t>(value_data_size);
             fn(dynamic_view{data_ + value_data_start + off_i,
                             static_cast<std::size_t>(off_next - off_i)});
