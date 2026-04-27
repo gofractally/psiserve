@@ -93,7 +93,7 @@ psio3_add_test(psio3_varint_tests varint_tests.cpp)
 
 # Name encoding (psio::name_id) — v1↔v3 byte-parity.
 add_executable(psio3_name_tests name_tests.cpp main.cpp)
-target_link_libraries(psio3_name_tests PRIVATE psio psio)
+target_link_libraries(psio3_name_tests PRIVATE psio psio1)
 target_include_directories(psio3_name_tests PRIVATE ${PSIO_CATCH2_INCLUDE})
 target_compile_features(psio3_name_tests PRIVATE cxx_std_23)
 add_test(NAME psio3_name_tests COMMAND psio3_name_tests)
