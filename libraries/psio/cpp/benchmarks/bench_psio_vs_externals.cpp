@@ -16,7 +16,10 @@
 #include <psio/bin.hpp>
 #include <psio/bincode.hpp>
 #include <psio/borsh.hpp>
+#include <psio/capnp.hpp>
+#include <psio/flatbuf.hpp>
 #include <psio/frac.hpp>
+#include <psio/msgpack.hpp>
 #include <psio/protobuf.hpp>
 #include <psio/pssz.hpp>
 #include <psio/reflect.hpp>
@@ -114,15 +117,21 @@ namespace {
       record("encode_rvalue", t_enc.min_ns, t_enc.median_ns, cv(t_enc),
              wire, t_enc.iters, t_enc.trials);
 
-      // encode_sink (reused buffer)
-      std::vector<char> sink;
-      sink.reserve(wire * 2);
-      auto t_sink = ns_per_iter(0u, [&](std::size_t) {
-         sink.clear();
-         psio::encode(fmt, v, sink);
-      });
-      record("encode_sink", t_sink.min_ns, t_sink.median_ns, cv(t_sink),
-             wire, t_sink.iters, t_sink.trials);
+      // encode_sink (reused buffer) — gated; capnp/flatbuf only have
+      // the rvalue path.
+      if constexpr (requires(std::vector<char>& s) {
+                       psio::encode(fmt, v, s);
+                    })
+      {
+         std::vector<char> sink;
+         sink.reserve(wire * 2);
+         auto t_sink = ns_per_iter(0u, [&](std::size_t) {
+            sink.clear();
+            psio::encode(fmt, v, sink);
+         });
+         record("encode_sink", t_sink.min_ns, t_sink.median_ns,
+                cv(t_sink), wire, t_sink.iters, t_sink.trials);
+      }
 
       // decode
       auto t_dec = ns_per_iter(0u, [&](std::size_t) {
@@ -173,6 +182,9 @@ namespace {
       cell("bincode",  psio::bincode{});
       cell("avro",     psio::avro{});
       cell("protobuf", psio::protobuf{});
+      cell("msgpack",  psio::msgpack{});
+      cell("capnp",    psio::capnp{});
+      cell("flatbuf",  psio::flatbuf{});
    }
 
 }  // namespace
