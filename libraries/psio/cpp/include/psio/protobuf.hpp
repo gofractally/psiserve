@@ -1531,11 +1531,46 @@ namespace psio
          }
       }
 
-      //  Pack one consteval-byte field's tag + value bytes into buf
+      //  Max bytes a "primitive" field can produce.  A field is
+      //  primitive iff its encoding has no length prefix and its
+      //  worst-case byte count is known at compile time:
+      //    bool / float / double / fixed-int : exact (max == actual).
+      //    varint / zigzag int               : tag (consteval) + 10
+      //                                        bytes worst-case varint.
+      //  Returns 0 for non-primitive types (string, vector, message,
+      //  optional<T>, etc.) — those never join a primitive run.
+      template <typename T, std::size_t I>
+      constexpr std::size_t pb_field_primitive_max_at() noexcept
+      {
+         using R          = ::psio::reflect<T>;
+         using F          = std::remove_cvref_t<
+            typename R::template member_type<I>>;
+         constexpr std::uint32_t fnum     = resolve_field_number<T, I>();
+         constexpr pb_int_enc    enc      = resolve_int_encoding<T, I>();
+         constexpr std::size_t   tag_max  = pb_max_tag_bytes(fnum);
+         if constexpr (std::is_same_v<F, bool>)
+            return tag_max + 1;
+         else if constexpr (std::is_same_v<F, float>)
+            return tag_max + 4;
+         else if constexpr (std::is_same_v<F, double>)
+            return tag_max + 8;
+         else if constexpr (std::is_integral_v<F> &&
+                            !std::is_same_v<F, bool>)
+         {
+            if constexpr (enc == pb_int_enc::fixed)
+               return tag_max + (sizeof(F) <= 4 ? 4 : 8);
+            else
+               return tag_max + 10;  // varint / zigzag worst case
+         }
+         else
+            return 0;
+      }
+
+      //  Pack one primitive field's tag + value bytes into buf
       //  starting at `pos`, returning the new position.  No sink
       //  interaction — used by the batched run helper.
       template <typename T, std::size_t I>
-      inline std::size_t pb_pack_consteval_into(
+      inline std::size_t pb_pack_primitive_into(
          const T& v, std::uint8_t* buf, std::size_t pos) noexcept
       {
          using R          = ::psio::reflect<T>;
@@ -1604,55 +1639,86 @@ namespace psio
                pos += 8;
             }
          }
+         else if constexpr (std::is_integral_v<F> &&
+                            !std::is_same_v<F, bool> &&
+                            enc == pb_int_enc::default_)
+         {
+            //  Default-encoded varint integer: tag (consteval) +
+            //  varint of value (1–10 bytes runtime).
+            pos += pb_write_const_tag<fnum, wt::varint>(buf + pos);
+            std::uint64_t u;
+            if constexpr (std::is_signed_v<F>)
+            {
+               auto sv = static_cast<std::int64_t>(field);
+               u       = static_cast<std::uint64_t>(sv);
+            }
+            else
+               u = static_cast<std::uint64_t>(field);
+            pos += ::psio::varint::leb128::scalar::encode_u64(
+               buf + pos, u);
+         }
+         else if constexpr (std::is_integral_v<F> &&
+                            !std::is_same_v<F, bool> &&
+                            enc == pb_int_enc::zigzag)
+         {
+            //  Zigzag-encoded varint integer.
+            pos += pb_write_const_tag<fnum, wt::varint>(buf + pos);
+            auto sv = static_cast<std::int64_t>(field);
+            auto u  = (static_cast<std::uint64_t>(sv) << 1) ^
+                     static_cast<std::uint64_t>(sv >> 63);
+            pos += ::psio::varint::leb128::scalar::encode_u64(
+               buf + pos, u);
+         }
          return pos;
       }
 
-      //  End of the consteval-byte run that starts at index I — the
-      //  smallest J ≥ I such that field J is NOT consteval-byte (or
-      //  member_count if the run continues to the last field).  All
-      //  evaluated at compile time.
+      //  End of the primitive-field run that starts at index I — the
+      //  smallest J ≥ I such that field J is NOT a primitive (or
+      //  member_count if the run continues to the last field).
       template <typename T, std::size_t I>
-      constexpr std::size_t pb_consteval_run_end_v_impl() noexcept
+      constexpr std::size_t pb_primitive_run_end_v_impl() noexcept
       {
          constexpr auto N = ::psio::reflect<T>::member_count;
          if constexpr (I >= N)
             return N;
-         else if constexpr (pb_field_consteval_bytes_at<T, I>() > 0)
-            return pb_consteval_run_end_v_impl<T, I + 1>();
+         else if constexpr (pb_field_primitive_max_at<T, I>() > 0)
+            return pb_primitive_run_end_v_impl<T, I + 1>();
          else
             return I;
       }
 
       template <typename T, std::size_t I>
-      inline constexpr std::size_t pb_consteval_run_end_v =
-         pb_consteval_run_end_v_impl<T, I>();
+      inline constexpr std::size_t pb_primitive_run_end_v =
+         pb_primitive_run_end_v_impl<T, I>();
 
-      //  Emit a run of consecutive consteval-byte fields [Begin, End)
-      //  in a single sink.write — packs all (tag + value) bytes into
-      //  one stack buffer, then a single write.
+      //  Emit a run of consecutive primitive fields [Begin, End) in
+      //  one sink.write.  Buffer is sized to the sum of per-field
+      //  worst-case bytes (consteval) and packed at runtime; the
+      //  actual byte count `pos` may be less than the buffer size
+      //  because varint-encoded values can be shorter than 10 bytes.
       template <typename T, std::size_t Begin, std::size_t End,
                 typename Sink>
-      inline void pb_emit_consteval_run(const T& v, Sink& s) noexcept
+      inline void pb_emit_primitive_run(const T& v, Sink& s) noexcept
       {
-         constexpr std::size_t total =
+         constexpr std::size_t cap =
             []<std::size_t... Js>(std::index_sequence<Js...>) {
-               return (pb_field_consteval_bytes_at<T, Begin + Js>() + ...
+               return (pb_field_primitive_max_at<T, Begin + Js>() + ...
                        + std::size_t(0));
             }(std::make_index_sequence<End - Begin>{});
-         std::uint8_t buf[total];
+         std::uint8_t buf[cap];
          std::size_t  pos = 0;
          [&]<std::size_t... Js>(std::index_sequence<Js...>) {
-            ((pos = pb_pack_consteval_into<T, Begin + Js>(v, buf, pos)),
+            ((pos = pb_pack_primitive_into<T, Begin + Js>(v, buf, pos)),
              ...);
          }(std::make_index_sequence<End - Begin>{});
          s.write(buf, pos);
       }
 
       //  Tail-recursive walker over reflected fields.  Groups
-      //  consecutive consteval-byte fields into a single batched
-      //  write; emits dynamic fields individually through the
-      //  cache-consuming path.  The whole walk unrolls at compile
-      //  time — no runtime branching on field index.
+      //  consecutive primitive fields (bool, float, double, fixed-int,
+      //  varint-int) into a single batched write; emits non-primitive
+      //  fields individually through the cache-consuming path.  The
+      //  whole walk unrolls at compile time.
       template <typename T, std::size_t I, typename Sink>
       inline void pb_walk_fields(const T&             v,
                                  const std::uint32_t* sizes,
@@ -1662,10 +1728,10 @@ namespace psio
          constexpr auto N = ::psio::reflect<T>::member_count;
          if constexpr (I >= N)
             return;
-         else if constexpr (pb_field_consteval_bytes_at<T, I>() > 0)
+         else if constexpr (pb_field_primitive_max_at<T, I>() > 0)
          {
-            constexpr std::size_t End = pb_consteval_run_end_v<T, I>;
-            pb_emit_consteval_run<T, I, End>(v, s);
+            constexpr std::size_t End = pb_primitive_run_end_v<T, I>;
+            pb_emit_primitive_run<T, I, End>(v, s);
             pb_walk_fields<T, End>(v, sizes, idx, s);
          }
          else
