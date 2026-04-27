@@ -26,6 +26,7 @@
 //   buffer_store_policy  — bump allocator into vector<uint8_t>
 //   buffer_load_policy   — read from span of bytes
 
+#include <psio/detail/variant_util.hpp>
 #include <psio/reflect.hpp>
 #include <psio/wit_resource.hpp>
 
@@ -141,8 +142,10 @@ namespace psio {
       template <typename T> struct is_std_tuple : std::false_type {};
       template <typename... Ts> struct is_std_tuple<std::tuple<Ts...>> : std::true_type {};
 
-      template <typename T> struct is_std_variant : std::false_type {};
-      template <typename... Ts> struct is_std_variant<std::variant<Ts...>> : std::true_type {};
+      // is_std_variant is shared with the format codecs — defined in
+      // psio/detail/variant_util.hpp (included transitively by every
+      // binary format).  Re-declaring it here would collide if both
+      // headers end up in the same TU.
       template <typename T> inline constexpr bool is_std_variant_v = is_std_variant<T>::value;
 
       // is_own_ct / is_borrow_ct come transitively from psio/wit_resource.hpp.

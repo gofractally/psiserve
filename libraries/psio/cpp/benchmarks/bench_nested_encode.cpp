@@ -24,6 +24,7 @@
 #include <psio/pssz.hpp>
 #include <psio/reflect.hpp>
 #include <psio/ssz.hpp>
+#include <psio/wit_abi.hpp>
 
 #include "harness.hpp"
 
@@ -68,16 +69,90 @@ constexpr int leaves_of()
    return 1 << (depth_of<T>::v - 1);
 }
 
+// ── wit_abi: synthetic "format tag" wrapping the lower/lift API. ─────
+struct wit_abi_format {};
+
+template <typename T>
+std::vector<std::uint8_t> wit_abi_encode(const T& value)
+{
+   psio::buffer_store_policy p;
+   const std::uint32_t       dest = p.alloc(psio::wit_abi_align_v<T>,
+                                       psio::wit_abi_size_v<T>);
+   psio::wit_abi_lower_fields(value, p, dest);
+   return std::move(p.buf);
+}
+
 // ── one cell: encode T via Fmt, returns ns-per-encode (min of 7) ──
 template <typename Fmt, typename T>
 double bench_encode(const T& v)
 {
    // Auto-tuned timing harness (50 ms target per trial, 7 trials).
    auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
-      auto bytes = psio::encode(Fmt{}, v);
-      asm volatile("" : : "r"(bytes.data()) : "memory");
+      if constexpr (std::is_same_v<Fmt, wit_abi_format>)
+      {
+         auto bytes = wit_abi_encode(v);
+         asm volatile("" : : "r"(bytes.data()) : "memory");
+      }
+      else
+      {
+         auto bytes = psio::encode(Fmt{}, v);
+         asm volatile("" : : "r"(bytes.data()) : "memory");
+      }
    });
    return t.min_ns;
+}
+
+// Just the size_of pass (no encoding bytes).
+template <typename Fmt, typename T>
+double bench_size_only(const T& v)
+{
+   if constexpr (std::is_same_v<Fmt, wit_abi_format>)
+   {
+      // wit_abi: only the static record size is consteval.
+      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+         std::size_t n = psio::wit_abi_size_v<std::remove_cvref_t<decltype(v)>>;
+         asm volatile("" : "+r"(n) : : "memory");
+      });
+      return t.min_ns;
+   }
+   else
+   {
+      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+         std::size_t n = psio::size_of(Fmt{}, v);
+         asm volatile("" : "+r"(n) : : "memory");
+      });
+      return t.min_ns;
+   }
+}
+
+// Encode into a reused std::vector<char>& (the sink path).
+template <typename Fmt, typename T>
+double bench_sink(const T& v)
+{
+   if constexpr (std::is_same_v<Fmt, wit_abi_format>)
+   {
+      // wit_abi has no in-place "sink" CPO; reuse a buffer_store_policy.
+      psio::buffer_store_policy p;
+      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+         p.buf.clear();
+         p.bump = 0;
+         const std::uint32_t dest = p.alloc(
+            psio::wit_abi_align_v<std::remove_cvref_t<decltype(v)>>,
+            psio::wit_abi_size_v<std::remove_cvref_t<decltype(v)>>);
+         psio::wit_abi_lower_fields(v, p, dest);
+      });
+      return t.min_ns;
+   }
+   else
+   {
+      std::vector<char> sink;
+      sink.reserve(4096);
+      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+         sink.clear();
+         psio::encode(Fmt{}, v, sink);
+      });
+      return t.min_ns;
+   }
 }
 
 template <typename T>
@@ -119,6 +194,11 @@ struct fmt_traits<psio::frac16>
    static constexpr const char* name = "frac16";
 };
 template <>
+struct fmt_traits<wit_abi_format>
+{
+   static constexpr const char* name = "wit_abi (bump)";
+};
+template <>
 struct fmt_traits<psio::pssz>
 {
    static constexpr const char* name = "pssz";
@@ -157,18 +237,27 @@ struct fmt_traits<psio::protobuf>
 template <typename Fmt>
 void run_one_format()
 {
-   std::printf("\n## %s — encode ns by depth\n\n", fmt_traits<Fmt>::name);
-   std::printf("| depth | leaves | wire bytes | ns/encode | ns/leaf |\n");
-   std::printf("|------:|-------:|-----------:|----------:|--------:|\n");
+   std::printf("\n## %s\n\n", fmt_traits<Fmt>::name);
+   std::printf("| depth | leaves | bytes | rvalue | sink | size_of | "
+               "size%% |\n");
+   std::printf("|------:|-------:|------:|-------:|-----:|--------:|"
+               "------:|\n");
 
    auto row = [&](auto v) {
-      using T   = std::remove_cvref_t<decltype(v)>;
-      auto  pre = psio::encode(Fmt{}, v);
-      double ns = bench_encode<Fmt>(v);
+      using T = std::remove_cvref_t<decltype(v)>;
+      std::size_t wire_bytes;
+      if constexpr (std::is_same_v<Fmt, wit_abi_format>)
+         wire_bytes = wit_abi_encode(v).size();
+      else
+         wire_bytes = psio::encode(Fmt{}, v).size();
+      double rv = bench_encode<Fmt>(v);
+      double sk = bench_sink<Fmt>(v);
+      double sz = bench_size_only<Fmt>(v);
       const int    d  = depth_of<T>::v;
       const int    L  = leaves_of<T>();
-      std::printf("| %5d | %6d | %10zu | %9.1f | %7.2f |\n",
-                  d, L, pre.size(), ns, ns / static_cast<double>(L));
+      std::printf("| %5d | %6d | %5zu | %6.1f | %4.1f | %7.1f | "
+                  "%5.0f%% |\n",
+                  d, L, wire_bytes, rv, sk, sz, 100.0 * sz / rv);
    };
 
    row(make_tree<N1>());
@@ -195,6 +284,7 @@ int main()
    run_one_format<psio::borsh>();
    run_one_format<psio::bincode>();
    run_one_format<psio::avro>();
+   run_one_format<wit_abi_format>();
 
    return 0;
 }
