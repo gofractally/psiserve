@@ -1,15 +1,17 @@
 // Format perf comparison, organised on two axes:
 //
-//   Schema-required (positional, no field names on wire)
-//     - pssz                 (psio::pssz)
-//     - msgpack fixarray     (psio::msgpack with default record form)
+//   Schema-required (no field names on wire — receiver needs the
+//                    schema to interpret the bytes):
+//     - pssz                 (positional + offset table, extensible)
+//     - msgpack fixarray     (positional, fixed schema)
+//     - protobuf             (numeric field tags + length-delim,
+//                             extensible)
 //
-//   Self-describing (field names on wire — receiver doesn't need
-//                    a schema to recover field meanings)
-//     - json                 (psio::json — text)
-//     - pjson                (psio::pjson — binary, indexed by hash)
-//     - msgpack fixmap       (psio::msgpack with msgpack_record_form
-//                            ::as_map = true)
+//   Self-describing (field names on wire — generic readers can
+//                    walk the bytes without a schema):
+//     - json                 (text)
+//     - pjson                (binary, hash-indexed)
+//     - msgpack fixmap       (named pairs)
 //
 // The two axes have different design goals; comparing across them
 // is the apples-to-oranges trap.  Comparing within each axis is
@@ -25,6 +27,7 @@
 #include <psio/msgpack.hpp>
 #include <psio/pjson_typed.hpp>
 #include <psio/pjson_view.hpp>
+#include <psio/protobuf.hpp>
 #include <psio/pssz.hpp>
 
 #include <chrono>
@@ -147,6 +150,7 @@ int main()
    //  Pre-encode once for size reporting + decode benches.
    auto pssz_bytes = psio::encode(psio::pssz{}, bag);
    auto mpa_bytes  = psio::encode(psio::msgpack{}, bag);
+   auto pb_bytes   = psio::encode(psio::protobuf{}, bag);
    auto json_bytes = psio::encode(psio::json{}, bagmap);
    auto pjson_bytes = psio::from_struct(bagmap);
    auto mpm_bytes  = psio::encode(psio::msgpack{}, bagmap);
@@ -157,6 +161,10 @@ int main()
    std::printf("  msgpack-fixarray : %zu bytes  (%.2fx vs pssz)\n",
                mpa_bytes.size(),
                static_cast<double>(mpa_bytes.size()) /
+                  static_cast<double>(pssz_bytes.size()));
+   std::printf("  protobuf         : %zu bytes  (%.2fx vs pssz)\n",
+               pb_bytes.size(),
+               static_cast<double>(pb_bytes.size()) /
                   static_cast<double>(pssz_bytes.size()));
 
    std::printf(
@@ -198,6 +206,19 @@ int main()
          asm volatile("" : : "r"(&out) : "memory");
       },
       N);
+   auto enc_pb = bench_ns(
+      [&] {
+         auto out = psio::encode(psio::protobuf{}, bag);
+         asm volatile("" : : "r"(out.data()) : "memory");
+      },
+      N);
+   auto dec_pb = bench_ns(
+      [&] {
+         auto out = psio::decode<bench::Bag>(
+            psio::protobuf{}, std::span<const char>{pb_bytes});
+         asm volatile("" : : "r"(&out) : "memory");
+      },
+      N);
 
    std::printf(
       "\n=========== Schema-required ns/op  (lower is better) =====\n");
@@ -205,9 +226,13 @@ int main()
    std::printf("  pssz             : %8.1f   %8.1f   %8.1f\n",
                enc_pssz, dec_pssz, enc_pssz + dec_pssz);
    std::printf(
-      "  msgpack-fixarray : %8.1f   %8.1f   %8.1f   (%.2fx encode, %.2fx decode)\n",
+      "  msgpack-fixarray : %8.1f   %8.1f   %8.1f   (%.2fx encode, %.2fx decode vs pssz)\n",
       enc_mpa, dec_mpa, enc_mpa + dec_mpa, enc_pssz / enc_mpa,
       dec_pssz / dec_mpa);
+   std::printf(
+      "  protobuf         : %8.1f   %8.1f   %8.1f   (%.2fx encode, %.2fx decode vs pssz)\n",
+      enc_pb, dec_pb, enc_pb + dec_pb, enc_pssz / enc_pb,
+      dec_pssz / dec_pb);
 
    //  ── Self-describing ────────────────────────────────────────────
    auto enc_json = bench_ns(
