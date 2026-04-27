@@ -6,6 +6,29 @@ unintentionally**.  This document is the running checklist; every v1
 header has a row, classified as ported / supersede-with-rationale /
 needs-port / explicit-cut.
 
+## Session log: WIT toolchain end-to-end (2026-04-26)
+
+Closed today, in order:
+  - `wit_gen.hpp` — runtime generator (5/29)
+  - `wit_constexpr.hpp` — consteval generator (4/12)
+  - `wit_encode.hpp` — Component Model binary encoder (3/22, byte-parity vs v1)
+  - `name.hpp` — compressed name id (5/40, byte-parity vs v1)
+  - structural.hpp gains PSIO_USE / PSIO_WORLD / PSIO_HOST_MODULE (+3/16)
+  - `wit_parser.hpp` — recursive-descent WIT parser (4/24, round-trip)
+  - PSIO_REFLECT(T) zero-fields support (resource markers like pollable)
+  - WASI 2.3 flip — 13 binding+host headers, 4 tests, round_trip,
+    examples, CMakeLists all on v3. wasi_cpp_tests 10/40 + wasi_host_tests
+    26/126.
+
+Validated end-to-end: psio reflection → wit_world → text + Component
+Model binary → parse back → equivalent IR, on production WASI 2.3
+shapes (resources, own/borrow, multi-interface, host modules).
+
+Deferred with rationale: `schema.hpp` + `emit_wit.hpp` (~5000-line
+v1-only Schema layer; no v3 consumer remaining after round_trip.cpp
+migration).
+
+
 Items flagged **REVIEW** below the relevant table need your sign-off
 before they're closed.
 
@@ -53,13 +76,13 @@ before they're closed.
 These are real features actively used downstream that have no v3
 equivalent.  No reason to drop them.
 
-- [ ] **`name.hpp`** — compressed name identifier.  Encodes ≤18-char
-      lowercase-alphanum-hyphen strings into a u64 via context-dependent
-      arithmetic coding (445 lines, MIT-licensed from Mark Thomas Nelson,
-      adapted by you).  **Used in `pfs/keys.hpp`, `pfs/store.hpp` as
-      `psio1::name_id` for the universal tenant identifier.**  Likely
-      also load-bearing in psizam / psiserve / psitri / psi-api.
-      Direct port — no dependencies on the rest of v1 beyond stdlib.
+- [x] **`name.hpp`** — compressed name identifier.  445 lines,
+      MIT-licensed arithmetic-coding encoder for short names (a-z, 0-9,
+      hyphen, ≤18 chars) → u64.  Ported as `psio/name.hpp` (PSIO_REFLECT
+      moved out of struct body — v3's macro generates an ADL-hooked
+      free function that can't live inside a class).  Test:
+      psio3_name_tests (5 cases / 40 assertions including v1↔v3
+      byte-parity for valid names, invalid inputs, and round-trip).
 
 - [x] **`compress_name.hpp`** — method-name compressor.  503 lines,
       MIT-licensed.  **DISTINCT** from `name.hpp`: different alphabet
@@ -99,17 +122,24 @@ equivalent.  No reason to drop them.
       assertions covering literal text match, runtime parity, blob
       layout, param/return lowering).
 
-- [ ] **`emit_wit.hpp`** — schema IR → WIT text emitter (41 lines
-      of declarations; impl lives in `schema.hpp` body).  Cannot ship
-      standalone — bundled with full `schema.hpp` port.  Different
-      from `wit_constexpr.hpp` (constexpr embedding) and `wit_gen.hpp`
-      (C++ types → wit_world) — this one runs at runtime, walking a
-      pre-built `wit_world` IR and producing text.  Used by host-side
-      tools that already have a populated `Schema`.
+- [deferred] **`emit_wit.hpp`** — see schema.hpp entry below — emit_wit's
+      41-line declaration ships with schema.cpp's 441-line impl as a
+      single artifact, deferred together. Note: round_trip.cpp no longer
+      depends on emit_wit (uses psio::generate_wit_text directly), so no
+      consumer in this tree currently blocks on the port.
 
-- [ ] **`wit_parser.hpp`** — recursive-descent WIT text parser.
-      `wit_parse(text) → wit_world`.  Required for schema-import
-      workflow ("read this `.wit`, generate matching C++ stubs").
+- [x] **`wit_parser.hpp`** — recursive-descent WIT text parser ported as
+      `psio/wit_parser.hpp`. 1009 lines, mostly mechanical sed (data-only
+      consumer of wit_world / wit_func / wit_type_def, all unchanged in
+      v3). Two real fixes during port: (1) parse_package wrote into
+      world.name instead of world.package — clobbered the world's name
+      and broke wit_encode's qualified-interface strings; (2)
+      parse_world_export / parse_world_import only accepted the typed
+      form `<name> : ...;` — wit_gen emits the bare-reference form
+      `export <name>;`, now both branches peek for it. Test:
+      psio3_wit_parser_tests (4 cases / 24 assertions including
+      gen → text → parse round-trip and error reporting with
+      line/column). Closes the WIT round-trip.
 
 - [x] **`wit_encode.hpp`** — `wit_world` → Component Model binary.
       Ported as `psio/wit_encode.hpp` (near-verbatim — purely
@@ -211,11 +241,20 @@ equivalent.  No reason to drop them.
       WASM ABI wiring.  Pure compiler-attribute spelling, no psio
       surface.  **Belongs in psizam**.  Tracked under psizam.
 
-- [ ] **`schema.hpp` (full)** — v1 has a 2521-line `schema.hpp` with
-      `SchemaBuilder`, schema diff, WIT roundtrip.  v3's is 310 lines
-      (Phase 14a — runtime schema value + static bridge).  Missing:
-      `SchemaBuilder` programmatic API, schema-diff, schema-to-WIT
-      roundtrip.  Already tracked separately as Phase 14b/14c.
+- [deferred] **`schema.hpp` (full) + `emit_wit.hpp` + `schema.cpp` +
+      `emit_wit.cpp`** — v1's full Schema layer is ~5000 lines (header
+      2521 + schema.cpp 1884 + emit_wit.cpp 441 + emit_wit.hpp 41)
+      deeply tied to v1's fracpack + JSON infrastructure: FracStream,
+      StreamBase, dynamic JSON, Box<T> smart-pointer for variant
+      cases, Phase B Package/Use/Interface/World envelope types with
+      FracPack wire schemas. Faithful port pulls in v1-only runtime
+      that v3 has already replaced via different mechanisms
+      (frac.hpp, json.hpp, dynamic_value.hpp).
+      **Deferred — no current consumer.** round_trip.cpp (the only
+      schema dependent in this tree) was migrated off SchemaBuilder
+      to psio::generate_wit_text. v3's `schema.hpp` (310 lines, Phase
+      14a) covers the runtime-schema-value side. Resurrect this entry
+      when a real consumer surfaces.
 
 - [ ] **`fracpack.hpp`** (2602 lines) — v1's main format.  v3 has
       `frac.hpp`.  Wire bytes parity confirmed via
