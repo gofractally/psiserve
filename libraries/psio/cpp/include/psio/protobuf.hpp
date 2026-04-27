@@ -797,14 +797,38 @@ namespace psio
       template <typename T>
       constexpr std::size_t pb_dynamic_size_count_impl() noexcept;
 
+      //  Field-level slot count.  Mirrors pb_field_count's runtime
+      //  contract: a Reflected field contributes 1 (parent's header
+      //  slot for the nested body length) PLUS the nested type's own
+      //  body slot count.  Non-Reflected fields contribute their
+      //  type-level count directly.  optional<F> peels to F (worst
+      //  case present — both passes short-circuit when absent).
+      template <typename F>
+      constexpr std::size_t pb_field_consteval_slot_count() noexcept
+      {
+         using U = std::remove_cvref_t<F>;
+         if constexpr (pb_is_optional<U>::value)
+            return pb_field_consteval_slot_count<
+               typename pb_is_optional<U>::elem>();
+         else if constexpr (Reflected<U>)
+         {
+            constexpr std::size_t inner = pb_dynamic_size_count_impl<U>();
+            return inner == pb_size_count_dynamic
+                      ? pb_size_count_dynamic
+                      : 1 + inner;
+         }
+         else
+            return pb_dynamic_size_count_impl<U>();
+      }
+
       template <typename T, std::size_t... Is>
       constexpr std::size_t pb_dynamic_size_count_struct_helper(
          std::index_sequence<Is...>) noexcept
       {
          using R = ::psio::reflect<T>;
          const std::size_t parts[] = {
-            pb_dynamic_size_count_impl<std::remove_cvref_t<
-               typename R::template member_type<Is>>>()...,
+            pb_field_consteval_slot_count<
+               typename R::template member_type<Is>>()...,
             0  // tail sentinel — guarantees a non-empty array even for
                // empty packs, and is filtered by the loop bound below.
          };
