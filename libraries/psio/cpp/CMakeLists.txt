@@ -22,6 +22,33 @@ add_library(psio
 target_include_directories(psio PUBLIC include)
 target_compile_features(psio PUBLIC cxx_std_23)
 
+# xxhash — vendored single-header under external/psitri; pjson uses it
+# for the 8-bit key prefilter. XXH_INLINE_ALL is defined at include
+# sites so no separate compilation unit is needed.
+target_include_directories(psio PUBLIC
+   ${CMAKE_SOURCE_DIR}/external/psitri/libraries/hash/include)
+
+# ucc — psitri's small-utility library. pjson_view leverages
+# ucc::find_byte (SWAR 8-byte-at-a-time scalar scan, falls back to
+# NEON/AVX2 on the supported targets) for the hash-prefilter walk
+# during object key lookup. Same pattern psitri's leaf nodes use.
+target_include_directories(psio PUBLIC
+   ${CMAKE_SOURCE_DIR}/external/psitri/libraries/ucc/include)
+
+# simdjson — optional. Powers psio::pjson::from_json (JSON text →
+# pjson-binary). When available, callers get the SIMD stage-1 scan;
+# the fused encoder walks simdjson's DOM tape twice (size + write) and
+# emits pjson bytes directly with no intermediate value tree.
+find_package(simdjson QUIET)
+if(simdjson_FOUND)
+   target_link_libraries(psio PUBLIC simdjson::simdjson)
+   target_compile_definitions(psio PUBLIC PSIO_HAVE_SIMDJSON=1)
+   message(STATUS "psio: simdjson found, json_to_pjson enabled")
+else()
+   target_compile_definitions(psio PUBLIC PSIO_HAVE_SIMDJSON=0)
+   message(STATUS "psio: simdjson not found; json_to_pjson disabled")
+endif()
+
 # Boost::headers is needed by the reflection macro machinery (preprocessor
 # seq/tuple helpers) once Phase 1 lands. Already on CI for psio/psio2.
 find_package(Boost REQUIRED)

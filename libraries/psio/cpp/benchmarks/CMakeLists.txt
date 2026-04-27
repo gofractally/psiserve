@@ -21,3 +21,21 @@ target_include_directories(psio3_bench_varint PRIVATE
    ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(psio3_bench_varint PRIVATE cxx_std_23)
 target_compile_options(psio3_bench_varint PRIVATE -O3 -DNDEBUG)
+
+# pjson walk: JSON → pjson, plus every reader path on the resulting
+# bytes. simdjson DOM / on-demand are included as competitive
+# baselines when simdjson is found by the parent.
+add_executable(psio3_bench_pjson_walk bench_pjson_walk.cpp)
+target_link_libraries(psio3_bench_pjson_walk PRIVATE psio)
+target_include_directories(psio3_bench_pjson_walk PRIVATE
+   ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(psio3_bench_pjson_walk PRIVATE cxx_std_23)
+target_compile_options(psio3_bench_pjson_walk PRIVATE -O3 -DNDEBUG)
+
+# pjson per-type encode/decode/view-access timing.
+add_executable(psio3_bench_pjson_types bench_pjson_types.cpp)
+target_link_libraries(psio3_bench_pjson_types PRIVATE psio)
+target_include_directories(psio3_bench_pjson_types PRIVATE
+   ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(psio3_bench_pjson_types PRIVATE cxx_std_23)
+target_compile_options(psio3_bench_pjson_types PRIVATE -O3 -DNDEBUG)
