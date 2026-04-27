@@ -25,21 +25,38 @@
 
 namespace bench
 {
+   //  A small reflected sub-record so we can exercise vector<substruct>.
+   struct Sub
+   {
+      std::int32_t id;
+      std::string  label;
+   };
+   PSIO_REFLECT(Sub, id, label)
+
    struct Bag
    {
       std::string                 name;
-      std::vector<std::uint8_t>   payload;
+      std::vector<std::uint8_t>   payload;     // bytes-blob path
+      std::vector<std::int32_t>   ids;         // typed-array (msgpack:
+                                               // array-of-i32; pjson:
+                                               // typed-array fast path)
+      std::vector<Sub>            entries;     // generic array of records
       std::optional<std::int32_t> count;
       std::int64_t                seq;
       double                      score;
    };
-   PSIO_REFLECT(Bag, name, payload, count, seq, score)
+   PSIO_REFLECT(Bag, name, payload, ids, entries, count, seq, score)
 
    inline Bag make_sample()
    {
       return Bag{
          .name    = std::string{"alice-the-quick-brown-fox"},
          .payload = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+         .ids     = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+         .entries = {Sub{1, std::string{"alpha"}},
+                     Sub{2, std::string{"beta"}},
+                     Sub{3, std::string{"gamma"}},
+                     Sub{4, std::string{"delta"}}},
          .count   = 42,
          .seq     = 123456789012LL,
          .score   = 3.14159265358979};

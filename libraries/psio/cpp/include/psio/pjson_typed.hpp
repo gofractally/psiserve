@@ -242,6 +242,12 @@ namespace psio {
                out.push_back(read_as<E>(v.at(i)));
             return out;
          }
+         else if constexpr (Reflected<F>)
+         {
+            //  Recursive nested object — make a typed view of the
+            //  inline pjson_view and ask it to materialise.
+            return view<F, pjson_format>::from_pjson(v).to_struct();
+         }
          else
             static_assert(sizeof(F) == 0,
                           "view<T,pjson_format>: unsupported field type");
@@ -257,6 +263,16 @@ namespace psio {
 
    template <typename F>
    inline std::size_t typed_field_size(const F& v);
+
+   //  Forward decls for the recursive Reflected branches in
+   //  typed_field_size_dispatch / typed_field_encode below.  Both are
+   //  defined further down once typed_field_size and typed_field_encode
+   //  are in place.
+   template <typename T>
+   inline std::size_t pjson_encoded_size(const T& t);
+   template <typename T>
+   inline std::size_t to_pjson_at(std::uint8_t* dst, std::size_t pos,
+                                  const T& t);
 
    namespace pjson_detail {
       // Local std::vector / std::optional detectors so the typed
@@ -337,6 +353,12 @@ namespace psio {
                   total += typed_field_size_dispatch<E>(x);
                return total;
             }
+         }
+         else if constexpr (Reflected<F>)
+         {
+            // Recursive object: pjson_encoded_size walks F's reflected
+            // members at the same depth as the top-level entry point.
+            return pjson_encoded_size(v);
          }
          else
             static_assert(sizeof(F) == 0,
@@ -432,6 +454,12 @@ namespace psio {
                return count_pos + 2 - start;
             }
          }
+         else if constexpr (Reflected<F>)
+         {
+            //  Recursive nested object — same machinery the top-level
+            //  to_pjson uses, applied at this position.
+            return ::psio::to_pjson_at<F>(dst, pos, v);
+         }
       }
    }
 
@@ -453,22 +481,25 @@ namespace psio {
       return 1 + value_data_size + N + 4 * N + 2;
    }
 
-   // In-place encoder. Tail-indexed: writes value_data first, then
-   // appends hash[N], slot[N], count u16. The hash and slot tables
-   // are filled IN PLACE during the field walk (their final positions
-   // are known from the pre-computed value_data size).
+   // In-place reflected-object encoder.  Tail-indexed: writes
+   // value_data first, then appends hash[N], slot[N], count u16.
+   // Returns total bytes written so callers can use it as a building
+   // block for nested structs.
+   //
+   // Caller pre-sizes dst with at least pjson_encoded_size(t) bytes
+   // available starting at pos.
    template <typename T>
-   inline void to_pjson(const T& t, std::vector<std::uint8_t>& out)
+   inline std::size_t to_pjson_at(std::uint8_t* dst, std::size_t pos,
+                                  const T& t)
    {
       using R = reflect<T>;
       static_assert(R::is_reflected,
-                    "to_pjson requires PSIO_REFLECT(T,...)");
-      std::size_t total = pjson_encoded_size(t);
-      out.resize(total);
-
-      constexpr std::size_t N = R::member_count;
-      std::size_t pos = 0;
-      out[pos++] = static_cast<std::uint8_t>(pjson_detail::t_object << 4);
+                    "to_pjson_at requires PSIO_REFLECT(T,...)");
+      std::size_t           total = pjson_encoded_size(t);
+      constexpr std::size_t N     = R::member_count;
+      std::size_t           start = pos;
+      dst[pos++] =
+         static_cast<std::uint8_t>(pjson_detail::t_object << 4);
       std::size_t value_data_start = pos;
       std::size_t value_data_size  = total - 1 - N - 4 * N - 2;
       std::size_t hash_table_pos   = value_data_start + value_data_size;
@@ -476,32 +507,40 @@ namespace psio {
       std::size_t count_pos        = slot_table_pos + 4 * N;
 
       const auto& tmpl = pjson_hash_template<T>();
-      std::memcpy(out.data() + hash_table_pos, tmpl.data(), N);
+      std::memcpy(dst + hash_table_pos, tmpl.data(), N);
 
       [&]<std::size_t... Is>(std::index_sequence<Is...>) {
          ((pos = [&] {
              constexpr auto name = R::template member_name<Is>;
-             std::uint32_t  off  =
-                 static_cast<std::uint32_t>(pos - value_data_start);
+             std::uint32_t  off =
+                static_cast<std::uint32_t>(pos - value_data_start);
              std::uint8_t ks =
-                 name.size() < 0xFFu
-                     ? static_cast<std::uint8_t>(name.size())
-                     : static_cast<std::uint8_t>(0xFFu);
+                name.size() < 0xFFu
+                   ? static_cast<std::uint8_t>(name.size())
+                   : static_cast<std::uint8_t>(0xFFu);
              pjson_detail::write_u32_le(
-                 out.data() + slot_table_pos + Is * 4,
-                 pjson_detail::pack_slot(off, ks));
-             std::memcpy(out.data() + pos, name.data(), name.size());
+                dst + slot_table_pos + Is * 4,
+                pjson_detail::pack_slot(off, ks));
+             std::memcpy(dst + pos, name.data(), name.size());
              pos += name.size();
              pos += pjson_detail::typed_field_encode(
-                 out.data(), pos,
-                 t.*R::template member_pointer<Is>);
+                dst, pos, t.*R::template member_pointer<Is>);
              return pos;
           }()),
           ...);
       }(std::make_index_sequence<R::member_count>{});
 
-      out[count_pos]     = static_cast<std::uint8_t>(N & 0xFF);
-      out[count_pos + 1] = static_cast<std::uint8_t>((N >> 8) & 0xFF);
+      dst[count_pos]     = static_cast<std::uint8_t>(N & 0xFF);
+      dst[count_pos + 1] = static_cast<std::uint8_t>((N >> 8) & 0xFF);
+      return count_pos + 2 - start;
+   }
+
+   // Top-level entry — resizes the output vector and calls to_pjson_at.
+   template <typename T>
+   inline void to_pjson(const T& t, std::vector<std::uint8_t>& out)
+   {
+      out.resize(pjson_encoded_size(t));
+      to_pjson_at(out.data(), 0, t);
    }
 
    // Returning form. Allocates a fresh vector each call. The in-place
