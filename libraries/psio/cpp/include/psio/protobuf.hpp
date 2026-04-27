@@ -34,6 +34,22 @@
 //   `field<N>` for, just consumed by protobuf's
 //   field-number-on-the-wire mechanic.
 //
+// Per-field integer-encoding overrides:
+//
+//   `attr(member, pb_fixed)`  — encode integral fields as fixed-width
+//                                (wire_type 1/5).  Maps to .proto's
+//                                fixed32/sfixed32/fixed64/sfixed64
+//                                depending on the C++ type's size and
+//                                signedness.  Default for floats/doubles
+//                                already, so this is a no-op there.
+//   `attr(member, pb_sint)`   — encode signed integers with zigzag
+//                                varint (wire_type 0).  Maps to
+//                                .proto's sint32/sint64.  Roughly half
+//                                the bytes of the default for small
+//                                negatives.
+//   Both apply per-element to vector<int>; tag wire_type is adjusted
+//   for fixed, varint stays for zigzag.
+//
 // Type mapping (C++ → wire_type, default integer encoding):
 //
 //   bool / [u]int{8,16,32,64} / enum  → varint     (wire_type 0)
@@ -83,8 +99,50 @@
 namespace psio
 {
 
+   //  Per-field integer-encoding annotations (protobuf-specific).
+   //  Spec types live in the `psio` namespace so `attr(field, pb_fixed)`
+   //  and `attr(field, pb_sint)` route through the canonical
+   //  effective_annotations_for_v path used by every other format.
+   //
+   //  pb_fixed   — encode integral fields as fixed32 / fixed64 (or
+   //               sfixed32 / sfixed64 for signed types) instead of
+   //               varint.  Wire-type 1 or 5.
+   //  pb_sint    — encode signed integral fields with zigzag varint.
+   //               Wire-type 0.  Negatives encode in 1–10 bytes
+   //               instead of always 10.
+   struct pb_fixed_spec
+   {
+      using spec_category = static_spec_tag;
+      constexpr bool operator==(const pb_fixed_spec&) const = default;
+   };
+   struct pb_sint_spec
+   {
+      using spec_category = static_spec_tag;
+      constexpr bool operator==(const pb_sint_spec&) const = default;
+   };
+   inline constexpr pb_fixed_spec pb_fixed{};
+   inline constexpr pb_sint_spec  pb_sint{};
+
    namespace detail::pb_impl
    {
+      enum class pb_int_enc : std::uint8_t { default_, fixed, zigzag };
+
+      template <typename T, std::size_t I>
+      constexpr pb_int_enc resolve_int_encoding() noexcept
+      {
+         using R          = ::psio::reflect<T>;
+         using FieldT     = typename R::template member_type<I>;
+         constexpr auto P = R::template member_pointer<I>;
+         using Anns       = std::remove_cvref_t<
+            decltype(::psio::effective_annotations_for_v<T, FieldT, P>)>;
+         if constexpr (::psio::has_spec_v<::psio::pb_fixed_spec, Anns>)
+            return pb_int_enc::fixed;
+         else if constexpr (::psio::has_spec_v<::psio::pb_sint_spec, Anns>)
+            return pb_int_enc::zigzag;
+         else
+            return pb_int_enc::default_;
+      }
+
       // ── Wire-type constants ─────────────────────────────────────
       namespace wt
       {
@@ -198,6 +256,173 @@ namespace psio
       constexpr bool is_packed_scalar_v =
          std::is_arithmetic_v<T> && !std::is_same_v<T, bool>;
 
+      // ── pb_int_enc helpers ──────────────────────────────────────
+      //
+      //  Wire-type, value-size, write, and read for integral payloads
+      //  under each encoding choice.  Floating-point types ignore Enc:
+      //  fixed-width is already their default and zigzag is undefined.
+      //  Bool also ignores Enc.
+
+      template <typename U, pb_int_enc E>
+      constexpr std::uint8_t pb_int_wire_type() noexcept
+      {
+         if constexpr (E == pb_int_enc::fixed)
+            return sizeof(U) <= 4 ? wt::fixed32 : wt::fixed64;
+         else
+            return wt::varint;
+      }
+
+      template <pb_int_enc E, typename U>
+      inline std::size_t pb_int_value_size(U v) noexcept
+      {
+         if constexpr (E == pb_int_enc::fixed)
+            return sizeof(U) <= 4 ? 4u : 8u;
+         else if constexpr (E == pb_int_enc::zigzag)
+         {
+            //  zigzag: (n << 1) ^ (n >> bw-1).  Cast through int64 so
+            //  signed shifts behave consistently across narrower types.
+            auto s = static_cast<std::int64_t>(v);
+            auto u = (static_cast<std::uint64_t>(s) << 1) ^
+                     static_cast<std::uint64_t>(s >> 63);
+            return varint_size(u);
+         }
+         else
+         {
+            if constexpr (std::is_signed_v<U>)
+            {
+               auto s = static_cast<std::int64_t>(v);
+               return varint_size(static_cast<std::uint64_t>(s));
+            }
+            else
+               return varint_size(static_cast<std::uint64_t>(v));
+         }
+      }
+
+      template <pb_int_enc E, typename U, typename Sink>
+      inline void pb_int_write_value(U v, Sink& s)
+      {
+         if constexpr (E == pb_int_enc::fixed)
+         {
+            if constexpr (sizeof(U) <= 4)
+            {
+               std::uint32_t bits = 0;
+               if constexpr (std::is_signed_v<U>)
+               {
+                  std::int32_t sv = static_cast<std::int32_t>(v);
+                  std::memcpy(&bits, &sv, sizeof(bits));
+               }
+               else
+                  bits = static_cast<std::uint32_t>(v);
+               std::uint32_t le = to_le(bits);
+               s.write(&le, sizeof(le));
+            }
+            else
+            {
+               std::uint64_t bits = 0;
+               if constexpr (std::is_signed_v<U>)
+               {
+                  std::int64_t sv = static_cast<std::int64_t>(v);
+                  std::memcpy(&bits, &sv, sizeof(bits));
+               }
+               else
+                  bits = static_cast<std::uint64_t>(v);
+               std::uint64_t le = to_le(bits);
+               s.write(&le, sizeof(le));
+            }
+         }
+         else if constexpr (E == pb_int_enc::zigzag)
+         {
+            auto sv = static_cast<std::int64_t>(v);
+            auto u  = (static_cast<std::uint64_t>(sv) << 1) ^
+                     static_cast<std::uint64_t>(sv >> 63);
+            emit_varint(u, s);
+         }
+         else
+         {
+            if constexpr (std::is_signed_v<U>)
+            {
+               auto sv = static_cast<std::int64_t>(v);
+               emit_varint(static_cast<std::uint64_t>(sv), s);
+            }
+            else
+               emit_varint(static_cast<std::uint64_t>(v), s);
+         }
+      }
+
+      template <pb_int_enc E, typename U>
+      inline U pb_int_read_value(std::span<const char> src,
+                                 std::size_t&          pos,
+                                 std::uint8_t          wire_type)
+      {
+         if constexpr (E == pb_int_enc::fixed)
+         {
+            if constexpr (sizeof(U) <= 4)
+            {
+               if (wire_type != wt::fixed32)
+                  throw std::runtime_error(
+                     "protobuf: fixed32 wire-type mismatch");
+               if (pos + 4 > src.size())
+                  throw std::runtime_error(
+                     "protobuf: truncated fixed32 int");
+               std::uint32_t bits;
+               std::memcpy(&bits, src.data() + pos, 4);
+               bits = to_le(bits);
+               pos += 4;
+               U out;
+               if constexpr (std::is_signed_v<U>)
+               {
+                  std::int32_t sv;
+                  std::memcpy(&sv, &bits, 4);
+                  out = static_cast<U>(sv);
+               }
+               else
+                  out = static_cast<U>(bits);
+               return out;
+            }
+            else
+            {
+               if (wire_type != wt::fixed64)
+                  throw std::runtime_error(
+                     "protobuf: fixed64 wire-type mismatch");
+               if (pos + 8 > src.size())
+                  throw std::runtime_error(
+                     "protobuf: truncated fixed64 int");
+               std::uint64_t bits;
+               std::memcpy(&bits, src.data() + pos, 8);
+               bits = to_le(bits);
+               pos += 8;
+               U out;
+               if constexpr (std::is_signed_v<U>)
+               {
+                  std::int64_t sv;
+                  std::memcpy(&sv, &bits, 8);
+                  out = static_cast<U>(sv);
+               }
+               else
+                  out = static_cast<U>(bits);
+               return out;
+            }
+         }
+         else if constexpr (E == pb_int_enc::zigzag)
+         {
+            if (wire_type != wt::varint)
+               throw std::runtime_error(
+                  "protobuf: sint wire-type mismatch");
+            std::uint64_t u = read_varint(src, pos);
+            std::int64_t  s =
+               static_cast<std::int64_t>((u >> 1) ^ (~(u & 1) + 1));
+            return static_cast<U>(s);
+         }
+         else
+         {
+            if (wire_type != wt::varint)
+               throw std::runtime_error(
+                  "protobuf: int wire-type mismatch");
+            std::uint64_t raw = read_varint(src, pos);
+            return static_cast<U>(raw);
+         }
+      }
+
       // ── size_of pass ────────────────────────────────────────────
 
       //  Forward-decls for recursive message + repeated handling.
@@ -265,7 +490,7 @@ namespace psio
             return R::template field_number<I>;
       }
 
-      template <typename T>
+      template <pb_int_enc Enc, typename T>
       std::size_t pb_field_size(const T& v, std::uint32_t field) noexcept
       {
          using U = std::remove_cvref_t<T>;
@@ -273,7 +498,8 @@ namespace psio
          {
             if (!v.has_value())
                return 0;
-            return pb_field_size<typename pb_is_optional<U>::elem>(*v, field);
+            return pb_field_size<Enc, typename pb_is_optional<U>::elem>(
+               *v, field);
          }
          else if constexpr (is_byte_vector_v<U>)
          {
@@ -288,10 +514,21 @@ namespace psio
                return 0;
             if constexpr (is_packed_scalar_v<E>)
             {
-               //  Packed: tag + varint(payload_len) + payload.
+               //  Packed: tag + varint(payload_len) + payload.  When
+               //  E is integral, Enc decides the per-element width;
+               //  for floats Enc is ignored (sizeof is fixed already).
                std::size_t payload = 0;
-               for (auto const& x : v)
-                  payload += pb_value_size(x);
+               if constexpr (std::is_integral_v<E> &&
+                             !std::is_same_v<E, bool>)
+               {
+                  for (auto const& x : v)
+                     payload += pb_int_value_size<Enc>(x);
+               }
+               else
+               {
+                  for (auto const& x : v)
+                     payload += pb_value_size(x);
+               }
                return tag_size(field, wt::length_delim) +
                       varint_size(payload) + payload;
             }
@@ -305,9 +542,11 @@ namespace psio
                return total;
             }
          }
-         else if constexpr (std::is_same_v<U, bool> ||
-                            std::is_integral_v<U>)
-            return tag_size(field, wt::varint) + pb_value_size(v);
+         else if constexpr (std::is_same_v<U, bool>)
+            return tag_size(field, wt::varint) + 1;
+         else if constexpr (std::is_integral_v<U>)
+            return tag_size(field, pb_int_wire_type<U, Enc>()) +
+                   pb_int_value_size<Enc>(v);
          else if constexpr (std::is_same_v<U, float>)
             return tag_size(field, wt::fixed32) + 4;
          else if constexpr (std::is_same_v<U, double>)
@@ -334,7 +573,7 @@ namespace psio
          std::size_t    total = 0;
          [&]<std::size_t... Is>(std::index_sequence<Is...>)
          {
-            ((total += pb_field_size(
+            ((total += pb_field_size<resolve_int_encoding<T, Is>()>(
                  v.*(R::template member_pointer<Is>),
                  resolve_field_number<T, Is>())),
              ...);
@@ -400,7 +639,7 @@ namespace psio
          }
       }
 
-      template <typename T, typename Sink>
+      template <pb_int_enc Enc, typename T, typename Sink>
       void pb_write_field(const T& v, std::uint32_t field, Sink& s)
       {
          using U = std::remove_cvref_t<T>;
@@ -408,7 +647,8 @@ namespace psio
          {
             if (!v.has_value())
                return;
-            pb_write_field<typename pb_is_optional<U>::elem>(*v, field, s);
+            pb_write_field<Enc, typename pb_is_optional<U>::elem>(
+               *v, field, s);
          }
          else if constexpr (is_byte_vector_v<U>)
          {
@@ -424,14 +664,45 @@ namespace psio
                return;
             if constexpr (is_packed_scalar_v<E>)
             {
-               //  Packed: one tag, varint(payload_len), values.
+               //  Packed: one tag, varint(payload_len), values.  Enc
+               //  applies per-element when E is integral.
+               //
+               //  Fast-path: when wire is fixed-width (float, double,
+               //  fixed32/fixed64 integer encoding), payload size =
+               //  v.size() * sizeof(E). No size walk needed — saves a
+               //  full pass over the elements.
                std::size_t payload = 0;
-               for (auto const& x : v)
-                  payload += pb_value_size(x);
+               constexpr bool fixed_width =
+                  std::is_floating_point_v<E> ||
+                  (std::is_integral_v<E> &&
+                   !std::is_same_v<E, bool> &&
+                   pb_int_wire_type<E, Enc>() != wt::varint);
+               if constexpr (fixed_width)
+                  payload = v.size() * sizeof(E);
+               else if constexpr (std::is_integral_v<E> &&
+                                  !std::is_same_v<E, bool>)
+               {
+                  for (auto const& x : v)
+                     payload += pb_int_value_size<Enc>(x);
+               }
+               else
+               {
+                  for (auto const& x : v)
+                     payload += pb_value_size(x);
+               }
                emit_tag(field, wt::length_delim, s);
                emit_varint(payload, s);
-               for (auto const& x : v)
-                  pb_write_value(x, s);
+               if constexpr (std::is_integral_v<E> &&
+                             !std::is_same_v<E, bool>)
+               {
+                  for (auto const& x : v)
+                     pb_int_write_value<Enc>(x, s);
+               }
+               else
+               {
+                  for (auto const& x : v)
+                     pb_write_value(x, s);
+               }
             }
             else
             {
@@ -443,11 +714,15 @@ namespace psio
                }
             }
          }
-         else if constexpr (std::is_same_v<U, bool> ||
-                            std::is_integral_v<U>)
+         else if constexpr (std::is_same_v<U, bool>)
          {
             emit_tag(field, wt::varint, s);
             pb_write_value(v, s);
+         }
+         else if constexpr (std::is_integral_v<U>)
+         {
+            emit_tag(field, pb_int_wire_type<U, Enc>(), s);
+            pb_int_write_value<Enc>(v, s);
          }
          else if constexpr (std::is_same_v<U, float>)
          {
@@ -484,7 +759,7 @@ namespace psio
          constexpr auto N = R::member_count;
          [&]<std::size_t... Is>(std::index_sequence<Is...>)
          {
-            ((pb_write_field(
+            ((pb_write_field<resolve_int_encoding<T, Is>()>(
                  v.*(R::template member_pointer<Is>),
                  resolve_field_number<T, Is>(),
                  s)),
@@ -630,7 +905,7 @@ namespace psio
       //  across multiple wire-tag occurrences (proto3 allows a
       //  repeated field's elements to arrive via mixed packed +
       //  unpacked chunks, all concatenated).
-      template <typename V>
+      template <pb_int_enc Enc, typename V>
       void pb_read_repeated(std::span<const char> src, std::size_t& pos,
                             std::uint8_t wire_type, V& out)
       {
@@ -646,33 +921,71 @@ namespace psio
                if (end > src.size())
                   throw std::runtime_error(
                      "protobuf: packed array overruns buffer");
+
+               // Reserve based on expected element count to avoid
+               // per-element vector reallocation. For fixed-wire
+               // types (fixed32/fixed64) the count is exact;
+               // for varint we lower-bound by n/max-elem-size.
+               // Either way we save 4-5 reallocs on a 16-element
+               // packed array.
+               if constexpr (std::is_floating_point_v<E>)
+                  out.reserve(out.size() + n / sizeof(E));
+               else if constexpr (std::is_integral_v<E> &&
+                                  !std::is_same_v<E, bool>)
+               {
+                  // Varint: 1..varint_max bytes per element. Reserve
+                  // for the upper bound (1 byte/elem) — over-reserves
+                  // by ~2× on average for typical small ints, but
+                  // beats N small reallocations.
+                  out.reserve(out.size() + n);
+               }
+               else
+                  out.reserve(out.size() + n);
+
                while (pos < end)
                {
-                  E v;
-                  //  Each packed element uses the wire_type implied
-                  //  by E (varint / fixed32 / fixed64), not 2.
-                  std::uint8_t inner_wt =
-                     std::is_floating_point_v<E>
-                        ? (sizeof(E) == 4 ? wt::fixed32 : wt::fixed64)
-                        : wt::varint;
-                  pb_read_value(src, pos, inner_wt, v);
-                  out.push_back(std::move(v));
+                  if constexpr (std::is_integral_v<E> &&
+                                !std::is_same_v<E, bool>)
+                  {
+                     std::uint8_t inner_wt = pb_int_wire_type<E, Enc>();
+                     E            v        = pb_int_read_value<Enc, E>(
+                        src, pos, inner_wt);
+                     out.push_back(v);
+                  }
+                  else
+                  {
+                     std::uint8_t inner_wt =
+                        std::is_floating_point_v<E>
+                           ? (sizeof(E) == 4 ? wt::fixed32 : wt::fixed64)
+                           : wt::varint;
+                     out.emplace_back();
+                     pb_read_value(src, pos, inner_wt, out.back());
+                  }
                }
             }
             else
             {
                //  Permit a sender that opted out of packing.
-               E v;
-               pb_read_value(src, pos, wire_type, v);
-               out.push_back(std::move(v));
+               if constexpr (std::is_integral_v<E> &&
+                             !std::is_same_v<E, bool>)
+               {
+                  out.push_back(
+                     pb_int_read_value<Enc, E>(src, pos, wire_type));
+               }
+               else
+               {
+                  out.emplace_back();
+                  pb_read_value(src, pos, wire_type, out.back());
+               }
             }
          }
          else
          {
-            //  Unpacked: one element per tag occurrence.
-            E v;
-            pb_read_value(src, pos, wire_type, v);
-            out.push_back(std::move(v));
+            //  Unpacked: one element per tag occurrence. Read straight
+            //  into the vector's storage to avoid the move construction
+            //  pjson_value would pay otherwise.
+            out.emplace_back();
+            pb_read_value(src, pos, wire_type, out.back());
          }
       }
 
@@ -689,13 +1002,23 @@ namespace psio
          using FT = std::remove_cvref_t<
             typename R::template member_type<I>>;
          auto& fref = out.*(R::template member_pointer<I>);
+         constexpr pb_int_enc Enc = resolve_int_encoding<T, I>();
 
          if constexpr (pb_is_optional<FT>::value)
          {
             using E = typename pb_is_optional<FT>::elem;
-            E inner{};
-            pb_read_value(src, pos, wire_type, inner);
-            fref = std::move(inner);
+            if constexpr (std::is_integral_v<E> &&
+                          !std::is_same_v<E, bool>)
+            {
+               E inner = pb_int_read_value<Enc, E>(src, pos, wire_type);
+               fref    = std::move(inner);
+            }
+            else
+            {
+               E inner{};
+               pb_read_value(src, pos, wire_type, inner);
+               fref = std::move(inner);
+            }
          }
          else if constexpr (is_byte_vector_v<FT>)
          {
@@ -713,7 +1036,12 @@ namespace psio
          }
          else if constexpr (pb_is_vector<FT>::value)
          {
-            pb_read_repeated(src, pos, wire_type, fref);
+            pb_read_repeated<Enc>(src, pos, wire_type, fref);
+         }
+         else if constexpr (std::is_integral_v<FT> &&
+                            !std::is_same_v<FT, bool>)
+         {
+            fref = pb_int_read_value<Enc, FT>(src, pos, wire_type);
          }
          else
          {

@@ -162,6 +162,9 @@ psio3_add_test(psio3_protobuf_tests protobuf_tests.cpp)
 # emit_protobuf (emit_protobuf.hpp) — Schema IR → .proto3 schema text.
 psio3_add_test(psio3_emit_protobuf_tests emit_protobuf_tests.cpp)
 
+# protobuf_parser (protobuf_parser.hpp) — .proto3 text → Schema IR.
+psio3_add_test(psio3_protobuf_parser_tests protobuf_parser_tests.cpp)
+
 # Quick perf comparison of json / msgpack / pjson on a representative
 # struct.  Built as a regular executable (not a ctest).  Run manually:
 #   ./bin/psio3_format_perf

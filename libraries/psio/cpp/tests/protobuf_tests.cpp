@@ -381,6 +381,128 @@ TEST_CASE("protobuf: receiver skips unknown fields by wire_type",
    CHECK(received.c == 30);  //  field 2 (b=20) was unknown and skipped.
 }
 
+// ─── pb_fixed / pb_sint integer-encoding annotations ───────────────
+
+//  Globally-scoped because attr() emits a ::psio::annotate<>
+//  specialisation that needs an enclosing namespace of psio.
+struct FixedMsg
+{
+   std::int32_t  s32 = 0;   // sfixed32
+   std::uint32_t u32 = 0;   // fixed32
+   std::int64_t  s64 = 0;   // sfixed64
+   std::uint64_t u64 = 0;   // fixed64
+   friend bool   operator==(const FixedMsg&, const FixedMsg&) = default;
+};
+PSIO_REFLECT(FixedMsg,
+             attr(s32, ::psio::pb_fixed),
+             attr(u32, ::psio::pb_fixed),
+             attr(s64, ::psio::pb_fixed),
+             attr(u64, ::psio::pb_fixed))
+
+struct SintMsg
+{
+   std::int32_t  a = 0;
+   std::int64_t  b = 0;
+   friend bool   operator==(const SintMsg&, const SintMsg&) = default;
+};
+PSIO_REFLECT(SintMsg,
+             attr(a, ::psio::pb_sint),
+             attr(b, ::psio::pb_sint))
+
+struct PackedFixedMsg
+{
+   std::vector<std::int32_t> ids;
+   friend bool operator==(const PackedFixedMsg&, const PackedFixedMsg&) =
+      default;
+};
+PSIO_REFLECT(PackedFixedMsg, attr(ids, ::psio::pb_fixed))
+
+struct PackedSintMsg
+{
+   std::vector<std::int32_t> ids;
+   friend bool operator==(const PackedSintMsg&, const PackedSintMsg&) =
+      default;
+};
+PSIO_REFLECT(PackedSintMsg, attr(ids, ::psio::pb_sint))
+
+TEST_CASE("protobuf: pb_fixed sets wire-type 5/1 and writes LE bytes",
+          "[protobuf][encoding]")
+{
+   FixedMsg m{-1, 0xDEADBEEF, -1LL, 0x0123456789ABCDEFULL};
+   auto     wire = psio::encode(psio::protobuf{}, m);
+
+   //  Expected bytes:
+   //    field 1 sfixed32 -1   : tag 0x0D (1<<3 | 5), 0xFF FF FF FF
+   //    field 2  fixed32 0xDEADBEEF: tag 0x15 (2<<3 | 5), 0xEF BE AD DE
+   //    field 3 sfixed64 -1   : tag 0x19 (3<<3 | 1), 0xFF*8
+   //    field 4  fixed64 ...  : tag 0x21 (4<<3 | 1), LE bytes
+   auto expected = b({0x0D, 0xFF, 0xFF, 0xFF, 0xFF,
+                      0x15, 0xEF, 0xBE, 0xAD, 0xDE,
+                      0x19, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                      0x21, 0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01});
+   CHECK(wire == expected);
+   rt(m);
+}
+
+TEST_CASE("protobuf: pb_sint zigzag-encodes signed varints",
+          "[protobuf][encoding]")
+{
+   //  Reference values from the protobuf spec:
+   //    zigzag( 0) = 0,   zigzag(-1) = 1,
+   //    zigzag( 1) = 2,   zigzag(-2) = 3, ...
+   //  So a = -1 → varint 1, b = -2 → varint 3.
+   SintMsg m{-1, -2};
+   auto    wire = psio::encode(psio::protobuf{}, m);
+
+   //  field 1 (sint32) : tag 0x08, varint 0x01
+   //  field 2 (sint64) : tag 0x10, varint 0x03
+   auto expected = b({0x08, 0x01, 0x10, 0x03});
+   CHECK(wire == expected);
+   rt(m);
+
+   //  And verify the default-encoded wire would have been 10 bytes
+   //  for the negative — pb_sint is materially shorter here.
+   CHECK(wire.size() == 4);
+}
+
+TEST_CASE("protobuf: pb_sint round-trips a swept range",
+          "[protobuf][encoding]")
+{
+   for (auto v : {0, 1, -1, 42, -42, 0x7FFFFFFF, -0x7FFFFFFF - 1})
+   {
+      SintMsg m{v, static_cast<std::int64_t>(v) * 1000};
+      rt(m);
+   }
+}
+
+TEST_CASE("protobuf: packed repeated honours pb_fixed per-element",
+          "[protobuf][encoding]")
+{
+   PackedFixedMsg m{{1, 2, -1}};
+   auto           wire = psio::encode(psio::protobuf{}, m);
+
+   //  tag 0x0A (field 1, length-delim), payload-len = 12
+   //  payload = 0x01 0x00 0x00 0x00 | 0x02 0x00 0x00 0x00 | 0xFF*4
+   auto expected = b({0x0A, 0x0C,
+                      0x01, 0x00, 0x00, 0x00,
+                      0x02, 0x00, 0x00, 0x00,
+                      0xFF, 0xFF, 0xFF, 0xFF});
+   CHECK(wire == expected);
+   rt(m);
+}
+
+TEST_CASE("protobuf: packed repeated honours pb_sint per-element",
+          "[protobuf][encoding]")
+{
+   PackedSintMsg m{{0, -1, 1, -2, 2}};
+   auto          wire = psio::encode(psio::protobuf{}, m);
+
+   //  tag 0x0A, len = 5, payload = 00 01 02 03 04 (zigzag of values)
+   auto expected = b({0x0A, 0x05, 0x00, 0x01, 0x02, 0x03, 0x04});
+   CHECK(wire == expected);
+   rt(m);
+}
+
 // ─── validate_strict accepts well-formed input ──────────────────────
 
 TEST_CASE("protobuf: validate accepts valid input", "[protobuf]")
