@@ -123,6 +123,9 @@ psio3_add_test(psio3_wit_gen_tests wit_gen_tests.cpp)
 # Consteval WIT generator (wit_constexpr.hpp).
 psio3_add_test(psio3_wit_constexpr_tests wit_constexpr_tests.cpp)
 
+# Recursive-descent WIT parser (wit_parser.hpp).
+psio3_add_test(psio3_wit_parser_tests wit_parser_tests.cpp)
+
 # Production-shaped WASI 2.3 inputs through wit_gen + wit_constexpr +
 # wit_encode (resources, own/borrow, multi-interface).
 psio3_add_test(psio3_wit_wasi_shapes_tests wit_wasi_shapes_tests.cpp)
