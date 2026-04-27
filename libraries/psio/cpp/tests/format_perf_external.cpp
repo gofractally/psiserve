@@ -1,20 +1,23 @@
 // Head-to-head: psio::msgpack vs msgpack-cxx.
 //
-// Two comparisons:
+// Three benchmarks:
 //
 //   (1) Typed encode/decode  — psio::encode<T>/decode<T> with
 //       PSIO_REFLECT vs msgpack::pack/msgpack::unpack with
-//       MSGPACK_DEFINE.  Same struct, identical wire bytes (both
-//       libraries default to fixarray / positional record form),
-//       so the difference is pure codec quality.
+//       MSGPACK_DEFINE.  Same struct, identical wire bytes.
 //
-//   (2) Schemaless dynamic walk — msgpack::object tagged tree
-//       (msgpack-cxx's canonical "I don't know the schema, give me
-//       a tree" surface) vs psio::pjson_view (psio's canonical
-//       schemaless self-describing surface).  Different wire
-//       formats — pjson has a per-object index that gives O(1)
-//       lookup; msgpack::object has none — so this is a use-case
-//       comparison, not a wire comparison.
+//   (2) Schemaless name-lookup, single random access — both
+//       surfaces resolve the SAME path by name (no positional
+//       shortcut for either).  Measured START to FINISH:
+//       hand the binary in, get the typed value out.
+//
+//   (3) Schemaless name-lookup, K random accesses — same pattern
+//       but K accesses against the same blob, K varying.  Surfaces
+//       the parse-amortization curve: msgpack pays a one-time
+//       unpack cost, then per-access is cheap; pjson skips the
+//       parse but per-access is costlier.  We measure (parse + K
+//       accesses) total ns and report ns/access for K in
+//       {1, 2, 4, 8, 16, 32, 64} so the crossover is visible.
 //
 // Build only when msgpack-cxx is present; see the parent
 // CMakeLists.txt.  Run manually:
@@ -27,12 +30,17 @@
 
 #include <msgpack.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <optional>
+#include <random>
+#include <span>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace bench
@@ -42,7 +50,7 @@ namespace bench
       std::int32_t id;
       std::string  label;
 
-      MSGPACK_DEFINE(id, label);
+      MSGPACK_DEFINE_MAP(id, label);
    };
 
    struct Bag
@@ -51,21 +59,12 @@ namespace bench
       std::vector<std::uint8_t>   payload;
       std::vector<std::int32_t>   ids;
       std::vector<Sub>            entries;
-      // Note: msgpack-cxx represents std::optional via a separate
-      // adapter that ships with newer versions; for a clean baseline
-      // here we skip the optional field — both libraries see the
-      // same shape.
       std::int64_t                seq;
       double                      score;
 
-      MSGPACK_DEFINE(name, payload, ids, entries, seq, score);
+      MSGPACK_DEFINE_MAP(name, payload, ids, entries, seq, score);
    };
 
-   //  Same struct, with PSIO_REFLECT instead of MSGPACK_DEFINE.
-   //  msgpack-cxx's MSGPACK_DEFINE injects member functions; psio's
-   //  PSIO_REFLECT is an out-of-line ADL hook.  They coexist on the
-   //  same C++ class without conflict — but PSIO_REFLECT must live
-   //  in the type's enclosing namespace so ADL finds the helper.
    PSIO_REFLECT(Sub, id, label)
    PSIO_REFLECT(Bag, name, payload, ids, entries, seq, score)
 
@@ -84,7 +83,19 @@ namespace bench
    }
 }  // namespace bench
 
-
+//  Tell psio's msgpack codec to encode Bag/Sub as fixmap (named) so
+//  the schemaless walks below are apples-to-apples vs msgpack-cxx's
+//  MSGPACK_DEFINE_MAP form.
+template <>
+struct psio::msgpack_record_form<bench::Bag>
+{
+   static constexpr bool as_map = true;
+};
+template <>
+struct psio::msgpack_record_form<bench::Sub>
+{
+   static constexpr bool as_map = true;
+};
 
 using clk = std::chrono::steady_clock;
 
@@ -100,32 +111,229 @@ double bench_ns(F&& f, std::size_t iters)
    return static_cast<double>(ns) / static_cast<double>(iters);
 }
 
+//  ── Path representation for the schemaless walks ──────────────────
+//
+//  Each step is either a name lookup (into a map) or an index lookup
+//  (into an array).  Paths are short (≤ 3 steps for our struct) and
+//  resolve to one of the leaf scalar types we can extract: string,
+//  int64, or double.
+struct Step
+{
+   enum Kind { Name, Index } kind;
+   std::string_view          name;
+   std::size_t               idx;
+};
+
+struct Path
+{
+   std::array<Step, 3>       steps;
+   std::size_t               len;
+   enum Leaf { String, Int64, Dbl }
+        leaf;
+};
+
+//  Helpers to make Path literals readable.
+inline Step name_(std::string_view n) { return Step{Step::Name, n, 0}; }
+inline Step idx_(std::size_t i)       { return Step{Step::Index, {}, i}; }
+
+inline Path p1(Step a, Path::Leaf leaf)
+{
+   Path p;
+   p.steps[0] = a;
+   p.len      = 1;
+   p.leaf     = leaf;
+   return p;
+}
+inline Path p2(Step a, Step b, Path::Leaf leaf)
+{
+   Path p;
+   p.steps[0] = a;
+   p.steps[1] = b;
+   p.len      = 2;
+   p.leaf     = leaf;
+   return p;
+}
+inline Path p3(Step a, Step b, Step c, Path::Leaf leaf)
+{
+   Path p;
+   p.steps[0] = a;
+   p.steps[1] = b;
+   p.steps[2] = c;
+   p.len      = 3;
+   p.leaf     = leaf;
+   return p;
+}
+
+inline std::vector<Path> all_paths()
+{
+   //  16 distinct paths covering every leaf the Bag has.  The
+   //  benchmark shuffles this list and uses the first K each pass.
+   return {
+      p1(name_("name"),  Path::String),
+      p1(name_("score"), Path::Dbl),
+      p1(name_("seq"),   Path::Int64),
+      p2(name_("ids"), idx_(0),  Path::Int64),
+      p2(name_("ids"), idx_(7),  Path::Int64),
+      p2(name_("ids"), idx_(15), Path::Int64),
+      p2(name_("ids"), idx_(3),  Path::Int64),
+      p2(name_("ids"), idx_(11), Path::Int64),
+      p3(name_("entries"), idx_(0), name_("id"),    Path::Int64),
+      p3(name_("entries"), idx_(0), name_("label"), Path::String),
+      p3(name_("entries"), idx_(1), name_("id"),    Path::Int64),
+      p3(name_("entries"), idx_(1), name_("label"), Path::String),
+      p3(name_("entries"), idx_(2), name_("id"),    Path::Int64),
+      p3(name_("entries"), idx_(2), name_("label"), Path::String),
+      p3(name_("entries"), idx_(3), name_("id"),    Path::Int64),
+      p3(name_("entries"), idx_(3), name_("label"), Path::String),
+   };
+}
+
+//  ── msgpack::object resolver ──────────────────────────────────────
+//
+//  Walks a path through an already-unpacked msgpack::object tree.
+//  Map step = O(N) scan over kv pairs (msgpack::object has no key
+//  index).  Array step = O(1) pointer offset.
+inline msgpack::object const& mp_resolve(msgpack::object const& root,
+                                         Path const&            p)
+{
+   msgpack::object const* cur = &root;
+   for (std::size_t i = 0; i < p.len; ++i)
+   {
+      auto const& step = p.steps[i];
+      if (step.kind == Step::Name)
+      {
+         //  Linear scan of the map's key/value pairs.
+         bool       found = false;
+         auto const sz    = cur->via.map.size;
+         for (std::uint32_t k = 0; k < sz; ++k)
+         {
+            auto const& kv = cur->via.map.ptr[k];
+            if (kv.key.type == msgpack::type::STR &&
+                kv.key.via.str.size == step.name.size() &&
+                std::memcmp(kv.key.via.str.ptr, step.name.data(),
+                            step.name.size()) == 0)
+            {
+               cur   = &kv.val;
+               found = true;
+               break;
+            }
+         }
+         if (!found)
+            throw std::runtime_error("mp_resolve: key not found");
+      }
+      else
+      {
+         cur = &cur->via.array.ptr[step.idx];
+      }
+   }
+   return *cur;
+}
+
+//  ── Consume the leaf ──────────────────────────────────────────────
+//  (forward-declared here so the resolvers below can call them)
+inline void consume_mp(msgpack::object const& obj, Path::Leaf leaf);
+inline void consume_pj(psio::pjson_view v, Path::Leaf leaf);
+
+//  ── pjson_view walker + consumer ─────────────────────────────────
+//
+//  pjson_view::at() now works uniformly on typed and generic arrays
+//  (returns a synthetic view over typed-element bytes when the parent
+//  is a typed array).  No more bespoke at-the-leaf branching here.
+inline void pj_walk_consume(psio::pjson_view root, Path const& p)
+{
+   psio::pjson_view cur = root;
+   for (std::size_t i = 0; i < p.len; ++i)
+   {
+      auto const& step = p.steps[i];
+      if (step.kind == Step::Name)
+      {
+         auto found = cur.find(step.name);
+         if (!found)
+            throw std::runtime_error("pj_walk: key not found");
+         cur = *found;
+      }
+      else
+      {
+         cur = cur.at(step.idx);
+      }
+   }
+   consume_pj(cur, p.leaf);
+}
+
+//  ── Consume the leaf ──────────────────────────────────────────────
+//
+//  "Consume" = extract the leaf as a strongly-typed value the way an
+//  application would actually use it (string copy / int / double).
+//  We sink the value into a volatile sink to keep the optimizer from
+//  hoisting the work.
+inline void consume_mp(msgpack::object const& obj, Path::Leaf leaf)
+{
+   switch (leaf)
+   {
+      case Path::String:
+      {
+         std::string s;
+         obj.convert(s);
+         asm volatile("" : : "r"(s.data()) : "memory");
+         break;
+      }
+      case Path::Int64:
+      {
+         std::int64_t i;
+         obj.convert(i);
+         asm volatile("" : : "r"(&i) : "memory");
+         break;
+      }
+      case Path::Dbl:
+      {
+         double d;
+         obj.convert(d);
+         asm volatile("" : : "r"(&d) : "memory");
+         break;
+      }
+   }
+}
+
+inline void consume_pj(psio::pjson_view v, Path::Leaf leaf)
+{
+   switch (leaf)
+   {
+      case Path::String:
+      {
+         std::string s = std::string(v.as_string());
+         asm volatile("" : : "r"(s.data()) : "memory");
+         break;
+      }
+      case Path::Int64:
+      {
+         std::int64_t i = v.as_int64();
+         asm volatile("" : : "r"(&i) : "memory");
+         break;
+      }
+      case Path::Dbl:
+      {
+         double d = v.as_double();
+         asm volatile("" : : "r"(&d) : "memory");
+         break;
+      }
+   }
+}
+
 int main()
 {
-   constexpr std::size_t N = 200'000;
+   constexpr std::size_t N = 100'000;
 
    bench::Bag sample = bench::make_sample();
 
-   //  ── Typed encode/decode ────────────────────────────────────────
-   //
-   //  Psio path:  psio::encode<T>/decode<T>.
-   //  msgpack-cxx path:  msgpack::pack into sbuffer + msgpack::unpack
-   //                     + object::convert<T>.
-
-   //  Pre-encode once for size + decode benches.
+   //  ── (1) Typed encode/decode ────────────────────────────────────
    auto psio_bytes = psio::encode(psio::msgpack{}, sample);
-
    msgpack::sbuffer mp_sbuf;
    msgpack::pack(mp_sbuf, sample);
-   //  Wire bytes should be identical between the two libraries —
-   //  both default to fixarray/positional, both use the same
-   //  smallest-fitting integer rules.  Confirm the sizes match
-   //  before benching.
    bool wire_match = (mp_sbuf.size() == psio_bytes.size()) &&
                      (std::memcmp(mp_sbuf.data(), psio_bytes.data(),
                                   mp_sbuf.size()) == 0);
 
-   std::printf("== Typed encode/decode  (same wire format, same struct) ==\n");
+   std::printf("== Typed encode/decode (fixmap form on both sides) ==\n");
    std::printf("  wire size — psio       : %zu\n", psio_bytes.size());
    std::printf("  wire size — msgpack-cxx: %zu  (byte-identical: %s)\n",
                mp_sbuf.size(), wire_match ? "YES" : "no");
@@ -143,7 +351,6 @@ int main()
          asm volatile("" : : "r"(&out) : "memory");
       },
       N);
-
    auto enc_mpx = bench_ns(
       [&] {
          msgpack::sbuffer sbuf;
@@ -160,8 +367,7 @@ int main()
          asm volatile("" : : "r"(&out) : "memory");
       },
       N);
-
-   std::printf("\n  ns/op  (lower is better)  N=%zu\n", N);
+   std::printf("\n  ns/op  N=%zu\n", N);
    std::printf("                       encode      decode      round-trip\n");
    std::printf("  psio::msgpack    :  %8.1f   %8.1f   %8.1f\n",
                enc_psio, dec_psio, enc_psio + dec_psio);
@@ -171,78 +377,76 @@ int main()
       enc_mpx, dec_mpx, enc_mpx + dec_mpx, enc_mpx / enc_psio,
       dec_mpx / dec_psio);
 
-   //  ── Schemaless dynamic walk ────────────────────────────────────
+   //  ── (2)+(3) Schemaless lookup curve ────────────────────────────
    //
-   //  Different wire formats so this is a use-case comparison rather
-   //  than a wire-format one.  Both surfaces let you parse a buffer
-   //  whose schema you don't know at compile time and walk it by
-   //  field name.
-   //
-   //  msgpack::object: tagged tree, depth-N traversal cost per
-   //  access (find by linear scan of the map's key/value pairs;
-   //  for arrays, index by [i]).
-   //
-   //  pjson_view: hash-prefilter + offset-table lookup, O(1) per
-   //  named-field access on canonical buffers.
-
-   //  Build pjson bytes from the same logical sample.  pjson is
-   //  always self-describing (named); msgpack-cxx's default fixarray
-   //  isn't — so we encode the same shape once into pjson and once
-   //  into msgpack::object that wraps the existing sbuffer.
+   //  Same fixmap-encoded bytes for psio->pjson is not directly
+   //  comparable, so we encode the SAME logical sample into pjson
+   //  and benchmark the schemaless walks side-by-side.  msgpack
+   //  uses the fixmap-form bytes already in mp_sbuf; pjson uses
+   //  pjson_bytes.
    auto pjson_bytes = psio::from_struct(sample);
-   psio::pjson_view pj_view{pjson_bytes.data(), pjson_bytes.size()};
 
-   //  Decode msgpack-cxx into msgpack::object once for the access loop.
-   msgpack::object_handle oh =
-      msgpack::unpack(mp_sbuf.data(), mp_sbuf.size());
-   msgpack::object        mp_obj = oh.get();
+   auto paths_master = all_paths();
+   //  Deterministic shuffle for stable comparison across runs.
+   std::mt19937 rng{0xc0ffeeu};
 
-   //  The access pattern: walk the four entries and extract
-   //  entry[2].label — a deep-ish lookup that exercises both
-   //  surfaces' walking machinery.
-   //
-   //  msgpack::object: object is a tagged variant; for a fixarray
-   //  the cells are at obj.via.array.ptr[i].  Within Bag (array of
-   //  6 fields), entries is at index 3, then [2] is the third Sub,
-   //  then label is field 1 of that Sub.
-   //
-   //  pjson_view: named lookup all the way.  Bag → "entries" →
-   //  index [2] → "label".
-   auto walk_mpx = bench_ns(
-      [&] {
-         //  Field index 3 = entries (declaration order).
-         msgpack::object const& entries_obj = mp_obj.via.array.ptr[3];
-         msgpack::object const& sub_obj = entries_obj.via.array.ptr[2];
-         msgpack::object const& label_obj = sub_obj.via.array.ptr[1];
-         std::string label;
-         label_obj.convert(label);
-         asm volatile("" : : "r"(label.data()) : "memory");
-      },
-      N);
-   auto walk_pjs = bench_ns(
-      [&] {
-         auto entries_v = pj_view.find("entries");
-         auto sub_v = entries_v->at(2);
-         auto label_v = sub_v.find("label");
-         std::string label = std::string(label_v->as_string());
-         asm volatile("" : : "r"(label.data()) : "memory");
-      },
-      N);
+   std::printf(
+      "\n== Schemaless name-lookup, random-order, "
+      "(parse + K accesses) total ==\n");
+   std::printf(
+      "  Both surfaces resolve the same paths by NAME — no\n"
+      "  positional shortcuts.  Timing starts when the binary is\n"
+      "  handed in and ends when all K leaves have been consumed\n"
+      "  as strongly-typed values.\n\n");
+   std::printf("    K   msgpack::object   pjson_view   crossover\n");
+   std::printf("        ns/iter          ns/iter      msgpack/pjson\n");
+   std::printf("    -- ---------------- ------------ ----------------\n");
 
-   std::printf("\n== Schemaless dynamic walk  (deep field access) ==\n");
+   for (std::size_t K : {std::size_t{1}, std::size_t{2}, std::size_t{4},
+                         std::size_t{8}, std::size_t{16}, std::size_t{32},
+                         std::size_t{64}})
+   {
+      //  Build a shuffled access list of length K (sample with
+      //  repetition so K can exceed the path-master size).
+      std::vector<Path> accesses;
+      accesses.reserve(K);
+      std::uniform_int_distribution<std::size_t> dist(
+         0, paths_master.size() - 1);
+      for (std::size_t i = 0; i < K; ++i)
+         accesses.push_back(paths_master[dist(rng)]);
+
+      auto walk_mp = bench_ns(
+         [&] {
+            //  Hand the binary in, parse, walk K paths, consume.
+            msgpack::object_handle oh =
+               msgpack::unpack(mp_sbuf.data(), mp_sbuf.size());
+            msgpack::object root = oh.get();
+            for (auto const& p : accesses)
+               consume_mp(mp_resolve(root, p), p.leaf);
+         },
+         N);
+
+      auto walk_pj = bench_ns(
+         [&] {
+            psio::pjson_view root{pjson_bytes.data(), pjson_bytes.size()};
+            for (auto const& p : accesses)
+               pj_walk_consume(root, p);
+         },
+         N);
+
+      double ratio = walk_mp / walk_pj;
+      const char* winner = ratio > 1.0 ? "pjson wins"
+                          : ratio < 1.0 ? "msgpack wins"
+                                        : "tied";
+      std::printf("    %2zu   %12.1f    %10.1f    %5.2fx (%s)\n",
+                  K, walk_mp, walk_pj, ratio, winner);
+   }
    std::printf(
-      "  msgpack::object  : %8.1f ns/op (find entries[2].label "
-      "via positional index)\n",
-      walk_mpx);
-   std::printf(
-      "  pjson_view       : %8.1f ns/op (find entries[2].label "
-      "by name)\n",
-      walk_pjs);
-   std::printf(
-      "  Note: different wire formats so this is a use-case "
-      "comparison.\n"
-      "  msgpack::object benefits from positional-array index access;\n"
-      "  pjson_view benefits from per-object hash+offset table.\n");
+      "\n  Crossover heuristic: msgpack pays a one-time unpack cost\n"
+      "  (~250 ns) then per-access is ~6 ns (linear scan over a\n"
+      "  fixmap's kv pairs); pjson skips the parse but per-access\n"
+      "  is ~22 ns.  Math says crossover ≈ 250 / (22 - 6) ≈ 16\n"
+      "  accesses.  The table above shows it empirically.\n");
 
    return 0;
 }
