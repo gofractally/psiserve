@@ -21,6 +21,19 @@
 #    ${CMAKE_CURRENT_SOURCE_DIR})
 # target_compile_features(psio3_bench_perf_report PRIVATE cxx_std_23)
 
+# Unified head-to-head: psio's wire formats × canonical external libs
+# × shapes × ops.  Replaces the v1↔v3 bench_perf_report matrix.  The
+# psio side is built unconditionally; competitor adapters land via
+# find_package gates (PSIO_HAVE_MSGPACK / PSIO_HAVE_PROTOBUF /
+# PSIO_HAVE_CAPNP / PSIO_HAVE_FLATBUF / PSIO_HAVE_SSZPP) in follow-up
+# commits.
+add_executable(psio_bench_vs_externals bench_psio_vs_externals.cpp)
+target_link_libraries(psio_bench_vs_externals PRIVATE psio)
+target_include_directories(psio_bench_vs_externals PRIVATE
+   ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(psio_bench_vs_externals PRIVATE cxx_std_23)
+target_compile_options(psio_bench_vs_externals PRIVATE -O3 -DNDEBUG)
+
 # Nested-encode baseline — per-format encode timing on balanced
 # binary trees of progressively greater depth.  Surfaces the
 # fractal O(D × N) recursive-size-walk cost that the protobuf
