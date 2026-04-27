@@ -50,6 +50,30 @@ else()
       "psio_bench_vs_externals: msgpack-cxx not found — skipping")
 endif()
 
+find_package(Protobuf QUIET CONFIG)
+if(Protobuf_FOUND)
+   #  Modern protobuf provides `protobuf_generate` (per-target) which
+   #  attaches generated .pb.cc/.pb.h to the consuming target and
+   #  drops them in CMAKE_CURRENT_BINARY_DIR/adapters/.
+   protobuf_generate(
+      TARGET psio_bench_vs_externals
+      LANGUAGE cpp
+      IMPORT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/adapters
+      PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/adapters
+      PROTOS ${CMAKE_CURRENT_SOURCE_DIR}/adapters/bench_schemas.proto)
+   target_include_directories(psio_bench_vs_externals PRIVATE
+      ${CMAKE_CURRENT_BINARY_DIR}/adapters)
+   target_link_libraries(psio_bench_vs_externals PRIVATE
+      protobuf::libprotobuf)
+   target_compile_definitions(psio_bench_vs_externals PRIVATE
+      PSIO_HAVE_PROTOBUF=1)
+   message(STATUS
+      "psio_bench_vs_externals: libprotobuf found — enabled")
+else()
+   message(STATUS
+      "psio_bench_vs_externals: libprotobuf not found — skipping")
+endif()
+
 # Nested-encode baseline — per-format encode timing on balanced
 # binary trees of progressively greater depth.  Surfaces the
 # fractal O(D × N) recursive-size-walk cost that the protobuf

@@ -31,6 +31,9 @@
 #ifdef PSIO_HAVE_MSGPACK
 #  include "adapters/msgpack_adapter.hpp"
 #endif
+#ifdef PSIO_HAVE_PROTOBUF
+#  include "adapters/protobuf_adapter.hpp"
+#endif
 
 #include <cstdio>
 #include <filesystem>
@@ -240,6 +243,100 @@ namespace {
    }
 #endif
 
+#ifdef PSIO_HAVE_PROTOBUF
+   //  Time libprotobuf on a single shape.  library = "libprotobuf",
+   //  format = "protobuf" (wire-compatible with psio::protobuf for the
+   //  same shape).  Includes the `build()` cost (psio shape → pb
+   //  message) on encode_rvalue, since that's what real callers do.
+   //  encode_pure isolates SerializeToString on a pre-built reused
+   //  pb message — closer to libprotobuf's best case.
+   template <typename T>
+   void bench_libprotobuf_cell(std::vector<snapshot_row>& out,
+                               const std::string&         shape_name,
+                               const T&                   v)
+   {
+      using PB = pb_bench::pb_message_t<T>;
+      PB seed;
+      pb_bench::build(seed, v);
+      std::string pre;
+      (void)seed.SerializeToString(&pre);
+      const std::size_t wire = pre.size();
+
+      auto record = [&](std::string op, double ns, double ns_med,
+                         double cv, std::size_t wire_b, std::size_t iters,
+                         int trials, std::string notes = "") {
+         out.push_back(snapshot_row{
+            .shape      = shape_name,
+            .format     = "protobuf",
+            .library    = "libprotobuf",
+            .mode       = "static",
+            .op         = std::move(op),
+            .ns_min     = ns,
+            .ns_median  = ns_med,
+            .cv_pct     = cv,
+            .wire_bytes = wire_b,
+            .iters      = iters,
+            .trials     = trials,
+            .notes      = std::move(notes),
+         });
+      };
+      auto cv = [](const timing& t) {
+         return t.min_ns > 0.0 ? t.stddev_ns / t.min_ns * 100.0 : 0.0;
+      };
+
+      // size_of — libprotobuf's ByteSizeLong on a built message.
+      auto t_size = ns_per_iter(0u, [&](std::size_t) {
+         std::size_t n = seed.ByteSizeLong();
+         asm volatile("" : "+r"(n) : : "memory");
+      });
+      record("size_of", t_size.min_ns, t_size.median_ns, cv(t_size),
+             wire, t_size.iters, t_size.trials,
+             "ByteSizeLong on pre-built pb message");
+
+      // encode_rvalue — fresh pb + build + SerializeToString, fair
+      // domain-struct-to-bytes timing (matches what psio::encode does).
+      auto t_enc = ns_per_iter(0u, [&](std::size_t) {
+         PB          pb;
+         pb_bench::build(pb, v);
+         std::string out_;
+         (void)pb.SerializeToString(&out_);
+         asm volatile("" : : "r"(out_.data()) : "memory");
+      });
+      record("encode_rvalue", t_enc.min_ns, t_enc.median_ns, cv(t_enc),
+             wire, t_enc.iters, t_enc.trials,
+             "fresh pb + build + SerializeToString");
+
+      // encode_sink — reused pb + reused std::string buffer.
+      // Closest libprotobuf gets to a "reuse" path; analogous to the
+      // psio sink path that reuses a vector<char>.
+      PB          reused;
+      std::string out_buf;
+      out_buf.reserve(wire * 2);
+      auto t_sink = ns_per_iter(0u, [&](std::size_t) {
+         reused.Clear();
+         pb_bench::build(reused, v);
+         out_buf.clear();
+         (void)reused.SerializeToString(&out_buf);
+      });
+      record("encode_sink", t_sink.min_ns, t_sink.median_ns,
+             cv(t_sink), wire, t_sink.iters, t_sink.trials,
+             "reused pb message + reused std::string");
+
+      // decode — ParseFromString into a reused message.
+      PB dec;
+      auto t_dec = ns_per_iter(0u, [&](std::size_t) {
+         dec.Clear();
+         (void)dec.ParseFromString(pre);
+         asm volatile("" : : "r"(&dec) : "memory");
+      });
+      record("decode", t_dec.min_ns, t_dec.median_ns, cv(t_dec),
+             wire, t_dec.iters, t_dec.trials,
+             "ParseFromString into reused pb message");
+
+      // No standalone validate — ParseFromString IS the validation.
+   }
+#endif
+
    //  Run all psio formats against one shape value.  Each cell is
    //  gated by fmt_supports<Fmt, T> so unsupported pairs are skipped
    //  rather than triggering a static_assert at compile time.
@@ -266,6 +363,12 @@ namespace {
 
 #ifdef PSIO_HAVE_MSGPACK
       bench_msgpack_cxx_cell(out, shape_name, v);
+#endif
+#ifdef PSIO_HAVE_PROTOBUF
+      if constexpr (requires {
+                       typename pb_bench::pb_message_for<T>::type;
+                    })
+         bench_libprotobuf_cell(out, shape_name, v);
 #endif
    }
 
