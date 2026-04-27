@@ -379,6 +379,57 @@ distinguishes them.
 Decoders **must** verify the stored hash byte matches `key_hash8` of
 the stored key bytes; mismatch is an error.
 
+#### Collision behavior
+
+The hash is 8 bits — there are 256 possible values. For an object of
+N fields with random keys, the expected number of hash collisions per
+query is ≈ N/256. Typical JSON objects have N ≤ 30, so the average
+lookup hits one hash candidate, runs one byte-equal-string-compare,
+and returns. For very wide objects (N ≈ 256) you'd expect ~1 false
+positive per query — still cheap.
+
+The lookup algorithm (§11) handles collisions correctly: on a hash
+hit that fails the byte-equal key check, it advances and re-scans
+the remainder. So worst-case N collisions degrade lookup to O(N) of
+**string compares** rather than just O(N) of byte compares. For
+N ≤ 1000 this remains acceptable (microseconds, not milliseconds).
+
+**Adversarial / hash-flooding inputs.** An attacker who controls the
+JSON keys can construct N keys that all hash to the same byte (only
+~256 attempts to find one collision; finding N colliders by birthday
+attack is `O(N · √256) = O(16N)` work for the attacker — trivial
+preprocessing). This degrades a single lookup to N string compares.
+For pjson's intended use cases (database storage of API request
+payloads, internal RPC, configuration files) JSON keys are typically
+**schema-defined by the application**, not attacker-controlled, so
+this attack vector is rare.
+
+If keys ARE attacker-controlled in your deployment (e.g., a generic
+key-value store storing user dictionaries), an implementation may:
+
+* Switch to a **seeded** hash. XXH3-64 takes a 64-bit seed; pick a
+  random seed at process startup and use it for every `key_hash8`
+  computation. Attackers can no longer precompute colliders.
+  Producers and consumers in the same process share the seed; if
+  pjson values are persisted across processes (database, file)
+  the seed must also be persisted alongside the value or recomputed
+  per-doc.
+* Cap the max fields per container at the application layer below
+  pjson's 65535 hard limit, bounding worst-case lookup work.
+* Skip hash verification on read (see §9 errors) and rely solely on
+  byte-equal key compare. Drops to O(N) per lookup unconditionally
+  but eliminates the hash-flood asymmetry; ~3-5× slower for typical
+  workloads.
+
+The reference C++ implementation does **not** seed the hash —
+`key_hash8` is deterministic, which makes content-addressable
+hashing (two pjson buffers from the same logical input hash to the
+same content-id) work cleanly. This is the right tradeoff when
+keys are not attacker-controlled. Deployments that need both
+deterministic hashing AND attacker-resistance should canonicalize
+inputs at a higher layer (e.g., reject objects with > K fields, or
+hash the key set externally).
+
 ### 5.4 Long-key escape
 
 If a key's byte length is ≥ 255, the slot's `key_size` byte is set to
