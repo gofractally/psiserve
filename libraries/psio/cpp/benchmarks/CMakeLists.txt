@@ -39,3 +39,12 @@ target_include_directories(psio3_bench_pjson_types PRIVATE
    ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(psio3_bench_pjson_types PRIVATE cxx_std_23)
 target_compile_options(psio3_bench_pjson_types PRIVATE -O3 -DNDEBUG)
+
+# psch schema-format perf: encode + view + lookup latency, plus
+# size-versus-typical-alternatives.
+add_executable(psio3_bench_psch bench_psch.cpp)
+target_link_libraries(psio3_bench_psch PRIVATE psio)
+target_include_directories(psio3_bench_psch PRIVATE
+   ${CMAKE_SOURCE_DIR}/external/psitri/libraries/hash/include)
+target_compile_features(psio3_bench_psch PRIVATE cxx_std_23)
+target_compile_options(psio3_bench_psch PRIVATE -O3 -DNDEBUG)
