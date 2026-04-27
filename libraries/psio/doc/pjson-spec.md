@@ -20,8 +20,13 @@ text (~102% on representative API payloads).
 
 The format is designed for:
 
-* **Random-access reads** by name or by index, in O(log N) per level
-  via a per-container hash + offset table.
+* **Random-access reads** by name or by index. Index lookup is O(1)
+  via a slot table. Object key lookup is O(N) per level — N being the
+  field count of that one object — but the per-field work is
+  ~1 byte compare via a SWAR-friendly hash prefilter, plus an expected
+  ~1 string-compare for the average case (rare hash collisions). For
+  typical objects of 5–50 fields the lookup is single-cache-line work.
+  Field encounter order is preserved; pjson does not sort keys.
 * **Single-allocation, single-pass encode** — no DOM tape, no
   intermediate value tree. The encoder appends children forward and
   writes the index at the tail.
