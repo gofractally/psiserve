@@ -1406,6 +1406,156 @@ namespace psio
          }
       }
 
+      //  Write a varint-encoded tag from a compile-time field number
+      //  into the start of buf. Returns the number of bytes written.
+      //  For typical field numbers (≤ 268435455 i.e. four-byte tag),
+      //  unrolls to a small straight-line store sequence.
+      template <std::uint32_t F, std::uint8_t WT>
+      inline std::size_t pb_write_const_tag(std::uint8_t* buf) noexcept
+      {
+         constexpr std::uint64_t tag =
+            (static_cast<std::uint64_t>(F) << 3) | WT;
+         if constexpr (tag < (1ULL << 7))
+         {
+            buf[0] = static_cast<std::uint8_t>(tag);
+            return 1;
+         }
+         else if constexpr (tag < (1ULL << 14))
+         {
+            buf[0] = static_cast<std::uint8_t>(tag) |
+                     static_cast<std::uint8_t>(0x80);
+            buf[1] = static_cast<std::uint8_t>(tag >> 7);
+            return 2;
+         }
+         else if constexpr (tag < (1ULL << 21))
+         {
+            buf[0] = static_cast<std::uint8_t>(tag) |
+                     static_cast<std::uint8_t>(0x80);
+            buf[1] = static_cast<std::uint8_t>(tag >> 7) |
+                     static_cast<std::uint8_t>(0x80);
+            buf[2] = static_cast<std::uint8_t>(tag >> 14);
+            return 3;
+         }
+         else if constexpr (tag < (1ULL << 28))
+         {
+            buf[0] = static_cast<std::uint8_t>(tag) |
+                     static_cast<std::uint8_t>(0x80);
+            buf[1] = static_cast<std::uint8_t>(tag >> 7) |
+                     static_cast<std::uint8_t>(0x80);
+            buf[2] = static_cast<std::uint8_t>(tag >> 14) |
+                     static_cast<std::uint8_t>(0x80);
+            buf[3] = static_cast<std::uint8_t>(tag >> 21);
+            return 4;
+         }
+         else
+         {
+            static_assert(F < (1ULL << 25),
+                          "psio::protobuf: field number too large for "
+                          "consteval tag fast path");
+            return 0;
+         }
+      }
+
+      //  Fused-write for consteval-byte fields: bool / float / double
+      //  / pb_fixed integer.  Tag bytes are computed at compile time;
+      //  tag + value go through a single sink.write — half the sink
+      //  interactions of the generic field write path.
+      template <pb_int_enc Enc, std::uint32_t F, typename T, typename Sink>
+      inline void pb_emit_consteval_field(const T& v, Sink& s) noexcept
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (std::is_same_v<U, bool>)
+         {
+            std::uint8_t  buf[5];
+            std::size_t   n = pb_write_const_tag<F, wt::varint>(buf);
+            buf[n++] = v ? std::uint8_t{1} : std::uint8_t{0};
+            s.write(buf, n);
+         }
+         else if constexpr (std::is_same_v<U, float>)
+         {
+            std::uint8_t  buf[8];
+            std::size_t   n = pb_write_const_tag<F, wt::fixed32>(buf);
+            std::uint32_t bits;
+            std::memcpy(&bits, &v, 4);
+            bits = to_le(bits);
+            std::memcpy(buf + n, &bits, 4);
+            s.write(buf, n + 4);
+         }
+         else if constexpr (std::is_same_v<U, double>)
+         {
+            std::uint8_t  buf[12];
+            std::size_t   n = pb_write_const_tag<F, wt::fixed64>(buf);
+            std::uint64_t bits;
+            std::memcpy(&bits, &v, 8);
+            bits = to_le(bits);
+            std::memcpy(buf + n, &bits, 8);
+            s.write(buf, n + 8);
+         }
+         else if constexpr (std::is_integral_v<U> &&
+                            !std::is_same_v<U, bool> &&
+                            Enc == pb_int_enc::fixed)
+         {
+            constexpr std::uint8_t wt_ =
+               sizeof(U) <= 4 ? wt::fixed32 : wt::fixed64;
+            constexpr std::size_t value_bytes =
+               sizeof(U) <= 4 ? 4 : 8;
+            std::uint8_t buf[12];
+            std::size_t  n = pb_write_const_tag<F, wt_>(buf);
+            if constexpr (value_bytes == 4)
+            {
+               std::uint32_t bits = 0;
+               if constexpr (std::is_signed_v<U>)
+               {
+                  std::int32_t sv = static_cast<std::int32_t>(v);
+                  std::memcpy(&bits, &sv, 4);
+               }
+               else
+                  bits = static_cast<std::uint32_t>(v);
+               bits = to_le(bits);
+               std::memcpy(buf + n, &bits, 4);
+            }
+            else
+            {
+               std::uint64_t bits = 0;
+               if constexpr (std::is_signed_v<U>)
+               {
+                  std::int64_t sv = static_cast<std::int64_t>(v);
+                  std::memcpy(&bits, &sv, 8);
+               }
+               else
+                  bits = static_cast<std::uint64_t>(v);
+               bits = to_le(bits);
+               std::memcpy(buf + n, &bits, 8);
+            }
+            s.write(buf, n + value_bytes);
+         }
+      }
+
+      //  Outer-level dispatch: route consteval-byte fields through
+      //  the fused-write helper, everything else through the cache-
+      //  consuming path.
+      template <pb_int_enc Enc, std::uint32_t F, typename T, typename Sink>
+      inline void pb_field_write_outer(const T&             v,
+                                       const std::uint32_t* sizes,
+                                       std::size_t&         idx,
+                                       Sink&                s)
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (std::is_same_v<U, bool> ||
+                       std::is_same_v<U, float> ||
+                       std::is_same_v<U, double> ||
+                       (std::is_integral_v<U> &&
+                        !std::is_same_v<U, bool> &&
+                        Enc == pb_int_enc::fixed))
+         {
+            pb_emit_consteval_field<Enc, F>(v, s);
+         }
+         else
+         {
+            pb_field_write_cached<Enc>(v, F, sizes, idx, s);
+         }
+      }
+
       template <typename T, typename Sink>
       void pb_message_write_cached(const T&             v,
                                    const std::uint32_t* sizes,
@@ -1416,9 +1566,10 @@ namespace psio
          constexpr auto N = R::member_count;
          [&]<std::size_t... Is>(std::index_sequence<Is...>)
          {
-            ((pb_field_write_cached<resolve_int_encoding<T, Is>()>(
+            ((pb_field_write_outer<
+                 resolve_int_encoding<T, Is>(),
+                 resolve_field_number<T, Is>()>(
                  v.*(R::template member_pointer<Is>),
-                 resolve_field_number<T, Is>(),
                  sizes, idx, s)),
              ...);
          }(std::make_index_sequence<N>{});
