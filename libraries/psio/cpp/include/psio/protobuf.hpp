@@ -88,6 +88,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -767,6 +768,471 @@ namespace psio
          }(std::make_index_sequence<N>{});
       }
 
+      // ── Stack-cached size precomputation ────────────────────────
+      //
+      //  The naive size+write pipeline above re-walks each subtree
+      //  every time it computes a length prefix — fractal cost
+      //  O(D × N) for depth D and N nodes.  The pipeline below visits
+      //  every node a fixed number of times (2 or 3) regardless of
+      //  nesting:
+      //
+      //    1. count pass   — only when T's slot count is shape-dependent
+      //                      (vector<message>, recursive types).
+      //                      Skipped when pb_dynamic_size_count_v<T> is
+      //                      a compile-time constant.
+      //    2. size pass    — populates sizes[0..K) and returns total bytes
+      //    3. write pass   — emits bytes, consumes sizes[0..K) in lockstep
+      //
+      //  Slot allocation: small-buffer optimisation with K ≤ 64 on
+      //  stack, heap fallback for huge schemas.  See
+      //  .issues/psio-size-cache-design.md for rationale.
+
+      //  Sentinel: the value pb_dynamic_size_count_v<T> takes when T's
+      //  slot count cannot be determined at compile time (e.g.,
+      //  vector<message>, recursive types).  The encoder runs a
+      //  count pass at runtime in that case.
+      inline constexpr std::size_t pb_size_count_dynamic =
+         std::numeric_limits<std::size_t>::max();
+
+      template <typename T>
+      constexpr std::size_t pb_dynamic_size_count_impl() noexcept;
+
+      template <typename T, std::size_t... Is>
+      constexpr std::size_t pb_dynamic_size_count_struct_helper(
+         std::index_sequence<Is...>) noexcept
+      {
+         using R = ::psio::reflect<T>;
+         const std::size_t parts[] = {
+            pb_dynamic_size_count_impl<std::remove_cvref_t<
+               typename R::template member_type<Is>>>()...,
+            0  // tail sentinel — guarantees a non-empty array even for
+               // empty packs, and is filtered by the loop bound below.
+         };
+         std::size_t total = 0;
+         for (std::size_t i = 0; i < sizeof...(Is); ++i)
+         {
+            if (parts[i] == pb_size_count_dynamic)
+               return pb_size_count_dynamic;
+            total += parts[i];
+         }
+         return total;
+      }
+
+      template <typename T>
+      constexpr std::size_t pb_dynamic_size_count_impl() noexcept
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (std::is_same_v<U, bool> ||
+                       std::is_integral_v<U> ||
+                       std::is_same_v<U, float> ||
+                       std::is_same_v<U, double>)
+            return 0;
+         else if constexpr (std::is_same_v<U, std::string> ||
+                            std::is_same_v<U, std::string_view>)
+            return 1;
+         else if constexpr (is_byte_vector_v<U>)
+            return 1;
+         else if constexpr (pb_is_optional<U>::value)
+            //  optional<T>: when present, contributes T's slots.  Worst-
+            //  case allocate as if present; the size+write passes both
+            //  short-circuit on `!has_value()` so unused slots stay
+            //  unread (lockstep preserved).
+            return pb_dynamic_size_count_impl<
+               typename pb_is_optional<U>::elem>();
+         else if constexpr (pb_is_vector<U>::value)
+         {
+            using E = typename pb_is_vector<U>::elem;
+            if constexpr (is_packed_scalar_v<E>)
+               return 1;  // one slot for the packed payload length
+            else
+               return pb_size_count_dynamic;
+         }
+         else if constexpr (Reflected<U>)
+            return pb_dynamic_size_count_struct_helper<U>(
+               std::make_index_sequence<
+                  ::psio::reflect<U>::member_count>{});
+         else
+            return pb_size_count_dynamic;
+      }
+
+      template <typename T>
+      inline constexpr std::size_t pb_dynamic_size_count_v =
+         pb_dynamic_size_count_impl<T>();
+
+      template <typename T>
+      std::size_t pb_message_count(const T& v) noexcept;
+
+      template <typename T>
+      std::size_t pb_message_size_collect(const T&       v,
+                                          std::uint32_t* sizes,
+                                          std::size_t&   idx) noexcept;
+
+      template <typename T, typename Sink>
+      void pb_message_write_cached(const T&             v,
+                                   const std::uint32_t* sizes,
+                                   std::size_t&         idx,
+                                   Sink&                s);
+
+      // ── pb_field_count: shape-only walk that returns slot count ─
+      template <pb_int_enc Enc, typename T>
+      std::size_t pb_field_count(const T& v) noexcept
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (pb_is_optional<U>::value)
+         {
+            if (!v.has_value())
+               return 0;
+            return pb_field_count<Enc, typename pb_is_optional<U>::elem>(*v);
+         }
+         else if constexpr (is_byte_vector_v<U>)
+         {
+            //  bytes always emit (matches pb_field_size's behaviour
+            //  even for empty payloads).
+            return 1;
+         }
+         else if constexpr (pb_is_vector<U>::value)
+         {
+            using E = typename pb_is_vector<U>::elem;
+            if (v.empty())
+               return 0;
+            if constexpr (is_packed_scalar_v<E>)
+               return 1;  // one slot for the packed payload length
+            else if constexpr (Reflected<E>)
+            {
+               //  one header slot per element + each element's own
+               //  inner slot count.  When E's slot count is consteval
+               //  (no inner shape-dependent fields), the per-element
+               //  contribution is constant and we can skip the
+               //  per-element walk.
+               constexpr std::size_t e_consteval =
+                  pb_dynamic_size_count_v<E>;
+               if constexpr (e_consteval != pb_size_count_dynamic)
+                  return v.size() * (1 + e_consteval);
+               std::size_t k = 0;
+               for (auto const& x : v)
+                  k += 1 + pb_message_count(x);
+               return k;
+            }
+            else if constexpr (std::is_same_v<E, std::string> ||
+                               std::is_same_v<E, std::string_view>)
+               return v.size();  // one length slot per element
+            else
+            {
+               static_assert(sizeof(E) == 0,
+                             "psio::protobuf: unsupported vector element");
+               return 0;
+            }
+         }
+         else if constexpr (std::is_same_v<U, std::string> ||
+                            std::is_same_v<U, std::string_view>)
+            return 1;
+         else if constexpr (Reflected<U>)
+            return 1 + pb_message_count(v);
+         else
+            //  bool, integer, float, double — bounded scalar, no slot.
+            return 0;
+      }
+
+      template <typename T>
+      std::size_t pb_message_count(const T& v) noexcept
+      {
+         //  Short-circuit when every nested field's slot count is
+         //  known at compile time — the trait already encodes the
+         //  total, so we skip the runtime walk entirely.
+         if constexpr (pb_dynamic_size_count_v<T> != pb_size_count_dynamic)
+            return pb_dynamic_size_count_v<T>;
+         else
+         {
+            using R          = ::psio::reflect<T>;
+            constexpr auto N = R::member_count;
+            std::size_t    k = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+               ((k += pb_field_count<resolve_int_encoding<T, Is>()>(
+                    v.*(R::template member_pointer<Is>))),
+                ...);
+            }(std::make_index_sequence<N>{});
+            return k;
+         }
+      }
+
+      // ── pb_field_size_collect: populate sizes[idx++] and return
+      //                           total byte cost of this field ─────
+      template <pb_int_enc Enc, typename T>
+      std::size_t pb_field_size_collect(const T&       v,
+                                        std::uint32_t  field,
+                                        std::uint32_t* sizes,
+                                        std::size_t&   idx) noexcept
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (pb_is_optional<U>::value)
+         {
+            if (!v.has_value())
+               return 0;
+            return pb_field_size_collect<Enc,
+                                         typename pb_is_optional<U>::elem>(
+               *v, field, sizes, idx);
+         }
+         else if constexpr (is_byte_vector_v<U>)
+         {
+            std::uint32_t n = static_cast<std::uint32_t>(v.size());
+            sizes[idx++]    = n;
+            return tag_size(field, wt::length_delim) +
+                   varint_size(n) + n;
+         }
+         else if constexpr (pb_is_vector<U>::value)
+         {
+            using E = typename pb_is_vector<U>::elem;
+            if (v.empty())
+               return 0;
+            if constexpr (is_packed_scalar_v<E>)
+            {
+               std::uint32_t  payload = 0;
+               constexpr bool fixed_width =
+                  std::is_floating_point_v<E> ||
+                  (std::is_integral_v<E> &&
+                   !std::is_same_v<E, bool> &&
+                   pb_int_wire_type<E, Enc>() != wt::varint);
+               if constexpr (fixed_width)
+                  payload = static_cast<std::uint32_t>(
+                     v.size() * sizeof(E));
+               else if constexpr (std::is_integral_v<E> &&
+                                  !std::is_same_v<E, bool>)
+               {
+                  for (auto const& x : v)
+                     payload += static_cast<std::uint32_t>(
+                        pb_int_value_size<Enc>(x));
+               }
+               else
+               {
+                  for (auto const& x : v)
+                     payload += static_cast<std::uint32_t>(
+                        pb_value_size(x));
+               }
+               sizes[idx++] = payload;
+               return tag_size(field, wt::length_delim) +
+                      varint_size(payload) + payload;
+            }
+            else if constexpr (Reflected<E>)
+            {
+               //  Reserve element-header slot, recurse to populate
+               //  inner slots, patch the reserved slot with the body
+               //  size.  idx walks past every inner slot during the
+               //  recursive call, mirroring the write pass's order.
+               std::size_t total = 0;
+               for (auto const& x : v)
+               {
+                  std::size_t body_slot = idx++;
+                  std::size_t body_size =
+                     pb_message_size_collect(x, sizes, idx);
+                  sizes[body_slot] =
+                     static_cast<std::uint32_t>(body_size);
+                  total += tag_size(field, wt::length_delim) +
+                           varint_size(body_size) + body_size;
+               }
+               return total;
+            }
+            else if constexpr (std::is_same_v<E, std::string> ||
+                               std::is_same_v<E, std::string_view>)
+            {
+               std::size_t total = 0;
+               for (auto const& x : v)
+               {
+                  std::uint32_t n =
+                     static_cast<std::uint32_t>(x.size());
+                  sizes[idx++] = n;
+                  total += tag_size(field, wt::length_delim) +
+                           varint_size(n) + n;
+               }
+               return total;
+            }
+            else
+            {
+               static_assert(sizeof(E) == 0,
+                             "psio::protobuf: unsupported vector element");
+               return 0;
+            }
+         }
+         else if constexpr (std::is_same_v<U, bool>)
+            return tag_size(field, wt::varint) + 1;
+         else if constexpr (std::is_integral_v<U>)
+            return tag_size(field, pb_int_wire_type<U, Enc>()) +
+                   pb_int_value_size<Enc>(v);
+         else if constexpr (std::is_same_v<U, float>)
+            return tag_size(field, wt::fixed32) + 4;
+         else if constexpr (std::is_same_v<U, double>)
+            return tag_size(field, wt::fixed64) + 8;
+         else if constexpr (std::is_same_v<U, std::string> ||
+                            std::is_same_v<U, std::string_view>)
+         {
+            std::uint32_t n = static_cast<std::uint32_t>(v.size());
+            sizes[idx++]    = n;
+            return tag_size(field, wt::length_delim) +
+                   varint_size(n) + n;
+         }
+         else if constexpr (Reflected<U>)
+         {
+            std::size_t body_slot = idx++;
+            std::size_t body_size =
+               pb_message_size_collect(v, sizes, idx);
+            sizes[body_slot] =
+               static_cast<std::uint32_t>(body_size);
+            return tag_size(field, wt::length_delim) +
+                   varint_size(body_size) + body_size;
+         }
+         else
+         {
+            static_assert(sizeof(U) == 0,
+                          "psio::protobuf: unsupported field type");
+            return 0;
+         }
+      }
+
+      template <typename T>
+      std::size_t pb_message_size_collect(const T&       v,
+                                          std::uint32_t* sizes,
+                                          std::size_t&   idx) noexcept
+      {
+         using R           = ::psio::reflect<T>;
+         constexpr auto N  = R::member_count;
+         std::size_t    total = 0;
+         [&]<std::size_t... Is>(std::index_sequence<Is...>)
+         {
+            ((total += pb_field_size_collect<resolve_int_encoding<T, Is>()>(
+                 v.*(R::template member_pointer<Is>),
+                 resolve_field_number<T, Is>(),
+                 sizes, idx)),
+             ...);
+         }(std::make_index_sequence<N>{});
+         return total;
+      }
+
+      // ── pb_field_write_cached: emit bytes, consume sizes[idx++] ──
+      template <pb_int_enc Enc, typename T, typename Sink>
+      void pb_field_write_cached(const T&             v,
+                                 std::uint32_t        field,
+                                 const std::uint32_t* sizes,
+                                 std::size_t&         idx,
+                                 Sink&                s)
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (pb_is_optional<U>::value)
+         {
+            if (!v.has_value())
+               return;
+            pb_field_write_cached<Enc,
+                                  typename pb_is_optional<U>::elem>(
+               *v, field, sizes, idx, s);
+         }
+         else if constexpr (is_byte_vector_v<U>)
+         {
+            emit_tag(field, wt::length_delim, s);
+            std::uint32_t n = sizes[idx++];
+            emit_varint(n, s);
+            if (n)
+               s.write(v.data(), n);
+         }
+         else if constexpr (pb_is_vector<U>::value)
+         {
+            using E = typename pb_is_vector<U>::elem;
+            if (v.empty())
+               return;
+            if constexpr (is_packed_scalar_v<E>)
+            {
+               std::uint32_t payload = sizes[idx++];
+               emit_tag(field, wt::length_delim, s);
+               emit_varint(payload, s);
+               if constexpr (std::is_integral_v<E> &&
+                             !std::is_same_v<E, bool>)
+               {
+                  for (auto const& x : v)
+                     pb_int_write_value<Enc>(x, s);
+               }
+               else
+               {
+                  for (auto const& x : v)
+                     pb_write_value(x, s);
+               }
+            }
+            else if constexpr (Reflected<E>)
+            {
+               for (auto const& x : v)
+               {
+                  emit_tag(field, wt::length_delim, s);
+                  std::uint32_t body = sizes[idx++];
+                  emit_varint(body, s);
+                  pb_message_write_cached(x, sizes, idx, s);
+               }
+            }
+            else if constexpr (std::is_same_v<E, std::string> ||
+                               std::is_same_v<E, std::string_view>)
+            {
+               for (auto const& x : v)
+               {
+                  emit_tag(field, wt::length_delim, s);
+                  std::uint32_t n = sizes[idx++];
+                  emit_varint(n, s);
+                  if (n)
+                     s.write(x.data(), n);
+               }
+            }
+         }
+         else if constexpr (std::is_same_v<U, bool>)
+         {
+            emit_tag(field, wt::varint, s);
+            pb_write_value(v, s);
+         }
+         else if constexpr (std::is_integral_v<U>)
+         {
+            emit_tag(field, pb_int_wire_type<U, Enc>(), s);
+            pb_int_write_value<Enc>(v, s);
+         }
+         else if constexpr (std::is_same_v<U, float>)
+         {
+            emit_tag(field, wt::fixed32, s);
+            pb_write_value(v, s);
+         }
+         else if constexpr (std::is_same_v<U, double>)
+         {
+            emit_tag(field, wt::fixed64, s);
+            pb_write_value(v, s);
+         }
+         else if constexpr (std::is_same_v<U, std::string> ||
+                            std::is_same_v<U, std::string_view>)
+         {
+            emit_tag(field, wt::length_delim, s);
+            std::uint32_t n = sizes[idx++];
+            emit_varint(n, s);
+            if (n)
+               s.write(v.data(), n);
+         }
+         else if constexpr (Reflected<U>)
+         {
+            emit_tag(field, wt::length_delim, s);
+            std::uint32_t body = sizes[idx++];
+            emit_varint(body, s);
+            pb_message_write_cached(v, sizes, idx, s);
+         }
+      }
+
+      template <typename T, typename Sink>
+      void pb_message_write_cached(const T&             v,
+                                   const std::uint32_t* sizes,
+                                   std::size_t&         idx,
+                                   Sink&                s)
+      {
+         using R          = ::psio::reflect<T>;
+         constexpr auto N = R::member_count;
+         [&]<std::size_t... Is>(std::index_sequence<Is...>)
+         {
+            ((pb_field_write_cached<resolve_int_encoding<T, Is>()>(
+                 v.*(R::template member_pointer<Is>),
+                 resolve_field_number<T, Is>(),
+                 sizes, idx, s)),
+             ...);
+         }(std::make_index_sequence<N>{});
+      }
+
       // ── decode pass ─────────────────────────────────────────────
       //
       //  Streaming walk over a length-delimited message body.  At
@@ -1138,17 +1604,60 @@ namespace psio
       friend void tag_invoke(decltype(::psio::encode), protobuf,
                              const T& v, std::vector<char>& sink)
       {
-         ::psio::vector_stream vs{sink};
-         detail::pb_impl::pb_write_message(v, vs);
+         //  Stack-cached size precomputation: count slots, populate
+         //  sizes[], then write reading sizes[] for length prefixes.
+         //  See .issues/psio-size-cache-design.md.
+         constexpr std::size_t      kSlotSbo = 64;
+         std::uint32_t              sbo[kSlotSbo];
+         std::vector<std::uint32_t> heap;
+         std::uint32_t*             sizes = sbo;
+         std::size_t                K;
+         if constexpr (detail::pb_impl::pb_dynamic_size_count_v<T> !=
+                       detail::pb_impl::pb_size_count_dynamic)
+            K = detail::pb_impl::pb_dynamic_size_count_v<T>;  // consteval — skip count pass
+         else
+            K = detail::pb_impl::pb_message_count(v);
+         if (K > kSlotSbo)
+         {
+            heap.resize(K);
+            sizes = heap.data();
+         }
+         std::size_t idx   = 0;
+         std::size_t total =
+            detail::pb_impl::pb_message_size_collect(v, sizes, idx);
+         std::size_t before = sink.size();
+         sink.resize(before + total);
+         ::psio::fast_buf_stream fbs{sink.data() + before, total};
+         idx = 0;
+         detail::pb_impl::pb_message_write_cached(v, sizes, idx, fbs);
       }
 
       template <typename T>
       friend std::vector<char> tag_invoke(decltype(::psio::encode),
                                           protobuf, const T& v)
       {
-         std::vector<char>       out(detail::pb_impl::pb_message_size(v));
+         constexpr std::size_t      kSlotSbo = 64;
+         std::uint32_t              sbo[kSlotSbo];
+         std::vector<std::uint32_t> heap;
+         std::uint32_t*             sizes = sbo;
+         std::size_t                K;
+         if constexpr (detail::pb_impl::pb_dynamic_size_count_v<T> !=
+                       detail::pb_impl::pb_size_count_dynamic)
+            K = detail::pb_impl::pb_dynamic_size_count_v<T>;  // consteval — skip count pass
+         else
+            K = detail::pb_impl::pb_message_count(v);
+         if (K > kSlotSbo)
+         {
+            heap.resize(K);
+            sizes = heap.data();
+         }
+         std::size_t idx   = 0;
+         std::size_t total =
+            detail::pb_impl::pb_message_size_collect(v, sizes, idx);
+         std::vector<char>       out(total);
          ::psio::fast_buf_stream fbs{out.data(), out.size()};
-         detail::pb_impl::pb_write_message(v, fbs);
+         idx = 0;
+         detail::pb_impl::pb_message_write_cached(v, sizes, idx, fbs);
          return out;
       }
 
