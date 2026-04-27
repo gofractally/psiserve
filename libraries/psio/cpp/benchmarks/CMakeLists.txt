@@ -14,6 +14,18 @@ target_include_directories(psio3_bench_perf_report PRIVATE
    ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(psio3_bench_perf_report PRIVATE cxx_std_23)
 
+# Nested-encode baseline — per-format encode timing on balanced
+# binary trees of progressively greater depth.  Surfaces the
+# fractal O(D × N) recursive-size-walk cost that the protobuf
+# stack-cache eliminated; identifies which other formats need
+# the same treatment.
+add_executable(psio3_bench_nested_encode bench_nested_encode.cpp)
+target_link_libraries(psio3_bench_nested_encode PRIVATE psio)
+target_include_directories(psio3_bench_nested_encode PRIVATE
+   ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(psio3_bench_nested_encode PRIVATE cxx_std_23)
+target_compile_options(psio3_bench_nested_encode PRIVATE -O3 -DNDEBUG)
+
 # Varint codec library — leb128, prefix2 (BE + LE), prefix3.
 add_executable(psio3_bench_varint bench_varint.cpp)
 target_link_libraries(psio3_bench_varint PRIVATE psio)
