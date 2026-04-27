@@ -127,9 +127,17 @@ equivalent.  No reason to drop them.
       assertions covering literal text match, runtime parity, blob
       layout, param/return lowering).
 
-- [ ] **`emit_wit.hpp`** — see schema.hpp entry below.  emit_wit is one
-      member of the symmetric format-emitter family that all consume
-      Schema IR.  Lands together with the IR + SchemaBuilder port.
+- [x] **`emit_wit.hpp`** — Schema → WIT text, ported as
+      `psio/emit_wit.hpp`. First member of the symmetric format-emitter
+      family.  Walks Schema IR (package + uses + interfaces + worlds +
+      orphan types) and produces standards-compliant WIT source text,
+      with inline forms for primitives / list / option / tuple /
+      own<resource> / Custom (annotation-aware), and `/* @psio:* */`
+      hints for shapes that have no native WIT spelling
+      (BoundedList::maxCount today; Array, FracPack to follow).
+      Test: psio3_emit_wit_tests (6 cases / 27 assertions) including
+      a SchemaBuilder ↔ emit_wit pipeline and an emit → wit_parse
+      round-trip.
 
 - [x] **`wit_parser.hpp`** — recursive-descent WIT text parser ported as
       `psio/wit_parser.hpp`. 1009 lines, mostly mechanical sed (data-only
@@ -244,49 +252,51 @@ equivalent.  No reason to drop them.
       WASM ABI wiring.  Pure compiler-attribute spelling, no psio
       surface.  **Belongs in psizam**.  Tracked under psizam.
 
-- [ ] **`schema.hpp` (full) + `emit_wit.hpp` + `schema.cpp` +
-      `emit_wit.cpp`** — Schema IR is **the multi-format pivot** for
-      psio: WIT, pSSZ, GraphQL, FlatBuffers, Cap'n Proto, JSON Schema
-      and every format psio chooses to support read/write through
-      this IR.  Decoupling it lets cross-format conversions preserve
-      as much information as each format allows, instead of writing
-      N×N pairwise converters.
+- [x] **`schema.hpp` Schema-layer triple — IR + Builder + emit_wit**
+      ported as `psio/schema_ir.hpp` + `psio/schema_builder.hpp` +
+      `psio/emit_wit.hpp`.  Schema IR is **the multi-format pivot**
+      for psio: WIT, pSSZ, GraphQL, FlatBuffers, Cap'n Proto, JSON
+      Schema and every format psio supports read/write through this
+      IR, so cross-format conversions preserve as much information as
+      each format allows instead of degrading through N×N pairwise
+      converters.  pSSZ is the native schema-schema — every IR type
+      is `PSIO_REFLECT`'d so the IR itself round-trips through pssz.
 
-      v1 file sizes: schema.hpp 2521 + schema.cpp 1884 + emit_wit.hpp
-      41 + emit_wit.cpp 441 = ~4900 lines.
+      Three working artifacts, separately ported:
 
-      Internally splits into three parts; port them as separate
-      working artifacts:
+      1. **Schema IR** (`psio/schema_ir.hpp`, 460 lines, 71/10 tests)
+         — Schema, Package, Use, Interface, World, AnyType variant
+         cases (14 alternatives), Member, Func, Attribute. Box<T>
+         smart-pointer breaks the cyclic graph at Member::type and
+         Func::result.  Convenience aliases at namespace `psio`.
 
-      1. **Schema IR + envelope types** (Schema, Package, Use,
-         Interface, World, AnyType variant cases — Object/Struct/
-         Variant/Tuple/List/Option/Resource, Member, Func, Attribute).
-         Mostly data; v3-native port preserves full attribute
-         expressiveness so format converters can route everything
-         the destination format can carry.
+      2. **SchemaBuilder** (`psio/schema_builder.hpp`, 460 lines,
+         46/6 tests) — walks PSIO_REFLECT'd structs, interface_info<T>,
+         world_info<W>, use_info<T>.  `insert<T>(name)` /
+         `insert_interface<Tag>()` / `insert_world<W>()` /
+         `build()` chained surface.  Coverage: primitives + std::vector
+         + std::optional + std::array + std::string + wit_resource +
+         PSIO_REFLECT'd records + the structural envelope.  Out of
+         scope today (extends as v3 ports the supporting types):
+         bounded_list, bitvector/bitlist, std::variant, uint128/256,
+         chrono, FracPack-nested wrappers, full custom-handler chain.
 
-      2. **SchemaBuilder** — walks reflection (PSIO_REFLECT,
-         interface_info<T>, world_info<W>, use_info<T>) and
-         programmatic insert<T>() / insert_world<W>() entry points to
-         populate the IR.  C++ → Schema is the universal "C++ side
-         enters the multi-format graph here" path.
+      3. **emit_wit** (`psio/emit_wit.hpp`, 380 lines, 27/6 tests) —
+         first format emitter.  Walks Schema → WIT text. Round-trip
+         through wit_parser proven by an integration test.
 
-      3. **emit_wit + the symmetrical format emitters** —
-         emit_wit (Schema → WIT text) is the first; emit_pssz, emit_gql,
-         emit_fbs, … land alongside.  Parsers (wit_parser ✓,
-         fbs_parser, capnp_parser) target the same IR coming back the
-         other way.
-
-      Tangential layer — **defer this part separately**: v1's schema
-      runtime transcoder (`CompiledType`, `FracParser`,
-      `frac2json` / `json2frac` CPOs, the `is_packable<T>::unpack`
-      machinery — 78 fracpack-symbol uses across schema.cpp and
-      schema.hpp) is the runtime data-transcoder layer, not the
-      schema-emitter layer.  In v3 this responsibility lives in the
+      The full v1 Schema layer was ~5000 lines (header 2521 +
+      schema.cpp 1884 + emit_wit.cpp 441 + emit_wit.hpp 41).  v3
+      shed the transcoder runtime (`CompiledType`, `FracParser`,
+      `frac2json` / `json2frac`, `is_packable<T>::unpack` — 78
+      fracpack-symbol uses) — that responsibility lives in v3's
       format CPOs (`bin.hpp`, `frac.hpp`, `json.hpp`,
-      `dynamic_value.hpp`) and is rebuilt v3-native independently.
-      Skipping the v1 transcoder during the IR/Builder/Emitter port
-      is the right call; rebuilding it doesn't gate the schema port.
+      `dynamic_value.hpp`) and is the next-layer concern.
+
+      **Next**: pSSZ round-trip test for the IR (proves the canonical
+      wire form), then emit_pssz / emit_gql / emit_fbs as additional
+      format emitters, and fbs_parser / capnp_parser on the inverse
+      side.
 
 - [ ] **`fracpack.hpp`** (2602 lines) — v1's main format.  v3 has
       `frac.hpp`.  Wire bytes parity confirmed via
