@@ -349,24 +349,23 @@ namespace test_pb
    };
    PSIO_REFLECT(OldMsg, a, b, c)
 
-   struct NewMsg  //  Receiver only knows fields 1, 3 (dropped 2).
-   {
-      std::int32_t a = 0;
-      std::int32_t c = 0;
-      friend bool  operator==(const NewMsg&, const NewMsg&) = default;
-   };
-}
+}  // namespace test_pb
 
-template <>
-inline constexpr std::uint32_t
-   psio::protobuf_field_number<&test_pb::NewMsg::a> = 1;
-template <>
-inline constexpr std::uint32_t
-   psio::protobuf_field_number<&test_pb::NewMsg::c> = 3;
+//  Receiver only knows fields 1 and 3 (dropped the middle one).
+//  Lives at global scope because the `attr(name, field<N>)` annotation
+//  emits a `template <>` specialisation of `::psio::annotate<>` and
+//  C++ requires those specialisations in an enclosing namespace.
+struct NewMsg
+{
+   std::int32_t a = 0;
+   std::int32_t c = 0;
+   friend bool  operator==(const NewMsg&, const NewMsg&) = default;
+};
+PSIO_REFLECT(NewMsg, attr(a, field<1>), attr(c, field<3>))
 
 namespace test_pb
 {
-   PSIO_REFLECT(NewMsg, a, c)
+   using ::NewMsg;
 }
 
 TEST_CASE("protobuf: receiver skips unknown fields by wire_type",

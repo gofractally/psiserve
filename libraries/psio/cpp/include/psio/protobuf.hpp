@@ -13,15 +13,26 @@
 // stable wire identity, so old senders / new receivers can interop
 // across schema evolution as long as the field number stays put.
 //
-// Field-number assignment (this codec):
+// Field-number assignment:
 //
-//   The N-th field in declaration order gets field_number N+1.  That
-//   makes PSIO_REFLECT(T, a, b, c) produce a := 1, b := 2, c := 3 on
-//   the wire — the same convention every protobuf compiler defaults
-//   to when the .proto specifies fields without explicit numbers.
-//   When the schema needs to evolve (insert / remove / reorder a
-//   field while keeping wire compatibility) the
-//   psio::protobuf_field_number<&T::m> annotation is the override.
+//   Pulled from psio's existing reflection annotation system — no
+//   protobuf-specific knob.  By default, the N-th field in
+//   declaration order gets field_number N+1 (this is what
+//   `reflect<T>::field_number<I>` returns out of the box).  Override
+//   per-field with the canonical `attr(member, field<N>)` form:
+//
+//       struct MyMsg {
+//          std::int32_t old_field;
+//          std::int32_t new_field;
+//       };
+//       PSIO_REFLECT(MyMsg, attr(old_field, field<3>),
+//                           attr(new_field, field<7>))
+//
+//   The codec calls `find_spec<field_num_spec>` on the field's
+//   effective annotations and falls back to declaration order when
+//   none is set — same behaviour every other format consults
+//   `field<N>` for, just consumed by protobuf's
+//   field-number-on-the-wire mechanic.
 //
 // Type mapping (C++ → wire_type, default integer encoding):
 //
@@ -49,12 +60,14 @@
 // is a separate hook).
 
 #include <psio/adapter.hpp>
+#include <psio/annotate.hpp>
 #include <psio/cpo.hpp>
 #include <psio/error.hpp>
 #include <psio/format_tag_base.hpp>
 #include <psio/reflect.hpp>
 #include <psio/stream.hpp>
 #include <psio/varint/leb128.hpp>
+#include <psio/wrappers.hpp>
 
 #include <bit>
 #include <cstdint>
@@ -69,20 +82,6 @@
 
 namespace psio
 {
-
-   //  Per-field protobuf field-number override.  Default convention
-   //  is "N-th declared field = field_number N+1"; when schema
-   //  evolution requires fixing field numbers explicitly, specialise
-   //  this template:
-   //
-   //      template <>
-   //      inline constexpr std::uint32_t
-   //         psio::protobuf_field_number<&MyMsg::renamed_field> = 7;
-   //
-   //  (The default fallback below returns 0, which the codec
-   //  interprets as "use declaration order.")
-   template <auto MemberPtr>
-   inline constexpr std::uint32_t protobuf_field_number = 0;
 
    namespace detail::pb_impl
    {
@@ -243,15 +242,27 @@ namespace psio
          }
       }
 
-      template <typename T, auto MemberPtr>
-      constexpr std::uint32_t resolve_field_number(std::size_t source_idx) noexcept
+      //  Pull the field number from the canonical reflection
+      //  surface.  reflect<T>::field_number<I> is Idx+1 by default
+      //  and is overwritten by `attr(name, field<N>)` annotations
+      //  via the existing effective_annotations_for_v +
+      //  find_spec<field_num_spec> path that every other format
+      //  consults for the same purpose.
+      template <typename T, std::size_t I>
+      constexpr std::uint32_t resolve_field_number() noexcept
       {
-         constexpr auto override_v =
-            ::psio::protobuf_field_number<MemberPtr>;
-         if constexpr (override_v != 0)
-            return override_v;
+         using R          = ::psio::reflect<T>;
+         using FieldT     = typename R::template member_type<I>;
+         constexpr auto P = R::template member_pointer<I>;
+         //  effective_annotations_for_v carries the actual annotation
+         //  tuple (member-level wins over wrapper-inherent and
+         //  type-level — same precedence every other format consults).
+         constexpr auto found = ::psio::find_spec<::psio::field_num_spec>(
+            ::psio::effective_annotations_for_v<T, FieldT, P>);
+         if constexpr (found.has_value())
+            return found->value;
          else
-            return static_cast<std::uint32_t>(source_idx + 1);
+            return R::template field_number<I>;
       }
 
       template <typename T>
@@ -325,7 +336,7 @@ namespace psio
          {
             ((total += pb_field_size(
                  v.*(R::template member_pointer<Is>),
-                 resolve_field_number<T, R::template member_pointer<Is>>(Is))),
+                 resolve_field_number<T, Is>())),
              ...);
          }(std::make_index_sequence<N>{});
          return total;
@@ -475,7 +486,7 @@ namespace psio
          {
             ((pb_write_field(
                  v.*(R::template member_pointer<Is>),
-                 resolve_field_number<T, R::template member_pointer<Is>>(Is),
+                 resolve_field_number<T, Is>(),
                  s)),
              ...);
          }(std::make_index_sequence<N>{});
@@ -691,8 +702,8 @@ namespace psio
                   {
                      if (handled)
                         return;
-                     constexpr auto fn = resolve_field_number<
-                        T, R::template member_pointer<Is>>(Is);
+                     constexpr auto fn =
+                        resolve_field_number<T, Is>();
                      if (field_num != fn)
                         return;
                      using FT = std::remove_cvref_t<
