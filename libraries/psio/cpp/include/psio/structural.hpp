@@ -4,9 +4,9 @@
 //
 //   PSIO_PACKAGE(name, version)              — declares a WIT package
 //   PSIO_INTERFACE(Tag, types(…), funcs(…))  — registers an interface
-//
-// PSIO_USE / PSIO_WORLD / PSIO_HOST_MODULE will land as follow-up commits;
-// the WASI 2.3 host bindings only use PACKAGE + INTERFACE.
+//   PSIO_USE(package, interface, version)    — cross-package use
+//   PSIO_WORLD(name, imports(…), exports(…)) — top-level composition
+//   PSIO_HOST_MODULE(Impl, interface(Tag, m…)…) — bind C++ host impl
 //
 // Each macro populates a compile-time, tag-keyed registry. wit_gen and
 // wit_constexpr walk those registries to assemble WIT text or binary.
@@ -170,6 +170,12 @@ namespace psio
 template <typename T>
 struct interface_of;
 
+// Reverse lookup: ImplClass → tuple of interface tags it implements.
+// Specialized by PSIO_HOST_MODULE.  The Linker uses this in
+// `provide(impl)` to find all slots that a host implementation fills.
+template <typename ImplClass>
+struct impl_of;
+
 namespace detail
 {
 
@@ -210,7 +216,55 @@ struct interface_marker
 {
 };
 
+// ─── Cross-package use registry — specialized by PSIO_USE ──────────
+template <typename Tag>
+struct use_info;
+
+template <typename Tag>
+struct use_marker
+{
+};
+
+// ─── World registry — specialized by PSIO_WORLD ───────────────────
+template <typename Tag>
+struct world_info;
+
+template <typename Tag>
+struct world_marker
+{
+};
+
+// ─── Per-(Impl, Tag) registry — one specialization per `interface(...)`
+// entry inside PSIO_HOST_MODULE.  Carries:
+//   ::host    = ImplClass
+//   ::tag     = interface tag
+//   ::methods = std::tuple<&Impl::m1, &Impl::m2, …>
+//   ::names   = std::array<string_view, N>{"m1", "m2", …}
+template <typename ImplClass, typename Tag>
+struct iface_impl;
+
+// Aggregate per-Impl registry — specialized by PSIO_HOST_MODULE.
+// Carries the tuple of iface_impl<Impl, Tag> instantiations.
+template <typename ImplClass>
+struct impl_info;
+
+// Variadic helper: PSIO_HOST_MODULE only emits a parenthesis-friendly
+// list of tag types and the template machinery assembles
+// `iface_impl<Impl, Tag>` tuples.  Avoids Boost.PP's struggle with
+// commas inside `< >`.
+template <typename Impl, typename... Tags>
+using iface_impls_tuple = ::std::tuple<iface_impl<Impl, Tags>...>;
+
 }  // namespace detail
+
+// Convenience: T → package, transitively via interface_of.
+template <typename T>
+struct package_of
+{
+   using interface_tag        = typename interface_of<T>::type;
+   using package              = typename detail::interface_info<interface_tag>::package;
+   static constexpr auto name = package::name;
+};
 
 }  // namespace psio
 
@@ -295,3 +349,156 @@ struct interface_marker
       inline constexpr interface_marker<::NAME>                                       \
           BOOST_PP_CAT(_psio_iface_, NAME){};                                         \
    }
+
+// =====================================================================
+// PSIO_USE(PACKAGE, INTERFACE, VERSION) — cross-package interface use
+// =====================================================================
+//
+// Records that the current scope wants to depend on a specific
+// (PACKAGE, INTERFACE) at a given version.  Schema-walking and Linker
+// code consumes this to compose worlds out of pre-existing interfaces.
+//
+// Example:
+//
+//   PSIO_USE(wasi_io, poll, "0.2.3")
+//
+// generates a unique tag struct and `use_info<Tag>` carrying the
+// three string_views.  The tag's name is `<PACKAGE>_<INTERFACE>_use_tag`.
+
+#define PSIO_USE_TAG_(PACKAGE, INTERFACE) \
+   BOOST_PP_CAT(BOOST_PP_CAT(PACKAGE, _), BOOST_PP_CAT(INTERFACE, _use_tag))
+
+#define PSIO_USE(PACKAGE, INTERFACE, VERSION)                                          \
+   namespace psio::detail                                                              \
+   {                                                                                   \
+      struct PSIO_USE_TAG_(PACKAGE, INTERFACE)                                         \
+      {                                                                                \
+      };                                                                               \
+      template <>                                                                      \
+      struct use_info<PSIO_USE_TAG_(PACKAGE, INTERFACE)>                                \
+      {                                                                                \
+         static constexpr ::std::string_view package        = #PACKAGE;                \
+         static constexpr ::std::string_view interface_name = #INTERFACE;              \
+         static constexpr ::std::string_view version        = VERSION;                 \
+      };                                                                               \
+      inline constexpr use_marker<PSIO_USE_TAG_(PACKAGE, INTERFACE)>                    \
+          BOOST_PP_CAT(BOOST_PP_CAT(_psio_use_, PACKAGE),                              \
+                       BOOST_PP_CAT(_, INTERFACE)){};                                  \
+   }
+
+// =====================================================================
+// PSIO_WORLD(NAME, imports(...), exports(...)) — top-level composition
+// =====================================================================
+//
+// `imports(…)` lists use-tags (see PSIO_USE) and/or interface tags;
+// `exports(…)` lists interface tags.  Both sides accept bare-name lists
+// — no `func()` wrapping needed (worlds compose interfaces, not
+// functions).
+//
+// The expansion lives in `namespace psio::detail`, so unqualified
+// names are resolved via the chain  detail → psio → ::  — user
+// classes at global scope are picked up through the global fallback.
+
+#define PSIO_WORLD_UNWRAP_IMPORTS(X)         BOOST_PP_CAT(PSIO_WORLD_UNWRAP_IMPORTS_, X)
+#define PSIO_WORLD_UNWRAP_IMPORTS_imports(...) __VA_ARGS__
+
+#define PSIO_WORLD_UNWRAP_EXPORTS(X)         BOOST_PP_CAT(PSIO_WORLD_UNWRAP_EXPORTS_, X)
+#define PSIO_WORLD_UNWRAP_EXPORTS_exports(...) __VA_ARGS__
+
+#define PSIO_WORLD(NAME, IMPORTS_SPEC, EXPORTS_SPEC) \
+   PSIO_WORLD_I_(NAME, PSIO_WORLD_UNWRAP_IMPORTS(IMPORTS_SPEC),  \
+                       PSIO_WORLD_UNWRAP_EXPORTS(EXPORTS_SPEC))
+
+#define PSIO_WORLD_I_(NAME, IMPORTS_VA, EXPORTS_VA)                                    \
+   namespace psio::detail                                                              \
+   {                                                                                   \
+      struct BOOST_PP_CAT(NAME, _world_tag)                                            \
+      {                                                                                \
+      };                                                                               \
+      template <>                                                                      \
+      struct world_info<BOOST_PP_CAT(NAME, _world_tag)>                                \
+      {                                                                                \
+         static constexpr ::std::string_view name = #NAME;                             \
+         using package = PSIO_CURRENT_PACKAGE_;                                        \
+         using imports = ::std::tuple<IMPORTS_VA>;                                     \
+         using exports = ::std::tuple<EXPORTS_VA>;                                     \
+      };                                                                               \
+      inline constexpr world_marker<BOOST_PP_CAT(NAME, _world_tag)>                    \
+          BOOST_PP_CAT(_psio_world_, NAME){};                                          \
+   }
+
+// =====================================================================
+// PSIO_HOST_MODULE(IMPL, interface(Tag, m1, m2, …)…) — bind C++ impl
+// =====================================================================
+//
+// Declares ImplClass as the host implementation of one or more
+// interfaces.  Each entry `interface(Tag, m1, m2, …)` lists the
+// interface's tag and the member functions on Impl that fulfill it,
+// in the same order as the interface's PSIO_INTERFACE funcs(…) entries.
+//
+// Effects:
+//   • iface_impl<Impl, Tag> is specialized for each entry
+//     (::tag / ::methods / ::names).
+//   • impl_info<Impl> is specialized with ::interfaces =
+//     iface_impls_tuple<Impl, Tag1, Tag2, …>.
+//   • impl_of<Impl>::type = std::tuple<Tag1, Tag2, …> for Linker
+//     reverse lookup.
+//
+// Must appear at namespace scope.  At least one entry is required.
+
+#define PSIO_HOST_MODULE_ARGS_interface(...) __VA_ARGS__
+
+#define PSIO_HOST_MODULE_HEAD_(x, ...) x
+#define PSIO_HOST_MODULE_TAIL_(x, ...) __VA_ARGS__
+
+#define PSIO_HOST_MODULE_TAG_(entry) \
+   PSIO_HOST_MODULE_TAG_I_(BOOST_PP_CAT(PSIO_HOST_MODULE_ARGS_, entry))
+#define PSIO_HOST_MODULE_TAG_I_(...) PSIO_HOST_MODULE_HEAD_(__VA_ARGS__)
+
+#define PSIO_HOST_MODULE_METHODS_(entry) \
+   PSIO_HOST_MODULE_METHODS_I_(BOOST_PP_CAT(PSIO_HOST_MODULE_ARGS_, entry))
+#define PSIO_HOST_MODULE_METHODS_I_(...) PSIO_HOST_MODULE_TAIL_(__VA_ARGS__)
+
+#define PSIO_HOST_MODULE_METHODS_SEQ_(entry) \
+   BOOST_PP_VARIADIC_TO_SEQ(PSIO_HOST_MODULE_METHODS_(entry))
+
+#define PSIO_HOST_MODULE_MEMBER_PTR_(s, IMPL, METHOD) &IMPL::METHOD
+#define PSIO_HOST_MODULE_NAME_(s, _, METHOD)          BOOST_PP_STRINGIZE(METHOD)
+
+#define PSIO_HOST_MODULE_EMIT_ENTRY_(r, IMPL, entry)                                   \
+   template <>                                                                         \
+   struct ::psio::detail::iface_impl<IMPL, ::PSIO_HOST_MODULE_TAG_(entry)>              \
+   {                                                                                   \
+      using host = IMPL;                                                               \
+      using tag  = ::PSIO_HOST_MODULE_TAG_(entry);                                      \
+      static constexpr auto methods = ::std::tuple{PSIO_PP_SEQ_TO_VA_ARGS(             \
+         BOOST_PP_SEQ_TRANSFORM(PSIO_HOST_MODULE_MEMBER_PTR_, IMPL,                    \
+                                PSIO_HOST_MODULE_METHODS_SEQ_(entry)))};               \
+      static constexpr ::std::array<                                                   \
+         ::std::string_view,                                                           \
+         BOOST_PP_SEQ_SIZE(PSIO_HOST_MODULE_METHODS_SEQ_(entry))>                       \
+         names{PSIO_PP_SEQ_TO_VA_ARGS(                                                 \
+            BOOST_PP_SEQ_TRANSFORM(PSIO_HOST_MODULE_NAME_, _,                          \
+                                   PSIO_HOST_MODULE_METHODS_SEQ_(entry)))};            \
+   };
+
+#define PSIO_HOST_MODULE_TAG_TYPE_(s, _, entry) ::PSIO_HOST_MODULE_TAG_(entry)
+
+#define PSIO_HOST_MODULE(IMPL, ...)                                                    \
+   BOOST_PP_SEQ_FOR_EACH(PSIO_HOST_MODULE_EMIT_ENTRY_, IMPL,                            \
+                         BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__))                        \
+   template <>                                                                         \
+   struct ::psio::impl_of<IMPL>                                                        \
+   {                                                                                   \
+      using type = ::std::tuple<PSIO_PP_SEQ_TO_VA_ARGS(                                \
+         BOOST_PP_SEQ_TRANSFORM(PSIO_HOST_MODULE_TAG_TYPE_, _,                         \
+                                BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__)))>;              \
+   };                                                                                  \
+   template <>                                                                         \
+   struct ::psio::detail::impl_info<IMPL>                                              \
+   {                                                                                   \
+      using interfaces = ::psio::detail::iface_impls_tuple<IMPL,                        \
+         PSIO_PP_SEQ_TO_VA_ARGS(                                                       \
+            BOOST_PP_SEQ_TRANSFORM(PSIO_HOST_MODULE_TAG_TYPE_, _,                      \
+                                   BOOST_PP_VARIADIC_TO_SEQ(__VA_ARGS__)))>;           \
+   };

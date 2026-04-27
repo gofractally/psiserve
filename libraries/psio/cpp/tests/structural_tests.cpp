@@ -171,3 +171,69 @@ TEST_CASE("structural: empty types() and zero-arg funcs compile", "[structural]"
    using info = psio::detail::interface_info<test_random>;
    STATIC_REQUIRE(std::tuple_size_v<info::types> == 0);
 }
+
+// =====================================================================
+// PSIO_USE / PSIO_WORLD / PSIO_HOST_MODULE
+// =====================================================================
+
+PSIO_USE(test_clocks, wall_clock, "0.2.3")
+PSIO_USE(test_clocks, monotonic_clock, "0.2.3")
+
+TEST_CASE("structural: PSIO_USE specializes use_info", "[structural][use]")
+{
+   using tag = psio::detail::PSIO_USE_TAG_(test_clocks, wall_clock);
+   using info = psio::detail::use_info<tag>;
+   STATIC_REQUIRE(info::package        == std::string_view{"test_clocks"});
+   STATIC_REQUIRE(info::interface_name == std::string_view{"wall_clock"});
+   STATIC_REQUIRE(info::version        == std::string_view{"0.2.3"});
+}
+
+PSIO_WORLD(test_clocks_world,
+           imports(psio::detail::PSIO_USE_TAG_(test_clocks, wall_clock),
+                   psio::detail::PSIO_USE_TAG_(test_clocks, monotonic_clock)),
+           exports(test_random))
+
+TEST_CASE("structural: PSIO_WORLD specializes world_info", "[structural][world]")
+{
+   using info = psio::detail::world_info<
+      psio::detail::test_clocks_world_world_tag>;
+
+   STATIC_REQUIRE(info::name == std::string_view{"test_clocks_world"});
+
+   STATIC_REQUIRE(std::tuple_size_v<info::imports> == 2);
+   STATIC_REQUIRE(std::tuple_size_v<info::exports> == 1);
+   STATIC_REQUIRE(std::is_same_v<std::tuple_element_t<0, info::exports>,
+                                 test_random>);
+}
+
+// PSIO_HOST_MODULE — bind a host impl to an interface.
+
+struct test_random_impl
+{
+   std::uint64_t get_random_u64() { return 42; }
+};
+
+PSIO_HOST_MODULE(test_random_impl,
+                 interface(test_random, get_random_u64))
+
+TEST_CASE("structural: PSIO_HOST_MODULE specializes iface_impl + impl_of",
+          "[structural][host_module]")
+{
+   using ii = psio::detail::iface_impl<test_random_impl, test_random>;
+
+   STATIC_REQUIRE(std::is_same_v<ii::host, test_random_impl>);
+   STATIC_REQUIRE(std::is_same_v<ii::tag,  test_random>);
+   STATIC_REQUIRE(std::tuple_size_v<decltype(ii::methods)> == 1);
+   STATIC_REQUIRE(ii::names.size() == 1);
+   CHECK(ii::names[0] == std::string_view{"get_random_u64"});
+
+   // impl_of reverse map.
+   using tags = typename psio::impl_of<test_random_impl>::type;
+   STATIC_REQUIRE(std::tuple_size_v<tags> == 1);
+   STATIC_REQUIRE(std::is_same_v<std::tuple_element_t<0, tags>, test_random>);
+
+   // impl_info aggregates iface_impls.
+   using ifaces = typename psio::detail::impl_info<test_random_impl>::interfaces;
+   STATIC_REQUIRE(std::tuple_size_v<ifaces> == 1);
+   STATIC_REQUIRE(std::is_same_v<std::tuple_element_t<0, ifaces>, ii>);
+}
