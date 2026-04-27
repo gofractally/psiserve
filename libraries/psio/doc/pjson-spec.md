@@ -166,6 +166,16 @@ The scale uses a compact variable-length encoding. The first byte's
 top 2 bits give the total byte count of the varscale; the remaining
 bits hold zigzag-encoded scale data, little-endian.
 
+> **Note: this is NOT the QUIC variable-length integer encoding.**
+> QUIC (RFC 9000) uses a 1/2/4/8-byte length ladder (length codes
+> map to byte counts 2⁰/2¹/2²/2³). Our encoding uses a 1/2/3/4-byte
+> linear ladder. Both share the "top-2-bits-encode-length" idea
+> in the first byte, but the length values and per-form capacities
+> differ. We chose the linear ladder because pjson's typical values
+> (decimal scale, long-key excess) cluster in the 1-3-byte range
+> where the linear ladder is more byte-efficient than QUIC's
+> power-of-2 jumps.
+
 ```
 First byte:
    bits 7..6: total byte count − 1   (0 → 1 byte, 1 → 2, 2 → 3, 3 → 4)
@@ -786,6 +796,142 @@ byte-for-byte through encode → decode → encode:
 A reference test corpus lives at `libraries/psio/cpp/tests/pjson_tests.cpp`.
 
 ---
+
+## 15. Canonical Encoding
+
+The pjson format permits multiple wire encodings of the same logical
+value (e.g. a small integer can use `uint_inline` or `int`). For
+content-addressable hashing, signature verification, deduplication,
+and equality comparison via byte-compare, implementations need to
+agree on a single canonical form for every value.
+
+### 15.1 Encoding rule (priority order)
+
+A canonical encoder selects the encoding by applying these rules in
+order:
+
+1. **Round-trip JSON without precision loss.** Choose only encodings
+   that preserve the value's information through a JSON-text →
+   pjson → JSON-text round-trip. (Strings preserve their escape form
+   per §4.7; numbers preserve their value bit-exactly per the rules
+   below.)
+2. **Smallest possible byte size.** Among encodings that satisfy
+   rule 1, choose the encoding that produces the fewest bytes.
+3. **Fastest decode on ties.** When two encodings produce the same
+   byte count AND both preserve precision, choose the one that
+   decodes fastest. For numbers this means: prefer `ieee_float` over
+   `decimal` (raw 8-byte memcpy beats mantissa-and-scale parse).
+
+This makes the canonical encoding **deterministic per value** —
+given the same logical value, every conforming encoder produces the
+same bytes for that value. (Field encounter order is excluded; see
+§15.4.)
+
+### 15.2 Numbers — concrete rules
+
+For an integer value `v`:
+
+| value range                          | canonical encoding              |
+|--------------------------------------|---------------------------------|
+| 0 ≤ v ≤ 15                           | `uint_inline` (1 byte)          |
+| v < 0 or v > 15, fits i64            | `int` with smallest bc (1..8)   |
+| beyond i64, fits i128                | `int` with smallest bc (9..16)  |
+
+For an integer-valued double (e.g. `42.0`): treat as integer and
+apply the table above. The fractional part is zero, so it round-trips
+through any integer encoding losslessly.
+
+For a fractional double `d` (non-zero fractional part):
+
+1. Compute the **shortest round-trip decimal** `(mantissa, scale)`
+   such that `from_double(d)` produces this pair (Ryu / Grisu /
+   Dragon4-equivalent). Trim trailing zeros from the mantissa
+   (incrementing `scale`) until either the last digit is non-zero
+   or `scale = 0`.
+2. Let `decimal_size = 1 + mantissa_bc + varscale_size(scale)`.
+3. If `decimal_size < 9` → encode as `decimal`.
+4. Else if `decimal_size > 9` → encode as `ieee_float`.
+5. Else (tie at 9 bytes) → encode as `ieee_float` (faster decode).
+
+For a fractional with no representable shortest decimal (e.g.
+NaN, ±Inf — JSON-illegal but a non-JSON producer could emit them):
+encode as `ieee_float`.
+
+For a `pjson_number{m, s}` provided directly by typed code (not via
+double): encode the (m, s) form regardless of whether `ieee_float`
+would be shorter — the typed value is **already** a `decimal`
+semantically; collapsing to double would lose its exact-decimal
+identity. (Producers that want the smallest encoding regardless of
+identity should construct from a double and run the rules above.)
+
+### 15.3 Strings
+
+The wire form of a string carries an encoding flag (§4.7) that
+**identifies the source** rather than canonicalizing it:
+
+- A string from a JSON text source encodes as `escape_form` —
+  byte-identical to the source bytes between the JSON quotes.
+- A string from a typed `std::string` (or equivalent) encodes as
+  `raw_text` — the program-visible text, with no escape pass.
+- A binary blob encodes as `binary`.
+
+Two pjson values for the same logical "Hello world" — one from JSON,
+one from a typed string — will NOT be byte-equal because they
+deliberately preserve their different source representations. This
+is the format's **byte-equality means same source** property.
+
+For applications that want logical equality across sources, consume
+both via `view::as_string()` and compare the unescaped bytes (which
+requires applying JSON unescape rules to the `escape_form` value).
+Or canonicalize at a higher layer before encoding.
+
+### 15.4 Containers
+
+- **Field encounter order is application-defined**, not canonical.
+  Two pjson objects with the same fields in different orders are NOT
+  byte-equal, even if their data is logically the same. Applications
+  that need order-independent equality must canonicalize key order
+  at a higher layer (typically: sort keys lexicographically before
+  encoding).
+- **Slot offsets** must be ascending and exactly cover the
+  value_data region (no gaps, no overlap). The encoder's natural
+  forward-write produces this; non-canonical layouts (e.g. jumbled
+  slot offsets reordering the children) are valid pjson but not
+  canonical.
+- **Hash bytes** are deterministic from key bytes (low byte of
+  XXH3-64 over suffix-stripped key per §5.3). Always canonical.
+- **num_fields** is the actual N. Always canonical.
+
+### 15.5 Strict canonical (byte-equality contract)
+
+A pjson value is **strictly canonical** iff:
+
+- Every nested numeric value satisfies §15.2.
+- Every nested string carries the canonical flag for its source
+  (§15.3).
+- Every nested container has slots in ascending offset order with
+  no gaps (§15.4).
+- Field order matches the application's chosen canonicalization
+  policy (which itself must be deterministic from the logical
+  value — typically lexicographic key sort, or original input
+  order if input order is part of the logical identity).
+
+Two strictly-canonical pjson buffers are byte-equal iff their
+logical values are equal under the application's order policy.
+
+### 15.6 Producer guidance
+
+Implementations marketed as "canonical pjson encoders" must:
+
+- Apply §15.1 priority rules for every value.
+- Document their field-order policy (lex-sort, source-order, etc.)
+  so consumers can match.
+- Never emit reserved low-nibble flag values (§3) on canonical
+  output.
+
+The reference C++ encoder follows §15.2 rules for numbers and
+preserves source-order field encoding. It does NOT sort keys; that's
+left to a higher layer.
 
 ## Appendix A. Glossary
 
