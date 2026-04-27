@@ -883,6 +883,143 @@ namespace psio
       inline constexpr std::size_t pb_dynamic_size_count_v =
          pb_dynamic_size_count_impl<T>();
 
+      // ── Consteval upper bound for fully-bounded shapes ──────────
+      //
+      //  For types where pb_dynamic_size_count_v<T> == 0 (no length
+      //  prefixes anywhere), the encoded byte count varies with the
+      //  values but is bounded by the maximum varint width per
+      //  field.  Computing this bound at compile time lets the
+      //  encoder allocate a stack buffer and emit in a single walk —
+      //  no size pass, no slot cache.
+
+      //  Worst-case bytes for a single value of type V under
+      //  encoding Enc.  Returns 0 for types that can't be bounded
+      //  at compile time (string, vector, Reflected — which all
+      //  imply pb_dynamic_size_count_v > 0 anyway).
+      template <typename V, pb_int_enc Enc>
+      constexpr std::size_t pb_max_value_bytes() noexcept
+      {
+         using U = std::remove_cvref_t<V>;
+         if constexpr (pb_is_optional<U>::value)
+            return pb_max_value_bytes<typename pb_is_optional<U>::elem,
+                                       Enc>();
+         else if constexpr (std::is_same_v<U, bool>)
+            return 1;
+         else if constexpr (std::is_integral_v<U>)
+         {
+            if constexpr (Enc == pb_int_enc::fixed)
+               return sizeof(U) <= 4 ? 4 : 8;
+            else
+               return 10;  // worst-case varint / zigzag for any int
+         }
+         else if constexpr (std::is_same_v<U, float>)
+            return 4;
+         else if constexpr (std::is_same_v<U, double>)
+            return 8;
+         else
+            return 0;  // not applicable in K=0 path
+      }
+
+      //  Max bytes for the varint-encoded field tag.
+      constexpr std::size_t pb_max_tag_bytes(std::uint32_t fnum) noexcept
+      {
+         const std::uint64_t tag = static_cast<std::uint64_t>(fnum) << 3;
+         return tag < (1ULL << 7)  ? 1
+              : tag < (1ULL << 14) ? 2
+              : tag < (1ULL << 21) ? 3
+              : tag < (1ULL << 28) ? 4
+                                    : 5;
+      }
+
+      template <typename T, std::size_t I>
+      constexpr std::size_t pb_field_max_size_at() noexcept
+      {
+         using R          = ::psio::reflect<T>;
+         using F          = std::remove_cvref_t<
+            typename R::template member_type<I>>;
+         constexpr std::uint32_t fnum = resolve_field_number<T, I>();
+         constexpr pb_int_enc    enc  = resolve_int_encoding<T, I>();
+         return pb_max_tag_bytes(fnum) + pb_max_value_bytes<F, enc>();
+      }
+
+      template <typename T, std::size_t... Is>
+      constexpr std::size_t pb_max_size_struct_helper(
+         std::index_sequence<Is...>) noexcept
+      {
+         return (pb_field_max_size_at<T, Is>() + ... + std::size_t(0));
+      }
+
+      //  Consteval upper bound on T's encoded byte size.  Returns 0
+      //  to signal "not consteval-bounded" (i.e., contains length-
+      //  prefixed data whose size depends on runtime values beyond
+      //  varint width).
+      template <typename T>
+      constexpr std::size_t pb_max_size_consteval() noexcept
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (Reflected<U> &&
+                       pb_dynamic_size_count_v<U> == 0)
+            return pb_max_size_struct_helper<U>(
+               std::make_index_sequence<
+                  ::psio::reflect<U>::member_count>{});
+         else
+            return 0;
+      }
+
+      template <typename T>
+      inline constexpr std::size_t pb_max_size_v =
+         pb_max_size_consteval<T>();
+
+      //  Per-field consteval byte cost.  Returns the exact (tag +
+      //  value) bytes when the field's encoding is fully determined
+      //  at compile time (bool / float / double / fixed-encoded
+      //  integer at the top level — not wrapped in optional).
+      //  Returns 0 to mean "value-dependent — must walk in the size
+      //  pass."  These fields contribute 0 slots, so skipping them
+      //  in size_collect doesn't break the cache lockstep.
+      template <typename T, std::size_t I>
+      constexpr std::size_t pb_field_consteval_bytes_at() noexcept
+      {
+         using R          = ::psio::reflect<T>;
+         using F          = std::remove_cvref_t<
+            typename R::template member_type<I>>;
+         constexpr std::uint32_t fnum = resolve_field_number<T, I>();
+         constexpr pb_int_enc    enc  = resolve_int_encoding<T, I>();
+         if constexpr (std::is_same_v<F, bool>)
+            return pb_max_tag_bytes(fnum) + 1;
+         else if constexpr (std::is_same_v<F, float>)
+            return pb_max_tag_bytes(fnum) + 4;
+         else if constexpr (std::is_same_v<F, double>)
+            return pb_max_tag_bytes(fnum) + 8;
+         else if constexpr (std::is_integral_v<F> &&
+                            !std::is_same_v<F, bool> &&
+                            enc == pb_int_enc::fixed)
+            return pb_max_tag_bytes(fnum) +
+                   (sizeof(F) <= 4 ? 4 : 8);
+         else
+            return 0;  // dynamic — must walk
+      }
+
+      template <typename T, std::size_t... Is>
+      constexpr std::size_t pb_consteval_prefix_helper(
+         std::index_sequence<Is...>) noexcept
+      {
+         return (pb_field_consteval_bytes_at<T, Is>() + ... +
+                 std::size_t(0));
+      }
+
+      template <typename T>
+      constexpr std::size_t pb_consteval_prefix_v_impl() noexcept
+      {
+         using R = ::psio::reflect<T>;
+         return pb_consteval_prefix_helper<T>(
+            std::make_index_sequence<R::member_count>{});
+      }
+
+      template <typename T>
+      inline constexpr std::size_t pb_consteval_prefix_v =
+         pb_consteval_prefix_v_impl<T>();
+
       template <typename T>
       std::size_t pb_message_count(const T& v) noexcept;
 
@@ -1112,17 +1249,47 @@ namespace psio
          }
       }
 
+      //  Outer-level wrapper: skips consteval-byte fields (bool,
+      //  float, double, top-level fixed-int) — their bytes are
+      //  already in pb_consteval_prefix_v.  Slot count for these
+      //  types is 0, so idx stays in lockstep.
+      //
+      //  optional<consteval-byte> stays runtime-walked because the
+      //  contribution depends on presence (0 vs N bytes).
+      template <pb_int_enc Enc, typename T>
+      std::size_t pb_field_size_collect_outer(const T&       v,
+                                              std::uint32_t  field,
+                                              std::uint32_t* sizes,
+                                              std::size_t&   idx) noexcept
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (std::is_same_v<U, bool> ||
+                       std::is_same_v<U, float> ||
+                       std::is_same_v<U, double> ||
+                       (std::is_integral_v<U> &&
+                        !std::is_same_v<U, bool> &&
+                        Enc == pb_int_enc::fixed))
+            return 0;
+         else
+            return pb_field_size_collect<Enc, T>(v, field, sizes, idx);
+      }
+
       template <typename T>
       std::size_t pb_message_size_collect(const T&       v,
                                           std::uint32_t* sizes,
                                           std::size_t&   idx) noexcept
       {
-         using R           = ::psio::reflect<T>;
-         constexpr auto N  = R::member_count;
-         std::size_t    total = 0;
+         using R          = ::psio::reflect<T>;
+         constexpr auto N = R::member_count;
+         //  Consteval byte contribution from bool / float / double /
+         //  fixed-int fields lives in pb_consteval_prefix_v<T>.
+         //  pb_field_size_collect_outer short-circuits those fields
+         //  back to 0 so the fold doesn't pay for them.
+         std::size_t total = pb_consteval_prefix_v<T>;
          [&]<std::size_t... Is>(std::index_sequence<Is...>)
          {
-            ((total += pb_field_size_collect<resolve_int_encoding<T, Is>()>(
+            ((total += pb_field_size_collect_outer<
+                 resolve_int_encoding<T, Is>()>(
                  v.*(R::template member_pointer<Is>),
                  resolve_field_number<T, Is>(),
                  sizes, idx)),
@@ -1628,6 +1795,11 @@ namespace psio
       friend void tag_invoke(decltype(::psio::encode), protobuf,
                              const T& v, std::vector<char>& sink)
       {
+         //  The sink path already has a reusable buffer, so writing
+         //  directly into it after a size pass beats the stack-buf
+         //  + memcpy variant we use for the rvalue return.  Stick
+         //  with the cache pipeline here.
+         //
          //  Stack-cached size precomputation: count slots, populate
          //  sizes[], then write reading sizes[] for length prefixes.
          //  See .issues/psio-size-cache-design.md.
@@ -1660,6 +1832,21 @@ namespace psio
       friend std::vector<char> tag_invoke(decltype(::psio::encode),
                                           protobuf, const T& v)
       {
+         //  Tier 1 — fully bounded (K=0, consteval upper bound).
+         if constexpr (detail::pb_impl::pb_max_size_v<T> > 0 &&
+                       detail::pb_impl::pb_max_size_v<T> <= 1024)
+         {
+            constexpr std::size_t Cap = detail::pb_impl::pb_max_size_v<T>;
+            char                  buf[Cap];
+            ::psio::fast_buf_stream fbs{buf, Cap};
+            std::size_t             idx = 0;
+            detail::pb_impl::pb_message_write_cached(
+               v, static_cast<const std::uint32_t*>(nullptr), idx, fbs);
+            const std::size_t actual = fbs.written();
+            std::vector<char> out(buf, buf + actual);
+            return out;
+         }
+
          constexpr std::size_t      kSlotSbo = 64;
          std::uint32_t              sbo[kSlotSbo];
          std::vector<std::uint32_t> heap;
