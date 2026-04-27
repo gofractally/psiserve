@@ -330,6 +330,83 @@ TEST_CASE("msgpack: validate accepts well-formed input",
    CHECK(static_cast<bool>(st));
 }
 
+// ─── vector<uint8_t> routes to bin, not array ────────────────────────
+
+TEST_CASE("msgpack: empty vector<u8> emits bin8(0)", "[msgpack][bin]")
+{
+   std::vector<std::uint8_t> v;
+   //  bin8(0): 0xc4, 0x00
+   CHECK(psio::encode(psio::msgpack{}, v) == b({0xc4, 0x00}));
+   rt(v);
+}
+
+TEST_CASE("msgpack: small vector<u8> emits bin8 + payload",
+          "[msgpack][bin]")
+{
+   std::vector<std::uint8_t> v{0x01, 0x02, 0x03};
+   auto                      enc = psio::encode(psio::msgpack{}, v);
+   //  bin8(3): 0xc4, 0x03 + 3 raw bytes
+   CHECK(enc == b({0xc4, 0x03, 0x01, 0x02, 0x03}));
+   rt(v);
+}
+
+TEST_CASE("msgpack: vector<u8> with high bytes — bin shows its size win",
+          "[msgpack][bin]")
+{
+   //  16 bytes including values ≥ 0x80.  The fixarray-of-fixints path
+   //  would inflate every ≥0x80 byte to a 2-byte uint8 form
+   //  (1 + 8*1 + 8*2 = 25 bytes).  bin8 stays flat at 18.
+   std::vector<std::uint8_t> v{
+      0x00, 0x10, 0x7f, 0x80, 0x81, 0xa0, 0xc0, 0xff,
+      0x33, 0x44, 0x55, 0xee, 0xdd, 0xcc, 0xbb, 0xaa};
+   auto enc = psio::encode(psio::msgpack{}, v);
+   REQUIRE(enc.size() == 18);
+   CHECK(static_cast<unsigned char>(enc[0]) == 0xc4);  // bin8
+   CHECK(static_cast<unsigned char>(enc[1]) == 0x10);  // length 16
+   //  Body is a verbatim memcpy of the input.
+   for (std::size_t i = 0; i < v.size(); ++i)
+      CHECK(static_cast<unsigned char>(enc[2 + i]) == v[i]);
+   rt(v);
+}
+
+TEST_CASE("msgpack: 256-byte vector<u8> tips into bin16",
+          "[msgpack][bin]")
+{
+   std::vector<std::uint8_t> v(256, 0xAA);
+   auto                      enc = psio::encode(psio::msgpack{}, v);
+   //  bin16: 0xc5, u16-be length, payload
+   REQUIRE(enc.size() == 3 + 256);
+   CHECK(static_cast<unsigned char>(enc[0]) == 0xc5);
+   CHECK(static_cast<unsigned char>(enc[1]) == 0x01);
+   CHECK(static_cast<unsigned char>(enc[2]) == 0x00);
+   rt(v);
+}
+
+TEST_CASE("msgpack: decode accepts back-compat array form for vector<u8>",
+          "[msgpack][bin]")
+{
+   //  Hand-craft a fixarray(3) of fixints — what an older encoder
+   //  (or our previous version) would have produced.
+   auto legacy = b({0x93, 0x01, 0x02, 0x03});
+   auto out    = psio::decode<std::vector<std::uint8_t>>(
+      psio::msgpack{}, std::span<const char>{legacy});
+   REQUIRE(out.size() == 3);
+   CHECK(out[0] == 1);
+   CHECK(out[1] == 2);
+   CHECK(out[2] == 3);
+}
+
+TEST_CASE("msgpack: vector<int8_t> stays as array (signed semantics)",
+          "[msgpack][bin]")
+{
+   //  vector<int8_t> represents "list of small signed ints", not
+   //  a binary blob, so it should NOT route to bin.
+   std::vector<std::int8_t> v{-1, 0, 1};
+   auto                     enc = psio::encode(psio::msgpack{}, v);
+   //  fixarray(3) + neg-fixint(-1=0xff) + posfixint(0) + posfixint(1)
+   CHECK(enc == b({0x93, 0xff, 0x00, 0x01}));
+}
+
 // ─── Decode rejects type mismatch (one cross-check) ──────────────────
 
 TEST_CASE("msgpack: decoding a string as int fails cleanly",

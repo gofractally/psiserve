@@ -186,6 +186,25 @@ namespace psio
          return 5;
       }
 
+      // bin8/16/32 length-prefix size (no fixbin — bin always carries
+      // at least a 1-byte length, even for tiny payloads).
+      inline std::size_t packed_size_of_bin(std::size_t n) noexcept
+      {
+         if (n <= 0xff)
+            return 2;
+         if (n <= 0xffff)
+            return 3;
+         return 5;
+      }
+
+      // Route raw-byte vectors to bin: vector<uint8_t> and
+      // vector<std::byte>.  vector<int8_t> stays as array because its
+      // semantics are "list of small signed ints", not "blob".
+      template <typename T>
+      constexpr bool is_byte_vector_v =
+         std::is_same_v<T, std::vector<std::uint8_t>> ||
+         std::is_same_v<T, std::vector<std::byte>>;
+
       // Reflect-based record size: msgpack-array of fields in
       // declaration order.
       template <typename T>
@@ -242,6 +261,10 @@ namespace psio
             if (!v.has_value())
                return 1;  // nil
             return packed_size_of(*v);
+         }
+         else if constexpr (is_byte_vector_v<U>)
+         {
+            return packed_size_of_bin(v.size()) + v.size();
          }
          else if constexpr (mp_is_vector<U>::value ||
                             mp_is_array<U>::value)
@@ -391,6 +414,26 @@ namespace psio
       }
 
       template <typename Sink>
+      void emit_bin_header(std::size_t n, Sink& s)
+      {
+         if (n <= 0xff)
+         {
+            put_byte(s, tag::bin8);
+            put_byte(s, static_cast<std::uint8_t>(n));
+         }
+         else if (n <= 0xffff)
+         {
+            put_byte(s, tag::bin16);
+            put_be<std::uint16_t>(s, static_cast<std::uint16_t>(n));
+         }
+         else
+         {
+            put_byte(s, tag::bin32);
+            put_be<std::uint32_t>(s, static_cast<std::uint32_t>(n));
+         }
+      }
+
+      template <typename Sink>
       void emit_array_header(std::size_t n, Sink& s)
       {
          if (n <= 15)
@@ -465,6 +508,16 @@ namespace psio
                put_byte(s, tag::nil);
             else
                write_value(*v, s);
+         }
+         else if constexpr (is_byte_vector_v<U>)
+         {
+            //  Single memcpy of the whole payload — the win over the
+            //  array-of-fixints path is biggest for arbitrary bytes,
+            //  any of which ≥ 0x80 would otherwise inflate to a
+            //  2-byte uint8 form.
+            emit_bin_header(v.size(), s);
+            if (!v.empty())
+               s.write(v.data(), v.size());
          }
          else if constexpr (mp_is_vector<U>::value || mp_is_array<U>::value)
          {
@@ -626,6 +679,22 @@ namespace psio
               pos - 1);
       }
 
+      // Decode a bin{8,16,32} header.  Returns the payload byte count;
+      // the caller reads `count` raw bytes starting at `pos`.
+      inline std::size_t decode_bin_header(std::span<const char> s,
+                                           std::size_t&          pos)
+      {
+         std::uint8_t t = read_u8(s, pos);
+         if (t == tag::bin8)
+            return read_u8(s, pos);
+         if (t == tag::bin16)
+            return read_be<std::uint16_t>(s, pos);
+         if (t == tag::bin32)
+            return read_be<std::uint32_t>(s, pos);
+         fail("msgpack: expected bin, got tag 0x" + std::to_string(t),
+              pos - 1);
+      }
+
       template <typename T>
       T decode_value(std::span<const char> s, std::size_t& pos);
 
@@ -726,6 +795,34 @@ namespace psio
                return U{};
             }
             return U{decode_value<typename mp_is_optional<U>::elem>(s, pos)};
+         }
+         else if constexpr (is_byte_vector_v<U>)
+         {
+            // Accept either bin (canonical) or array (back-compat for
+            // data emitted before this codec started routing byte
+            // vectors to bin).
+            std::uint8_t t = pos < s.size()
+                                ? static_cast<std::uint8_t>(s[pos])
+                                : 0;
+            if (t == tag::bin8 || t == tag::bin16 || t == tag::bin32)
+            {
+               std::size_t n = decode_bin_header(s, pos);
+               if (pos + n > s.size())
+                  fail("msgpack: bin overruns buffer", pos);
+               U out;
+               out.resize(n);
+               if (n)
+                  std::memcpy(out.data(), s.data() + pos, n);
+               pos += n;
+               return out;
+            }
+            std::size_t n = decode_array_header(s, pos);
+            U           out;
+            out.reserve(n);
+            using E = typename mp_is_vector<U>::elem;
+            for (std::size_t i = 0; i < n; ++i)
+               out.push_back(decode_value<E>(s, pos));
+            return out;
          }
          else if constexpr (mp_is_vector<U>::value)
          {
