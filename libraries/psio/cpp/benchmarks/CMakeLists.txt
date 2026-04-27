@@ -34,6 +34,22 @@ target_include_directories(psio_bench_vs_externals PRIVATE
 target_compile_features(psio_bench_vs_externals PRIVATE cxx_std_23)
 target_compile_options(psio_bench_vs_externals PRIVATE -O3 -DNDEBUG)
 
+# Optional canonical-external library adapters.  Each is gated by
+# find_package; missing libraries quietly drop their column from the
+# output rather than failing the build.
+
+find_package(msgpack-cxx QUIET CONFIG)
+if(msgpack-cxx_FOUND)
+   target_link_libraries(psio_bench_vs_externals PRIVATE msgpack-cxx)
+   target_compile_definitions(psio_bench_vs_externals PRIVATE
+      PSIO_HAVE_MSGPACK=1)
+   message(STATUS
+      "psio_bench_vs_externals: msgpack-cxx found — enabled")
+else()
+   message(STATUS
+      "psio_bench_vs_externals: msgpack-cxx not found — skipping")
+endif()
+
 # Nested-encode baseline — per-format encode timing on balanced
 # binary trees of progressively greater depth.  Surfaces the
 # fractal O(D × N) recursive-size-walk cost that the protobuf

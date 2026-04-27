@@ -28,6 +28,10 @@
 #include "harness.hpp"
 #include "shapes.hpp"
 
+#ifdef PSIO_HAVE_MSGPACK
+#  include "adapters/msgpack_adapter.hpp"
+#endif
+
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -162,6 +166,80 @@ namespace {
       }
    }
 
+#ifdef PSIO_HAVE_MSGPACK
+   //  Time msgpack-cxx (the canonical lib) on a single shape, with
+   //  the same op surface as bench_psio_cell.  library = "msgpack-cxx",
+   //  format = "msgpack" (wire-compatible with psio::msgpack).
+   template <typename T>
+   void bench_msgpack_cxx_cell(std::vector<snapshot_row>& out,
+                                const std::string& shape_name, const T& v)
+   {
+      auto bytes = mp_bench::encode(v);
+      const std::size_t wire = bytes.size();
+
+      auto record = [&](std::string op, double ns, double ns_med,
+                         double cv, std::size_t wire_b, std::size_t iters,
+                         int trials, std::string notes = "") {
+         out.push_back(snapshot_row{
+            .shape      = shape_name,
+            .format     = "msgpack",
+            .library    = "msgpack-cxx",
+            .mode       = "static",
+            .op         = std::move(op),
+            .ns_min     = ns,
+            .ns_median  = ns_med,
+            .cv_pct     = cv,
+            .wire_bytes = wire_b,
+            .iters      = iters,
+            .trials     = trials,
+            .notes      = std::move(notes),
+         });
+      };
+
+      auto cv = [](const timing& t) {
+         return t.min_ns > 0.0 ? t.stddev_ns / t.min_ns * 100.0 : 0.0;
+      };
+
+      // size_of  — msgpack-cxx has no two-pass sizer; the only honest
+      // measurement is "pack to a throwaway sbuffer, take .size()".
+      auto t_size = ns_per_iter(0u, [&](std::size_t) {
+         std::size_t n = mp_bench::size_of(v);
+         asm volatile("" : "+r"(n) : : "memory");
+      });
+      record("size_of", t_size.min_ns, t_size.median_ns, cv(t_size),
+             wire, t_size.iters, t_size.trials,
+             "pack-to-throwaway-sbuffer (no native sizer)");
+
+      // encode_rvalue — fresh sbuffer + std::vector<char> copy.
+      auto t_enc = ns_per_iter(0u, [&](std::size_t) {
+         auto b = mp_bench::encode(v);
+         asm volatile("" : : "r"(b.data()) : "memory");
+      });
+      record("encode_rvalue", t_enc.min_ns, t_enc.median_ns, cv(t_enc),
+             wire, t_enc.iters, t_enc.trials);
+
+      // encode_sink — reused sbuffer (msgpack-cxx's native buffer).
+      msgpack::sbuffer sbuf;
+      auto t_sink = ns_per_iter(0u, [&](std::size_t) {
+         mp_bench::encode_into(v, sbuf);
+      });
+      record("encode_sink", t_sink.min_ns, t_sink.median_ns, cv(t_sink),
+             wire, t_sink.iters, t_sink.trials,
+             "reused msgpack::sbuffer (not std::vector<char>)");
+
+      // decode  — unpack + convert.  msgpack-cxx allocates internally
+      // for each unpack call; this is the canonical pattern.
+      auto t_dec = ns_per_iter(0u, [&](std::size_t) {
+         auto p = mp_bench::decode<T>(bytes.data(), bytes.size());
+         asm volatile("" : : "r"(&p) : "memory");
+      });
+      record("decode", t_dec.min_ns, t_dec.median_ns, cv(t_dec),
+             wire, t_dec.iters, t_dec.trials);
+
+      // No native validate — `unpack` IS the validation; report skipped.
+   }
+#endif
+
    //  Run all psio formats against one shape value.  Each cell is
    //  gated by fmt_supports<Fmt, T> so unsupported pairs are skipped
    //  rather than triggering a static_assert at compile time.
@@ -185,6 +263,10 @@ namespace {
       cell("msgpack",  psio::msgpack{});
       cell("capnp",    psio::capnp{});
       cell("flatbuf",  psio::flatbuf{});
+
+#ifdef PSIO_HAVE_MSGPACK
+      bench_msgpack_cxx_cell(out, shape_name, v);
+#endif
    }
 
 }  // namespace
