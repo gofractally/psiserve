@@ -516,14 +516,32 @@ TEST_CASE("pjson typed_array: validate/round-trip", "[pjson][typed_array]")
             static_cast<std::int64_t>(i + 1));
 }
 
-TEST_CASE("pjson typed_array: at()/for_each_element reject",
+TEST_CASE("pjson typed_array: at() and for_each_element synthesize "
+          "form_typed_array_element views",
           "[pjson][typed_array][view]")
 {
    std::int32_t in[] = {1, 2, 3};
    auto bytes = make_typed_array<std::int32_t>(in);
    pjson_view v{bytes.data(), bytes.size()};
-   CHECK_THROWS(v.at(0));
-   CHECK_THROWS(v.for_each_element([](pjson_view) {}));
+
+   // at(i) returns a synthetic view that points at the raw element
+   // bytes and reports kind::integer; as_int64 reads through to the
+   // typed-array bytes directly.
+   auto e0 = v.at(0);
+   CHECK(e0.is_integer());
+   CHECK(e0.as_int64() == 1);
+   auto e2 = v.at(2);
+   CHECK(e2.as_int64() == 3);
+
+   // for_each_element iterates by calling at(i) under the covers.
+   std::vector<std::int64_t> seen;
+   v.for_each_element([&](pjson_view child) {
+      seen.push_back(child.as_int64());
+   });
+   REQUIRE(seen.size() == 3);
+   CHECK(seen[0] == 1);
+   CHECK(seen[1] == 2);
+   CHECK(seen[2] == 3);
 }
 
 TEST_CASE("pjson typed_array: nested in object value",
@@ -735,6 +753,67 @@ TEST_CASE("pjson row_array: vector<ReflectedT> auto-emits row_array",
       CHECK(obj[1].second.as<std::int64_t>() == raw[i].age);
       CHECK(obj[2].second.as<bool>() == raw[i].active);
    }
+}
+
+TEST_CASE("pjson row_array: view at()/find/for_each_field uniform API",
+          "[pjson][row_array][view]")
+{
+   pjson_array a;
+   a.push_back(pjson_value{pjson_object{
+      {"id", pjson_value{std::int64_t{10}}},
+      {"name", pjson_value{std::string{"alice"}}}}});
+   a.push_back(pjson_value{pjson_object{
+      {"id", pjson_value{std::int64_t{20}}},
+      {"name", pjson_value{std::string{"bob"}}}}});
+   a.push_back(pjson_value{pjson_object{
+      {"id", pjson_value{std::int64_t{30}}},
+      {"name", pjson_value{std::string{"carol"}}}}});
+
+   auto bytes = make_row_array(a);
+   pjson_view arr{bytes.data(), bytes.size()};
+
+   // Top-level row_array view is array-shaped.
+   REQUIRE(arr.is_array());
+   REQUIRE(arr.is_row_array());
+   CHECK(arr.count() == 3);
+
+   // at(i) returns a record view that's object-shaped.
+   for (std::size_t i = 0; i < 3; ++i)
+   {
+      auto rec = arr.at(i);
+      REQUIRE(rec.is_object());
+      CHECK(rec.count() == 2);  // K = 2 fields per record
+
+      // find() walks the shared schema in the row_array buffer.
+      auto id_v   = rec.find("id");
+      auto name_v = rec.find("name");
+      REQUIRE(id_v.has_value());
+      REQUIRE(name_v.has_value());
+      CHECK(id_v->as_int64() == static_cast<std::int64_t>((i + 1) * 10));
+   }
+
+   // for_each_element iterates records.
+   std::size_t seen = 0;
+   arr.for_each_element([&](pjson_view rec) {
+      auto id = rec["id"].as_int64();
+      CHECK((id == 10 || id == 20 || id == 30));
+      ++seen;
+   });
+   CHECK(seen == 3);
+
+   // for_each_field on a record iterates (key, value) using shared keys.
+   auto rec0 = arr.at(0);
+   std::vector<std::string> keys;
+   rec0.for_each_field([&](std::string_view k, pjson_view) {
+      keys.emplace_back(k);
+   });
+   REQUIRE(keys.size() == 2);
+   CHECK(keys[0] == "id");
+   CHECK(keys[1] == "name");
+
+   // String values inside row_array records are still real pjson
+   // values — round-trip via as_string works.
+   CHECK(arr.at(1)["name"].as_string() == "bob");
 }
 
 TEST_CASE("pjson row_array: variable-length values round-trip",

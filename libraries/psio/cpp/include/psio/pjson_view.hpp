@@ -64,9 +64,28 @@ namespace psio {
 
       kind type() const noexcept
       {
-         if (!data_ || size_ == 0) return kind::invalid;
-         std::uint8_t t = data_[0] >> 4;
+         if (!data_) return kind::invalid;
          using namespace pjson_detail;
+         // Synthetic forms — interpret based on form_/synth_param_.
+         if (form_ == form_typed_array_element)
+         {
+            switch (synth_param_)
+            {
+               case tac_i8:  case tac_i16: case tac_i32: case tac_i64:
+               case tac_u8:  case tac_u16: case tac_u32: case tac_u64:
+                  return kind::integer;
+               case tac_f32: case tac_f64:
+                  return kind::floating;
+               default:
+                  return kind::invalid;
+            }
+         }
+         if (form_ == form_row_array_record)
+            return kind::object;
+
+         // Normal form — read the tag byte.
+         if (size_ == 0) return kind::invalid;
+         std::uint8_t t = data_[0] >> 4;
          switch (t)
          {
             case t_null:        return kind::null;
@@ -82,7 +101,14 @@ namespace psio {
             // that care about the difference (JSON emit, fast bulk
             // reads) test is_typed_array().
             case t_array:       return kind::array;
-            case t_object:      return kind::object;
+            // t_object low nibble: 0 = single object → kind::object;
+            // 1 = row_array (homogeneous-shape array of objects) →
+            // kind::array (semantically a list, even though the wire
+            // shares t_object's high nibble).
+            case t_object:
+               return ((data_[0] & 0x0F) == pjson_detail::object_form_row_array)
+                          ? kind::array
+                          : kind::object;
             default:            return kind::invalid;
          }
       }
@@ -116,6 +142,15 @@ namespace psio {
          return pjson_detail::typed_array_code_from_low(
                     data_[0] & 0x0F) != pjson_detail::tac_invalid;
       }
+      // Distinguishes the row_array form of t_object from the single-
+      // object form. Both report kind::object/kind::array via type();
+      // is_row_array() answers the wire-form question directly.
+      bool is_row_array() const noexcept
+      {
+         if (!data_ || size_ == 0) return false;
+         if ((data_[0] >> 4) != pjson_detail::t_object) return false;
+         return (data_[0] & 0x0F) == pjson_detail::object_form_row_array;
+      }
       // Element type code (tac_i8 .. tac_f64). Undefined unless
       // is_typed_array().
       std::uint8_t typed_array_elem_code() const noexcept
@@ -143,6 +178,37 @@ namespace psio {
       std::int64_t as_int64() const
       {
          using namespace pjson_detail;
+         if (form_ == form_typed_array_element)
+         {
+            switch (synth_param_)
+            {
+               case tac_i8:
+               { std::int8_t v;  std::memcpy(&v, data_, 1); return v; }
+               case tac_i16:
+               { std::int16_t v; std::memcpy(&v, data_, 2); return v; }
+               case tac_i32:
+               { std::int32_t v; std::memcpy(&v, data_, 4); return v; }
+               case tac_i64:
+               { std::int64_t v; std::memcpy(&v, data_, 8); return v; }
+               case tac_u8:  return data_[0];
+               case tac_u16:
+               { std::uint16_t v; std::memcpy(&v, data_, 2); return v; }
+               case tac_u32:
+               { std::uint32_t v; std::memcpy(&v, data_, 4); return v; }
+               case tac_u64:
+               {
+                  std::uint64_t v; std::memcpy(&v, data_, 8);
+                  if (v > static_cast<std::uint64_t>(
+                             std::numeric_limits<std::int64_t>::max()))
+                     throw std::out_of_range(
+                        "pjson_view::as_int64: u64 exceeds i64");
+                  return static_cast<std::int64_t>(v);
+               }
+               default:
+                  throw std::runtime_error(
+                     "pjson_view::as_int64: float element");
+            }
+         }
          std::uint8_t t = data_[0] >> 4;
          if (t == t_uint_inline) return static_cast<std::int64_t>(data_[0] & 0x0F);
          if (t == t_int)
@@ -184,6 +250,18 @@ namespace psio {
       double as_double() const
       {
          using namespace pjson_detail;
+         if (form_ == form_typed_array_element)
+         {
+            switch (synth_param_)
+            {
+               case tac_f32:
+               { float f;  std::memcpy(&f, data_, 4); return f; }
+               case tac_f64:
+               { double d; std::memcpy(&d, data_, 8); return d; }
+               default:
+                  return static_cast<double>(as_int64());
+            }
+         }
          std::uint8_t t = data_[0] >> 4;
          if (t == t_ieee_float)
          {
@@ -246,6 +324,20 @@ namespace psio {
       std::size_t count() const
       {
          using namespace pjson_detail;
+         if (form_ == form_row_array_record)
+         {
+            // Field count K lives at parent's varuint after the width
+            // byte; same value for every record in the row_array.
+            std::uint64_t K_u64;
+            std::size_t   nb = read_varuint62(parent_ + 2,
+                                              parent_size_ - 2, K_u64);
+            if (nb == 0)
+               throw std::runtime_error("pjson_view::count: bad K");
+            return static_cast<std::size_t>(K_u64);
+         }
+         if (form_ == form_typed_array_element)
+            throw std::runtime_error(
+               "pjson_view::count: not a container");
          std::uint8_t t = data_[0] >> 4;
          if (t != t_array && t != t_object)
             throw std::runtime_error("pjson_view::count: not a container");
@@ -255,13 +347,41 @@ namespace psio {
                 (static_cast<std::size_t>(data_[size_ - 1]) << 8);
       }
 
+      // Element access: index into an array. Three cases:
+      //   * typed_array — return a view in form_typed_array_element
+      //     mode pointing at the raw element bytes; the synth_param_
+      //     remembers the element type so as_int64/as_double work.
+      //   * row_array — return a view in form_row_array_record mode
+      //     pointing at the record body; parent_ keeps a pointer to
+      //     the row_array buffer so find/for_each_field can read the
+      //     shared schema directly.
+      //   * generic array — return a normal view directly into the
+      //     buffer (zero copy, form_normal).
+      //
+      // No allocation, no scratch buffers — the synthetic views alias
+      // bytes already in the source buffer and carry just enough extra
+      // state to interpret them correctly.
       dynamic_view at(std::size_t i) const
       {
          using namespace pjson_detail;
          if (is_typed_array())
-            throw std::runtime_error(
-                "pjson_view::at: typed array — use typed_int64_at / "
-                "typed_uint64_at / typed_double_at");
+         {
+            std::size_t N = count();
+            if (i >= N)
+               throw std::out_of_range("pjson_view::at: typed_array index");
+            std::uint8_t code = typed_array_elem_code();
+            std::size_t  es   = pjson_detail::typed_array_elem_size(code);
+            dynamic_view v;
+            v.data_        = data_ + 1 + i * es;
+            v.size_        = es;
+            v.form_        = form_typed_array_element;
+            v.synth_param_ = code;
+            return v;
+         }
+         if (is_row_array())
+         {
+            return row_array_record_view_(i);
+         }
          require_(kind::array);
          std::size_t N = count();
          if (i >= N)
@@ -456,6 +576,8 @@ namespace psio {
       std::optional<dynamic_view> find(std::string_view key) const
       {
          using namespace pjson_detail;
+         if (form_ == form_row_array_record)
+            return row_record_find_(key);
          if (type() != kind::object) return std::nullopt;
          std::size_t  N = count();
          std::size_t  slot_table_pos   = size_ - 2 - 4 * N;
@@ -523,6 +645,11 @@ namespace psio {
       void for_each_field(Fn&& fn) const
       {
          using namespace pjson_detail;
+         if (form_ == form_row_array_record)
+         {
+            row_record_for_each_field_(std::forward<Fn>(fn));
+            return;
+         }
          require_(kind::object);
          std::size_t N = count();
          std::size_t slot_table_pos   = size_ - 2 - 4 * N;
@@ -563,10 +690,16 @@ namespace psio {
       {
          using namespace pjson_detail;
          require_(kind::array);
-         if (is_typed_array())
-            throw std::runtime_error(
-                "pjson_view::for_each_element: typed array — use "
-                "typed_*_at or typed_array_span<T>()");
+         if (is_typed_array() || is_row_array())
+         {
+            // Synthetic-element forms: defer to at(i), which builds a
+            // form_typed_array_element / form_row_array_record view
+            // pointing into the source bytes (no allocation).
+            std::size_t N = count();
+            for (std::size_t i = 0; i < N; ++i)
+               fn(at(i));
+            return;
+         }
          std::size_t N = count();
          std::size_t slot_table_pos   = size_ - 2 - 4 * N;
          std::size_t value_data_start = 1;
@@ -592,8 +725,191 @@ namespace psio {
          if (type() != k)
             throw std::runtime_error("pjson_view: type mismatch");
       }
-      const std::uint8_t* data_ = nullptr;
-      std::size_t         size_ = 0;
+
+      // ── row_array helpers ──────────────────────────────────────────────
+      //
+      // Schema descriptor for a row_array, computed once per accessor
+      // call from the parent buffer (data_ in array view, parent_ in
+      // record view). All offsets are relative to the row_array buffer
+      // start.
+      struct row_array_meta_
+      {
+         std::size_t   K;
+         std::uint8_t  slot_w_code;
+         std::uint8_t  recoff_w_code;
+         std::size_t   slot_w;
+         std::size_t   recoff_w;
+         std::size_t   key_slots_pos;
+         std::size_t   hash_pos;
+         std::size_t   keys_pos;
+         std::size_t   records_body_start;
+         std::size_t   record_offsets_pos;
+         std::size_t   N;
+         const std::uint8_t* base;
+         std::size_t         base_size;
+      };
+
+      static row_array_meta_ read_row_meta_(const std::uint8_t* base,
+                                            std::size_t         bsize)
+      {
+         using namespace pjson_detail;
+         row_array_meta_ m;
+         m.base          = base;
+         m.base_size     = bsize;
+         std::uint8_t wb = base[1];
+         m.slot_w_code   = wb & 0x03;
+         m.recoff_w_code = (wb >> 2) & 0x03;
+         m.slot_w        = width_bytes(m.slot_w_code);
+         m.recoff_w      = width_bytes(m.recoff_w_code);
+         std::uint64_t K_u64;
+         std::size_t   nb = read_varuint62(base + 2, bsize - 2, K_u64);
+         if (nb == 0)
+            throw std::runtime_error("pjson_view: bad row_array K");
+         m.K              = static_cast<std::size_t>(K_u64);
+         m.key_slots_pos  = 2 + nb;
+         m.hash_pos       = m.key_slots_pos + 4 * m.K;
+         m.keys_pos       = m.hash_pos + m.K;
+         std::uint32_t last_slot = read_u32_le(
+             base + m.key_slots_pos + (m.K - 1) * 4);
+         std::uint32_t keys_area_size =
+             slot_offset(last_slot) + slot_key_size(last_slot);
+         m.records_body_start = m.keys_pos + keys_area_size;
+         m.N = static_cast<std::size_t>(base[bsize - 2]) |
+               (static_cast<std::size_t>(base[bsize - 1]) << 8);
+         m.record_offsets_pos = bsize - 2 - m.N * m.recoff_w;
+         return m;
+      }
+
+      // Construct a form_row_array_record view for record i. Caller is
+      // a row_array array view (form_normal, t_object low_nibble = 1).
+      dynamic_view row_array_record_view_(std::size_t i) const
+      {
+         using namespace pjson_detail;
+         auto m = read_row_meta_(data_, size_);
+         if (i >= m.N)
+            throw std::out_of_range(
+               "pjson_view::at: row_array record index");
+         std::uint32_t roff_i = read_width(
+             data_ + m.record_offsets_pos + i * m.recoff_w,
+             m.recoff_w_code);
+         std::uint32_t roff_next =
+             i + 1 < m.N
+                 ? read_width(
+                       data_ + m.record_offsets_pos +
+                           (i + 1) * m.recoff_w,
+                       m.recoff_w_code)
+                 : static_cast<std::uint32_t>(
+                       m.record_offsets_pos - m.records_body_start);
+         dynamic_view v;
+         v.data_        = data_ + m.records_body_start + roff_i;
+         v.size_        = roff_next - roff_i;
+         v.parent_      = data_;
+         v.parent_size_ = size_;
+         v.form_        = form_row_array_record;
+         return v;
+      }
+
+      // Find a key inside a row_array record. Hash-prefilter scan over
+      // the shared hash[K] from the parent buffer; on a hit, byte-equal
+      // compare against the shared key bytes; on match, return a view
+      // over the value bytes inside the record body.
+      std::optional<dynamic_view>
+      row_record_find_(std::string_view key) const
+      {
+         using namespace pjson_detail;
+         auto m = read_row_meta_(parent_, parent_size_);
+         std::size_t  rec_slot_pos = size_ - m.K * m.slot_w;
+         std::uint8_t want         = key_hash8(key);
+         const std::uint8_t* hashes = parent_ + m.hash_pos;
+         std::size_t         remaining = m.K;
+         std::size_t         base      = 0;
+         while (remaining > 0)
+         {
+            int hit = ucc::find_byte(hashes + base, remaining, want);
+            if (hit >= static_cast<int>(remaining)) return std::nullopt;
+            std::size_t j = base + static_cast<std::size_t>(hit);
+            std::uint32_t kslot = read_u32_le(
+                parent_ + m.key_slots_pos + j * 4);
+            std::uint32_t koff  = slot_offset(kslot);
+            std::uint8_t  ksize = slot_key_size(kslot);
+            const std::uint8_t* kp = parent_ + m.keys_pos + koff;
+            if (ksize == key.size() &&
+                std::memcmp(kp, key.data(), ksize) == 0)
+            {
+               std::uint32_t voff = read_width(
+                   data_ + rec_slot_pos + j * m.slot_w, m.slot_w_code);
+               std::uint32_t vend =
+                   j + 1 < m.K
+                       ? read_width(
+                             data_ + rec_slot_pos + (j + 1) * m.slot_w,
+                             m.slot_w_code)
+                       : static_cast<std::uint32_t>(rec_slot_pos);
+               return dynamic_view{data_ + voff, vend - voff};
+            }
+            base      = j + 1;
+            remaining = (j + 1 <= m.K) ? (m.K - (j + 1)) : 0;
+         }
+         return std::nullopt;
+      }
+
+      template <typename Fn>
+      void row_record_for_each_field_(Fn&& fn) const
+      {
+         using namespace pjson_detail;
+         auto m = read_row_meta_(parent_, parent_size_);
+         std::size_t rec_slot_pos = size_ - m.K * m.slot_w;
+         for (std::size_t j = 0; j < m.K; ++j)
+         {
+            std::uint32_t kslot = read_u32_le(
+                parent_ + m.key_slots_pos + j * 4);
+            std::uint32_t koff  = slot_offset(kslot);
+            std::uint8_t  ksize = slot_key_size(kslot);
+            std::string_view k(
+                reinterpret_cast<const char*>(parent_ + m.keys_pos + koff),
+                ksize);
+            std::uint32_t voff = read_width(
+                data_ + rec_slot_pos + j * m.slot_w, m.slot_w_code);
+            std::uint32_t vend =
+                j + 1 < m.K
+                    ? read_width(
+                          data_ + rec_slot_pos + (j + 1) * m.slot_w,
+                          m.slot_w_code)
+                    : static_cast<std::uint32_t>(rec_slot_pos);
+            fn(k, dynamic_view{data_ + voff, vend - voff});
+         }
+      }
+
+      // ── synth state ────────────────────────────────────────────────────
+      //
+      // The view augments its (data_, size_) pair with a small synth
+      // descriptor that lets the read accessors handle wire forms whose
+      // bytes aren't a self-contained pjson value. No scratch buffers,
+      // no allocation — the bytes live in the parent buffer; the view
+      // remembers how to interpret them.
+      //
+      //   form_normal              data_[0] is the real tag byte.
+      //   form_typed_array_element data_ points at raw element bytes;
+      //                            synth_param_ is the tac_* code that
+      //                            tells type()/as_int64()/as_double()
+      //                            how to interpret them.
+      //   form_row_array_record    data_ points at a record body within
+      //                            a row_array; parent_ points at the
+      //                            row_array buffer (so find/for_each
+      //                            can read the shared schema directly).
+
+      enum form_t : std::uint8_t
+      {
+         form_normal              = 0,
+         form_typed_array_element = 1,
+         form_row_array_record    = 2,
+      };
+
+      const std::uint8_t* data_   = nullptr;
+      std::size_t         size_   = 0;
+      const std::uint8_t* parent_ = nullptr;  // row_array buffer (form 2 only)
+      std::size_t         parent_size_ = 0;   // row_array buffer size (form 2)
+      std::uint8_t        form_   = form_normal;
+      std::uint8_t        synth_param_ = 0;   // form 1: tac_* element code
    };
 
    // Backward-compat alias. New code should prefer
