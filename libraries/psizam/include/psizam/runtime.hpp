@@ -23,6 +23,8 @@
 //   auto inst = rt.instantiate(tmpl);
 //   inst.as<greeter>().run(5);
 
+#include <psio/wit_abi.hpp>
+
 #include <psizam/canonical_dispatch.hpp>
 #include <psizam/gas.hpp>
 #include <psizam/gas_pool.hpp>
@@ -510,7 +512,7 @@ namespace detail_runtime {
                // be dropped because `return ret_slots[0]` can only carry
                // one i64 out.
                constexpr std::size_t rflat =
-                  ::psio::canonical_flat_count_v<ReturnType>;
+                  ::psio::wit_abi_flat_count_v<ReturnType>;
 
                if constexpr (rflat <= ::psio::MAX_FLAT_RESULTS) {
                   native_value        ret_slots[16] = {};
@@ -525,7 +527,7 @@ namespace detail_runtime {
                      R (H::*)(As...))
                   {
                      return (std::size_t{0} + ... +
-                        ::psio::canonical_flat_count_v<
+                        ::psio::wit_abi_flat_count_v<
                            std::remove_cvref_t<As>>);
                   }(method_ptr);
 
@@ -533,7 +535,7 @@ namespace detail_runtime {
                      static_cast<uint32_t>(args[arg_flats].i32);
 
                   return_lower_policy rlp{nullptr, memory};
-                  ::psio::canonical_lower_fields(result, rlp, retptr);
+                  ::psio::wit_abi_lower_fields(result, rlp, retptr);
 
                   native_value rv;
                   rv.i64 = 0;
