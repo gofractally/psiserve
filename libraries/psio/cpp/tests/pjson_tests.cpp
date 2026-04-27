@@ -582,6 +582,129 @@ TEST_CASE("pjson typed_array: pjson_to_json direct walker",
    CHECK(j2 == "[0,18446744073709551615]");
 }
 
+// ── row_array form (homogeneous-shape array of objects, §5.2.1) ──────────
+
+namespace {
+   // Encode `a` (a homogeneous array of objects) into row_array bytes.
+   std::vector<std::uint8_t> make_row_array(const pjson_array& a)
+   {
+      using namespace psio::pjson_detail;
+      REQUIRE(array_is_row_array_homogeneous(a));
+      std::size_t total = row_array_size(a);
+      std::vector<std::uint8_t> out(total);
+      encode_row_array_at(out.data(), 0, a);
+      return out;
+   }
+}
+
+TEST_CASE("pjson row_array: homogeneity detection",
+          "[pjson][row_array]")
+{
+   using namespace psio::pjson_detail;
+
+   pjson_array homo;
+   for (int i = 0; i < 5; ++i)
+      homo.push_back(pjson_value{pjson_object{
+         {"id", pjson_value{static_cast<std::int64_t>(i)}},
+         {"name", pjson_value{std::string{"x"}}}}});
+   CHECK(array_is_row_array_homogeneous(homo));
+
+   pjson_array hetero = homo;
+   hetero.push_back(pjson_value{
+      pjson_object{{"id", pjson_value{std::int64_t{99}}}}});
+   CHECK_FALSE(array_is_row_array_homogeneous(hetero));
+
+   pjson_array order_swapped;
+   order_swapped.push_back(pjson_value{pjson_object{
+      {"id", pjson_value{std::int64_t{0}}},
+      {"name", pjson_value{std::string{"a"}}}}});
+   order_swapped.push_back(pjson_value{pjson_object{
+      {"name", pjson_value{std::string{"b"}}},
+      {"id", pjson_value{std::int64_t{1}}}}});
+   CHECK_FALSE(array_is_row_array_homogeneous(order_swapped));
+
+   CHECK_FALSE(array_is_row_array_homogeneous(pjson_array{}));
+}
+
+TEST_CASE("pjson row_array: encode + decode round-trip",
+          "[pjson][row_array]")
+{
+   using namespace psio::pjson_detail;
+
+   pjson_array a;
+   for (int i = 0; i < 4; ++i)
+      a.push_back(pjson_value{pjson_object{
+         {"id", pjson_value{static_cast<std::int64_t>(i * 7)}},
+         {"name", pjson_value{std::string{"alice"}}}}});
+   auto bytes = make_row_array(a);
+
+   CHECK(bytes[0] == ((t_object << 4) | object_form_row_array));
+   std::uint16_t N_dec =
+      static_cast<std::uint16_t>(bytes[bytes.size() - 2]) |
+      (static_cast<std::uint16_t>(bytes[bytes.size() - 1]) << 8);
+   CHECK(N_dec == 4);
+
+   REQUIRE(pjson::validate({bytes.data(), bytes.size()}));
+   auto v = pjson::decode({bytes.data(), bytes.size()});
+   REQUIRE(v.holds<pjson_array>());
+   const auto& got = v.as<pjson_array>();
+   REQUIRE(got.size() == 4);
+   for (std::size_t i = 0; i < 4; ++i)
+   {
+      REQUIRE(got[i].holds<pjson_object>());
+      const auto& obj = got[i].as<pjson_object>();
+      REQUIRE(obj.size() == 2);
+      CHECK(obj[0].first == "id");
+      CHECK(obj[0].second.as<std::int64_t>() ==
+            static_cast<std::int64_t>(i * 7));
+      CHECK(obj[1].first == "name");
+      CHECK(obj[1].second.as<std::string>() == "alice");
+   }
+}
+
+TEST_CASE("pjson row_array: adaptive width fires for small N",
+          "[pjson][row_array]")
+{
+   using namespace psio::pjson_detail;
+   pjson_array a;
+   for (int i = 0; i < 3; ++i)
+      a.push_back(pjson_value{pjson_object{
+         {"x", pjson_value{static_cast<std::int64_t>(i)}}}});
+   auto bytes = make_row_array(a);
+   std::uint8_t w             = bytes[1];
+   std::uint8_t slot_w_code   = w & 0x03;
+   std::uint8_t recoff_w_code = (w >> 2) & 0x03;
+   CHECK(slot_w_code == 0);    // u8
+   CHECK(recoff_w_code == 0);  // u8
+}
+
+TEST_CASE("pjson row_array: variable-length values round-trip",
+          "[pjson][row_array]")
+{
+   // Records with variable-length string fields exercise the
+   // per-record slot table (without it, there's no way to find
+   // where each field's bytes end inside the record body).
+   pjson_array a;
+   a.push_back(pjson_value{pjson_object{
+      {"id", pjson_value{std::int64_t{1}}},
+      {"name", pjson_value{std::string{"a"}}}}});
+   a.push_back(pjson_value{pjson_object{
+      {"id", pjson_value{std::int64_t{2}}},
+      {"name", pjson_value{std::string{"longer-string-here"}}}}});
+   a.push_back(pjson_value{pjson_object{
+      {"id", pjson_value{std::int64_t{3}}},
+      {"name", pjson_value{std::string{}}}}});
+
+   auto bytes = make_row_array(a);
+   auto v     = pjson::decode({bytes.data(), bytes.size()});
+   const auto& got = v.as<pjson_array>();
+   REQUIRE(got.size() == 3);
+   CHECK(got[0].as<pjson_object>()[1].second.as<std::string>() == "a");
+   CHECK(got[1].as<pjson_object>()[1].second.as<std::string>()
+         == "longer-string-here");
+   CHECK(got[2].as<pjson_object>()[1].second.as<std::string>().empty());
+}
+
 // ── JSON pipeline (when simdjson is available) ───────────────────────────
 
 #if defined(PSIO_HAVE_SIMDJSON) && PSIO_HAVE_SIMDJSON

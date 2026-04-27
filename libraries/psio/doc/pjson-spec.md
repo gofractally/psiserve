@@ -87,9 +87,9 @@ encoded data; for others it is reserved.
 | 7    | reserved      |                                                | — |
 | 8    | `string`      | encoding flag (see §4.7); 0..2 valid, others reserved | (size − 1) bytes (length implicit from `size`) |
 | 9    | reserved      |                                                | — |
-| 10 (A) | reserved   |                                                | — |
+| 10 (A) | `bytes`     | reserved (must be 0)                           | (size − 1) bytes (raw octets) — see §4.8 |
 | 11 (B) | `array`     | layout selector — see §5.1: 0 = generic, 1..10 = typed homogeneous (element type code = low_nibble − 1), 11..15 reserved | container body — see §5 |
-| 12 (C) | `object`    | reserved (must be 0)                           | container body — see §5 |
+| 12 (C) | `object`    | layout selector — see §5.2: 0 = single object, 1 = row_array (homogeneous-shape array of objects), 2..15 reserved | container body — see §5 |
 | 13–15  | reserved   |                                                | — |
 
 Implementations must reject (return error) on any reserved tag code or
@@ -466,6 +466,129 @@ else (long-key):
 
 Field encounter order is preserved (no canonical sort).
 
+### 5.2.1 Row-array layout (tag = 0xC1)
+
+A **row_array** is a homogeneous-shape array of objects: every record
+has the same K keys in the same order. The shared schema (key bytes
++ key prefilter hashes) lives **once** at the array level instead of
+being repeated in every record. This is the dominant case for
+JSON-over-API payloads (lists of records, query results, log lines)
+and removes substantial per-element overhead.
+
+```
+[tag: u8 = 0xC1]
+[width byte: bit 0..1 = slot_w, bit 2..3 = recoff_w, bits 4..7 reserved (must be 0)]
+                width code: 0 = u8, 1 = u16, 2 = u24, 3 = u32
+[K: 2-bit-prefix varuint (number of fields per record)]
+[shared key slots: K × u32 LE]      packed { key_offset:24, key_size:8 }
+                                     (offsets into the keys area)
+[hash[K]: K × u8]                    shared 8-bit prefilter hashes
+[shared keys area: contiguous key bytes, length = sum of key_sizes]
+[records body: variable]
+   for each i in 0..N:
+      [value_data_i]                contiguous value bytes
+      [slot_i[K]: K × slot_w bytes] per-record value offsets
+                                     (relative to value_data_i start)
+[record_offsets[N]: N × recoff_w bytes]   start of record i
+                                           (relative to records-body start)
+[count: u16 LE]                      N — number of records
+```
+
+`count` is the **last 2 bytes** of the container, matching §5.1 / §5.2.
+
+#### 5.2.1.1 Adaptive widths
+
+The encoder picks `slot_w`, `recoff_w` to fit the largest value in
+each width-scaled field, packing them into the single width byte:
+
+| width code | bytes | max value |
+|---|---|---|
+| 0 | 1 | 255 |
+| 1 | 2 | 65 535 |
+| 2 | 3 | 16 777 215 |
+| 3 | 4 | 4 294 967 295 |
+
+`slot_w` scales with the **largest single record's body size** (since
+slot offsets are relative to record start). `recoff_w` scales with
+the **total records-body size** (since record offsets are relative
+to the records-body start).
+
+For a 1000-record array of small objects (each ≤ 256 B, total body
+< 64 KB): `slot_w = u8`, `recoff_w = u16` — minimal overhead. For
+arrays beyond 16 MB body: `recoff_w = u32`.
+
+The shared key slots use a fixed `u32` width (24-bit offset + 8-bit
+size, matching the §5.2 single-object slot format) — keys areas are
+always small (≤ a few KB), so adaptive width here adds complexity
+without measurable benefit.
+
+#### 5.2.1.2 Per-record body
+
+Each record carries its own slot table at the **tail** of its body:
+
+```
+record_i_size = (i + 1 < N
+                 ? record_offsets[i+1]
+                 : records_body_size) − record_offsets[i]
+
+slot_i_pos    = record_i_start + record_i_size − K × slot_w
+value_data_i  = record_i_start[0 .. slot_i_pos)
+```
+
+Slot `slot_i[j]` is the offset (within record i's value_data) where
+field j's value begins. Field j's value extends to the next slot's
+offset (or to `slot_i_pos` for the last field).
+
+#### 5.2.1.3 Lookup `arr[i][key]`
+
+```
+1. Read N from the last 2 bytes; compute records-body extents.
+2. Read width byte → (slot_w, recoff_w).
+3. record_i_start = records_body_start + record_offsets[i].
+4. Hash-prefilter the SHARED hash[K] for `key_hash8(key)`. On hit,
+   verify the candidate via the shared keys area → field index j.
+5. Read slot_i[j] from record i's tail.
+6. Value bytes live at record_i_start[slot_i[j] .. slot_i[j+1] or
+   record_i_size − K·slot_w).
+```
+
+The hash-prefilter scan happens **once per array**, not once per
+record — this is the primary lookup-perf win over generic `t_object`
+× N elements.
+
+#### 5.2.1.4 Wire savings vs. generic
+
+For an array of N records with K fields each, fixed key bytes
+totalling Kb bytes of keys, and fixed value sizes totalling Vb
+bytes of values:
+
+| layout | bytes (excl. constant overhead) |
+|---|---|
+| generic `array` of `object` | N × (1 + Kb + K + 4K + 2 + Vb) + 4N + 3 |
+| `row_array` | 4K + K + Kb + N × (Vb + K·slot_w) + N·recoff_w + 4 |
+
+The savings are `N × (1 + Kb + K + 2 + 4K − K·slot_w) − 4N + ...`,
+dominated by removing per-record key bytes (`N × Kb`) and per-record
+hash table (`N × K`). For typical small records the row_array form
+is 30–50% smaller.
+
+#### 5.2.1.5 Encoder rule
+
+A producer **may** emit row_array when every JSON object in a source
+array has:
+- the same number of keys K,
+- the same K keys (byte-equal) in the same order,
+- byte-equal hash-array (derivable from keys),
+
+When the encoder detects this on a single homogeneity-detect pass,
+it emits row_array; otherwise it falls back to generic
+`t_array` × `t_object`. The detection cost is one pass over the
+JSON array's first object's key list, then byte-compares against
+each subsequent object's first K key bytes.
+
+Strict canonical encoders (§15) **must** emit row_array when
+applicable.
+
 ### 5.3 Key prefilter hash
 
 Each object's `hash[i]` byte is the **low 8 bits of XXH3-64** computed
@@ -742,7 +865,12 @@ parse_value(ptr, size) -> Value:
           return parse_typed_array(ptr, size, code = low − 1)
        else:
           error                                           // reserved
-   12: return parse_object(ptr, size)
+   12: if low == 0:
+          return parse_object(ptr, size)                  // single object
+       else if low == 1:
+          return parse_row_array(ptr, size)
+       else:
+          error                                           // reserved
    else: error
 
 parse_array(ptr, size):
@@ -1092,7 +1220,28 @@ Or canonicalize at a higher layer before encoding.
   XXH3-64 over suffix-stripped key per §5.3). Always canonical.
 - **num_fields** is the actual N. Always canonical.
 
-### 15.5 Arrays — generic vs. typed
+### 15.5 Objects — generic vs. row_array
+
+For an array whose elements are all objects with **identical
+schemas** (same K keys, same order, byte-equal key strings), the
+canonical encoder **must** emit the **row_array** form (§5.2.1)
+rather than a generic `t_array` of N `t_object`s. The shared
+schema removes the per-record overhead, so the row_array form is
+always the smaller-byte choice — no further size comparison needed.
+
+A canonical encoder must also pick the **smallest adaptive widths**
+(`slot_w`, `recoff_w`) that fit the actual record body sizes:
+
+```
+slot_w   = smallest width fitting max(record_body_size_i) for i in 0..N
+recoff_w = smallest width fitting total records-body size
+```
+
+Mismatched objects (extra fields, missing fields, different
+byte-order of keys) make the array non-homogeneous; canonical
+encoders fall back to generic `t_array` of `t_object`s in that case.
+
+### 15.6 Arrays — generic vs. typed
 
 For an array whose elements are all of one fixed-width primitive
 type (signed integer, unsigned integer, float), the canonical
@@ -1120,7 +1269,7 @@ pjson encoding choice that gives byte-different output for the
 "same" logical array. Strict-canonical encoders therefore must
 choose typed when applicable.
 
-### 15.6 Strict canonical (byte-equality contract)
+### 15.7 Strict canonical (byte-equality contract)
 
 A pjson value is **strictly canonical** iff:
 
@@ -1129,9 +1278,11 @@ A pjson value is **strictly canonical** iff:
   (§15.3).
 - Every nested container has slots in ascending offset order with
   no gaps (§15.4).
-- Every nested array satisfies §15.5 (typed form when homogeneous
+- Every nested array satisfies §15.6 (typed form when homogeneous
   primitive, with the smallest element-type code that holds every
   element exactly).
+- Every nested array of homogeneously-shaped objects satisfies
+  §15.5 (row_array form with smallest adaptive widths).
 - Field order matches the application's chosen canonicalization
   policy (which itself must be deterministic from the logical
   value — typically lexicographic key sort, or original input
@@ -1140,7 +1291,7 @@ A pjson value is **strictly canonical** iff:
 Two strictly-canonical pjson buffers are byte-equal iff their
 logical values are equal under the application's order policy.
 
-### 15.7 Producer guidance
+### 15.8 Producer guidance
 
 Implementations marketed as "canonical pjson encoders" must:
 

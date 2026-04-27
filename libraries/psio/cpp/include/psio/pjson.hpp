@@ -804,6 +804,235 @@ namespace psio {
       //
       // value_data per field: [key bytes (key_size)][tag][raw bits]
       //   or with long-key escape: [varuint excess][key bytes][tag][bits]
+      // Adaptive-width helpers for row_array encoding/decoding.
+      // Width code: 0 = u8, 1 = u16, 2 = u24, 3 = u32.
+      inline std::uint8_t width_code_for(std::uint64_t v) noexcept
+      {
+         if (v <= 0xFFu)        return 0;
+         if (v <= 0xFFFFu)      return 1;
+         if (v <= 0xFFFFFFu)    return 2;
+         return 3;
+      }
+      inline std::size_t width_bytes(std::uint8_t code) noexcept
+      {
+         return static_cast<std::size_t>(code) + 1;
+      }
+      inline std::uint32_t read_width(const std::uint8_t* p,
+                                      std::uint8_t        code) noexcept
+      {
+         std::uint32_t v = 0;
+         std::memcpy(&v, p, width_bytes(code));
+         return v;
+      }
+      inline void write_width(std::uint8_t* p,
+                              std::uint8_t  code,
+                              std::uint32_t v) noexcept
+      {
+         std::memcpy(p, &v, width_bytes(code));
+      }
+
+      // Object t_object low-nibble layout selector.
+      enum : std::uint8_t
+      {
+         object_form_single    = 0,  // §5.2 — generic object
+         object_form_row_array = 1,  // §5.2.1 — homogeneous row_array
+         // 2..15 reserved
+      };
+
+      // True when every element is a pjson_object whose keys (in order,
+      // byte-equal) match the first object's keys. Used by the writer
+      // to choose row_array form vs. generic array of objects.
+      inline bool array_is_row_array_homogeneous(
+          const pjson_array& a) noexcept
+      {
+         if (a.empty()) return false;
+         if (!a[0].holds<pjson_object>()) return false;
+         const auto& first = a[0].as<pjson_object>();
+         std::size_t K = first.size();
+         for (std::size_t i = 1; i < a.size(); ++i)
+         {
+            if (!a[i].holds<pjson_object>()) return false;
+            const auto& o = a[i].as<pjson_object>();
+            if (o.size() != K) return false;
+            for (std::size_t j = 0; j < K; ++j)
+               if (o[j].first != first[j].first) return false;
+         }
+         return true;
+      }
+
+      // Encode a row_array. Caller must have already verified the
+      // input is homogeneous (see array_is_row_array_homogeneous).
+      // Two-pass:
+      //   1. compute record body sizes + width selectors
+      //   2. write tag, width byte, schema, records, indexes
+      inline std::size_t encode_row_array_at(std::uint8_t*      dst,
+                                             std::size_t        pos,
+                                             const pjson_array& a)
+      {
+         std::size_t start    = pos;
+         std::size_t N        = a.size();
+         const auto& first    = a[0].as<pjson_object>();
+         std::size_t K        = first.size();
+
+         // Pass 1: per-record value_data sizes and per-field offsets.
+         // Stored as a flat vector of N×K offsets to avoid per-record
+         // heap allocs; record_value_sizes[i] is the i-th record's
+         // total value_data size.
+         std::vector<std::uint32_t> per_field_offset(N * K);
+         std::vector<std::uint32_t> record_value_sizes(N);
+         std::uint32_t              max_record_body = 0;
+         for (std::size_t i = 0; i < N; ++i)
+         {
+            const auto&   obj  = a[i].as<pjson_object>();
+            std::uint32_t off  = 0;
+            for (std::size_t j = 0; j < K; ++j)
+            {
+               per_field_offset[i * K + j] = off;
+               off += static_cast<std::uint32_t>(value_size(obj[j].second));
+            }
+            record_value_sizes[i] = off;  // body before per-record slot tail
+         }
+
+         // Compute per-record full body size (value_data + slot table)
+         // and the running record_offset for each record.
+         std::vector<std::uint32_t> record_offsets(N);
+         std::uint32_t running = 0;
+         std::uint8_t  slot_w_code; // determined after we know max body
+         // Find slot_w first based on max record body — slot offsets
+         // are within a record, bounded by record body size.
+         for (std::size_t i = 0; i < N; ++i)
+            max_record_body = std::max(max_record_body,
+                                       record_value_sizes[i]);
+         slot_w_code = width_code_for(max_record_body);
+         std::size_t slot_w = width_bytes(slot_w_code);
+         for (std::size_t i = 0; i < N; ++i)
+         {
+            record_offsets[i] = running;
+            running += record_value_sizes[i] +
+                       static_cast<std::uint32_t>(K * slot_w);
+         }
+         std::uint8_t recoff_w_code = width_code_for(running);
+         std::size_t recoff_w = width_bytes(recoff_w_code);
+
+         // Compute total keys area size + write shared schema.
+         std::uint32_t keys_area_size = 0;
+         for (std::size_t j = 0; j < K; ++j)
+            keys_area_size += static_cast<std::uint32_t>(
+                first[j].first.size());
+
+         // Layout positions, written front-to-back:
+         //   tag(1) width(1) K(varuint) keyslots(4K) hash(K) keys(...)
+         //   then records body, then record_offsets[N], then count u16.
+         dst[pos++] = static_cast<std::uint8_t>(
+             (t_object << 4) | object_form_row_array);
+         dst[pos++] = static_cast<std::uint8_t>(
+             slot_w_code | (recoff_w_code << 2));
+         pos += write_varuint62(dst, pos, K);
+
+         std::size_t key_slots_pos = pos;
+         pos += 4 * K;
+
+         std::size_t hash_pos = pos;
+         pos += K;
+
+         std::size_t keys_pos = pos;
+         std::uint32_t key_off_running = 0;
+         for (std::size_t j = 0; j < K; ++j)
+         {
+            const auto&  k     = first[j].first;
+            std::uint8_t ks_byte =
+                k.size() < 0xFFu ? static_cast<std::uint8_t>(k.size())
+                                 : static_cast<std::uint8_t>(0xFFu);
+            write_u32_le(dst + key_slots_pos + j * 4,
+                         pack_slot(key_off_running, ks_byte));
+            dst[hash_pos + j] = key_hash8(k);
+            std::memcpy(dst + pos, k.data(), k.size());
+            pos += k.size();
+            key_off_running += static_cast<std::uint32_t>(k.size());
+            // Long-key escape (key_size == 0xFF) is supported but
+            // requires a varuint excess inside the keys area; skip
+            // for now since canonical encoders limit key length to
+            // < 255 (see §5.4).
+         }
+         (void)keys_pos;
+
+         // Records body.
+         std::size_t records_body_start = pos;
+         for (std::size_t i = 0; i < N; ++i)
+         {
+            const auto& obj            = a[i].as<pjson_object>();
+            std::size_t record_start    = pos;
+            std::size_t record_value_sz = record_value_sizes[i];
+            for (std::size_t j = 0; j < K; ++j)
+               pos += encode_value_at(dst, pos, obj[j].second);
+            // Per-record slot table at the tail of the record.
+            std::size_t slot_pos = record_start + record_value_sz;
+            for (std::size_t j = 0; j < K; ++j)
+               write_width(dst + slot_pos + j * slot_w, slot_w_code,
+                           per_field_offset[i * K + j]);
+            pos = slot_pos + K * slot_w;
+         }
+
+         // record_offsets[N] tail-indexed.
+         std::size_t record_offsets_pos = pos;
+         for (std::size_t i = 0; i < N; ++i)
+            write_width(dst + record_offsets_pos + i * recoff_w,
+                        recoff_w_code, record_offsets[i]);
+         pos += N * recoff_w;
+         (void)records_body_start;
+
+         // count u16 LE.
+         dst[pos]     = static_cast<std::uint8_t>(N & 0xFF);
+         dst[pos + 1] = static_cast<std::uint8_t>((N >> 8) & 0xFF);
+         pos += 2;
+
+         return pos - start;
+      }
+
+      // Pre-compute the byte size of a row_array encoding for `a`.
+      // Mirrors encode_row_array_at's pass 1 + size accounting; used
+      // by the public encoder to size the output buffer up front.
+      inline std::size_t row_array_size(const pjson_array& a) noexcept
+      {
+         std::size_t N = a.size();
+         if (N == 0) return 0;
+         const auto& first = a[0].as<pjson_object>();
+         std::size_t K     = first.size();
+
+         std::uint32_t max_body = 0;
+         std::uint32_t running  = 0;
+         std::vector<std::uint32_t> body_sizes(N);
+         for (std::size_t i = 0; i < N; ++i)
+         {
+            const auto&   obj = a[i].as<pjson_object>();
+            std::uint32_t b   = 0;
+            for (std::size_t j = 0; j < K; ++j)
+               b += static_cast<std::uint32_t>(value_size(obj[j].second));
+            body_sizes[i] = b;
+            max_body = std::max(max_body, b);
+         }
+         std::uint8_t slot_w_code = width_code_for(max_body);
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+         for (std::size_t i = 0; i < N; ++i)
+            running += body_sizes[i] +
+                       static_cast<std::uint32_t>(K * slot_w);
+         std::uint8_t recoff_w_code = width_code_for(running);
+         std::size_t  recoff_w      = width_bytes(recoff_w_code);
+
+         std::uint32_t keys_area = 0;
+         for (std::size_t j = 0; j < K; ++j)
+            keys_area += static_cast<std::uint32_t>(first[j].first.size());
+
+         return 1 /*tag*/ + 1 /*width byte*/
+              + varuint62_byte_count(K)
+              + 4 * K /*shared key slots*/
+              + K /*hash[K]*/
+              + keys_area
+              + running /*records body*/
+              + N * recoff_w /*record_offsets*/
+              + 2 /*count*/;
+      }
+
       inline std::size_t encode_object_at(std::uint8_t*       dst,
                                           std::size_t         pos,
                                           const pjson_object& o)
@@ -918,6 +1147,105 @@ namespace psio {
             a.push_back(std::move(child));
          }
          out = pjson_value{std::move(a)};
+         return true;
+      }
+
+      // Row-array decoder. Reads the shared schema, then for each
+      // record reconstructs a pjson_object with the shared keys + the
+      // record's per-field values. Output: pjson_value{pjson_array} of
+      // pjson_value{pjson_object}.
+      inline bool decode_row_array(const std::uint8_t* p,
+                                   std::size_t         size,
+                                   pjson_value&        out)
+      {
+         if (size < 4) return false;  // tag + width + K + count u16 minimum
+         std::uint8_t width_byte    = p[1];
+         std::uint8_t slot_w_code   = width_byte & 0x03;
+         std::uint8_t recoff_w_code = (width_byte >> 2) & 0x03;
+         std::size_t  slot_w        = width_bytes(slot_w_code);
+         std::size_t  recoff_w      = width_bytes(recoff_w_code);
+
+         std::uint64_t K_u64;
+         std::size_t   K_bytes =
+             read_varuint62(p + 2, size - 2, K_u64);
+         if (K_bytes == 0) return false;
+         std::size_t K = static_cast<std::size_t>(K_u64);
+         if (K == 0) return false;
+
+         std::size_t key_slots_pos = 2 + K_bytes;
+         std::size_t hash_pos      = key_slots_pos + 4 * K;
+         std::size_t keys_pos      = hash_pos + K;
+         if (keys_pos > size - 2) return false;
+
+         // Compute keys area total size from the last key slot.
+         std::uint32_t last_slot = read_u32_le(
+             p + key_slots_pos + (K - 1) * 4);
+         std::uint32_t last_off  = slot_offset(last_slot);
+         std::uint8_t  last_ks   = slot_key_size(last_slot);
+         if (last_ks == 0xFF) return false;  // long keys not supported in row_array yet
+         std::uint32_t keys_area_size = last_off + last_ks;
+         std::size_t   records_body_start = keys_pos + keys_area_size;
+
+         std::uint16_t N = static_cast<std::uint16_t>(p[size - 2]) |
+                           (static_cast<std::uint16_t>(p[size - 1]) << 8);
+         std::size_t record_offsets_pos = size - 2 - N * recoff_w;
+         if (record_offsets_pos < records_body_start) return false;
+         std::size_t records_body_size =
+             record_offsets_pos - records_body_start;
+
+         // Build shared key list.
+         std::vector<std::string_view> keys(K);
+         for (std::size_t j = 0; j < K; ++j)
+         {
+            std::uint32_t s_j = read_u32_le(p + key_slots_pos + j * 4);
+            std::uint32_t kof = slot_offset(s_j);
+            std::uint8_t  ksz = slot_key_size(s_j);
+            if (ksz == 0xFF) return false;
+            keys[j] = std::string_view(
+                reinterpret_cast<const char*>(p + keys_pos + kof), ksz);
+            if (p[hash_pos + j] != key_hash8(keys[j])) return false;
+         }
+
+         pjson_array out_arr;
+         out_arr.reserve(N);
+         for (std::uint16_t i = 0; i < N; ++i)
+         {
+            std::uint32_t roff_i =
+                read_width(p + record_offsets_pos + i * recoff_w,
+                           recoff_w_code);
+            std::uint32_t roff_next =
+                i + 1 < N
+                    ? read_width(p + record_offsets_pos +
+                                     (i + 1) * recoff_w,
+                                 recoff_w_code)
+                    : static_cast<std::uint32_t>(records_body_size);
+            if (roff_next < roff_i) return false;
+            std::size_t  rec_size  = roff_next - roff_i;
+            const std::uint8_t* rec = p + records_body_start + roff_i;
+            if (K * slot_w > rec_size) return false;
+            std::size_t  slot_pos  = rec_size - K * slot_w;
+            std::size_t  body_size = slot_pos;
+
+            pjson_object obj;
+            obj.reserve(K);
+            for (std::size_t j = 0; j < K; ++j)
+            {
+               std::uint32_t voff =
+                   read_width(rec + slot_pos + j * slot_w, slot_w_code);
+               std::uint32_t vend =
+                   j + 1 < K
+                       ? read_width(rec + slot_pos + (j + 1) * slot_w,
+                                    slot_w_code)
+                       : static_cast<std::uint32_t>(body_size);
+               if (vend < voff || vend > body_size) return false;
+               pjson_value child;
+               if (!decode_value(rec + voff, vend - voff, child))
+                  return false;
+               obj.emplace_back(std::string(keys[j]), std::move(child));
+            }
+            out_arr.push_back(pjson_value{std::move(obj)});
+         }
+         out = pjson_value{std::move(out_arr)};
          return true;
       }
 
@@ -1192,7 +1520,10 @@ namespace psio {
                out = pjson_value{std::move(a)};
                return true;
             }
-            case t_object: return decode_object(p, size, out);
+            case t_object:
+               if (low == object_form_single)    return decode_object(p, size, out);
+               if (low == object_form_row_array) return decode_row_array(p, size, out);
+               return false;  // reserved low_nibble
             default:       return false;
          }
       }
