@@ -365,6 +365,215 @@ namespace psio {
          return fixed_contrib<T>() + variable_contrib(v);
       }
 
+      // ── Stack-cached size precomputation ────────────────────────
+      //
+      // The naive write_value path calls record_body_size(v) for
+      // every non-DWNC nested record (line ~560 below) just to emit
+      // the varuint length prefix.  Each call recurses, and each
+      // outer level above does its own recursion → fractal O(D × N)
+      // cost on deeply nested data.
+      //
+      // The cache pipeline mirrors what protobuf does: walk once
+      // during a size-collect pass, populate sizes[idx++] with each
+      // non-DWNC record's body size, then walk again during write
+      // reading sizes[idx++] instead of recomputing.  Total work
+      // becomes O(N) regardless of nesting depth.
+
+      template <typename T>
+      std::size_t variable_contrib_collect(const T& v,
+                                           std::uint32_t* sizes,
+                                           std::size_t&   idx);
+
+      template <typename T>
+      std::size_t record_body_collect(const T&       v,
+                                      std::uint32_t* sizes,
+                                      std::size_t&   idx)
+      {
+         using R           = ::psio::reflect<T>;
+         std::size_t body  = 0;
+         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            (
+               ([&]
+                {
+                   using F = typename R::template member_type<Is>;
+                   body += fixed_contrib<F>();
+                   if constexpr (!fully_fixed<F>())
+                      body += variable_contrib_collect(
+                         v.*(R::template member_pointer<Is>), sizes,
+                         idx);
+                }()),
+               ...);
+         }(std::make_index_sequence<R::member_count>{});
+         return body;
+      }
+
+      template <typename T>
+      std::size_t variable_contrib_collect(const T&       v,
+                                           std::uint32_t* sizes,
+                                           std::size_t&   idx)
+      {
+         if constexpr (fully_fixed<T>())
+            return 0;
+         else if constexpr (::psio::format_should_dispatch_adapter_v<
+                               ::psio::bin, T>)
+         {
+            using Proj = ::psio::adapter<std::remove_cvref_t<T>,
+                                          ::psio::binary_category>;
+            const auto n = Proj::packsize(v);
+            return varuint32_size(static_cast<std::uint32_t>(n)) + n;
+         }
+         else if constexpr (std::is_same_v<T, std::string>)
+            return varuint32_size(static_cast<std::uint32_t>(v.size())) +
+                   v.size();
+         else if constexpr (is_std_vector<T>::value)
+         {
+            using E           = typename T::value_type;
+            std::size_t total = varuint32_size(
+               static_cast<std::uint32_t>(v.size()));
+            if constexpr (fully_fixed<E>())
+               total += v.size() * fixed_contrib<E>();
+            else
+            {
+               for (const auto& x : v)
+                  total += fixed_contrib<E>() +
+                           variable_contrib_collect(x, sizes, idx);
+            }
+            return total;
+         }
+         else if constexpr (is_std_array<T>::value)
+         {
+            std::size_t total = 0;
+            for (const auto& x : v)
+               total += variable_contrib_collect(x, sizes, idx);
+            return total;
+         }
+         else if constexpr (is_std_optional<T>::value)
+         {
+            if (!v.has_value())
+               return 0;
+            using E = typename T::value_type;
+            return fixed_contrib<E>() +
+                   variable_contrib_collect(*v, sizes, idx);
+         }
+         else if constexpr (is_std_variant<T>::value)
+         {
+            std::size_t total = 0;
+            std::visit(
+               [&](const auto& alt)
+               {
+                  using A = std::remove_cvref_t<decltype(alt)>;
+                  total   = varuint32_size(
+                              static_cast<std::uint32_t>(v.index())) +
+                          fixed_contrib<A>() +
+                          variable_contrib_collect(alt, sizes, idx);
+               },
+               v);
+            return total;
+         }
+         else if constexpr (is_bitlist<T>::value)
+            return varuint32_size(
+                      static_cast<std::uint32_t>(v.size())) +
+                   v.bytes().size();
+         else if constexpr (Record<T>)
+         {
+            if constexpr (!::psio::is_dwnc_v<T>)
+            {
+               //  Reserve a slot, recurse to populate inner slots,
+               //  then patch the reserved slot with this record's
+               //  body size.
+               const std::size_t body_idx = idx++;
+               const std::size_t body =
+                  record_body_collect(v, sizes, idx);
+               sizes[body_idx] = static_cast<std::uint32_t>(body);
+               return varuint32_size(
+                         static_cast<std::uint32_t>(body)) +
+                      body;
+            }
+            else
+               return record_body_collect(v, sizes, idx);
+         }
+         else
+            return 0;
+      }
+
+      template <typename T>
+      std::size_t packed_size_of_collect(const T&       v,
+                                         std::uint32_t* sizes,
+                                         std::size_t&   idx)
+      {
+         return fixed_contrib<T>() +
+                variable_contrib_collect(v, sizes, idx);
+      }
+
+      // Count of non-DWNC reflected records inside v — drives the
+      // sizes[] allocation for the cache pipeline.
+      template <typename T>
+      std::size_t bin_count_records(const T& v) noexcept
+      {
+         if constexpr (fully_fixed<T>())
+            return 0;
+         else if constexpr (::psio::format_should_dispatch_adapter_v<
+                               ::psio::bin, T>)
+            return 0;  // adapter encodes opaquely, no slots
+         else if constexpr (std::is_same_v<T, std::string>)
+            return 0;
+         else if constexpr (is_std_vector<T>::value)
+         {
+            using E = typename T::value_type;
+            if constexpr (fully_fixed<E>())
+               return 0;
+            std::size_t k = 0;
+            for (const auto& x : v)
+               k += bin_count_records(x);
+            return k;
+         }
+         else if constexpr (is_std_array<T>::value)
+         {
+            using E = typename T::value_type;
+            if constexpr (fully_fixed<E>())
+               return 0;
+            std::size_t k = 0;
+            for (const auto& x : v)
+               k += bin_count_records(x);
+            return k;
+         }
+         else if constexpr (is_std_optional<T>::value)
+         {
+            if (!v.has_value())
+               return 0;
+            return bin_count_records(*v);
+         }
+         else if constexpr (is_std_variant<T>::value)
+         {
+            std::size_t k = 0;
+            std::visit(
+               [&](const auto& alt) { k = bin_count_records(alt); }, v);
+            return k;
+         }
+         else if constexpr (is_bitlist<T>::value)
+            return 0;
+         else if constexpr (Record<T>)
+         {
+            using R       = ::psio::reflect<T>;
+            std::size_t k = ::psio::is_dwnc_v<T> ? std::size_t{0}
+                                                  : std::size_t{1};
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               (
+                  ([&]
+                   {
+                      using F = typename R::template member_type<Is>;
+                      if constexpr (!fully_fixed<F>())
+                         k += bin_count_records(
+                            v.*(R::template member_pointer<Is>));
+                   }()),
+                  ...);
+            }(std::make_index_sequence<R::member_count>{});
+            return k;
+         }
+         else
+            return 0;
+      }
+
       // ── Unified walker ───────────────────────────────────────────────────
       //
       // One template handles both packsize (Sink = psio::size_stream) and
@@ -373,8 +582,15 @@ namespace psio {
       // `.write(ptr, n)` writes n bytes, `.write(ch)` writes a single
       // byte. `size_stream` specializations of those just sum sizes.
 
+      //  Optional `sizes` / `idx_ptr` carry per-record body sizes
+      //  precomputed by packed_size_of_collect, eliminating the
+      //  fractal record_body_size() call at every nested non-DWNC
+      //  record.  When nullptr (or no caller passes them), the path
+      //  falls back to the runtime walk.
       template <typename T, typename Sink>
-      void write_value(const T& v, Sink& s)
+      void write_value(const T& v, Sink& s,
+                       const std::uint32_t* sizes   = nullptr,
+                       std::size_t*         idx_ptr = nullptr)
       {
          if constexpr (::psio::format_should_dispatch_adapter_v<
                           ::psio::bin, T>)
@@ -416,7 +632,7 @@ namespace psio {
                s.write(v.data(), v.size() * sizeof(E));
             else
                for (const auto& x : v)
-                  write_value(x, s);
+                  write_value(x, s, sizes, idx_ptr);
          }
          else if constexpr (is_std_vector<T>::value)
          {
@@ -443,7 +659,7 @@ namespace psio {
             else
             {
                for (const auto& x : v)
-                  write_value(x, s);
+                  write_value(x, s, sizes, idx_ptr);
             }
          }
          else if constexpr (std::is_same_v<T, std::string>)
@@ -457,12 +673,16 @@ namespace psio {
             std::uint8_t tag = v.has_value() ? 1 : 0;
             s.write(reinterpret_cast<const char*>(&tag), 1);
             if (v.has_value())
-               write_value(*v, s);
+               write_value(*v, s, sizes, idx_ptr);
          }
          else if constexpr (is_std_variant<T>::value)
          {
             write_varuint32(s, static_cast<std::uint32_t>(v.index()));
-            std::visit([&](const auto& alt) { write_value(alt, s); }, v);
+            std::visit(
+               [&](const auto& alt) {
+                  write_value(alt, s, sizes, idx_ptr);
+               },
+               v);
          }
          else if constexpr (is_bitvector<T>::value)
          {
@@ -538,7 +758,7 @@ namespace psio {
                          }
                          else
                          {
-                            write_value(fref, sink);
+                            write_value(fref, sink, sizes, idx_ptr);
                          }
                       }()),
                      ...);
@@ -552,12 +772,16 @@ namespace psio {
             else
             {
                // Non-DWNC: wrap body in varuint content_size prefix.
-               // Compute body size analytically via record_body_size
-               // (same walk variable_contrib does) so we can emit the
-               // prefix without a duplicate size_stream pass over the
-               // body. Mirrors v1 bin's bin_size_cache pattern: one
-               // size walk total per non-DWNC record, not two.
-               const std::size_t body_size = record_body_size(v);
+               // body_size comes from the cache when available (the
+               // size-collect pass populated it during the upfront
+               // packed_size_of call); otherwise fall back to the
+               // per-record record_body_size walk (the legacy path,
+               // kept for size_stream and other no-cache callers).
+               std::size_t body_size;
+               if (sizes && idx_ptr)
+                  body_size = sizes[(*idx_ptr)++];
+               else
+                  body_size = record_body_size(v);
                write_varuint32(
                   s, static_cast<std::uint32_t>(body_size));
                if constexpr (sink_counts_only_v<Sink>)
@@ -839,23 +1063,53 @@ namespace psio {
       friend void tag_invoke(decltype(::psio::encode), bin, const T& v,
                              std::vector<char>& sink)
       {
-         //  Pre-size + fast_buf_stream beats vector_stream's grow-as-
-         //  you-write on nested data: one resize beats N reallocations.
-         const std::size_t       n    = detail::bin_impl::packed_size_of(v);
-         const std::size_t       orig = sink.size();
-         sink.resize(orig + n);
-         ::psio::fast_buf_stream fbs{sink.data() + orig, n};
-         detail::bin_impl::write_value(v, fbs);
+         //  Stack-cached size precomputation: one walk populates the
+         //  per-record body-size cache and computes the total; the
+         //  write walk consumes the cache instead of recomputing
+         //  record_body_size() at every nested non-DWNC record.
+         constexpr std::size_t      kSlotSbo = 64;
+         std::uint32_t              sbo[kSlotSbo];
+         std::vector<std::uint32_t> heap;
+         std::uint32_t*             sizes = sbo;
+         const std::size_t          K =
+            detail::bin_impl::bin_count_records(v);
+         if (K > kSlotSbo)
+         {
+            heap.resize(K);
+            sizes = heap.data();
+         }
+         std::size_t       idx = 0;
+         const std::size_t total =
+            detail::bin_impl::packed_size_of_collect(v, sizes, idx);
+         const std::size_t orig = sink.size();
+         sink.resize(orig + total);
+         ::psio::fast_buf_stream fbs{sink.data() + orig, total};
+         idx = 0;
+         detail::bin_impl::write_value(v, fbs, sizes, &idx);
       }
 
       template <typename T>
       friend std::vector<char> tag_invoke(decltype(::psio::encode), bin,
                                           const T& v)
       {
-         const std::size_t       n = detail::bin_impl::packed_size_of(v);
-         std::vector<char>        out(n);
+         constexpr std::size_t      kSlotSbo = 64;
+         std::uint32_t              sbo[kSlotSbo];
+         std::vector<std::uint32_t> heap;
+         std::uint32_t*             sizes = sbo;
+         const std::size_t          K =
+            detail::bin_impl::bin_count_records(v);
+         if (K > kSlotSbo)
+         {
+            heap.resize(K);
+            sizes = heap.data();
+         }
+         std::size_t       idx = 0;
+         const std::size_t total =
+            detail::bin_impl::packed_size_of_collect(v, sizes, idx);
+         std::vector<char>       out(total);
          ::psio::fast_buf_stream fbs{out.data(), out.size()};
-         detail::bin_impl::write_value(v, fbs);
+         idx = 0;
+         detail::bin_impl::write_value(v, fbs, sizes, &idx);
          return out;
       }
 
