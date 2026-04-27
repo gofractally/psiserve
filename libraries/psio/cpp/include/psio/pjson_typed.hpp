@@ -191,6 +191,24 @@ namespace psio {
          {
             using E = typename is_std_vector_<F>::elem;
             F out;
+            // vector<uint8_t> / vector<std::byte> route through the
+            // dedicated t_bytes tag rather than typed-array — bytes
+            // are a blob, not a list of small ints; JSON renders
+            // base64 rather than [1,2,3,…].
+            if constexpr (std::is_same_v<E, std::uint8_t> ||
+                          std::is_same_v<E, std::byte>)
+            {
+               if (v.is_bytes())
+               {
+                  auto span = v.as_bytes();
+                  out.resize(span.size());
+                  if (!span.empty())
+                     std::memcpy(out.data(), span.data(), span.size());
+                  return out;
+               }
+               // Fall through to array decode for back-compat data
+               // emitted before the t_bytes routing landed.
+            }
             // Typed-array fast path: bulk-memcpy when the wire form
             // is a typed array whose element matches E.
             if constexpr (
@@ -299,7 +317,13 @@ namespace psio {
          else if constexpr (typed_is_vector_<F>::value)
          {
             using E = typename typed_is_vector_<F>::elem;
-            if constexpr (is_typed_array_elem_<E>)
+            // vector<u8>/vector<std::byte> → t_bytes: 1 tag + N raw bytes.
+            if constexpr (std::is_same_v<E, std::uint8_t> ||
+                          std::is_same_v<E, std::byte>)
+            {
+               return 1u + v.size();
+            }
+            else if constexpr (is_typed_array_elem_<E>)
             {
                // Typed-array body: 1 tag + N*sizeof(E) + 2 count.
                return 1u + v.size() * sizeof(E) + 2u;
@@ -359,7 +383,21 @@ namespace psio {
          else if constexpr (typed_is_vector_<F>::value)
          {
             using E = typename typed_is_vector_<F>::elem;
-            if constexpr (is_typed_array_elem_<E>)
+            // vector<u8>/vector<std::byte> → t_bytes (single memcpy,
+            // no count tail; consumers see "binary blob" rather than
+            // "list of small ints").
+            if constexpr (std::is_same_v<E, std::uint8_t> ||
+                          std::is_same_v<E, std::byte>)
+            {
+               dst[pos] = static_cast<std::uint8_t>(t_bytes << 4);
+               if (!v.empty())
+                  std::memcpy(dst + pos + 1,
+                              reinterpret_cast<const std::uint8_t*>(
+                                 v.data()),
+                              v.size());
+               return 1u + v.size();
+            }
+            else if constexpr (is_typed_array_elem_<E>)
             {
                // Bulk typed-array fast path — single memcpy per
                // vector regardless of length.
