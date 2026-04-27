@@ -147,6 +147,12 @@ psio3_add_test(psio3_emit_capnp_tests emit_capnp_tests.cpp)
 # capnp_parser (capnp_parser.hpp) — .capnp text → Schema IR.
 psio3_add_test(psio3_capnp_parser_tests capnp_parser_tests.cpp)
 
+# emit_fbs (emit_fbs.hpp) — Schema IR → FlatBuffers schema text.
+psio3_add_test(psio3_emit_fbs_tests emit_fbs_tests.cpp)
+
+# fbs_parser (fbs_parser.hpp) — .fbs text → Schema IR.
+psio3_add_test(psio3_fbs_parser_tests fbs_parser_tests.cpp)
+
 # Production-shaped WASI 2.3 inputs through wit_gen + wit_constexpr +
 # wit_encode (resources, own/borrow, multi-interface).
 psio3_add_test(psio3_wit_wasi_shapes_tests wit_wasi_shapes_tests.cpp)
