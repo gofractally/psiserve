@@ -141,6 +141,12 @@ psio3_add_test(psio3_schema_pssz_tests schema_pssz_tests.cpp)
 # emit_pssz (emit_pssz.hpp) — Schema IR → pSSZ wire bytes.
 psio3_add_test(psio3_emit_pssz_tests emit_pssz_tests.cpp)
 
+# emit_capnp (emit_capnp.hpp) — Schema IR → Cap'n Proto schema text.
+psio3_add_test(psio3_emit_capnp_tests emit_capnp_tests.cpp)
+
+# capnp_parser (capnp_parser.hpp) — .capnp text → Schema IR.
+psio3_add_test(psio3_capnp_parser_tests capnp_parser_tests.cpp)
+
 # Production-shaped WASI 2.3 inputs through wit_gen + wit_constexpr +
 # wit_encode (resources, own/borrow, multi-interface).
 psio3_add_test(psio3_wit_wasi_shapes_tests wit_wasi_shapes_tests.cpp)
