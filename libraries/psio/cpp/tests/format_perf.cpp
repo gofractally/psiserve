@@ -1,7 +1,9 @@
-// Quick perf comparison: json (reflection CPO) vs msgpack
-// (reflection CPO) on the same struct.  pjson encodes a different
-// surface (dynamic pjson_value tree), so it's measured separately
-// on its native input.
+// Apples-to-apples format perf comparison: json, msgpack, and pjson
+// all driven by the same reflected struct via their typed CPO /
+// from_struct entry points.  pjson now supports vector + optional
+// fields in pjson_typed (typed-array fast path for primitive
+// element types, t_null tag for absent optionals), so the same Bag
+// shape exercises every format.
 //
 // Build via psio3_format_perf target.  Output reports ns/op for
 // encode + decode + round-trip on each format, plus encoded size.
@@ -11,7 +13,8 @@
 
 #include <psio/json.hpp>
 #include <psio/msgpack.hpp>
-#include <psio/pjson.hpp>
+#include <psio/pjson_typed.hpp>
+#include <psio/pjson_view.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -116,53 +119,38 @@ int main()
                enc_mp, dec_mp, enc_mp + dec_mp, enc_json / enc_mp,
                dec_json / dec_mp);
 
-   // ── pjson on its native input (dynamic pjson_value) ─────────────
+   // ── pjson via typed from_struct + typed_pjson_view ──────────────
    //
-   // pjson is a different shape: it encodes a dynamic value tree
-   // rather than a reflected struct.  Apples-to-apples vs json/msgpack
-   // would need wiring pjson into the CPO path; for now we measure
-   // pjson on its own canonical workflow so the relative cost of
-   // dynamic-value encoding is at least visible.
-   psio::pjson_object obj;
-   obj.emplace_back("name", psio::pjson_value{sample.name});
-   psio::pjson_array payload_arr;
-   for (auto b : sample.payload)
-      payload_arr.emplace_back(
-         psio::pjson_value{psio::pjson_number{
-            static_cast<std::int64_t>(b), 0}});
-   obj.emplace_back("payload", psio::pjson_value{std::move(payload_arr)});
-   obj.emplace_back(
-      "count",
-      psio::pjson_value{psio::pjson_number{
-         static_cast<std::int64_t>(*sample.count), 0}});
-   obj.emplace_back("seq",
-                    psio::pjson_value{psio::pjson_number{sample.seq, 0}});
-   obj.emplace_back("score", psio::pjson_value{sample.score});
-   psio::pjson_value pj{std::move(obj)};
-
-   auto pj_bytes = psio::pjson::encode(pj);
-   std::printf("\n  pjson    : %zu bytes  (%.2fx vs json)\n",
-               pj_bytes.size(),
-               static_cast<double>(pj_bytes.size()) /
+   // Same reflected Bag, encoded and decoded through the typed pjson
+   // entry points.  Vector/optional support landed in pjson_typed
+   // alongside this benchmark — the typed-array fast path handles
+   // the vector<u8>, t_null handles the absent optional<int32>.
+   auto pjson_bytes = psio::from_struct(sample);
+   std::printf("  pjson    : %zu bytes  (%.2fx vs json)\n",
+               pjson_bytes.size(),
+               static_cast<double>(pjson_bytes.size()) /
                   static_cast<double>(json_bytes.size()));
 
    auto enc_pj = bench_ns(
       [&] {
-         auto out = psio::pjson::encode(pj);
+         std::vector<std::uint8_t> out;
+         psio::to_pjson(sample, out);
          asm volatile("" : : "r"(out.data()) : "memory");
       },
       N);
    auto dec_pj = bench_ns(
       [&] {
-         auto out = psio::pjson::decode(
-            std::span<const std::uint8_t>{pj_bytes.data(), pj_bytes.size()});
+         psio::pjson_view raw{pjson_bytes.data(), pjson_bytes.size()};
+         auto v = psio::typed_pjson_view<bench::Bag>::from_pjson(raw);
+         auto out = v.to_struct();
          asm volatile("" : : "r"(&out) : "memory");
       },
       N);
 
-   std::printf("  pjson    :  %8.1f   %8.1f   %8.1f   (dynamic value, "
-               "different surface)\n",
-               enc_pj, dec_pj, enc_pj + dec_pj);
+   std::printf("  pjson    :  %8.1f   %8.1f   %8.1f   (%.2fx encode, "
+               "%.2fx decode vs json)\n",
+               enc_pj, dec_pj, enc_pj + dec_pj, enc_json / enc_pj,
+               dec_json / dec_pj);
 
    return 0;
 }

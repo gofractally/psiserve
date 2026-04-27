@@ -18,7 +18,11 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <optional>
+#include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace psio {
 
@@ -149,6 +153,22 @@ namespace psio {
       }
 
       template <typename F>
+      struct is_std_vector_ : std::false_type {};
+      template <typename E, typename A>
+      struct is_std_vector_<std::vector<E, A>> : std::true_type
+      {
+         using elem = E;
+      };
+
+      template <typename F>
+      struct is_std_optional_ : std::false_type {};
+      template <typename U>
+      struct is_std_optional_<std::optional<U>> : std::true_type
+      {
+         using elem = U;
+      };
+
+      template <typename F>
       static F read_as(pjson_view v)
       {
          if constexpr (std::is_same_v<F, bool>) return v.as_bool();
@@ -160,6 +180,50 @@ namespace psio {
             return std::string(v.as_string());
          else if constexpr (std::is_same_v<F, std::string_view>)
             return v.as_string();
+         else if constexpr (is_std_optional_<F>::value)
+         {
+            // null on the wire → empty optional; otherwise recurse.
+            if (v.is_null())
+               return F{};
+            return F{read_as<typename is_std_optional_<F>::elem>(v)};
+         }
+         else if constexpr (is_std_vector_<F>::value)
+         {
+            using E = typename is_std_vector_<F>::elem;
+            F out;
+            // Typed-array fast path: bulk-memcpy when the wire form
+            // is a typed array whose element matches E.
+            if constexpr (
+               std::is_same_v<E, std::int8_t>  ||
+               std::is_same_v<E, std::int16_t> ||
+               std::is_same_v<E, std::int32_t> ||
+               std::is_same_v<E, std::int64_t> ||
+               std::is_same_v<E, std::uint8_t> ||
+               std::is_same_v<E, std::uint16_t> ||
+               std::is_same_v<E, std::uint32_t> ||
+               std::is_same_v<E, std::uint64_t> ||
+               std::is_same_v<E, float>        ||
+               std::is_same_v<E, double>)
+            {
+               if (v.is_typed_array() &&
+                   v.typed_array_elem_code() ==
+                      pjson_detail::tac_for<E>())
+               {
+                  std::size_t n = v.count();
+                  out.resize(n);
+                  if (n)
+                     std::memcpy(out.data(), v.data() + 1,
+                                 n * sizeof(E));
+                  return out;
+               }
+            }
+            //  Fallback: walk a generic array, one element at a time.
+            std::size_t n = v.count();
+            out.reserve(n);
+            for (std::size_t i = 0; i < n; ++i)
+               out.push_back(read_as<E>(v.at(i)));
+            return out;
+         }
          else
             static_assert(sizeof(F) == 0,
                           "view<T,pjson_format>: unsupported field type");
@@ -177,6 +241,38 @@ namespace psio {
    inline std::size_t typed_field_size(const F& v);
 
    namespace pjson_detail {
+      // Local std::vector / std::optional detectors so the typed
+      // size/encode dispatch can route them without bouncing through
+      // view<T, pjson_format>'s private detectors.
+      template <typename F>
+      struct typed_is_vector_ : std::false_type {};
+      template <typename E, typename A>
+      struct typed_is_vector_<std::vector<E, A>> : std::true_type
+      {
+         using elem = E;
+      };
+
+      template <typename F>
+      struct typed_is_optional_ : std::false_type {};
+      template <typename U>
+      struct typed_is_optional_<std::optional<U>> : std::true_type
+      {
+         using elem = U;
+      };
+
+      template <typename E>
+      constexpr bool is_typed_array_elem_ =
+         std::is_same_v<E, std::int8_t>  ||
+         std::is_same_v<E, std::int16_t> ||
+         std::is_same_v<E, std::int32_t> ||
+         std::is_same_v<E, std::int64_t> ||
+         std::is_same_v<E, std::uint8_t> ||
+         std::is_same_v<E, std::uint16_t> ||
+         std::is_same_v<E, std::uint32_t> ||
+         std::is_same_v<E, std::uint64_t> ||
+         std::is_same_v<E, float>        ||
+         std::is_same_v<E, double>;
+
       template <typename F>
       inline std::size_t typed_field_size_dispatch(const F& v)
       {
@@ -193,6 +289,31 @@ namespace psio {
          else if constexpr (std::is_same_v<F, std::string> ||
                             std::is_same_v<F, std::string_view>)
             return 1u + std::string_view(v).size();
+         else if constexpr (typed_is_optional_<F>::value)
+         {
+            if (!v.has_value())
+               return 1;  // null tag
+            return typed_field_size_dispatch<
+               typename typed_is_optional_<F>::elem>(*v);
+         }
+         else if constexpr (typed_is_vector_<F>::value)
+         {
+            using E = typename typed_is_vector_<F>::elem;
+            if constexpr (is_typed_array_elem_<E>)
+            {
+               // Typed-array body: 1 tag + N*sizeof(E) + 2 count.
+               return 1u + v.size() * sizeof(E) + 2u;
+            }
+            else
+            {
+               // Generic-array body: tag + Σ(child sizes) + 4*N slot
+               // table + 2 count.
+               std::size_t total = 1u + 4u * v.size() + 2u;
+               for (const auto& x : v)
+                  total += typed_field_size_dispatch<E>(x);
+               return total;
+            }
+         }
          else
             static_assert(sizeof(F) == 0,
                           "from_struct: unsupported field type");
@@ -225,6 +346,54 @@ namespace psio {
          else if constexpr (std::is_same_v<F, std::string> ||
                             std::is_same_v<F, std::string_view>)
             return encode_string_at(dst, pos, std::string_view(v));
+         else if constexpr (typed_is_optional_<F>::value)
+         {
+            if (!v.has_value())
+            {
+               dst[pos] = static_cast<std::uint8_t>(t_null << 4);
+               return 1;
+            }
+            return typed_field_encode<typename typed_is_optional_<F>::elem>(
+               dst, pos, *v);
+         }
+         else if constexpr (typed_is_vector_<F>::value)
+         {
+            using E = typename typed_is_vector_<F>::elem;
+            if constexpr (is_typed_array_elem_<E>)
+            {
+               // Bulk typed-array fast path — single memcpy per
+               // vector regardless of length.
+               return encode_typed_array_at<E>(
+                  dst, pos,
+                  std::span<const E>{v.data(), v.size()});
+            }
+            else
+            {
+               // Generic-array form: [tag][value_data][slot[N]][count].
+               std::size_t start = pos;
+               dst[pos++] = static_cast<std::uint8_t>(t_array << 4);
+               std::size_t N  = v.size();
+               std::size_t vd = 0;
+               for (const auto& x : v)
+                  vd += typed_field_size_dispatch<E>(x);
+               std::size_t value_data_start = pos;
+               std::size_t slot_table_pos   = value_data_start + vd;
+               std::size_t count_pos        = slot_table_pos + 4 * N;
+               for (std::size_t i = 0; i < N; ++i)
+               {
+                  std::uint32_t off =
+                     static_cast<std::uint32_t>(pos - value_data_start);
+                  write_u32_le(dst + slot_table_pos + i * 4,
+                               pack_slot(off, 0));
+                  pos += typed_field_encode<E>(dst, pos, v[i]);
+               }
+               dst[count_pos]     =
+                  static_cast<std::uint8_t>(N & 0xFF);
+               dst[count_pos + 1] =
+                  static_cast<std::uint8_t>((N >> 8) & 0xFF);
+               return count_pos + 2 - start;
+            }
+         }
       }
    }
 
