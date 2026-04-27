@@ -1,20 +1,11 @@
-// pSSZ round-trip on Schema IR.
+// pSSZ round-trip on Schema IR — the canonical schema-schema wire form.
 //
-// pSSZ is the canonical schema-schema wire format: every IR type is
-// PSIO_REFLECT'd so a populated Schema is just another reflected
-// struct as far as the codec is concerned.
-//
-// Currently working: flat IR records (Package, Int, Float,
-// Attribute, etc.) round-trip cleanly, AND any IR type that recurses
-// through AnyType — Member, Func, Object containing variable-shape
-// members — round-trip through Box<T> as a transparent wrapper.
-//
-// Still blocked on a full Schema round-trip: pssz has no case for
-// std::map<K, V> (size_of_v / encode_value / decode_value all hit
-// `unsupported type` static_asserts).  Schema::types is a std::map;
-// either pssz adds a case mirroring vector<pair<K, V>>, or Schema
-// swaps the map for a vector<pair> with the map invariants
-// (sorted-by-key, unique-keys) enforced at the IR layer.
+// Every IR type is PSIO_REFLECT'd so a populated Schema is just
+// another reflected struct as far as the codec is concerned.  pssz
+// recognises Box<T> as a transparent wrapper (see this file's box
+// suite + commit 3461d0f), and Schema::types is a vector<Member>
+// rather than a std::map<string, AnyType> — so the full Schema
+// round-trip works without pssz needing an associative-container case.
 
 #include <psio/schema_ir.hpp>
 #include <psio/pssz.hpp>
@@ -132,4 +123,47 @@ TEST_CASE("pssz: nested Box<AnyType> recursive shape round-trips",
    auto bytes   = psio::encode(psio::pssz{}, original);
    auto decoded = psio::decode<AnyType>(psio::pssz{}, bytes);
    CHECK(decoded == original);
+}
+
+// ─── Full Schema round-trip ─────────────────────────────────────────
+
+TEST_CASE("pssz: full Schema round-trips byte-identically",
+          "[schema_pssz][full]")
+{
+   using psio::Func;
+   using psio::Interface;
+   using psio::Member;
+   using psio::schema_types::AnyType;
+   using psio::schema_types::Box;
+   using psio::schema_types::Int;
+   using psio::schema_types::Object;
+   using psio::schema_types::Type;
+
+   // Representative Schema covering every interesting IR shape:
+   // a package header, a record with two fields (one primitive, one
+   // Type-by-name reference), an interface with two funcs, and a
+   // declared u32 alias all the schema's named-type entries reach.
+   psio::Schema s;
+   s.package = psio::Package{.name = "test:pkg", .version = "1.0.0"};
+   s.insert("u32", AnyType{Int{32, false}});
+   s.insert("datetime",
+            AnyType{Object{.members = {Member{.name = "seconds",
+                                              .type = Box<AnyType>{Type{"u32"}},
+                                              .attributes = {}}}}});
+   s.interfaces.push_back(Interface{
+      .name       = "wall_clock",
+      .type_names = {"datetime"},
+      .funcs      = {Func{.name   = "now",
+                          .params = {},
+                          .result = Box<AnyType>{Type{"datetime"}}}}});
+
+   auto bytes = psio::encode(psio::pssz{}, s);
+   REQUIRE_FALSE(bytes.empty());
+
+   auto decoded = psio::decode<psio::Schema>(psio::pssz{}, bytes);
+   CHECK(decoded == s);
+
+   // Re-encode the decoded form; bytes must be identical.
+   auto bytes2 = psio::encode(psio::pssz{}, decoded);
+   CHECK(bytes2 == bytes);
 }

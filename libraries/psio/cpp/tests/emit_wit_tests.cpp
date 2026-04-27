@@ -46,7 +46,7 @@ TEST_CASE("emit_wit: record with primitive + list + option fields",
    using namespace psio::schema_types;
 
    Schema s;
-   s.types["bag"] = Object{
+   s.insert("bag", AnyType{Object{
       .members = {
          Member{.name = "name",
                 .type = Box<AnyType>{
@@ -54,7 +54,7 @@ TEST_CASE("emit_wit: record with primitive + list + option fields",
          Member{.name = "items",
                 .type = Box<AnyType>{List{Box<AnyType>{Int{32, false}}}}},
          Member{.name = "count",
-                .type = Box<AnyType>{Option{Box<AnyType>{Int{32, true}}}}}}};
+                .type = Box<AnyType>{Option{Box<AnyType>{Int{32, true}}}}}}}});
 
    s.interfaces.push_back(Interface{
       .name = "bags", .type_names = {"bag"}, .funcs = {}});
@@ -73,16 +73,16 @@ TEST_CASE("emit_wit: variant + resource", "[emit_wit]")
    using namespace psio::schema_types;
 
    Schema s;
-   s.types["status"] = Variant{
+   s.insert("status", AnyType{Variant{
       .members = {
          Member{.name = "ok",   .type = Box<AnyType>{Tuple{}}},
-         Member{.name = "err",  .type = Box<AnyType>{Int{32, false}}}}};
+         Member{.name = "err",  .type = Box<AnyType>{Int{32, false}}}}}});
 
-   s.types["pollable"] = Resource{
+   s.insert("pollable", AnyType{Resource{
       .name    = "pollable",
       .methods = {Func{.name = "ready",
                        .result = Box<AnyType>{Custom{Box<AnyType>{Int{1, false}}, "bool"}}},
-                  Func{.name = "block"}}};
+                  Func{.name = "block"}}}});
 
    s.interfaces.push_back(Interface{
       .name       = "io",

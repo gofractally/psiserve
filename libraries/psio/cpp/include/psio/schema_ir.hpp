@@ -420,30 +420,52 @@ namespace psio::schema_types
    // ── Schema (top-level container) ────────────────────────────────────
    //
    // Carries the package header, every interface / world / use
-   // declaration, and the named-type map referenced by Type{} entries
+   // declaration, and the named-type list referenced by Type{} entries
    // throughout the AnyType graph.  Format emitters consume this;
    // format parsers produce it.
+   //
+   // `types` is a vector<Member> rather than a map<string, AnyType>:
+   //   1. Order is meaningful (declaration order should round-trip
+   //      through every format that preserves it).
+   //   2. Member already has the right shape (name + Box<AnyType> +
+   //      attributes) and is PSIO_REFLECT'd, so pssz / every other
+   //      format that walks reflected records carries it without an
+   //      additional std::map case.
+   //   3. The map invariants (uniqueness, lookup) are restated as
+   //      Schema::insert / Schema::get; insertion deduplicates by
+   //      name so the visible behaviour matches v1.
    struct Schema
    {
-      Package                        package;
-      std::vector<Interface>         interfaces;
-      std::vector<World>             worlds;
-      std::vector<Use>               uses;
-      std::map<std::string, AnyType> types;
+      Package                package;
+      std::vector<Interface> interfaces;
+      std::vector<World>     worlds;
+      std::vector<Use>       uses;
+      std::vector<Member>    types;
 
       friend bool operator==(const Schema&, const Schema&) = default;
 
       // Lookup by name; returns nullptr for unknown.
-      const AnyType* get(const std::string& name) const noexcept
+      const AnyType* get(std::string_view name) const noexcept
       {
-         auto it = types.find(name);
-         return it == types.end() ? nullptr : &it->second;
+         for (const auto& m : types)
+            if (m.name == name)
+               return m.type.get();
+         return nullptr;
       }
 
-      // Insert-or-overwrite.
+      // Insert-or-overwrite by name (vector preserves declaration
+      // order; later inserts of the same name update in place).
       void insert(std::string name, AnyType type)
       {
-         types.insert_or_assign(std::move(name), std::move(type));
+         for (auto& m : types)
+            if (m.name == name)
+            {
+               *m.type = std::move(type);
+               return;
+            }
+         types.push_back(Member{std::move(name),
+                                Box<AnyType>{std::move(type)},
+                                {}});
       }
    };
    PSIO_REFLECT(Schema, package, interfaces, worlds, uses, types)

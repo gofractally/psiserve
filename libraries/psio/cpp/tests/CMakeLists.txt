@@ -138,6 +138,9 @@ psio3_add_test(psio3_emit_wit_tests emit_wit_tests.cpp)
 # pSSZ round-trip on Schema IR — the canonical schema-schema wire form.
 psio3_add_test(psio3_schema_pssz_tests schema_pssz_tests.cpp)
 
+# emit_pssz (emit_pssz.hpp) — Schema IR → pSSZ wire bytes.
+psio3_add_test(psio3_emit_pssz_tests emit_pssz_tests.cpp)
+
 # Production-shaped WASI 2.3 inputs through wit_gen + wit_constexpr +
 # wit_encode (resources, own/borrow, multi-interface).
 psio3_add_test(psio3_wit_wasi_shapes_tests wit_wasi_shapes_tests.cpp)

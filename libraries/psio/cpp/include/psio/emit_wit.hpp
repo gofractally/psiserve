@@ -191,13 +191,13 @@ namespace psio::schema_types
             for (const auto& iface : _schema.interfaces)
                for (const auto& tn : iface.type_names)
                   in_iface.insert(tn);
-            for (const auto& [name, type] : _schema.types)
+            for (const auto& m : _schema.types)
             {
-               if (in_iface.contains(name))
+               if (in_iface.contains(m.name))
                   continue;
-               if (!name.empty() && name.front() == '@')
+               if (!m.name.empty() && m.name.front() == '@')
                   continue;
-               emit_type_decl(name, type);
+               emit_type_decl(m.name, *m.type);
             }
          }
 
