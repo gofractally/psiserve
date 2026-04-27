@@ -12,7 +12,7 @@
 
 #include <cstdint>
 
-namespace psio1::varint {
+namespace psio::varint {
 
    struct decode_u32_result
    {
@@ -42,4 +42,4 @@ namespace psio1::varint {
       bool         ok;
    };
 
-}  // namespace psio1::varint
+}  // namespace psio::varint

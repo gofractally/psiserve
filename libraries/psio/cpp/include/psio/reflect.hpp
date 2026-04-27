@@ -226,7 +226,7 @@ namespace psio {
    template <>                                                                  \
    inline constexpr auto ::psio::annotate<&TYPE::BOOST_PP_TUPLE_ELEM(1, kt)> = \
       [] {                                                                      \
-         using namespace ::psio3;                                                \
+         using namespace ::psio;                                                 \
          return ::psio::to_spec_tuple(BOOST_PP_TUPLE_ELEM(2, kt));              \
       }();
 

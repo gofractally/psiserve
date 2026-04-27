@@ -37,7 +37,7 @@
 #  include <arm_neon.h>
 #endif
 
-namespace psio1::varint::leb128 {
+namespace psio::varint::leb128 {
 
    // Maximum encoded byte counts.  ceil(W/7) for an unsigned width-W
    // value; signed forms share the unsigned bound because the sign bit
@@ -448,4 +448,4 @@ namespace psio1::varint::leb128 {
    using fast::decode_i64;
    using fast::decode_zigzag64;
 
-}  // namespace psio1::varint::leb128
+}  // namespace psio::varint::leb128

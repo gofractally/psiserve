@@ -34,7 +34,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace psio1::varint::prefix2 {
+namespace psio::varint::prefix2 {
 
    inline constexpr std::size_t max_bytes_u64 = 8;
    inline constexpr std::uint64_t max_value =
@@ -204,4 +204,4 @@ namespace psio1::varint::prefix2 {
 
    }  // namespace le
 
-}  // namespace psio1::varint::prefix2
+}  // namespace psio::varint::prefix2

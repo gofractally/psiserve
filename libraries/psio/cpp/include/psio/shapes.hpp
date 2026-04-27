@@ -19,9 +19,13 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -196,6 +200,25 @@ namespace psio {
    // byte-oriented specs (length_bound, utf8_spec, hex_spec) target it
    // specifically.
    namespace detail {
+      // Associative-container detector — std::map / std::set /
+      // std::unordered_map / std::unordered_set.  These are runtime-
+      // sized sequences (of pairs or keys), but they don't satisfy the
+      // VariableSequence concept because they expose insert/emplace
+      // instead of push_back.  Their inherent annotations
+      // (sorted_spec, unique_keys_spec) target VariableSequenceShape,
+      // so we route them there explicitly rather than introducing a
+      // separate MapShape that every existing spec would have to add.
+      template <typename T>
+      struct is_map_like : std::false_type {};
+      template <typename K, typename V, typename C, typename A>
+      struct is_map_like<std::map<K, V, C, A>> : std::true_type {};
+      template <typename K, typename C, typename A>
+      struct is_map_like<std::set<K, C, A>> : std::true_type {};
+      template <typename K, typename V, typename H, typename E, typename A>
+      struct is_map_like<std::unordered_map<K, V, H, E, A>> : std::true_type {};
+      template <typename K, typename H, typename E, typename A>
+      struct is_map_like<std::unordered_set<K, H, E, A>> : std::true_type {};
+
       template <typename T>
       constexpr auto compute_shape_tag_of() noexcept
       {
@@ -215,6 +238,8 @@ namespace psio {
          else if constexpr (is_variant<U>::value)
             return ::psio::VariantShape{};
          else if constexpr (VariableSequence<U>)
+            return ::psio::VariableSequenceShape{};
+         else if constexpr (is_map_like<U>::value)
             return ::psio::VariableSequenceShape{};
          else if constexpr (Record<U>)
             return ::psio::RecordShape{};

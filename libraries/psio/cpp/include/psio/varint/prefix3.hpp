@@ -38,7 +38,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace psio1::varint::prefix3 {
+namespace psio::varint::prefix3 {
 
    inline constexpr std::size_t max_bytes_u64 = 9;
 
@@ -153,4 +153,4 @@ namespace psio1::varint::prefix3 {
    using fast::encode_u64;
    using fast::size_u64;
 
-}  // namespace psio1::varint::prefix3
+}  // namespace psio::varint::prefix3

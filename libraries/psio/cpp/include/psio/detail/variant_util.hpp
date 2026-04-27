@@ -10,7 +10,7 @@
 #include <utility>
 #include <variant>
 
-namespace psio1::detail {
+namespace psio::detail {
 
    template <typename T>
    struct is_std_variant : std::false_type {};
@@ -46,4 +46,4 @@ namespace psio1::detail {
          std::index_sequence_for<Ts...>{});
    }
 
-}  // namespace psio1::detail
+}  // namespace psio::detail
