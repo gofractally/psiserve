@@ -54,6 +54,7 @@
 #include <psio/format_tag_base.hpp>
 #include <psio/reflect.hpp>
 #include <psio/stream.hpp>
+#include <psio/varint/leb128.hpp>
 
 #include <bit>
 #include <cstdint>
@@ -94,53 +95,50 @@ namespace psio
          constexpr std::uint8_t fixed32       = 5;
       }  // namespace wt
 
-      // ── varint (LEB128, unsigned, little-endian groups) ─────────
+      // ── varint = LEB128 (matches the protobuf wire format) ─────
+      //
+      //  Decode goes through psio::varint::leb128::fast::decode_u64,
+      //  which picks NEON on aarch64, SSE/SWAR on x86_64, and scalar
+      //  elsewhere; ~2x the throughput of the byte-at-a-time loop on
+      //  long varints, and zero overhead on the common 1-byte tags
+      //  since the fast path checks `avail < 16` and falls back to
+      //  scalar for short reads.
+      //
+      //  Encode is left scalar: the leb128 library's measurements
+      //  (varint/leb128.hpp:248) show the encode side is dominated
+      //  by the writer's store + advance, with vectorised packing
+      //  pulled from below the level the wire-rate measurements care
+      //  about.  Keeping the scalar form here avoids dragging
+      //  alignment/padding concerns into the protobuf write path.
+
       inline std::size_t varint_size(std::uint64_t v) noexcept
       {
-         //  1 byte per 7-bit group; minimum 1 byte even for zero.
-         std::size_t n = 1;
-         while (v >= 0x80)
-         {
-            v >>= 7;
-            ++n;
-         }
-         return n;
+         return ::psio::varint::leb128::scalar::size_u64(v);
       }
 
       template <typename Sink>
       inline void emit_varint(std::uint64_t v, Sink& s)
       {
-         //  Hot path: tiny values (the common case for tags + small
-         //  ints) take exactly one byte.
-         while (v >= 0x80)
-         {
-            std::uint8_t b = static_cast<std::uint8_t>(v) | 0x80;
-            s.write(&b, 1);
-            v >>= 7;
-         }
-         std::uint8_t last = static_cast<std::uint8_t>(v);
-         s.write(&last, 1);
+         std::uint8_t buf[10];
+         std::size_t  n =
+            ::psio::varint::leb128::scalar::encode_u64(buf, v);
+         s.write(buf, n);
       }
 
       inline std::uint64_t read_varint(std::span<const char> src,
                                        std::size_t&          pos)
       {
-         std::uint64_t v     = 0;
-         int           shift = 0;
-         while (true)
-         {
-            if (pos >= src.size())
-               throw std::runtime_error(
-                  "protobuf: truncated varint");
-            std::uint8_t b = static_cast<std::uint8_t>(src[pos++]);
-            v |= static_cast<std::uint64_t>(b & 0x7f) << shift;
-            if ((b & 0x80) == 0)
-               return v;
-            shift += 7;
-            if (shift >= 64)
-               throw std::runtime_error(
-                  "protobuf: varint > 10 bytes");
-         }
+         //  fast::decode_u64 returns {.value, .size, .ok}.  Up to 16
+         //  bytes ahead are read by the SIMD path so the bounds
+         //  check is per-call, not per-byte.
+         auto avail = src.size() - pos;
+         auto r     = ::psio::varint::leb128::fast::decode_u64(
+            reinterpret_cast<const std::uint8_t*>(src.data() + pos),
+            avail);
+         if (!r.ok)
+            throw std::runtime_error("protobuf: malformed varint");
+         pos += r.len;
+         return r.value;
       }
 
       // Tag = (field_number << 3) | wire_type, varint-encoded.
