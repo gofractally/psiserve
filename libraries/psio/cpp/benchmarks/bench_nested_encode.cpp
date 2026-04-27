@@ -70,7 +70,8 @@ constexpr int leaves_of()
 }
 
 // ── wit_abi: synthetic "format tag" wrapping the lower/lift API. ─────
-struct wit_abi_format {};
+struct wit_abi_format        {};  // naïve bump (resizes vector per alloc)
+struct wit_abi_presized_format {};  // pre-reserved via wit_abi_total_bytes
 
 template <typename T>
 std::vector<std::uint8_t> wit_abi_encode(const T& value)
@@ -78,6 +79,21 @@ std::vector<std::uint8_t> wit_abi_encode(const T& value)
    psio::buffer_store_policy p;
    const std::uint32_t       dest = p.alloc(psio::wit_abi_align_v<T>,
                                        psio::wit_abi_size_v<T>);
+   psio::wit_abi_lower_fields(value, p, dest);
+   return std::move(p.buf);
+}
+
+template <typename T>
+std::vector<std::uint8_t> wit_abi_encode_presized(const T& value)
+{
+   //  One pre-pass with size_store_policy gives the exact total bytes
+   //  the real lower would allocate.  Reserving up front means
+   //  buffer_store_policy::alloc never needs to grow the vector.
+   const std::uint32_t       total = psio::wit_abi_total_bytes(value);
+   psio::buffer_store_policy p;
+   p.buf.reserve(total);
+   const std::uint32_t dest =
+      p.alloc(psio::wit_abi_align_v<T>, psio::wit_abi_size_v<T>);
    psio::wit_abi_lower_fields(value, p, dest);
    return std::move(p.buf);
 }
@@ -91,6 +107,11 @@ double bench_encode(const T& v)
       if constexpr (std::is_same_v<Fmt, wit_abi_format>)
       {
          auto bytes = wit_abi_encode(v);
+         asm volatile("" : : "r"(bytes.data()) : "memory");
+      }
+      else if constexpr (std::is_same_v<Fmt, wit_abi_presized_format>)
+      {
+         auto bytes = wit_abi_encode_presized(v);
          asm volatile("" : : "r"(bytes.data()) : "memory");
       }
       else
@@ -115,6 +136,14 @@ double bench_size_only(const T& v)
       });
       return t.min_ns;
    }
+   else if constexpr (std::is_same_v<Fmt, wit_abi_presized_format>)
+   {
+      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+         std::size_t n = psio::wit_abi_total_bytes(v);
+         asm volatile("" : "+r"(n) : : "memory");
+      });
+      return t.min_ns;
+   }
    else
    {
       auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
@@ -133,6 +162,22 @@ double bench_sink(const T& v)
    {
       // wit_abi has no in-place "sink" CPO; reuse a buffer_store_policy.
       psio::buffer_store_policy p;
+      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+         p.buf.clear();
+         p.bump = 0;
+         const std::uint32_t dest = p.alloc(
+            psio::wit_abi_align_v<std::remove_cvref_t<decltype(v)>>,
+            psio::wit_abi_size_v<std::remove_cvref_t<decltype(v)>>);
+         psio::wit_abi_lower_fields(v, p, dest);
+      });
+      return t.min_ns;
+   }
+   else if constexpr (std::is_same_v<Fmt, wit_abi_presized_format>)
+   {
+      psio::buffer_store_policy p;
+      // Reserve once outside the loop so the second-and-later
+      // iterations measure pure encode + size walk, not allocation.
+      p.buf.reserve(psio::wit_abi_total_bytes(v) * 2);
       auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
          p.buf.clear();
          p.bump = 0;
@@ -199,6 +244,11 @@ struct fmt_traits<wit_abi_format>
    static constexpr const char* name = "wit_abi (bump)";
 };
 template <>
+struct fmt_traits<wit_abi_presized_format>
+{
+   static constexpr const char* name = "wit_abi (pre-sized)";
+};
+template <>
 struct fmt_traits<psio::pssz>
 {
    static constexpr const char* name = "pssz";
@@ -248,6 +298,8 @@ void run_one_format()
       std::size_t wire_bytes;
       if constexpr (std::is_same_v<Fmt, wit_abi_format>)
          wire_bytes = wit_abi_encode(v).size();
+      else if constexpr (std::is_same_v<Fmt, wit_abi_presized_format>)
+         wire_bytes = wit_abi_encode_presized(v).size();
       else
          wire_bytes = psio::encode(Fmt{}, v).size();
       double rv = bench_encode<Fmt>(v);
@@ -285,6 +337,7 @@ int main()
    run_one_format<psio::bincode>();
    run_one_format<psio::avro>();
    run_one_format<wit_abi_format>();
+   run_one_format<wit_abi_presized_format>();
 
    return 0;
 }

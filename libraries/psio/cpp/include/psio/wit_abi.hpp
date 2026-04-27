@@ -1191,6 +1191,45 @@ namespace psio {
    // buffer is allocated once, then fixed_store_policy writes with zero
    // overhead — no vector growth, no bounds checks, no base offset math.
 
+   // ── size_store_policy — count bytes only, no writes ─────────────────────
+   //
+   // Mirrors lower-fields' alloc/store interface but performs no actual
+   // memory writes. Used to compute the total wire size in advance so the
+   // real buffer (vector or otherwise) can be pre-allocated.
+
+   struct size_store_policy {
+      uint32_t bump = 0;
+      uint32_t base = 0;
+
+      uint32_t alloc(uint32_t align, uint32_t size) {
+         bump = (bump + align - 1) & ~(align - 1);
+         uint32_t ptr = bump;
+         bump += size;
+         return ptr;
+      }
+
+      void store_u8(uint32_t, uint8_t)                {}
+      void store_u16(uint32_t, uint16_t)              {}
+      void store_u32(uint32_t, uint32_t)              {}
+      void store_u64(uint32_t, uint64_t)              {}
+      void store_f32(uint32_t, float)                 {}
+      void store_f64(uint32_t, double)                {}
+      void store_bytes(uint32_t, const char*, uint32_t) {}
+   };
+
+   //  One-pass walk that returns the total bytes a buffer_store_policy
+   //  would consume to lower `value`.  Useful as a pre-reservation hint
+   //  to eliminate repeated vector::resize calls during the actual lower.
+   template <typename T>
+   inline uint32_t wit_abi_total_bytes(const T& value) noexcept
+   {
+      size_store_policy p;
+      const uint32_t    dest =
+         p.alloc(wit_abi_align_v<T>, wit_abi_size_v<T>);
+      wit_abi_lower_fields(value, p, dest);
+      return p.bump;
+   }
+
    struct fixed_store_policy {
       uint8_t* buf;
       uint32_t bump = 0;
