@@ -132,6 +132,9 @@ psio3_add_test(psio3_schema_ir_tests schema_ir_tests.cpp)
 # SchemaBuilder (schema_builder.hpp) — C++ reflection → Schema IR.
 psio3_add_test(psio3_schema_builder_tests schema_builder_tests.cpp)
 
+# emit_wit (emit_wit.hpp) — Schema IR → WIT text emitter.
+psio3_add_test(psio3_emit_wit_tests emit_wit_tests.cpp)
+
 # Production-shaped WASI 2.3 inputs through wit_gen + wit_constexpr +
 # wit_encode (resources, own/borrow, multi-interface).
 psio3_add_test(psio3_wit_wasi_shapes_tests wit_wasi_shapes_tests.cpp)

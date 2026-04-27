@@ -101,17 +101,29 @@ namespace psio::schema_types
       SchemaBuilder() = default;
 
       // Insert a type under a chosen name and return *this for chaining.
+      //
+      // If the type's automatic name (reflect<T>::name for reflected
+      // types, the @-interned id otherwise) happens to equal the
+      // user-supplied name, we leave the original definition in place
+      // — overwriting it with a Type{} pointing at itself would
+      // produce a cycle that resolve() walks until the stack runs out.
       template <typename T>
       SchemaBuilder& insert(std::string name) &
       {
-         schema_.insert(std::move(name), insert<T>());
+         AnyType ref = insert<T>();
+         if (auto* t = std::get_if<Type>(&ref.value); t && t->type == name)
+            return *this;
+         schema_.insert(std::move(name), std::move(ref));
          return *this;
       }
 
       template <typename T>
       SchemaBuilder&& insert(std::string name) &&
       {
-         schema_.insert(std::move(name), insert<T>());
+         AnyType ref = insert<T>();
+         if (auto* t = std::get_if<Type>(&ref.value); t && t->type == name)
+            return std::move(*this);
+         schema_.insert(std::move(name), std::move(ref));
          return std::move(*this);
       }
 
@@ -119,6 +131,16 @@ namespace psio::schema_types
       // calls for the same T return a Type{} reference back to the
       // first registration so the schema graph stays acyclic on the
       // wire even for self-referential types.
+      //
+      // Naming policy:
+      //   - PSIO_REFLECT'd structs / resources use `reflect<T>::name`
+      //     so emitters render `record point { … }` instead of
+      //     `record @4 { … }` and downstream tooling can refer to
+      //     them by their source-level name.
+      //   - Everything else (primitives, std::vector, std::optional,
+      //     std::array, etc.) uses an `@N` interning name; emitters
+      //     resolve those inline at the use site rather than emit
+      //     them as standalone aliases.
       template <typename T>
       AnyType insert()
       {
@@ -128,11 +150,14 @@ namespace psio::schema_types
          if (auto it = id_to_name_.find(idx); it != id_to_name_.end())
             return Type{it->second};
 
-         // Reserve the name first so cycles see the Type{} reference.
-         std::string name     = "@" + std::to_string(id_to_name_.size());
-         id_to_name_[idx]     = name;
-         schema_.insert(name, AnyType{});  // placeholder; overwritten below
+         std::string name;
+         if constexpr (Reflected<U>)
+            name = std::string{reflect<U>::name};
+         else
+            name = "@" + std::to_string(id_to_name_.size());
 
+         id_to_name_[idx] = name;
+         schema_.insert(name, AnyType{});  // placeholder; overwritten below
          schema_.insert(name, build_anytype<U>());
          return Type{name};
       }

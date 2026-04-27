@@ -388,10 +388,19 @@ namespace psio {
             pkg += part.text;
          }
 
-         expect(tok::colon);
-         auto name = expect_ident();
-         pkg += ":";
-         pkg += name.text;
+         // `:` and the second name are technically required by
+         // canonical WIT but psio's emit_wit historically renders the
+         // package id without the namespace prefix when the input
+         // schema didn't carry one (the colon-less form is what v1
+         // produces too).  Tolerate both shapes so emit→parse
+         // round-trips on those schemas.
+         if (peek_is(tok::colon))
+         {
+            lex_.next();
+            auto name = expect_ident();
+            pkg += ":";
+            pkg += name.text;
+         }
 
          // Optional @version
          if (peek_is(tok::at)) {
