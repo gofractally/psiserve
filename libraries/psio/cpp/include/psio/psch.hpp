@@ -40,6 +40,13 @@ namespace psio::psch {
    inline constexpr std::array<char, 4> magic{'P', 'S', 'C', 'H'};
 
    inline constexpr std::uint8_t flag_wide_type_ids = 0x01;
+   // When set, slots in fields_pool are 4 bytes
+   //   ({ name_off:u16, name_len:u8, type_id:u8 }).
+   // When unset, slots are 8 bytes
+   //   ({ name_off:u24, name_len:u8, type_id:u16, pad:u16 }).
+   // Encoder picks compact when name_pool < 64 KiB AND type_count ≤ 254;
+   // both fit. Saves ~50% on fields_pool for typical schemas.
+   inline constexpr std::uint8_t flag_compact_slots = 0x02;
 
    enum class kind : std::uint8_t
    {
@@ -70,7 +77,9 @@ namespace psio::psch {
    inline constexpr std::size_t type_stride = 8;
 
    // Per-field slot stride in fields_pool ordered_fields array.
-   inline constexpr std::size_t field_slot_stride = 8;
+   // 4 bytes when compact_slots flag is set; 8 bytes otherwise.
+   inline constexpr std::size_t field_slot_stride_compact = 4;
+   inline constexpr std::size_t field_slot_stride_wide    = 8;
 
    // ── Internal layout helpers ─────────────────────────────────────────────
 
@@ -302,11 +311,14 @@ namespace psio::psch {
                {intern_name_(n),
                 static_cast<std::uint8_t>(n.size()), tid});
 
-         std::uint32_t fields_offset =
-            static_cast<std::uint32_t>(fields_pool_size_());
+         // Fields_offset depends on slot_stride which is decided at
+         // finalize time; record the container index here, resolve to
+         // a byte offset later.
+         std::uint32_t container_idx =
+            static_cast<std::uint32_t>(containers_.size());
          containers_.push_back(std::move(blk));
          types_.push_back(
-            type_entry{kind::container, fields_offset,
+            type_entry{kind::container, container_idx,
                        static_cast<std::uint16_t>(fields.size()), 0, 0});
          return next_id_();
       }
@@ -325,31 +337,37 @@ namespace psio::psch {
 
       std::vector<std::uint8_t> finalize(std::uint16_t root_type_id)
       {
-         bool wide = types_.size() > 254;
+         bool wide    = types_.size() > 254;
+         bool compact = !wide && name_pool_.size() < 0x10000;
+         std::size_t slot_stride =
+            compact ? field_slot_stride_compact : field_slot_stride_wide;
 
          std::size_t header_size =
             4                                // magic
             + 1                              // flags
             + varuint8_size(types_.size())   // type_count
             + varuint16_size(name_pool_.size())
-            + varuint16_size(fields_pool_size_())
+            + varuint16_size(fields_pool_size_(slot_stride))
             + varuint16_size(variants_pool_size_())
             + (wide ? 3 : varuint8_size(root_type_id));
 
          std::size_t type_table_size = types_.size() * type_stride;
+         std::size_t fp_size = fields_pool_size_(slot_stride);
          std::size_t total =
             header_size + name_pool_.size() + type_table_size +
-            fields_pool_size_() + variants_pool_size_();
+            fp_size + variants_pool_size_();
 
          std::vector<std::uint8_t> out(total);
          std::size_t pos = 0;
 
          std::memcpy(out.data() + pos, magic.data(), 4);
          pos += 4;
-         out[pos++] = wide ? flag_wide_type_ids : 0;
+         out[pos++] = static_cast<std::uint8_t>(
+            (wide ? flag_wide_type_ids : 0) |
+            (compact ? flag_compact_slots : 0));
          pos += write_varuint8(out.data(), pos, types_.size());
          pos += write_varuint16(out.data(), pos, name_pool_.size());
-         pos += write_varuint16(out.data(), pos, fields_pool_size_());
+         pos += write_varuint16(out.data(), pos, fp_size);
          pos += write_varuint16(out.data(), pos, variants_pool_size_());
          if (wide)
          {
@@ -369,6 +387,20 @@ namespace psio::psch {
          std::memcpy(out.data() + pos, name_pool_.data(), name_pool_.size());
          pos += name_pool_.size();
 
+         // Resolve container_idx → fields_offset using the picked
+         // slot_stride. Walk containers in declaration order.
+         std::vector<std::uint32_t> container_offsets(containers_.size());
+         {
+            std::uint32_t off = 0;
+            for (std::size_t i = 0; i < containers_.size(); ++i)
+            {
+               container_offsets[i] = off;
+               const auto& b = containers_[i];
+               off += static_cast<std::uint32_t>(
+                  3 + b.lookup.size() + b.fields.size() * slot_stride);
+            }
+         }
+
          // type_table — fixed 8-byte stride per entry.
          for (const auto& t : types_)
          {
@@ -385,7 +417,8 @@ namespace psio::psch {
                   write_u32_le(p + 1, t.payload32);
                   break;
                case kind::container:
-                  write_u32_le(p + 1, t.payload32);     // fields_offset
+                  // payload32 = container_idx; resolve to byte offset.
+                  write_u32_le(p + 1, container_offsets[t.payload32]);
                   p[5] = static_cast<std::uint8_t>(t.payload16 & 0xFF); // K
                   break;
                case kind::vector_:
@@ -411,7 +444,9 @@ namespace psio::psch {
          }
 
          // fields_pool — per container: header(3) + lookup(table_size) +
-         // ordered_fields(K * 8).
+         // ordered_fields(K * slot_stride). Compact slots are 4 bytes
+         // ({u16 name_off, u8 name_len, u8 type_id}); wide slots are 8
+         // bytes ({u24 name_off, u8 name_len, u16 type_id, u16 pad}).
          for (const auto& blk : containers_)
          {
             out[pos++] = blk.K;
@@ -423,14 +458,22 @@ namespace psio::psch {
             for (const auto& fld : blk.fields)
             {
                std::uint8_t* p = out.data() + pos;
-               // name_off:24, name_len:8 packed as u32 LE.
-               std::uint32_t packed =
-                  (fld.name_off & 0x00FFFFFFu) |
-                  (static_cast<std::uint32_t>(fld.name_len & 0xFFu) << 24);
-               write_u32_le(p, packed);
-               write_u16_le(p + 4, fld.type_id);
-               p[6] = 0; p[7] = 0;  // pad
-               pos += field_slot_stride;
+               if (compact)
+               {
+                  write_u16_le(p, static_cast<std::uint16_t>(fld.name_off));
+                  p[2] = fld.name_len;
+                  p[3] = static_cast<std::uint8_t>(fld.type_id);
+               }
+               else
+               {
+                  std::uint32_t packed =
+                     (fld.name_off & 0x00FFFFFFu) |
+                     (static_cast<std::uint32_t>(fld.name_len & 0xFFu) << 24);
+                  write_u32_le(p, packed);
+                  write_u16_le(p + 4, fld.type_id);
+                  p[6] = 0; p[7] = 0;  // pad
+               }
+               pos += slot_stride;
             }
          }
 
@@ -497,11 +540,11 @@ namespace psio::psch {
          name_pool_.insert(name_pool_.end(), n.begin(), n.end());
          return off;
       }
-      std::size_t fields_pool_size_() const noexcept
+      std::size_t fields_pool_size_(std::size_t slot_stride) const noexcept
       {
          std::size_t s = 0;
          for (const auto& b : containers_)
-            s += 3 + b.lookup.size() + b.fields.size() * field_slot_stride;
+            s += 3 + b.lookup.size() + b.fields.size() * slot_stride;
          return s;
       }
       std::size_t variants_pool_size_() const noexcept
@@ -536,6 +579,12 @@ namespace psio::psch {
       std::size_t   type_count()      const noexcept { return type_count_; }
       std::uint16_t root_type_id()    const noexcept { return root_; }
       bool          wide_type_ids()   const noexcept { return wide_ids_; }
+      bool          compact_slots()   const noexcept { return compact_slots_; }
+      std::size_t   slot_stride()     const noexcept
+      {
+         return compact_slots_ ? field_slot_stride_compact
+                               : field_slot_stride_wide;
+      }
 
       kind type_kind(std::uint16_t id) const
       {
@@ -568,15 +617,8 @@ namespace psio::psch {
          std::uint8_t  size_log2  = blk[2];
          std::size_t   table_size = std::size_t{1} << size_log2;
          const std::uint8_t* ord = blk + 3 + table_size;
-         const std::uint8_t* slot = ord + j * field_slot_stride;
-         std::uint32_t packed = read_u32_le(slot);
-         std::uint32_t name_off = packed & 0x00FFFFFFu;
-         std::uint8_t  name_len =
-            static_cast<std::uint8_t>((packed >> 24) & 0xFFu);
-         std::uint16_t tid = read_u16_le(slot + 4);
-         std::string_view name(
-            reinterpret_cast<const char*>(name_pool_ + name_off), name_len);
-         return {name, tid};
+         const std::uint8_t* slot = ord + j * slot_stride();
+         return decode_slot_(slot);
       }
 
       // Container: field by name. O(1): one PHF lookup + 1 memcmp.
@@ -600,16 +642,13 @@ namespace psio::psch {
          if (ord_idx == 0xFFu) return std::nullopt;
 
          const std::uint8_t* ord  = blk + 3 + table_size;
-         const std::uint8_t* slot = ord + ord_idx * field_slot_stride;
-         std::uint32_t packed   = read_u32_le(slot);
-         std::uint32_t name_off = packed & 0x00FFFFFFu;
-         std::uint8_t  name_len =
-            static_cast<std::uint8_t>((packed >> 24) & 0xFFu);
-         if (name_len != name.size()) return std::nullopt;
-         if (std::memcmp(name_pool_ + name_off, name.data(), name_len) != 0)
+         const std::uint8_t* slot = ord + ord_idx * slot_stride();
+         auto decoded = decode_slot_(slot);
+         std::string_view stored = decoded.first;
+         if (stored.size() != name.size()) return std::nullopt;
+         if (std::memcmp(stored.data(), name.data(), stored.size()) != 0)
             return std::nullopt;
-         std::uint16_t tid = read_u16_le(slot + 4);
-         return field_lookup{ord_idx, tid};
+         return field_lookup{ord_idx, decoded.second};
       }
 
       // Vector: elem type + length.
@@ -678,6 +717,33 @@ namespace psio::psch {
             throw std::out_of_range("psch::type_id");
       }
 
+      // Decode one slot into (name, type_id) honoring slot stride.
+      std::pair<std::string_view, std::uint16_t>
+      decode_slot_(const std::uint8_t* slot) const
+      {
+         std::uint32_t name_off;
+         std::uint8_t  name_len;
+         std::uint16_t tid;
+         if (compact_slots_)
+         {
+            name_off = read_u16_le(slot);
+            name_len = slot[2];
+            tid      = static_cast<std::uint16_t>(slot[3]);
+         }
+         else
+         {
+            std::uint32_t packed = read_u32_le(slot);
+            name_off = packed & 0x00FFFFFFu;
+            name_len =
+               static_cast<std::uint8_t>((packed >> 24) & 0xFFu);
+            tid      = read_u16_le(slot + 4);
+         }
+         std::string_view name(
+            reinterpret_cast<const char*>(name_pool_ + name_off),
+            name_len);
+         return {name, tid};
+      }
+
       void parse_header_()
       {
          if (size_ < 4 + 1) throw std::runtime_error("psch: short header");
@@ -685,7 +751,8 @@ namespace psio::psch {
             throw std::runtime_error("psch: bad magic");
          std::size_t pos = 4;
          std::uint8_t flags = data_[pos++];
-         wide_ids_ = (flags & flag_wide_type_ids) != 0;
+         wide_ids_      = (flags & flag_wide_type_ids) != 0;
+         compact_slots_ = (flags & flag_compact_slots) != 0;
 
          std::uint64_t v;
          std::size_t   nb;
@@ -748,6 +815,7 @@ namespace psio::psch {
       std::size_t         type_count_     = 0;
       std::uint16_t       root_           = 0;
       bool                wide_ids_       = false;
+      bool                compact_slots_  = false;
    };
 
 }  // namespace psio::psch

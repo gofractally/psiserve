@@ -178,6 +178,12 @@ TEST_CASE("psch: sized for typical schemas",
                                  {"version", u32_t}});
    auto bytes = w.finalize(p);
 
-   // ~150 bytes: header + 5 type entries + 1 container block + names.
-   CHECK(bytes.size() < 200);
+   // ~80 bytes with compact slots: header + 5 type entries + 1
+   // container block (3 + 8 + 4*4 slots = 27) + name_pool ~17.
+   CHECK(bytes.size() < 100);
+
+   // Verify the schema picked compact slot mode (small enough).
+   view v(bytes.data(), bytes.size());
+   CHECK(v.compact_slots());
+   CHECK(v.slot_stride() == 4);
 }
