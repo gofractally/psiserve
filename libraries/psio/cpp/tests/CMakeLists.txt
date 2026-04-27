@@ -156,6 +156,9 @@ psio3_add_test(psio3_fbs_parser_tests fbs_parser_tests.cpp)
 # MsgPack codec (msgpack.hpp) — schema-driven encode/decode/validate.
 psio3_add_test(psio3_msgpack_tests msgpack_tests.cpp)
 
+# Protobuf codec (protobuf.hpp) — schema-driven encode/decode/validate.
+psio3_add_test(psio3_protobuf_tests protobuf_tests.cpp)
+
 # Quick perf comparison of json / msgpack / pjson on a representative
 # struct.  Built as a regular executable (not a ctest).  Run manually:
 #   ./bin/psio3_format_perf
