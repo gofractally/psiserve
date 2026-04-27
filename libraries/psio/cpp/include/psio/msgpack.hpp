@@ -53,6 +53,30 @@
 #include <psio/reflect.hpp>
 #include <psio/stream.hpp>
 
+namespace psio
+{
+   //  Per-type opt-in for record-as-fixmap encoding.  Default is
+   //  fixarray (positional, schema-required, fastest, smallest); set
+   //  ::as_map = true on a specialisation to switch a type to fixmap
+   //  (string-keyed, self-describing, interop-friendly with generic
+   //  msgpack libraries).
+   //
+   //      template <>
+   //      struct psio::msgpack_record_form<MyType> {
+   //         static constexpr bool as_map = true;
+   //      };
+   //
+   //  The trait is consulted recursively: each PSIO_REFLECT'd struct
+   //  hit during walk picks its own form.  Decode accepts either form
+   //  regardless of the type's trait so a producer that flipped to
+   //  fixmap doesn't strand consumers built against the previous wire.
+   template <typename T>
+   struct msgpack_record_form
+   {
+      static constexpr bool as_map = false;
+   };
+}  // namespace psio
+
 #include <bit>
 #include <cstdint>
 #include <cstring>
@@ -296,18 +320,47 @@ namespace psio
          }
       }
 
+      // Map-header size: fixmap (≤15) is 1 byte; map16 is 3; map32 is 5.
+      inline std::size_t packed_size_of_map(std::size_t n) noexcept
+      {
+         if (n <= 15)
+            return 1;
+         if (n <= 0xffff)
+            return 3;
+         return 5;
+      }
+
       template <typename T>
       std::size_t packed_size_of_record(const T& v) noexcept
       {
          using R          = ::psio::reflect<T>;
          constexpr auto N = R::member_count;
-         std::size_t    total = packed_size_of_array(N);
-         [&]<std::size_t... Is>(std::index_sequence<Is...>)
+         if constexpr (::psio::msgpack_record_form<T>::as_map)
          {
-            ((total += packed_size_of(v.*(R::template member_pointer<Is>))),
-             ...);
-         }(std::make_index_sequence<N>{});
-         return total;
+            //  fixmap: header + sum_i (fixstr-of-name) + (value-size).
+            std::size_t total = packed_size_of_map(N);
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+               ((total +=
+                    packed_size_of_str(
+                       std::string_view{R::template member_name<Is>}.size()) +
+                    packed_size_of(v.*(R::template member_pointer<Is>))),
+                ...);
+            }(std::make_index_sequence<N>{});
+            return total;
+         }
+         else
+         {
+            //  fixarray: header + sum_i (value-size).
+            std::size_t total = packed_size_of_array(N);
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+               ((total +=
+                    packed_size_of(v.*(R::template member_pointer<Is>))),
+                ...);
+            }(std::make_index_sequence<N>{});
+            return total;
+         }
       }
 
       // ── encode pass ───────────────────────────────────────────────
@@ -450,6 +503,23 @@ namespace psio
          }
       }
 
+      template <typename Sink>
+      void emit_map_header(std::size_t n, Sink& s)
+      {
+         if (n <= 15)
+            put_byte(s, static_cast<std::uint8_t>(0x80 | n));
+         else if (n <= 0xffff)
+         {
+            put_byte(s, tag::map16);
+            put_be<std::uint16_t>(s, static_cast<std::uint16_t>(n));
+         }
+         else
+         {
+            put_byte(s, tag::map32);
+            put_be<std::uint32_t>(s, static_cast<std::uint32_t>(n));
+         }
+      }
+
       template <typename T, typename Sink>
       void write_value(const T& v, Sink& s);
 
@@ -458,11 +528,32 @@ namespace psio
       {
          using R          = ::psio::reflect<T>;
          constexpr auto N = R::member_count;
-         emit_array_header(N, s);
-         [&]<std::size_t... Is>(std::index_sequence<Is...>)
+         if constexpr (::psio::msgpack_record_form<T>::as_map)
          {
-            ((write_value(v.*(R::template member_pointer<Is>), s)), ...);
-         }(std::make_index_sequence<N>{});
+            emit_map_header(N, s);
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+               ((
+                  [&]
+                  {
+                     constexpr auto name = R::template member_name<Is>;
+                     std::string_view sv{name};
+                     emit_str_header(sv.size(), s);
+                     if (!sv.empty())
+                        s.write(sv.data(), sv.size());
+                     write_value(v.*(R::template member_pointer<Is>), s);
+                  }()),
+                ...);
+            }(std::make_index_sequence<N>{});
+         }
+         else
+         {
+            emit_array_header(N, s);
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+               ((write_value(v.*(R::template member_pointer<Is>), s)), ...);
+            }(std::make_index_sequence<N>{});
+         }
       }
 
       template <typename T, typename Sink>
@@ -703,12 +794,134 @@ namespace psio
                            std::span<const char> s,
                            std::size_t&          pos);
 
+      //  Map header reader — fixmap (0x80..0x8f), map16 (0xde),
+      //  map32 (0xdf).  Returns the pair count.
+      inline std::size_t decode_map_header(std::span<const char> s,
+                                           std::size_t&          pos)
+      {
+         std::uint8_t t = read_u8(s, pos);
+         if ((t & 0xf0) == 0x80)
+            return t & 0x0f;
+         if (t == tag::map16)
+            return read_be<std::uint16_t>(s, pos);
+         if (t == tag::map32)
+            return read_be<std::uint32_t>(s, pos);
+         fail("msgpack: expected map, got tag 0x" + std::to_string(t),
+              pos - 1);
+      }
+
+      //  Skip one msgpack value at `pos`.  Used by the map decoder
+      //  when an unknown key shows up so the rest of the stream stays
+      //  aligned.
+      inline void skip_value(std::span<const char> s, std::size_t& pos);
+
       template <typename T>
       T decode_record(std::span<const char> s, std::size_t& pos)
       {
          using R          = ::psio::reflect<T>;
          constexpr auto N = R::member_count;
-         std::size_t    n = decode_array_header(s, pos);
+         //  Branch on the actual wire tag, not the type's own
+         //  msgpack_record_form trait — that lets a producer that
+         //  flipped to fixmap not strand consumers built against
+         //  the previous wire (and vice versa).
+         std::uint8_t t = pos < s.size()
+                             ? static_cast<std::uint8_t>(s[pos])
+                             : 0;
+         bool is_map = (t & 0xf0) == 0x80 || t == tag::map16 ||
+                       t == tag::map32;
+         if (is_map)
+         {
+            std::size_t n = decode_map_header(s, pos);
+            T out{};
+            //  Fast path: keys appear in declaration order — the
+            //  common case for typed encoders.  We try a paired-walk
+            //  through the key+value pairs and the reflected fields;
+            //  if a key mismatch shows up we fall back to a per-pair
+            //  string-match scan.
+            bool ordered = true;
+            //  Track which fields we've decoded so we can default-
+            //  initialise the rest.
+            bool seen[N == 0 ? 1 : N] = {};
+            std::size_t walked = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+               ((
+                  [&]
+                  {
+                     if (!ordered || walked >= n)
+                        return;
+                     std::size_t key_len = decode_str_header(s, pos);
+                     std::string_view key{s.data() + pos, key_len};
+                     pos += key_len;
+                     std::string_view want{R::template member_name<Is>};
+                     if (key == want)
+                     {
+                        out.*(R::template member_pointer<Is>) =
+                           decode_value<std::remove_cvref_t<
+                              typename R::template member_type<Is>>>(s, pos);
+                        seen[Is] = true;
+                        ++walked;
+                     }
+                     else
+                     {
+                        //  Pos already advanced past the key; restore by
+                        //  rewinding and dropping into the fallback
+                        //  scan that handles arbitrary key order.
+                        pos -= key_len;
+                        //  Unread the str header too.  fixstr is 1
+                        //  byte; str8/16/32 are 2/3/5.  Easier: just
+                        //  bail out of the ordered walk and let the
+                        //  fallback scan from `walked` re-read the
+                        //  remaining (n - walked) pairs.
+                        if (key_len <= 31)
+                           --pos;
+                        else if (key_len <= 0xff)
+                           pos -= 2;
+                        else if (key_len <= 0xffff)
+                           pos -= 3;
+                        else
+                           pos -= 5;
+                        ordered = false;
+                     }
+                  }()),
+                ...);
+            }(std::make_index_sequence<N>{});
+            //  Fallback scan: O(remaining-pairs × N) string matches.
+            //  Defaults stay for fields not present in the wire.
+            while (walked < n)
+            {
+               std::size_t key_len = decode_str_header(s, pos);
+               std::string_view key{s.data() + pos, key_len};
+               pos += key_len;
+               bool matched = false;
+               [&]<std::size_t... Is>(std::index_sequence<Is...>)
+               {
+                  ((
+                     [&]
+                     {
+                        if (matched || seen[Is])
+                           return;
+                        std::string_view want{R::template member_name<Is>};
+                        if (key == want)
+                        {
+                           out.*(R::template member_pointer<Is>) =
+                              decode_value<std::remove_cvref_t<
+                                 typename R::template member_type<Is>>>(s,
+                                                                        pos);
+                           seen[Is] = true;
+                           matched = true;
+                        }
+                     }()),
+                   ...);
+               }(std::make_index_sequence<N>{});
+               if (!matched)
+                  skip_value(s, pos);
+               ++walked;
+            }
+            return out;
+         }
+         //  fixarray form — positional, the production fast path.
+         std::size_t n = decode_array_header(s, pos);
          if (n != N)
             fail("msgpack: record array arity mismatch", pos);
          T out{};
@@ -720,6 +933,112 @@ namespace psio
              ...);
          }(std::make_index_sequence<N>{});
          return out;
+      }
+
+      //  skip_value implementation — read one value of any type and
+      //  advance `pos` past it.  Used by the map decoder's unknown-key
+      //  branch.  Doesn't validate beyond what's required to step
+      //  cleanly to the next position.
+      inline void skip_value(std::span<const char> s, std::size_t& pos)
+      {
+         std::uint8_t t = read_u8(s, pos);
+         if (t <= 0x7f) return;                       // pos fixint
+         if (t >= 0xe0) return;                       // neg fixint
+         if ((t & 0xe0) == 0xa0)                      // fixstr
+         {
+            pos += t & 0x1f;
+            return;
+         }
+         if ((t & 0xf0) == 0x90)                      // fixarray
+         {
+            std::size_t n = t & 0x0f;
+            for (std::size_t i = 0; i < n; ++i)
+               skip_value(s, pos);
+            return;
+         }
+         if ((t & 0xf0) == 0x80)                      // fixmap
+         {
+            std::size_t n = t & 0x0f;
+            for (std::size_t i = 0; i < n; ++i)
+            {
+               skip_value(s, pos);
+               skip_value(s, pos);
+            }
+            return;
+         }
+         switch (t)
+         {
+            case tag::nil:
+            case tag::false_:
+            case tag::true_:    return;
+            case tag::u8:
+            case tag::i8:       pos += 1; return;
+            case tag::u16:
+            case tag::i16:      pos += 2; return;
+            case tag::u32:
+            case tag::i32:
+            case tag::f32:      pos += 4; return;
+            case tag::u64:
+            case tag::i64:
+            case tag::f64:      pos += 8; return;
+            case tag::str8:
+            case tag::bin8:
+            {
+               std::size_t n = read_u8(s, pos);
+               pos += n;
+               return;
+            }
+            case tag::str16:
+            case tag::bin16:
+            {
+               std::size_t n = read_be<std::uint16_t>(s, pos);
+               pos += n;
+               return;
+            }
+            case tag::str32:
+            case tag::bin32:
+            {
+               std::size_t n = read_be<std::uint32_t>(s, pos);
+               pos += n;
+               return;
+            }
+            case tag::array16:
+            {
+               std::size_t n = read_be<std::uint16_t>(s, pos);
+               for (std::size_t i = 0; i < n; ++i) skip_value(s, pos);
+               return;
+            }
+            case tag::array32:
+            {
+               std::size_t n = read_be<std::uint32_t>(s, pos);
+               for (std::size_t i = 0; i < n; ++i) skip_value(s, pos);
+               return;
+            }
+            case tag::map16:
+            {
+               std::size_t n = read_be<std::uint16_t>(s, pos);
+               for (std::size_t i = 0; i < n; ++i)
+               {
+                  skip_value(s, pos);
+                  skip_value(s, pos);
+               }
+               return;
+            }
+            case tag::map32:
+            {
+               std::size_t n = read_be<std::uint32_t>(s, pos);
+               for (std::size_t i = 0; i < n; ++i)
+               {
+                  skip_value(s, pos);
+                  skip_value(s, pos);
+               }
+               return;
+            }
+            default:
+               fail("msgpack: skip_value: unknown tag 0x" +
+                       std::to_string(t),
+                    pos - 1);
+         }
       }
 
       template <typename T>
