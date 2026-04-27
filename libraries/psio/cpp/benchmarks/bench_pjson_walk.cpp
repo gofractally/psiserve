@@ -27,6 +27,7 @@
 #include <psio/pjson_json.hpp>
 #include <psio/pjson_json_typed.hpp>
 #include <psio/view_to_json.hpp>
+#include <psio/pjson_to_json.hpp>
 #include <simdjson.h>
 #endif
 
@@ -613,8 +614,44 @@ int main(int argc, char** argv)
          std::string s = psio::view_to_json(view);
          sink ^= static_cast<std::int64_t>(s.size());
       });
-      report("view_to_json (pjson_view)", iters, secs, bytes.size(),
+      report("view_to_json [pjson → JSON]", iters, secs, bytes.size(),
              sink);
+   }
+   // 13. T → pjson → JSON (compose, fresh buffer each call).
+   {
+      User                      u    = make_user();
+      std::vector<std::uint8_t> buf;
+      std::int64_t              sink = 0;
+      double                    secs = run_loop(iters, [&] {
+         psio::to_pjson(u, buf);
+         psio::pjson_view view{buf.data(), buf.size()};
+         std::string s = psio::view_to_json(view);
+         sink ^= static_cast<std::int64_t>(s.size());
+      });
+      report("T → pjson → JSON (compose)", iters, secs,
+             kJson.size(), sink);
+   }
+   // 14. pjson → JSON via direct walker (skips view abstraction).
+   {
+      std::int64_t sink = 0;
+      double       secs = run_loop(iters, [&] {
+         std::string s = psio::pjson_to_json(
+             {bytes.data(), bytes.size()});
+         sink ^= static_cast<std::int64_t>(s.size());
+      });
+      report("pjson_to_json [direct, no view]", iters, secs,
+             bytes.size(), sink);
+   }
+   // 15. pjson → JSON direct, in-place output buffer.
+   {
+      std::int64_t sink = 0;
+      std::string  out_buf;
+      double       secs = run_loop(iters, [&] {
+         psio::pjson_to_json({bytes.data(), bytes.size()}, out_buf);
+         sink ^= static_cast<std::int64_t>(out_buf.size());
+      });
+      report("pjson_to_json [direct, in-place buf]", iters, secs,
+             bytes.size(), sink);
    }
 #endif
 
