@@ -24,9 +24,14 @@ Validated end-to-end: psio reflection → wit_world → text + Component
 Model binary → parse back → equivalent IR, on production WASI 2.3
 shapes (resources, own/borrow, multi-interface, host modules).
 
-Deferred with rationale: `schema.hpp` + `emit_wit.hpp` (~5000-line
-v1-only Schema layer; no v3 consumer remaining after round_trip.cpp
-migration).
+Next up: `schema.hpp` + `emit_wit.hpp` (~4900-line Schema layer).
+Schema IR is the canonical multi-format pivot — WIT, pSSZ, GraphQL,
+FlatBuffers, Cap'n Proto, JSON Schema all read/write through it —
+so the IR/Builder/Emitter triple must port with full attribute
+fidelity.  The fracpack-anchored runtime transcoder layer
+(CompiledType, FracParser, frac2json/json2frac) is a separate
+concern that v3 rebuilds via its CPO infrastructure independently.
+See the schema.hpp row below for the staged plan.
 
 
 Items flagged **REVIEW** below the relevant table need your sign-off
@@ -122,11 +127,9 @@ equivalent.  No reason to drop them.
       assertions covering literal text match, runtime parity, blob
       layout, param/return lowering).
 
-- [deferred] **`emit_wit.hpp`** — see schema.hpp entry below — emit_wit's
-      41-line declaration ships with schema.cpp's 441-line impl as a
-      single artifact, deferred together. Note: round_trip.cpp no longer
-      depends on emit_wit (uses psio::generate_wit_text directly), so no
-      consumer in this tree currently blocks on the port.
+- [ ] **`emit_wit.hpp`** — see schema.hpp entry below.  emit_wit is one
+      member of the symmetric format-emitter family that all consume
+      Schema IR.  Lands together with the IR + SchemaBuilder port.
 
 - [x] **`wit_parser.hpp`** — recursive-descent WIT text parser ported as
       `psio/wit_parser.hpp`. 1009 lines, mostly mechanical sed (data-only
@@ -241,20 +244,49 @@ equivalent.  No reason to drop them.
       WASM ABI wiring.  Pure compiler-attribute spelling, no psio
       surface.  **Belongs in psizam**.  Tracked under psizam.
 
-- [deferred] **`schema.hpp` (full) + `emit_wit.hpp` + `schema.cpp` +
-      `emit_wit.cpp`** — v1's full Schema layer is ~5000 lines (header
-      2521 + schema.cpp 1884 + emit_wit.cpp 441 + emit_wit.hpp 41)
-      deeply tied to v1's fracpack + JSON infrastructure: FracStream,
-      StreamBase, dynamic JSON, Box<T> smart-pointer for variant
-      cases, Phase B Package/Use/Interface/World envelope types with
-      FracPack wire schemas. Faithful port pulls in v1-only runtime
-      that v3 has already replaced via different mechanisms
-      (frac.hpp, json.hpp, dynamic_value.hpp).
-      **Deferred — no current consumer.** round_trip.cpp (the only
-      schema dependent in this tree) was migrated off SchemaBuilder
-      to psio::generate_wit_text. v3's `schema.hpp` (310 lines, Phase
-      14a) covers the runtime-schema-value side. Resurrect this entry
-      when a real consumer surfaces.
+- [ ] **`schema.hpp` (full) + `emit_wit.hpp` + `schema.cpp` +
+      `emit_wit.cpp`** — Schema IR is **the multi-format pivot** for
+      psio: WIT, pSSZ, GraphQL, FlatBuffers, Cap'n Proto, JSON Schema
+      and every format psio chooses to support read/write through
+      this IR.  Decoupling it lets cross-format conversions preserve
+      as much information as each format allows, instead of writing
+      N×N pairwise converters.
+
+      v1 file sizes: schema.hpp 2521 + schema.cpp 1884 + emit_wit.hpp
+      41 + emit_wit.cpp 441 = ~4900 lines.
+
+      Internally splits into three parts; port them as separate
+      working artifacts:
+
+      1. **Schema IR + envelope types** (Schema, Package, Use,
+         Interface, World, AnyType variant cases — Object/Struct/
+         Variant/Tuple/List/Option/Resource, Member, Func, Attribute).
+         Mostly data; v3-native port preserves full attribute
+         expressiveness so format converters can route everything
+         the destination format can carry.
+
+      2. **SchemaBuilder** — walks reflection (PSIO_REFLECT,
+         interface_info<T>, world_info<W>, use_info<T>) and
+         programmatic insert<T>() / insert_world<W>() entry points to
+         populate the IR.  C++ → Schema is the universal "C++ side
+         enters the multi-format graph here" path.
+
+      3. **emit_wit + the symmetrical format emitters** —
+         emit_wit (Schema → WIT text) is the first; emit_pssz, emit_gql,
+         emit_fbs, … land alongside.  Parsers (wit_parser ✓,
+         fbs_parser, capnp_parser) target the same IR coming back the
+         other way.
+
+      Tangential layer — **defer this part separately**: v1's schema
+      runtime transcoder (`CompiledType`, `FracParser`,
+      `frac2json` / `json2frac` CPOs, the `is_packable<T>::unpack`
+      machinery — 78 fracpack-symbol uses across schema.cpp and
+      schema.hpp) is the runtime data-transcoder layer, not the
+      schema-emitter layer.  In v3 this responsibility lives in the
+      format CPOs (`bin.hpp`, `frac.hpp`, `json.hpp`,
+      `dynamic_value.hpp`) and is rebuilt v3-native independently.
+      Skipping the v1 transcoder during the IR/Builder/Emitter port
+      is the right call; rebuilding it doesn't gate the schema port.
 
 - [ ] **`fracpack.hpp`** (2602 lines) — v1's main format.  v3 has
       `frac.hpp`.  Wire bytes parity confirmed via
