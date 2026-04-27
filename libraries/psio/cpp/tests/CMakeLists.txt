@@ -159,6 +159,9 @@ psio3_add_test(psio3_msgpack_tests msgpack_tests.cpp)
 # Protobuf codec (protobuf.hpp) — schema-driven encode/decode/validate.
 psio3_add_test(psio3_protobuf_tests protobuf_tests.cpp)
 
+# emit_protobuf (emit_protobuf.hpp) — Schema IR → .proto3 schema text.
+psio3_add_test(psio3_emit_protobuf_tests emit_protobuf_tests.cpp)
+
 # Quick perf comparison of json / msgpack / pjson on a representative
 # struct.  Built as a regular executable (not a ctest).  Run manually:
 #   ./bin/psio3_format_perf
@@ -317,3 +320,8 @@ add_executable(psio3_smoke_perf smoke_perf.cpp)
 target_link_libraries(psio3_smoke_perf PRIVATE psio psio)
 target_compile_features(psio3_smoke_perf PRIVATE cxx_std_23)
 target_compile_options(psio3_smoke_perf PRIVATE -O3 -DNDEBUG)
+
+# psch — pSSZ schema binary (writer + view). Round-trip + lookup.
+psio3_add_test(psio3_psch_tests psch_tests.cpp)
+target_include_directories(psio3_psch_tests PRIVATE
+   ${CMAKE_SOURCE_DIR}/external/psitri/libraries/hash/include)
