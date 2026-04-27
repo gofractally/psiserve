@@ -274,6 +274,19 @@ namespace psio {
    inline std::size_t to_pjson_at(std::uint8_t* dst, std::size_t pos,
                                   const T& t);
 
+   // Forward decls for the typed row_array path (reflected vector
+   // elements). Bodies live in pjson_detail and are defined after
+   // typed_field_size_dispatch / typed_field_encode are in scope.
+   namespace pjson_detail {
+      template <typename E>
+      inline std::size_t typed_row_array_size(std::span<const E>) noexcept;
+      template <typename E>
+      inline std::size_t encode_typed_row_array_at(
+         std::uint8_t*      dst,
+         std::size_t        pos,
+         std::span<const E> records);
+   }
+
    namespace pjson_detail {
       // Local std::vector / std::optional detectors so the typed
       // size/encode dispatch can route them without bouncing through
@@ -343,6 +356,15 @@ namespace psio {
             {
                // Typed-array body: 1 tag + N*sizeof(E) + 2 count.
                return 1u + v.size() * sizeof(E) + 2u;
+            }
+            else if constexpr (Reflected<E>)
+            {
+               // Reflected element type → row_array (§5.2.1). Schema is
+               // shared across records (compile-time-known from
+               // reflect<E>); two passes over records to size and pick
+               // adaptive widths.
+               return typed_row_array_size<E>(
+                  std::span<const E>{v.data(), v.size()});
             }
             else
             {
@@ -427,6 +449,16 @@ namespace psio {
                   dst, pos,
                   std::span<const E>{v.data(), v.size()});
             }
+            else if constexpr (Reflected<E>)
+            {
+               // vector<ReflectedT> → row_array (§5.2.1). Reflect gives
+               // us homogeneity for free: every element has the same K
+               // fields in the same order, so the schema hoists out of
+               // each record by construction.
+               return encode_typed_row_array_at<E>(
+                  dst, pos,
+                  std::span<const E>{v.data(), v.size()});
+            }
             else
             {
                // Generic-array form: [tag][value_data][slot[N]][count].
@@ -460,6 +492,177 @@ namespace psio {
             //  to_pjson uses, applied at this position.
             return ::psio::to_pjson_at<F>(dst, pos, v);
          }
+      }
+
+      // ── Typed row_array (for vector<ReflectedT>) ────────────────────────
+      //
+      // Two-pass walker. Pass 1: per-record body sizes + max(body), used
+      // to pick adaptive widths. Pass 2: write header + shared schema +
+      // per-record bytes + record_offsets + count. Uses reflect<E> for
+      // the schema (member_name, member_pointer) and typed_field_encode
+      // for value bytes.
+
+      template <typename E>
+      inline std::size_t typed_row_array_size(
+         std::span<const E> records) noexcept
+      {
+         using R                 = reflect<E>;
+         constexpr std::size_t K = R::member_count;
+         std::size_t           N = records.size();
+         if (N == 0)
+            return 1 /*tag*/ + 1 /*width*/ + varuint62_byte_count(K)
+                  + 4 * K + K /*hashes*/
+                  + [] {
+                       std::size_t s = 0;
+                       [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+                          ((s += R::template member_name<Is>.size()), ...);
+                       }(std::make_index_sequence<K>{});
+                       return s;
+                    }()
+                  + 0 /*records body*/ + 0 /*record_offsets*/
+                  + 2 /*count*/;
+
+         std::vector<std::uint32_t> body_sizes(N);
+         std::uint32_t              max_body = 0;
+         for (std::size_t i = 0; i < N; ++i)
+         {
+            std::uint32_t b = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               ((b += static_cast<std::uint32_t>(typed_field_size_dispatch(
+                    records[i].*R::template member_pointer<Is>))),
+                ...);
+            }(std::make_index_sequence<K>{});
+            body_sizes[i] = b;
+            if (b > max_body) max_body = b;
+         }
+         std::uint8_t slot_w_code = width_code_for(max_body);
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+
+         std::uint32_t total_body = 0;
+         for (std::size_t i = 0; i < N; ++i)
+            total_body +=
+               body_sizes[i] + static_cast<std::uint32_t>(K * slot_w);
+         std::uint8_t recoff_w_code = width_code_for(total_body);
+         std::size_t  recoff_w      = width_bytes(recoff_w_code);
+
+         std::uint32_t keys_area = 0;
+         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            ((keys_area += static_cast<std::uint32_t>(
+                  R::template member_name<Is>.size())),
+             ...);
+         }(std::make_index_sequence<K>{});
+
+         return 1 /*tag*/ + 1 /*width byte*/
+                + varuint62_byte_count(K) + 4 * K /*key slots*/
+                + K /*hash[K]*/ + keys_area + total_body
+                + N * recoff_w + 2 /*count*/;
+      }
+
+      template <typename E>
+      inline std::size_t encode_typed_row_array_at(
+         std::uint8_t*      dst,
+         std::size_t        pos,
+         std::span<const E> records)
+      {
+         using R                 = reflect<E>;
+         constexpr std::size_t K = R::member_count;
+         std::size_t           start = pos;
+         std::size_t           N     = records.size();
+
+         // Pass 1: per-field offsets within each record + body sizes.
+         std::vector<std::uint32_t> per_field_offset(N * K);
+         std::vector<std::uint32_t> body_sizes(N);
+         std::uint32_t              max_body = 0;
+         for (std::size_t i = 0; i < N; ++i)
+         {
+            std::uint32_t off = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               ((per_field_offset[i * K + Is] = off,
+                 off += static_cast<std::uint32_t>(typed_field_size_dispatch(
+                    records[i].*R::template member_pointer<Is>))),
+                ...);
+            }(std::make_index_sequence<K>{});
+            body_sizes[i] = off;
+            if (off > max_body) max_body = off;
+         }
+         std::uint8_t slot_w_code = width_code_for(max_body);
+         std::size_t  slot_w      = width_bytes(slot_w_code);
+
+         std::vector<std::uint32_t> record_offsets(N);
+         std::uint32_t              total_body = 0;
+         for (std::size_t i = 0; i < N; ++i)
+         {
+            record_offsets[i] = total_body;
+            total_body +=
+               body_sizes[i] + static_cast<std::uint32_t>(K * slot_w);
+         }
+         std::uint8_t recoff_w_code = width_code_for(total_body);
+         std::size_t  recoff_w      = width_bytes(recoff_w_code);
+
+         // Pass 2: write header + shared schema.
+         dst[pos++] = static_cast<std::uint8_t>(
+            (t_object << 4) | object_form_row_array);
+         dst[pos++] = static_cast<std::uint8_t>(
+            slot_w_code | (recoff_w_code << 2));
+         pos += write_varuint62(dst, pos, K);
+
+         std::size_t key_slots_pos = pos;
+         pos += 4 * K;
+         std::size_t hash_pos = pos;
+         pos += K;
+
+         // Reuse the constexpr hash array computed once per E.
+         const auto& hash_template = pjson_hash_template<E>();
+         std::memcpy(dst + hash_pos, hash_template.data(), K);
+
+         std::uint32_t key_off_running = 0;
+         [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            ((
+               [&] {
+                  constexpr auto name = R::template member_name<Is>;
+                  std::uint8_t   ks_byte =
+                     name.size() < 0xFFu
+                        ? static_cast<std::uint8_t>(name.size())
+                        : static_cast<std::uint8_t>(0xFFu);
+                  write_u32_le(
+                     dst + key_slots_pos + Is * 4,
+                     pack_slot(key_off_running, ks_byte));
+                  std::memcpy(dst + pos, name.data(), name.size());
+                  pos += name.size();
+                  key_off_running +=
+                     static_cast<std::uint32_t>(name.size());
+               }()),
+             ...);
+         }(std::make_index_sequence<K>{});
+
+         // Records body.
+         for (std::size_t i = 0; i < N; ++i)
+         {
+            std::size_t record_start = pos;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+               ((pos += typed_field_encode(
+                    dst, pos,
+                    records[i].*R::template member_pointer<Is>)),
+                ...);
+            }(std::make_index_sequence<K>{});
+            std::size_t slot_pos = record_start + body_sizes[i];
+            for (std::size_t j = 0; j < K; ++j)
+               write_width(dst + slot_pos + j * slot_w, slot_w_code,
+                           per_field_offset[i * K + j]);
+            pos = slot_pos + K * slot_w;
+         }
+
+         // record_offsets[N], then count u16.
+         for (std::size_t i = 0; i < N; ++i)
+            write_width(dst + pos + i * recoff_w, recoff_w_code,
+                        record_offsets[i]);
+         pos += N * recoff_w;
+
+         dst[pos]     = static_cast<std::uint8_t>(N & 0xFF);
+         dst[pos + 1] = static_cast<std::uint8_t>((N >> 8) & 0xFF);
+         pos += 2;
+
+         return pos - start;
       }
    }
 

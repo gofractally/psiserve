@@ -678,6 +678,65 @@ TEST_CASE("pjson row_array: adaptive width fires for small N",
    CHECK(recoff_w_code == 0);  // u8
 }
 
+TEST_CASE("pjson row_array: vector<ReflectedT> auto-emits row_array",
+          "[pjson][row_array][typed]")
+{
+   // Wrap a vector<User> in a reflected struct so to_pjson can encode
+   // it (top-level entry takes a reflected struct).
+   struct UserList
+   {
+      std::vector<User> users;
+   };
+   // Reflect it inline (PSIO_REFLECT is namespace-scoped — fine here
+   // since the test struct is at namespace scope).
+
+   std::vector<User> raw = {
+      {"alice", 30, true, 3.14},
+      {"bob",   25, false, 2.71},
+      {"carol", 40, true, 1.41},
+   };
+
+   // Direct encode of the vector<User> via the typed encoder. The
+   // size + encode helpers live in pjson_detail; call them directly
+   // here because there's no top-level psio API for "encode a typed
+   // vector at the root" (it's normally embedded in a reflected
+   // struct).
+   using namespace psio::pjson_detail;
+   std::span<const User> span(raw.data(), raw.size());
+   std::size_t total = typed_row_array_size<User>(span);
+   std::vector<std::uint8_t> bytes(total);
+   encode_typed_row_array_at<User>(bytes.data(), 0, span);
+
+   // The first byte must be the row_array tag.
+   CHECK(bytes[0] == ((t_object << 4) | object_form_row_array));
+   // Last 2 bytes are the count.
+   std::uint16_t N_dec =
+      static_cast<std::uint16_t>(bytes[bytes.size() - 2]) |
+      (static_cast<std::uint16_t>(bytes[bytes.size() - 1]) << 8);
+   CHECK(N_dec == 3);
+
+   // Round-trip: decode produces a pjson_array of pjson_objects with
+   // the four User fields each.
+   REQUIRE(pjson::validate({bytes.data(), bytes.size()}));
+   auto v = pjson::decode({bytes.data(), bytes.size()});
+   REQUIRE(v.holds<pjson_array>());
+   const auto& got = v.as<pjson_array>();
+   REQUIRE(got.size() == 3);
+   for (std::size_t i = 0; i < 3; ++i)
+   {
+      REQUIRE(got[i].holds<pjson_object>());
+      const auto& obj = got[i].as<pjson_object>();
+      REQUIRE(obj.size() == 4);
+      CHECK(obj[0].first == "name");
+      CHECK(obj[1].first == "age");
+      CHECK(obj[2].first == "active");
+      CHECK(obj[3].first == "score");
+      CHECK(obj[0].second.as<std::string>() == raw[i].name);
+      CHECK(obj[1].second.as<std::int64_t>() == raw[i].age);
+      CHECK(obj[2].second.as<bool>() == raw[i].active);
+   }
+}
+
 TEST_CASE("pjson row_array: variable-length values round-trip",
           "[pjson][row_array]")
 {
