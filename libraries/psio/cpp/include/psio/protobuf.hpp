@@ -1531,28 +1531,151 @@ namespace psio
          }
       }
 
-      //  Outer-level dispatch: route consteval-byte fields through
-      //  the fused-write helper, everything else through the cache-
-      //  consuming path.
-      template <pb_int_enc Enc, std::uint32_t F, typename T, typename Sink>
-      inline void pb_field_write_outer(const T&             v,
-                                       const std::uint32_t* sizes,
-                                       std::size_t&         idx,
-                                       Sink&                s)
+      //  Pack one consteval-byte field's tag + value bytes into buf
+      //  starting at `pos`, returning the new position.  No sink
+      //  interaction — used by the batched run helper.
+      template <typename T, std::size_t I>
+      inline std::size_t pb_pack_consteval_into(
+         const T& v, std::uint8_t* buf, std::size_t pos) noexcept
       {
-         using U = std::remove_cvref_t<T>;
-         if constexpr (std::is_same_v<U, bool> ||
-                       std::is_same_v<U, float> ||
-                       std::is_same_v<U, double> ||
-                       (std::is_integral_v<U> &&
-                        !std::is_same_v<U, bool> &&
-                        Enc == pb_int_enc::fixed))
+         using R          = ::psio::reflect<T>;
+         using F          = std::remove_cvref_t<
+            typename R::template member_type<I>>;
+         constexpr std::uint32_t fnum = resolve_field_number<T, I>();
+         constexpr pb_int_enc    enc  = resolve_int_encoding<T, I>();
+         const auto&             field =
+            v.*(R::template member_pointer<I>);
+         if constexpr (std::is_same_v<F, bool>)
          {
-            pb_emit_consteval_field<Enc, F>(v, s);
+            pos += pb_write_const_tag<fnum, wt::varint>(buf + pos);
+            buf[pos++] = field ? std::uint8_t{1} : std::uint8_t{0};
+         }
+         else if constexpr (std::is_same_v<F, float>)
+         {
+            pos += pb_write_const_tag<fnum, wt::fixed32>(buf + pos);
+            std::uint32_t bits;
+            std::memcpy(&bits, &field, 4);
+            bits = to_le(bits);
+            std::memcpy(buf + pos, &bits, 4);
+            pos += 4;
+         }
+         else if constexpr (std::is_same_v<F, double>)
+         {
+            pos += pb_write_const_tag<fnum, wt::fixed64>(buf + pos);
+            std::uint64_t bits;
+            std::memcpy(&bits, &field, 8);
+            bits = to_le(bits);
+            std::memcpy(buf + pos, &bits, 8);
+            pos += 8;
+         }
+         else if constexpr (std::is_integral_v<F> &&
+                            !std::is_same_v<F, bool> &&
+                            enc == pb_int_enc::fixed)
+         {
+            constexpr std::uint8_t wt_ =
+               sizeof(F) <= 4 ? wt::fixed32 : wt::fixed64;
+            pos += pb_write_const_tag<fnum, wt_>(buf + pos);
+            if constexpr (sizeof(F) <= 4)
+            {
+               std::uint32_t bits = 0;
+               if constexpr (std::is_signed_v<F>)
+               {
+                  std::int32_t sv = static_cast<std::int32_t>(field);
+                  std::memcpy(&bits, &sv, 4);
+               }
+               else
+                  bits = static_cast<std::uint32_t>(field);
+               bits = to_le(bits);
+               std::memcpy(buf + pos, &bits, 4);
+               pos += 4;
+            }
+            else
+            {
+               std::uint64_t bits = 0;
+               if constexpr (std::is_signed_v<F>)
+               {
+                  std::int64_t sv = static_cast<std::int64_t>(field);
+                  std::memcpy(&bits, &sv, 8);
+               }
+               else
+                  bits = static_cast<std::uint64_t>(field);
+               bits = to_le(bits);
+               std::memcpy(buf + pos, &bits, 8);
+               pos += 8;
+            }
+         }
+         return pos;
+      }
+
+      //  End of the consteval-byte run that starts at index I — the
+      //  smallest J ≥ I such that field J is NOT consteval-byte (or
+      //  member_count if the run continues to the last field).  All
+      //  evaluated at compile time.
+      template <typename T, std::size_t I>
+      constexpr std::size_t pb_consteval_run_end_v_impl() noexcept
+      {
+         constexpr auto N = ::psio::reflect<T>::member_count;
+         if constexpr (I >= N)
+            return N;
+         else if constexpr (pb_field_consteval_bytes_at<T, I>() > 0)
+            return pb_consteval_run_end_v_impl<T, I + 1>();
+         else
+            return I;
+      }
+
+      template <typename T, std::size_t I>
+      inline constexpr std::size_t pb_consteval_run_end_v =
+         pb_consteval_run_end_v_impl<T, I>();
+
+      //  Emit a run of consecutive consteval-byte fields [Begin, End)
+      //  in a single sink.write — packs all (tag + value) bytes into
+      //  one stack buffer, then a single write.
+      template <typename T, std::size_t Begin, std::size_t End,
+                typename Sink>
+      inline void pb_emit_consteval_run(const T& v, Sink& s) noexcept
+      {
+         constexpr std::size_t total =
+            []<std::size_t... Js>(std::index_sequence<Js...>) {
+               return (pb_field_consteval_bytes_at<T, Begin + Js>() + ...
+                       + std::size_t(0));
+            }(std::make_index_sequence<End - Begin>{});
+         std::uint8_t buf[total];
+         std::size_t  pos = 0;
+         [&]<std::size_t... Js>(std::index_sequence<Js...>) {
+            ((pos = pb_pack_consteval_into<T, Begin + Js>(v, buf, pos)),
+             ...);
+         }(std::make_index_sequence<End - Begin>{});
+         s.write(buf, pos);
+      }
+
+      //  Tail-recursive walker over reflected fields.  Groups
+      //  consecutive consteval-byte fields into a single batched
+      //  write; emits dynamic fields individually through the
+      //  cache-consuming path.  The whole walk unrolls at compile
+      //  time — no runtime branching on field index.
+      template <typename T, std::size_t I, typename Sink>
+      inline void pb_walk_fields(const T&             v,
+                                 const std::uint32_t* sizes,
+                                 std::size_t&         idx,
+                                 Sink&                s)
+      {
+         constexpr auto N = ::psio::reflect<T>::member_count;
+         if constexpr (I >= N)
+            return;
+         else if constexpr (pb_field_consteval_bytes_at<T, I>() > 0)
+         {
+            constexpr std::size_t End = pb_consteval_run_end_v<T, I>;
+            pb_emit_consteval_run<T, I, End>(v, s);
+            pb_walk_fields<T, End>(v, sizes, idx, s);
          }
          else
          {
-            pb_field_write_cached<Enc>(v, F, sizes, idx, s);
+            using R = ::psio::reflect<T>;
+            pb_field_write_cached<resolve_int_encoding<T, I>()>(
+               v.*(R::template member_pointer<I>),
+               resolve_field_number<T, I>(),
+               sizes, idx, s);
+            pb_walk_fields<T, I + 1>(v, sizes, idx, s);
          }
       }
 
@@ -1562,17 +1685,7 @@ namespace psio
                                    std::size_t&         idx,
                                    Sink&                s)
       {
-         using R          = ::psio::reflect<T>;
-         constexpr auto N = R::member_count;
-         [&]<std::size_t... Is>(std::index_sequence<Is...>)
-         {
-            ((pb_field_write_outer<
-                 resolve_int_encoding<T, Is>(),
-                 resolve_field_number<T, Is>()>(
-                 v.*(R::template member_pointer<Is>),
-                 sizes, idx, s)),
-             ...);
-         }(std::make_index_sequence<N>{});
+         pb_walk_fields<T, 0>(v, sizes, idx, s);
       }
 
       // ── decode pass ─────────────────────────────────────────────
