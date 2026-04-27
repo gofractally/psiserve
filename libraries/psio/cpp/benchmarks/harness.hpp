@@ -32,7 +32,7 @@
 #include <string_view>
 #include <vector>
 
-namespace psio3_bench {
+namespace psio_bench {
 
    struct timing
    {
@@ -289,4 +289,4 @@ namespace psio3_bench {
       }
    }
 
-}  // namespace psio3_bench
+}  // namespace psio_bench

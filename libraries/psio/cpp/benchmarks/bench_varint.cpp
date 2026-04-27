@@ -26,8 +26,8 @@
 #include <vector>
 
 namespace v = psio::varint;
-using psio3_bench::ns_per_iter;
-using psio3_bench::timing;
+using psio_bench::ns_per_iter;
+using psio_bench::timing;
 
 namespace {
 

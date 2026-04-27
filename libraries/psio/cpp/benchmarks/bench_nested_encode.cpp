@@ -103,7 +103,7 @@ template <typename Fmt, typename T>
 double bench_encode(const T& v)
 {
    // Auto-tuned timing harness (50 ms target per trial, 7 trials).
-   auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+   auto t = psio_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
       if constexpr (std::is_same_v<Fmt, wit_abi_format>)
       {
          auto bytes = wit_abi_encode(v);
@@ -130,7 +130,7 @@ double bench_size_only(const T& v)
    if constexpr (std::is_same_v<Fmt, wit_abi_format>)
    {
       // wit_abi: only the static record size is consteval.
-      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+      auto t = psio_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
          std::size_t n = psio::wit_abi_size_v<std::remove_cvref_t<decltype(v)>>;
          asm volatile("" : "+r"(n) : : "memory");
       });
@@ -138,7 +138,7 @@ double bench_size_only(const T& v)
    }
    else if constexpr (std::is_same_v<Fmt, wit_abi_presized_format>)
    {
-      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+      auto t = psio_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
          std::size_t n = psio::wit_abi_total_bytes(v);
          asm volatile("" : "+r"(n) : : "memory");
       });
@@ -146,7 +146,7 @@ double bench_size_only(const T& v)
    }
    else
    {
-      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+      auto t = psio_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
          std::size_t n = psio::size_of(Fmt{}, v);
          asm volatile("" : "+r"(n) : : "memory");
       });
@@ -162,7 +162,7 @@ double bench_sink(const T& v)
    {
       // wit_abi has no in-place "sink" CPO; reuse a buffer_store_policy.
       psio::buffer_store_policy p;
-      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+      auto t = psio_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
          p.buf.clear();
          p.bump = 0;
          const std::uint32_t dest = p.alloc(
@@ -178,7 +178,7 @@ double bench_sink(const T& v)
       // Reserve once outside the loop so the second-and-later
       // iterations measure pure encode + size walk, not allocation.
       p.buf.reserve(psio::wit_abi_total_bytes(v) * 2);
-      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+      auto t = psio_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
          p.buf.clear();
          p.bump = 0;
          const std::uint32_t dest = p.alloc(
@@ -192,7 +192,7 @@ double bench_sink(const T& v)
    {
       std::vector<char> sink;
       sink.reserve(4096);
-      auto t = psio3_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
+      auto t = psio_bench::ns_per_iter(0u, [&](std::size_t /*i*/) {
          sink.clear();
          psio::encode(Fmt{}, v, sink);
       });

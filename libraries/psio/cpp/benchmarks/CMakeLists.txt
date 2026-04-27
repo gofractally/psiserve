@@ -1,18 +1,25 @@
 # psio benchmarks — cross-library perf + wire-size harness.
 #
-# Shape library (shapes.hpp) defines parallel PSIO1_REFLECT / PSIO_REFLECT
-# structs at each size tier; harness.hpp is the timing + report utility
-# layer; each bench_*.cpp links psio (v1) + psio into the same binary
-# so encodings can be compared byte-for-byte and timed in one pass.
+# Shape library (shapes.hpp) defines reflected struct types at each
+# size tier (Point, NameRecord, FlatRecord, Record, Validator, Order,
+# ValidatorList, plus *Bounded variants).  harness.hpp is the timing
+# + report utility layer.
 #
 # Competitor adapters (libcapnp, libflatbuffers, msgpack-c, protobuf,
-# sszpp) are optional find_package-gated additions in follow-ups.
+# sszpp) are optional find_package-gated additions wired into the
+# new psio_vs_externals bench (in progress).
 
-add_executable(psio3_bench_perf_report bench_perf_report.cpp)
-target_link_libraries(psio3_bench_perf_report PRIVATE psio psio)
-target_include_directories(psio3_bench_perf_report PRIVATE
-   ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_features(psio3_bench_perf_report PRIVATE cxx_std_23)
+# bench_perf_report (legacy): v1 ↔ v3 markdown+CSV report.  shapes.hpp
+# was rewritten to drop the V1Foo/V3Foo pairs, which made this
+# obsolete.  Kept on disk as reference for the new bench's loop
+# structure, but no longer built by default — re-enable manually if
+# you need the old comparison columns.
+#
+# add_executable(psio3_bench_perf_report bench_perf_report.cpp)
+# target_link_libraries(psio3_bench_perf_report PRIVATE psio psio)
+# target_include_directories(psio3_bench_perf_report PRIVATE
+#    ${CMAKE_CURRENT_SOURCE_DIR})
+# target_compile_features(psio3_bench_perf_report PRIVATE cxx_std_23)
 
 # Nested-encode baseline — per-format encode timing on balanced
 # binary trees of progressively greater depth.  Surfaces the
