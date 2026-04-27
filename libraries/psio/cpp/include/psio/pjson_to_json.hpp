@@ -180,34 +180,163 @@ namespace psio {
                    reinterpret_cast<const char*>(p + 1), size - 1);
                out.push_back('"');
                // Hot path: escape_form (JSON-coming-from-JSON pipeline)
-               // — verbatim memcpy. Same for binary stub (TODO: base64).
-               // Cold path: raw_text — escape per char (out-of-line).
-               if (low != string_flag_raw_text) [[likely]]
+               // — verbatim memcpy. Cold path: raw_text — escape per
+               // char (out-of-line).
+               if (low == string_flag_escape_form) [[likely]]
                   out.append(s);
                else
                   emit_string_escaping(out, s);
                out.push_back('"');
                return;
             }
+            case t_bytes:
+            {
+               // TODO: proper base64. Stub: emit as quoted bytes.
+               out.push_back('"');
+               out.append(reinterpret_cast<const char*>(p + 1), size - 1);
+               out.push_back('"');
+               return;
+            }
             case t_array:
             {
+               // Generic array (low_nibble = 0) vs typed homogeneous
+               // (low_nibble = 1..10 → element type code = low - 1).
+               if (low == 0)
+               {
+                  std::uint16_t N =
+                      static_cast<std::uint16_t>(p[size - 2]) |
+                      (static_cast<std::uint16_t>(p[size - 1]) << 8);
+                  std::size_t slot_table_pos  = size - 2 - 4 * N;
+                  std::size_t value_data_size = slot_table_pos - 1;
+                  out.push_back('[');
+                  for (std::uint16_t i = 0; i < N; ++i)
+                  {
+                     if (i) out.push_back(',');
+                     std::uint32_t off = slot_offset(
+                         read_u32_le(p + slot_table_pos + i * 4));
+                     std::uint32_t off_next =
+                         i + 1 < N
+                             ? slot_offset(read_u32_le(
+                                   p + slot_table_pos + (i + 1) * 4))
+                             : static_cast<std::uint32_t>(value_data_size);
+                     direct_pjson_to_json(out, p + 1 + off,
+                                          off_next - off);
+                  }
+                  out.push_back(']');
+                  return;
+               }
+               // Typed-array path.
+               std::uint8_t code = typed_array_code_from_low(low);
+               if (code == tac_invalid)
+                  throw std::runtime_error(
+                      "pjson_to_json: reserved t_array low_nibble");
+               std::size_t es = typed_array_elem_size(code);
                std::uint16_t N =
                    static_cast<std::uint16_t>(p[size - 2]) |
                    (static_cast<std::uint16_t>(p[size - 1]) << 8);
-               std::size_t slot_table_pos = size - 2 - 4 * N;
-               std::size_t value_data_size = slot_table_pos - 1;
+               const std::uint8_t* base = p + 1;
                out.push_back('[');
                for (std::uint16_t i = 0; i < N; ++i)
                {
                   if (i) out.push_back(',');
-                  std::uint32_t off =
-                      slot_offset(read_u32_le(p + slot_table_pos + i * 4));
-                  std::uint32_t off_next =
-                      i + 1 < N
-                          ? slot_offset(read_u32_le(
-                                p + slot_table_pos + (i + 1) * 4))
-                          : static_cast<std::uint32_t>(value_data_size);
-                  direct_pjson_to_json(out, p + 1 + off, off_next - off);
+                  const std::uint8_t* eb = base + i * es;
+                  switch (code)
+                  {
+                     case tac_i8:
+                     {
+                        std::int8_t v;  std::memcpy(&v, eb, 1);
+                        char tmp[8];
+                        auto r = std::to_chars(tmp, tmp + sizeof(tmp),
+                                               static_cast<int>(v));
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_i16:
+                     {
+                        std::int16_t v; std::memcpy(&v, eb, 2);
+                        char tmp[8];
+                        auto r = std::to_chars(tmp, tmp + sizeof(tmp),
+                                               static_cast<int>(v));
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_i32:
+                     {
+                        std::int32_t v; std::memcpy(&v, eb, 4);
+                        char tmp[16];
+                        auto r =
+                            std::to_chars(tmp, tmp + sizeof(tmp), v);
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_i64:
+                     {
+                        std::int64_t v; std::memcpy(&v, eb, 8);
+                        char tmp[24];
+                        auto r =
+                            std::to_chars(tmp, tmp + sizeof(tmp), v);
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_u8:
+                     {
+                        char tmp[8];
+                        auto r = std::to_chars(
+                            tmp, tmp + sizeof(tmp),
+                            static_cast<unsigned>(eb[0]));
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_u16:
+                     {
+                        std::uint16_t v; std::memcpy(&v, eb, 2);
+                        char tmp[8];
+                        auto r = std::to_chars(
+                            tmp, tmp + sizeof(tmp),
+                            static_cast<unsigned>(v));
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_u32:
+                     {
+                        std::uint32_t v; std::memcpy(&v, eb, 4);
+                        char tmp[16];
+                        auto r =
+                            std::to_chars(tmp, tmp + sizeof(tmp), v);
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_u64:
+                     {
+                        std::uint64_t v; std::memcpy(&v, eb, 8);
+                        char tmp[24];
+                        auto r =
+                            std::to_chars(tmp, tmp + sizeof(tmp), v);
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_f32:
+                     {
+                        float v; std::memcpy(&v, eb, 4);
+                        char tmp[32];
+                        auto r =
+                            std::to_chars(tmp, tmp + sizeof(tmp), v);
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     case tac_f64:
+                     {
+                        double v; std::memcpy(&v, eb, 8);
+                        char tmp[32];
+                        auto r =
+                            std::to_chars(tmp, tmp + sizeof(tmp), v);
+                        out.append(tmp, r.ptr);
+                        break;
+                     }
+                     default:
+                        throw std::runtime_error(
+                            "pjson_to_json: bad typed_array code");
+                  }
                }
                out.push_back(']');
                return;

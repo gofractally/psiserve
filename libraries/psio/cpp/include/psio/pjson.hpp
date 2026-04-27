@@ -33,10 +33,18 @@
 //   5  decimal           raw = (low_nibble+1) mantissa bytes + varscale (1..4)
 //   6  ieee_float        raw = 8 bytes
 //   8  string            raw = (size - 1) bytes; low nibble flag:
-//                          0=raw_text, 1=escape_form, 2=binary
-//   B  array             raw = container content
+//                          0=raw_text, 1=escape_form
+//   A  bytes             raw = (size - 1) bytes; low nibble reserved (must be 0)
+//   B  array             raw = container content; low nibble selects layout:
+//                          0      = generic array (per-element tags + slot table)
+//                          1..10  = typed homogeneous array — element type
+//                                   code = low_nibble - 1
+//                                   (0=i8 1=i16 2=i32 3=i64
+//                                    4=u8 5=u16 6=u32 7=u64
+//                                    8=f32 9=f64)
+//                          11..15 = reserved
 //   C  object            raw = container content
-//   2, 7, 9, A, D..F     reserved
+//   2, 7, 9, D..F        reserved
 //
 // No magic, no version, no flags. Versioning lives in the application
 // wrapper (HTTP content-type, file header, RPC envelope). Buffer length
@@ -268,12 +276,76 @@ namespace psio {
          t_int         = 4,    // low nibble: byte_count - 1 (1..16)
          t_decimal     = 5,    // low nibble: mantissa byte_count - 1
          t_ieee_float  = 6,
-         t_string      = 8,    // low nibble: encoding flag (see below)
-         // 9, 10 (was bytes), reserved — bytes is now t_string with
-         //                              string_flag_binary
-         t_array       = 0xB,
+         t_string      = 8,    // low nibble: text encoding flag
+         // 9 reserved
+         t_bytes       = 0xA,  // low nibble reserved (must be 0)
+         t_array       = 0xB,  // low nibble: 0 = generic, 1..10 = typed
+                               //   (element type code = low_nibble - 1)
          t_object      = 0xC,
       };
+
+      // Element type codes for the typed-array form of t_array (when
+      // the tag's low nibble is non-zero). On the wire the low nibble
+      // carries `tac + 1` so that low-nibble = 0 stays reserved for
+      // the generic array layout. Element bytes are little-endian
+      // fixed-width values; the body is N × sizeof(element) raw bytes
+      // followed by a u16 count.
+      enum : std::uint8_t
+      {
+         tac_i8  = 0,
+         tac_i16 = 1,
+         tac_i32 = 2,
+         tac_i64 = 3,
+         tac_u8  = 4,
+         tac_u16 = 5,
+         tac_u32 = 6,
+         tac_u64 = 7,
+         tac_f32 = 8,
+         tac_f64 = 9,
+         // 10..14 reserved (low nibble values 11..15 on the wire)
+         tac_invalid = 0xFF,
+      };
+
+      // Per-element byte count for a typed-array element type code.
+      // Returns 0 for reserved / invalid codes; callers should check.
+      inline std::size_t typed_array_elem_size(std::uint8_t code) noexcept
+      {
+         switch (code)
+         {
+            case tac_i8:  case tac_u8:  return 1;
+            case tac_i16: case tac_u16: return 2;
+            case tac_i32: case tac_u32: case tac_f32: return 4;
+            case tac_i64: case tac_u64: case tac_f64: return 8;
+            default: return 0;
+         }
+      }
+      inline bool typed_array_is_signed_int(std::uint8_t code) noexcept
+      {
+         return code <= tac_i64;
+      }
+      inline bool typed_array_is_unsigned_int(std::uint8_t code) noexcept
+      {
+         return code >= tac_u8 && code <= tac_u64;
+      }
+      inline bool typed_array_is_float(std::uint8_t code) noexcept
+      {
+         return code == tac_f32 || code == tac_f64;
+      }
+      // Decode a t_array tag's low nibble into a tac_* code, returning
+      // tac_invalid for the generic-array slot (low_nibble == 0) and
+      // for reserved values (low_nibble > 10).
+      inline std::uint8_t typed_array_code_from_low(
+          std::uint8_t low) noexcept
+      {
+         if (low == 0 || low > 10) return tac_invalid;
+         return static_cast<std::uint8_t>(low - 1);
+      }
+      // Inverse: tac_* → low-nibble (always low_nibble = tac + 1).
+      inline std::uint8_t typed_array_low_from_code(
+          std::uint8_t code) noexcept
+      {
+         return static_cast<std::uint8_t>(code + 1);
+      }
 
       // Sub-encoding flags for t_string (low nibble of the tag).
       // Tells the JSON emitter what to do with the stored bytes;
@@ -287,9 +359,7 @@ namespace psio {
          // `\uXXXX` etc are LITERAL bytes in the buffer). JSON emit
          // wraps in quotes verbatim, no escape work.
          string_flag_escape_form    = 1,
-         // Binary bytes — JSON emit must base64-encode them.
-         string_flag_binary         = 2,
-         // 3..15: reserved
+         // 2..15: reserved
       };
 
       // Strip a trailing ".tag" suffix from a key for the prefilter hash.
@@ -638,10 +708,62 @@ namespace psio {
                                          std::size_t        pos,
                                          const pjson_bytes& b) noexcept
       {
-         dst[pos] = static_cast<std::uint8_t>(
-             (t_string << 4) | string_flag_binary);
+         dst[pos] = static_cast<std::uint8_t>(t_bytes << 4);
          if (!b.empty()) std::memcpy(dst + pos + 1, b.data(), b.size());
          return 1u + b.size();
+      }
+
+      // Map a C++ element type to its tac_* code at compile time.
+      template <typename T>
+      inline constexpr std::uint8_t tac_for() noexcept
+      {
+         if constexpr (std::is_same_v<T, std::int8_t>)        return tac_i8;
+         else if constexpr (std::is_same_v<T, std::int16_t>)  return tac_i16;
+         else if constexpr (std::is_same_v<T, std::int32_t>)  return tac_i32;
+         else if constexpr (std::is_same_v<T, std::int64_t>)  return tac_i64;
+         else if constexpr (std::is_same_v<T, std::uint8_t>)  return tac_u8;
+         else if constexpr (std::is_same_v<T, std::uint16_t>) return tac_u16;
+         else if constexpr (std::is_same_v<T, std::uint32_t>) return tac_u32;
+         else if constexpr (std::is_same_v<T, std::uint64_t>) return tac_u64;
+         else if constexpr (std::is_same_v<T, float>)         return tac_f32;
+         else if constexpr (std::is_same_v<T, double>)        return tac_f64;
+         else
+            static_assert(sizeof(T) == 0,
+                          "encode_typed_array: unsupported element type");
+      }
+
+      // Total byte size of a typed_array carrying N elements of code.
+      inline std::size_t typed_array_size(std::uint8_t code,
+                                          std::size_t  N) noexcept
+      {
+         return 1u + typed_array_elem_size(code) * N + 2u;
+      }
+
+      // Tail-indexed typed-array encoder. Layout:
+      //
+      //   [tag = (t_array << 4) | (code + 1)]
+      //   [N × element bytes, little-endian]
+      //   [count: u16 LE]
+      //
+      // Low_nibble = code + 1 because low_nibble = 0 is the generic-
+      // array marker. Total bytes = 1 + N*elem_size + 2.
+      // Caller pre-sizes dst.
+      template <typename T>
+      inline std::size_t encode_typed_array_at(
+          std::uint8_t*       dst,
+          std::size_t         pos,
+          std::span<const T>  elems) noexcept
+      {
+         constexpr std::uint8_t code = tac_for<T>();
+         constexpr std::size_t  es   = sizeof(T);
+         std::size_t            N    = elems.size();
+         dst[pos] = static_cast<std::uint8_t>(
+             (t_array << 4) | typed_array_low_from_code(code));
+         if (N) std::memcpy(dst + pos + 1, elems.data(), N * es);
+         std::size_t count_pos = pos + 1 + N * es;
+         dst[count_pos]     = static_cast<std::uint8_t>(N & 0xFF);
+         dst[count_pos + 1] = static_cast<std::uint8_t>((N >> 8) & 0xFF);
+         return 1u + N * es + 2u;
       }
 
       // Tail-indexed array encoder.
@@ -948,17 +1070,128 @@ namespace psio {
             case t_string:
             {
                // Low-nibble flag tells us whether the bytes are
-               // text (variant: std::string) or binary (variant:
-               // pjson_bytes). Reject reserved flag values.
-               if (low > string_flag_binary) return false;
-               if (low == string_flag_binary)
-                  out = pjson_value{pjson_bytes(p + 1, p + size)};
-               else
-                  out = pjson_value{std::string(
-                      reinterpret_cast<const char*>(p + 1), size - 1)};
+               // raw_text (0) or escape_form (1). Reject reserved
+               // flag values.
+               if (low > string_flag_escape_form) return false;
+               out = pjson_value{std::string(
+                   reinterpret_cast<const char*>(p + 1), size - 1)};
                return true;
             }
-            case t_array:  return decode_array(p, size, out);
+            case t_bytes:
+            {
+               // Tag's low nibble must be 0; raw bytes follow.
+               if (low != 0) return false;
+               out = pjson_value{pjson_bytes(p + 1, p + size)};
+               return true;
+            }
+            case t_array:
+            {
+               if (low == 0) return decode_array(p, size, out);
+               // Typed array: low nibble = code + 1.
+               std::uint8_t code = typed_array_code_from_low(low);
+               if (code == tac_invalid) return false;
+               std::size_t es = typed_array_elem_size(code);
+               if (es == 0 || size < 3) return false;
+               std::uint16_t N =
+                   static_cast<std::uint16_t>(p[size - 2]) |
+                   (static_cast<std::uint16_t>(p[size - 1]) << 8);
+               if (1u + es * static_cast<std::size_t>(N) + 2u != size)
+                  return false;
+               pjson_array a;
+               a.reserve(N);
+               const std::uint8_t* base = p + 1;
+               for (std::uint16_t i = 0; i < N; ++i)
+               {
+                  const std::uint8_t* eb = base + i * es;
+                  switch (code)
+                  {
+                     case tac_i8:
+                     {
+                        std::int8_t v;
+                        std::memcpy(&v, eb, 1);
+                        a.push_back(pjson_value{
+                            static_cast<std::int64_t>(v)});
+                        break;
+                     }
+                     case tac_i16:
+                     {
+                        std::int16_t v;
+                        std::memcpy(&v, eb, 2);
+                        a.push_back(pjson_value{
+                            static_cast<std::int64_t>(v)});
+                        break;
+                     }
+                     case tac_i32:
+                     {
+                        std::int32_t v;
+                        std::memcpy(&v, eb, 4);
+                        a.push_back(pjson_value{
+                            static_cast<std::int64_t>(v)});
+                        break;
+                     }
+                     case tac_i64:
+                     {
+                        std::int64_t v;
+                        std::memcpy(&v, eb, 8);
+                        a.push_back(pjson_value{v});
+                        break;
+                     }
+                     case tac_u8:
+                        a.push_back(pjson_value{
+                            static_cast<std::int64_t>(eb[0])});
+                        break;
+                     case tac_u16:
+                     {
+                        std::uint16_t v;
+                        std::memcpy(&v, eb, 2);
+                        a.push_back(pjson_value{
+                            static_cast<std::int64_t>(v)});
+                        break;
+                     }
+                     case tac_u32:
+                     {
+                        std::uint32_t v;
+                        std::memcpy(&v, eb, 4);
+                        a.push_back(pjson_value{
+                            static_cast<std::int64_t>(v)});
+                        break;
+                     }
+                     case tac_u64:
+                     {
+                        std::uint64_t v;
+                        std::memcpy(&v, eb, 8);
+                        // u64 may exceed i64 range; promote to
+                        // pjson_number when needed.
+                        if (v <= static_cast<std::uint64_t>(
+                                     std::numeric_limits<std::int64_t>::max()))
+                           a.push_back(pjson_value{
+                               static_cast<std::int64_t>(v)});
+                        else
+                           a.push_back(pjson_value{pjson_number{
+                               static_cast<__int128>(v), 0}});
+                        break;
+                     }
+                     case tac_f32:
+                     {
+                        float v;
+                        std::memcpy(&v, eb, 4);
+                        a.push_back(pjson_value{
+                            static_cast<double>(v)});
+                        break;
+                     }
+                     case tac_f64:
+                     {
+                        double v;
+                        std::memcpy(&v, eb, 8);
+                        a.push_back(pjson_value{v});
+                        break;
+                     }
+                     default: return false;
+                  }
+               }
+               out = pjson_value{std::move(a)};
+               return true;
+            }
             case t_object: return decode_object(p, size, out);
             default:       return false;
          }

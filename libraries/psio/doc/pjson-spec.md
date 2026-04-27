@@ -88,7 +88,7 @@ encoded data; for others it is reserved.
 | 8    | `string`      | encoding flag (see §4.7); 0..2 valid, others reserved | (size − 1) bytes (length implicit from `size`) |
 | 9    | reserved      |                                                | — |
 | 10 (A) | reserved   |                                                | — |
-| 11 (B) | `array`     | reserved (must be 0)                           | container body — see §5 |
+| 11 (B) | `array`     | layout selector — see §5.1: 0 = generic, 1..10 = typed homogeneous (element type code = low_nibble − 1), 11..15 reserved | container body — see §5 |
 | 12 (C) | `object`    | reserved (must be 0)                           | container body — see §5 |
 | 13–15  | reserved   |                                                | — |
 
@@ -227,20 +227,17 @@ pjson encoders sourced from non-JSON inputs may emit them.
 
 ```
 tag (1 B): high = 8, low = encoding flag
-content (size − 1 B): bytes; interpretation per the flag
+content (size − 1 B): UTF-8 text; interpretation per the flag
 ```
 
 The low nibble carries an **encoding flag** that tells the JSON
-emitter what to do with the stored bytes. This collapses what would
-otherwise need two distinct types (text and binary) into one tag with
-a sub-flag.
+emitter what to do with the stored text bytes.
 
 | flag | name          | meaning                                                       |
 |------|---------------|---------------------------------------------------------------|
 | 0    | `raw_text`    | UTF-8 text NOT in JSON-escape form. JSON emit must run a per-character escape pass (handle `"`, `\`, control chars, etc.). |
 | 1    | `escape_form` | Text already in JSON-escape form (`\"`, `\n`, `\uXXXX` etc are LITERAL bytes). JSON emit just wraps in surrounding quotes — no per-byte work. |
-| 2    | `binary`      | Raw binary bytes. JSON emit must base64-encode them. The encoded JSON typically uses a `.b64` key-suffix convention (see §7) so consumers know to base64-decode on input. |
-| 3..15 | reserved     | Implementations must reject.                                  |
+| 2..15 | reserved     | Implementations must reject.                                  |
 
 The string length is always `size − 1` (no length prefix).
 
@@ -249,18 +246,37 @@ source:
 
 * JSON parser → `escape_form` (the bytes between quotes are taken
   verbatim from the source JSON).
-* Typed value of `std::string` (or equivalent) where the producer
-  doesn't know whether escape characters are present → `raw_text`.
-* Typed value that the producer has already validated to contain no
-  characters needing escape → `escape_form` (cheaper emit later).
-* Raw binary blob (image, hash digest, etc.) → `binary`.
+* Typed text value where the producer doesn't know whether escape
+  characters are present → `raw_text`.
+* Typed text value that the producer has already validated to contain
+  no characters needing escape → `escape_form` (cheaper emit later).
 
-**Decoder behavior.** On `flag = binary` the value is conceptually
-binary data, not text. Implementations may expose it via a separate
-"bytes" accessor (returning a span of bytes) versus a "string"
-accessor (returning a string view). The reference C++ implementation
-uses both `view::as_string()` and `view::as_bytes()`, with the kind
-discriminated by the flag.
+Raw binary blobs are NOT a string sub-flag — they have their own
+`bytes` tag (§4.8).
+
+### 4.8 `bytes` (code 10)
+
+```
+tag (1 B): high = A, low = 0 (reserved)
+content (size − 1 B): raw binary bytes
+```
+
+The `bytes` tag carries a contiguous run of raw binary octets. There
+is no length prefix; the length is `size − 1` from the caller-
+provided value `size`. The low nibble is reserved and must be 0;
+implementations must reject non-zero values.
+
+**JSON round-trip.** JSON has no native binary literal. JSON emitters
+**should** base64-encode the bytes and emit a quoted string. JSON
+parsers cannot infer "this string was supposed to be bytes" from the
+text alone — convention is to use a key suffix (e.g. `"avatar.b64"`)
+so consumers know to base64-decode on input (§7).
+
+**Why a separate tag (not a `string` sub-flag).** Text and binary
+are conceptually distinct: text is interpreted as UTF-8 codepoints
+and re-encoded for JSON; binary is opaque octets. Carrying them as
+separate tags keeps the type discrimination explicit at the wire
+layer and removes the binary value from the per-string flag table.
 
 ---
 
@@ -271,7 +287,18 @@ values are written first, the index is appended at the tail. The
 caller-provided `size` of the container is required to locate the
 index by walking backward from the end.
 
-### 5.1 Array layout (code 11)
+The `array` tag (code 11) has **two layout variants** selected by
+the low nibble:
+
+* **Generic array** — low nibble = 0. Children may be any pjson
+  value. Per-element tags + slot table. See §5.1.
+* **Typed homogeneous array** — low nibble = 1..10. Children are
+  all the same fixed-width primitive type. No per-element tags,
+  no slot table. See §5.1.1.
+
+The remaining low-nibble values (11..15) are reserved.
+
+### 5.1 Generic array layout (tag = 0xB0)
 
 ```
 [tag: u8 = 0xB0]
@@ -302,6 +329,86 @@ child_i_size  = child_i_end − child_i_start
 ```
 
 where `value_data_size = container_size − 2 − 4·N − 1`.
+
+### 5.1.1 Typed homogeneous array layout (tag = 0xB{1..A})
+
+```
+[tag: u8 = 0xB{code+1}]              code ∈ {0..9}
+[element_0 .. element_{N-1}]         N × element_size raw bytes, LE
+[count: u16 LE]                      N — number of elements
+```
+
+The wire low-nibble is `code + 1` (so that low_nibble = 0 stays
+reserved for the generic-array layout). The element type code is
+recovered as `low_nibble − 1`.
+
+Total size: `1 + N × element_size + 2`. Random access reduces to a
+single offset computation: `element_i = container_start + 1 + i ×
+element_size`. There is no per-element tag and no slot table.
+
+**Element type codes** (low_nibble − 1):
+
+| code | element type | bytes | range / format             |
+|------|--------------|-------|----------------------------|
+| 0    | `i8`         | 1     | −128..127                  |
+| 1    | `i16`        | 2     | −32 768..32 767            |
+| 2    | `i32`        | 4     | −2³¹..2³¹−1                |
+| 3    | `i64`        | 8     | −2⁶³..2⁶³−1                |
+| 4    | `u8`         | 1     | 0..255                     |
+| 5    | `u16`        | 2     | 0..65 535                  |
+| 6    | `u32`        | 4     | 0..2³²−1                   |
+| 7    | `u64`        | 8     | 0..2⁶⁴−1                   |
+| 8    | `f32`        | 4     | IEEE-754 binary32          |
+| 9    | `f64`        | 8     | IEEE-754 binary64          |
+| 10–14 | reserved    | —     | implementations must reject (low_nibble values 11..15) |
+
+Implementations must reject reserved codes.
+
+**When to use vs. generic.** A producer may always encode a
+homogeneous primitive array as the generic form instead — the
+format does not require typed. The choice is producer-side
+**density vs. encoder work**:
+
+| producer                                                | typical choice |
+|---------------------------------------------------------|----------------|
+| typed-struct encoder with declared fixed-width array    | typed (zero scan — element type known statically) |
+| JSON parser, default mode                               | generic (no homogeneity scan) |
+| JSON parser, **strict canonical** mode (§15)            | typed when all elements fit one primitive type, smallest type that fits |
+| RPC / DB writer with already-typed columns              | typed |
+
+Wire-size comparison for an `i32[100]`:
+
+| encoding | bytes |
+|---|---|
+| generic with per-element `int` tags | 1 (tag) + ≤ 5×100 (per-element tag+payload) + 4×100 (slot) + 2 = ~903 |
+| typed `i32`                         | 1 + 4×100 + 2 = 403 |
+
+A decoder must accept both forms for any homogeneous primitive
+array. Random access is faster on the typed form (constant-stride
+pointer arithmetic) than the generic form (slot-table indirect
+read), but the time difference is small for small N.
+
+**Encoding rules.**
+
+* Element bytes are little-endian, fixed-width per the element
+  type code. Floats use IEEE-754 binary representation as raw
+  bytes.
+* `count` is `u16 LE` (max 65 535 elements), matching §5.5.
+* Element bytes need not be aligned in the wire stream; readers
+  must use byte-by-byte copy rather than direct typed loads.
+
+**JSON emission.** A typed array emits to JSON as a JSON array of
+numbers. Integer codes (0..7) emit as decimal-integer text; float
+codes (8, 9) emit as shortest-round-trippable decimal text. There
+is no JSON-side marker indicating the array was stored as typed —
+JSON consumers see a plain `[..]` of numbers.
+
+**JSON ingestion.** A JSON parser **may** detect homogeneous
+primitive arrays and emit the typed form; a default-mode parser
+typically emits generic (simpler, no scan pass). When detection
+runs, the parser picks the smallest signed/unsigned/float type
+that holds every element exactly. A canonical encoder (§15)
+**must** emit the typed form when applicable.
 
 ### 5.2 Object layout (code 12)
 
@@ -518,11 +625,12 @@ the pjson.
 | `null` | 0 (null) |
 | `false` | 1 (bool, low nibble = 0) |
 | `true` | 1 (bool, low nibble = 1) |
-| integer fitting i64 | 3 (int_inline) for 0..15, else 4 (int) |
-| integer beyond i64 | 4 (int) with bc 9..16 |
+| integer fitting `i64` | 3 (uint_inline) for 0..15, else 4 (int) |
+| integer beyond `i64` | 4 (int) with bc 9..16 |
 | fractional / exponent | 5 (decimal) when shortest, else 6 (ieee_float) |
 | `"..."` | 8 (string) — bytes between quotes, escape-form preserved |
-| `[ ... ]` | 11 (array) |
+| `[ ... ]` (heterogeneous) | 11 (array, low nibble = 0 — generic) |
+| `[ ... ]` (homogeneous primitive, canonical mode) | 11 (array, low nibble = code+1 — typed) |
 | `{ ... }` | 12 (object) |
 
 There is no JSON literal for `bytes`. JSON encoders may emit them as
@@ -582,9 +690,10 @@ strips the suffix so `view["amount"]` and a stored key
 
 A parser must detect and reject:
 
-* Tag with reserved type code (7, 9, 13–15).
-* Tag with non-zero low-nibble bits where the spec marks them
-  reserved.
+* Tag with reserved type code (2, 7, 9, 13–15).
+* Tag with reserved low-nibble bits (e.g., `bool` low nibble > 1;
+  `string` low nibble > 1; `array` low nibble 11..15; `bytes` low
+  nibble != 0).
 * `int` or `decimal` with bc < 1 or bc > 16.
 * Container with stated count yielding `slot_table_pos < 1` or
   `value_data_size > size − overhead`.
@@ -623,9 +732,16 @@ parse_value(ptr, size) -> Value:
       return Decimal(zz_decode(mantissa_zz), scale)
    6: assert size == 9
       return Double(read_le_double(ptr + 1))
-   8: return String(ptr[1 .. size))
-   10: return Bytes(ptr[1 .. size))
-   11: return parse_array(ptr, size)
+   8: assert low ≤ 1
+      return String(ptr[1 .. size), encoding_flag = low)
+   10: assert low == 0
+       return Bytes(ptr[1 .. size))
+   11: if low == 0:
+          return parse_array(ptr, size)                   // generic
+       else if 1 ≤ low ≤ 10:
+          return parse_typed_array(ptr, size, code = low − 1)
+       else:
+          error                                           // reserved
    12: return parse_object(ptr, size)
    else: error
 
@@ -642,6 +758,15 @@ parse_array(ptr, size):
                   : value_data_size
       child = parse_value(value_data_start + off_i, off_next − off_i)
       append child
+
+parse_typed_array(ptr, size, code):
+   element_size = sizeof_for_code(code)                   // 1, 2, 4, or 8
+   assert element_size > 0
+   N = read_u16_le(ptr + size − 2)
+   assert 1 + N·element_size + 2 == size
+   for i in 0..N:
+      element_bytes = ptr[1 + i·element_size .. 1 + (i+1)·element_size)
+      append decode_element(element_bytes, code)
 
 parse_object(ptr, size):
    N = read_u16_le(ptr + size − 2)
@@ -772,13 +897,13 @@ encode_value(value, out: byte buffer):
       Double(d):
          append 0x60
          append d as 8 IEEE bytes LE
-      String(bytes_in_escape_form):
-         append 0x80
-         append bytes
+      String(text, encoding_flag):                       // flag ∈ {0, 1}
+         append 0x80 | encoding_flag
+         append text
       Bytes(b):
          append 0xA0
          append b
-      Array(children):
+      Array(children):                                    // generic form
          append 0xB0
          start = out.position
          records = []
@@ -788,6 +913,11 @@ encode_value(value, out: byte buffer):
          for r in records:
             append slot_pack(r.offset, 0) as u32 LE
          append count = |children| as u16 LE
+      TypedArray(elements, code):                         // code ∈ {0..9}
+         append 0xB0 | (code + 1)                         // low_nibble = code + 1
+         for e in elements:
+            append e as element_size(code) bytes LE
+         append count = |elements| as u16 LE
       Object(fields):
          append 0xC0
          start = out.position
@@ -817,8 +947,10 @@ tail.
 
 This is **pjson v1**. Future revisions of the format will:
 
-* Allocate previously-reserved tag codes (7, 9, 13–15) for new types.
-* Allocate previously-reserved low-nibble bits as flags or extensions.
+* Allocate previously-reserved tag codes (2, 7, 9, 13–15) for new types.
+* Allocate previously-reserved low-nibble bits as flags or extensions
+  (e.g. new `string` flags, new typed-array element codes in
+  `array`'s 11..15 reserved range).
 * Be detectable through application-layer means (file headers, MIME
   types, RPC protocol versions). The pjson value format itself does
   not carry a version byte.
@@ -843,6 +975,9 @@ byte-for-byte through encode → decode → encode:
   same hash byte; lookup must return the right one for each).
 * Long-key escape: object with a key of 254 bytes (no escape) and a
   key of 255 bytes (escape).
+* Typed homogeneous arrays for each element code (i8, i16, i32, i64,
+  u8, u16, u32, u64, f32, f64), including empty (N=0) and non-empty
+  forms.
 
 A reference test corpus lives at `libraries/psio/cpp/tests/pjson_tests.cpp`.
 
@@ -871,7 +1006,8 @@ order:
 3. **Fastest decode on ties.** When two encodings produce the same
    byte count AND both preserve precision, choose the one that
    decodes fastest. For numbers this means: prefer `ieee_float` over
-   `decimal` (raw 8-byte memcpy beats mantissa-and-scale parse).
+   `decimal` (a raw 8-byte load is cheaper than mantissa-and-scale
+   reconstruction).
 
 This makes the canonical encoding **deterministic per value** —
 given the same logical value, every conforming encoder produces the
@@ -908,12 +1044,13 @@ For a fractional with no representable shortest decimal (e.g.
 NaN, ±Inf — JSON-illegal but a non-JSON producer could emit them):
 encode as `ieee_float`.
 
-For a `pjson_number{m, s}` provided directly by typed code (not via
-double): encode the (m, s) form regardless of whether `ieee_float`
-would be shorter — the typed value is **already** a `decimal`
-semantically; collapsing to double would lose its exact-decimal
-identity. (Producers that want the smallest encoding regardless of
-identity should construct from a double and run the rules above.)
+For a `(mantissa, scale)` pair supplied directly by a typed numeric
+source (not derived from a double): encode the `(mantissa, scale)`
+form regardless of whether `ieee_float` would be shorter — the
+typed value is **already** a `decimal` semantically; collapsing to
+double would lose its exact-decimal identity. Producers that want
+the smallest encoding regardless of identity should convert through
+double first and apply the rules above.
 
 ### 15.3 Strings
 
@@ -922,18 +1059,20 @@ The wire form of a string carries an encoding flag (§4.7) that
 
 - A string from a JSON text source encodes as `escape_form` —
   byte-identical to the source bytes between the JSON quotes.
-- A string from a typed `std::string` (or equivalent) encodes as
-  `raw_text` — the program-visible text, with no escape pass.
-- A binary blob encodes as `binary`.
+- A string from a typed text value encodes as `raw_text` — the
+  program-visible text, with no escape pass.
+- Raw binary uses the separate `bytes` tag (§4.8), not a string
+  flag.
 
-Two pjson values for the same logical "Hello world" — one from JSON,
-one from a typed string — will NOT be byte-equal because they
-deliberately preserve their different source representations. This
-is the format's **byte-equality means same source** property.
+Two pjson values for the same logical text "Hello world" — one
+from JSON, one from a typed string — will NOT be byte-equal
+because they deliberately preserve their different source
+representations. This is the format's **byte-equality means same
+source** property.
 
-For applications that want logical equality across sources, consume
-both via `view::as_string()` and compare the unescaped bytes (which
-requires applying JSON unescape rules to the `escape_form` value).
+For applications that want logical equality across sources, decode
+both as their text form and compare the unescaped bytes (which
+requires applying JSON unescape rules to an `escape_form` value).
 Or canonicalize at a higher layer before encoding.
 
 ### 15.4 Containers
@@ -953,7 +1092,35 @@ Or canonicalize at a higher layer before encoding.
   XXH3-64 over suffix-stripped key per §5.3). Always canonical.
 - **num_fields** is the actual N. Always canonical.
 
-### 15.5 Strict canonical (byte-equality contract)
+### 15.5 Arrays — generic vs. typed
+
+For an array whose elements are all of one fixed-width primitive
+type (signed integer, unsigned integer, float), the canonical
+encoder **must** emit the **typed** form (§5.1.1) using the
+**smallest element-type code** that holds every element exactly:
+
+1. If any element is fractional (non-zero fractional part): use the
+   smallest IEEE float that round-trips every element. `f32` if
+   every element round-trips through a 32-bit float, else `f64`.
+2. Else if every element is non-negative: use the smallest unsigned
+   width that fits every element: `u8`, `u16`, `u32`, or `u64`.
+3. Else: use the smallest signed width that fits every element:
+   `i8`, `i16`, `i32`, or `i64`.
+
+For an array with at least one non-primitive element (string,
+container, mixed type), or whose primitive elements span multiple
+unrelated families (mixed integer-and-float, mixed signed-and-very-
+large-unsigned beyond `i64`), the canonical encoder uses the
+**generic** form (§5.1).
+
+Rationale: the typed form satisfies §15.1 priority rule 2
+(smallest size) for homogeneous primitive arrays; the size win is
+substantial (often 2× or more on dense arrays) and is the only
+pjson encoding choice that gives byte-different output for the
+"same" logical array. Strict-canonical encoders therefore must
+choose typed when applicable.
+
+### 15.6 Strict canonical (byte-equality contract)
 
 A pjson value is **strictly canonical** iff:
 
@@ -962,6 +1129,9 @@ A pjson value is **strictly canonical** iff:
   (§15.3).
 - Every nested container has slots in ascending offset order with
   no gaps (§15.4).
+- Every nested array satisfies §15.5 (typed form when homogeneous
+  primitive, with the smallest element-type code that holds every
+  element exactly).
 - Field order matches the application's chosen canonicalization
   policy (which itself must be deterministic from the logical
   value — typically lexicographic key sort, or original input
@@ -970,7 +1140,7 @@ A pjson value is **strictly canonical** iff:
 Two strictly-canonical pjson buffers are byte-equal iff their
 logical values are equal under the application's order policy.
 
-### 15.6 Producer guidance
+### 15.7 Producer guidance
 
 Implementations marketed as "canonical pjson encoders" must:
 
@@ -993,7 +1163,7 @@ left to a higher layer.
 | **slot table** | the array of N slots, located at `container_end − 2 − 4·N`. |
 | **hash table** | the array of N hash bytes (objects only), located immediately before the slot table. |
 | **count** | the `u16 LE` at the last 2 bytes of every container, giving N. |
-| **canonical layout** | for an object, `hash[i] == key_hash8(field_i_name)` in declaration order matches a producer's expected order, enabling memcmp-based fast-path validation against a compile-time-derived hash array. |
+| **canonical layout** | for an object, `hash[i] == key_hash8(field_i_name)` in declaration order matches a producer's expected order, enabling byte-equal fast-path validation against a precomputed hash array. |
 | **suffix stripping** | the hash function ignores any trailing `.<suffix>` on the key, supporting presentation-tag conventions. |
 
 ## Appendix B. Worked Example

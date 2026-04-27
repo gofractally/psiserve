@@ -171,6 +171,37 @@ namespace psio {
          case K::array:
          {
             out.push_back('[');
+            // Typed homogeneous arrays expose typed_*_at accessors
+            // instead of for_each_element (no per-element view to
+            // hand out). Dispatch on the element kind: floats and
+            // unsigned 64-bit ints emit via the float/uint paths;
+            // everything else fits int64 cleanly.
+            if (v.is_typed_array())
+            {
+               std::uint8_t code = v.typed_array_elem_code();
+               std::size_t  N    = v.count();
+               for (std::size_t i = 0; i < N; ++i)
+               {
+                  if (i) out.push_back(',');
+                  if (psio::pjson_detail::typed_array_is_float(code))
+                     view_to_json_detail::emit_double(
+                         out, v.typed_double_at(i));
+                  else if (code == psio::pjson_detail::tac_u64)
+                  {
+                     // u64 may exceed i64 range; render as decimal
+                     // text via to_chars on uint64.
+                     char buf[24];
+                     auto r = std::to_chars(
+                         buf, buf + sizeof(buf), v.typed_uint64_at(i));
+                     out.append(buf, r.ptr);
+                  }
+                  else
+                     view_to_json_detail::emit_int(
+                         out, v.typed_int64_at(i));
+               }
+               out.push_back(']');
+               return;
+            }
             bool first = true;
             v.for_each_element([&](View child) {
                if (!first) out.push_back(',');

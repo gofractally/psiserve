@@ -5,6 +5,7 @@
 #include <psio/pjson.hpp>
 #include <psio/pjson_view.hpp>
 #include <psio/pjson_typed.hpp>
+#include <psio/pjson_to_json.hpp>
 #include <psio/view_to_json.hpp>
 #if defined(PSIO_HAVE_SIMDJSON) && PSIO_HAVE_SIMDJSON
 #include <psio/pjson_json.hpp>
@@ -340,6 +341,245 @@ TEST_CASE("pjson stress: random tree round-trips", "[pjson][stress]")
       auto bytes2 = pjson::encode(v2);
       REQUIRE(bytes == bytes2);
    }
+}
+
+// ── typed homogeneous arrays (tag 9) ─────────────────────────────────────
+
+namespace {
+   // Helper: build a typed-array buffer (t_array, low_nibble = code+1).
+   template <typename T>
+   std::vector<std::uint8_t> make_typed_array(std::span<const T> elems)
+   {
+      std::vector<std::uint8_t> out(
+          psio::pjson_detail::typed_array_size(
+              psio::pjson_detail::tac_for<T>(), elems.size()));
+      psio::pjson_detail::encode_typed_array_at(out.data(), 0, elems);
+      return out;
+   }
+}
+
+TEST_CASE("pjson typed_array: encode/decode each element type",
+          "[pjson][typed_array]")
+{
+   using namespace psio::pjson_detail;
+
+   // i8 — wire low_nibble = code + 1, so tag = (t_array<<4) | (tac_i8+1).
+   {
+      std::int8_t in[] = {-128, -1, 0, 1, 127};
+      auto bytes = make_typed_array<std::int8_t>(in);
+      // size = 1 tag + 5*1 element bytes + 2 count = 8
+      CHECK(bytes.size() == 8);
+      CHECK(bytes[0] == ((t_array << 4) | (tac_i8 + 1)));
+      CHECK(bytes[6] == 5);
+      CHECK(bytes[7] == 0);
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      REQUIRE(a.size() == 5);
+      CHECK(a[0].as<std::int64_t>() == -128);
+      CHECK(a[2].as<std::int64_t>() == 0);
+      CHECK(a[4].as<std::int64_t>() == 127);
+   }
+   // i16
+   {
+      std::int16_t in[] = {-32768, 0, 32767};
+      auto bytes = make_typed_array<std::int16_t>(in);
+      CHECK(bytes.size() == 1 + 3 * 2 + 2);
+      CHECK(bytes[0] == ((t_array << 4) | (tac_i16 + 1)));
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      CHECK(a[0].as<std::int64_t>() == -32768);
+      CHECK(a[2].as<std::int64_t>() == 32767);
+   }
+   // i32
+   {
+      std::int32_t in[] = {-1000000, 0, 1000000};
+      auto bytes = make_typed_array<std::int32_t>(in);
+      CHECK(bytes.size() == 1 + 3 * 4 + 2);
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      CHECK(a[0].as<std::int64_t>() == -1000000);
+      CHECK(a[2].as<std::int64_t>() == 1000000);
+   }
+   // i64
+   {
+      std::int64_t in[] = {std::numeric_limits<std::int64_t>::min(),
+                           0,
+                           std::numeric_limits<std::int64_t>::max()};
+      auto bytes = make_typed_array<std::int64_t>(in);
+      CHECK(bytes.size() == 1 + 3 * 8 + 2);
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      CHECK(a[0].as<std::int64_t>() ==
+            std::numeric_limits<std::int64_t>::min());
+      CHECK(a[2].as<std::int64_t>() ==
+            std::numeric_limits<std::int64_t>::max());
+   }
+   // u8
+   {
+      std::uint8_t in[] = {0, 1, 254, 255};
+      auto bytes = make_typed_array<std::uint8_t>(in);
+      CHECK(bytes.size() == 1 + 4 * 1 + 2);
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      CHECK(a[3].as<std::int64_t>() == 255);
+   }
+   // u32
+   {
+      std::uint32_t in[] = {0, 4000000000u};
+      auto bytes = make_typed_array<std::uint32_t>(in);
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      CHECK(a[1].as<std::int64_t>() == 4000000000LL);
+   }
+   // u64 — value beyond i64 range surfaces as pjson_number.
+   {
+      std::uint64_t in[] = {0, std::numeric_limits<std::uint64_t>::max()};
+      auto bytes = make_typed_array<std::uint64_t>(in);
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      CHECK(a[0].as<std::int64_t>() == 0);
+      REQUIRE(a[1].holds<pjson_number>());
+      CHECK(a[1].as<pjson_number>().mantissa ==
+            static_cast<__int128>(std::numeric_limits<std::uint64_t>::max()));
+   }
+   // f32
+   {
+      float in[] = {-1.5f, 0.0f, 3.25f};
+      auto bytes = make_typed_array<float>(in);
+      CHECK(bytes.size() == 1 + 3 * 4 + 2);
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      CHECK(a[0].as<double>() == -1.5);
+      CHECK(a[2].as<double>() == 3.25);
+   }
+   // f64
+   {
+      double in[] = {3.14159265358979, -1.0e100};
+      auto bytes = make_typed_array<double>(in);
+      CHECK(bytes.size() == 1 + 2 * 8 + 2);
+      auto v = pjson::decode({bytes.data(), bytes.size()});
+      auto& a = v.as<pjson_array>();
+      CHECK(a[0].as<double>() == 3.14159265358979);
+      CHECK(a[1].as<double>() == -1.0e100);
+   }
+}
+
+TEST_CASE("pjson typed_array: view accessors", "[pjson][typed_array][view]")
+{
+   std::int32_t in[] = {-7, 0, 42, 100000};
+   auto bytes = make_typed_array<std::int32_t>(in);
+   pjson_view v{bytes.data(), bytes.size()};
+   REQUIRE(v.is_array());
+   REQUIRE(v.is_typed_array());
+   CHECK(v.typed_array_elem_code() == psio::pjson_detail::tac_i32);
+   CHECK(v.typed_array_elem_size() == 4);
+   CHECK(v.count() == 4);
+   CHECK(v.typed_int64_at(0) == -7);
+   CHECK(v.typed_int64_at(1) == 0);
+   CHECK(v.typed_int64_at(2) == 42);
+   CHECK(v.typed_int64_at(3) == 100000);
+   CHECK(v.typed_double_at(2) == 42.0);
+
+   // typed_array_span<T> with matching element type.
+   auto span = v.typed_array_span<std::int32_t>();
+   REQUIRE(span.size() == 4);
+   CHECK(span[2] == 42);
+
+   // Mismatched element type rejects.
+   CHECK_THROWS(v.typed_array_span<std::int64_t>());
+}
+
+TEST_CASE("pjson typed_array: empty array", "[pjson][typed_array]")
+{
+   std::span<const std::int32_t> empty{};
+   auto bytes = make_typed_array<std::int32_t>(empty);
+   CHECK(bytes.size() == 3);  // tag + 0 elements + count u16
+   pjson_view v{bytes.data(), bytes.size()};
+   REQUIRE(v.is_typed_array());
+   CHECK(v.count() == 0);
+}
+
+TEST_CASE("pjson typed_array: validate/round-trip", "[pjson][typed_array]")
+{
+   std::int64_t in[] = {1, 2, 3, 4, 5};
+   auto bytes = make_typed_array<std::int64_t>(in);
+   REQUIRE(pjson::validate({bytes.data(), bytes.size()}));
+   // Decode produces a regular pjson_array; encode of THAT will
+   // produce a regular t_array (not a typed_array), since
+   // pjson_value can't carry the typed-ness. That's expected — typed
+   // array bytes are produced only by direct encoder paths.
+   auto v = pjson::decode({bytes.data(), bytes.size()});
+   auto& a = v.as<pjson_array>();
+   REQUIRE(a.size() == 5);
+   for (std::size_t i = 0; i < 5; ++i)
+      CHECK(a[i].as<std::int64_t>() ==
+            static_cast<std::int64_t>(i + 1));
+}
+
+TEST_CASE("pjson typed_array: at()/for_each_element reject",
+          "[pjson][typed_array][view]")
+{
+   std::int32_t in[] = {1, 2, 3};
+   auto bytes = make_typed_array<std::int32_t>(in);
+   pjson_view v{bytes.data(), bytes.size()};
+   CHECK_THROWS(v.at(0));
+   CHECK_THROWS(v.for_each_element([](pjson_view) {}));
+}
+
+TEST_CASE("pjson typed_array: nested in object value",
+          "[pjson][typed_array]")
+{
+   std::int32_t scores[] = {10, 20, 30};
+   auto inner = make_typed_array<std::int32_t>(scores);
+
+   // Hand-build an object whose only field's value is a typed_array.
+   // We can't go via pjson_value because the variant doesn't carry
+   // typed_array; build the object bytes directly.
+   //
+   // Layout:
+   //   [0xC0][key 's'][typed_array_bytes][hash[1]][slot[1]][count u16]
+   std::string key = "s";
+   std::size_t value_data = 1 /*key*/ + inner.size();
+   std::size_t total = 1 + value_data + 1 + 4 + 2;
+   std::vector<std::uint8_t> out(total);
+   out[0] = static_cast<std::uint8_t>(psio::pjson_detail::t_object << 4);
+   out[1] = static_cast<std::uint8_t>('s');
+   std::memcpy(out.data() + 2, inner.data(), inner.size());
+   std::size_t hash_pos = 1 + value_data;
+   std::size_t slot_pos = hash_pos + 1;
+   std::size_t count_pos = slot_pos + 4;
+   out[hash_pos] = psio::pjson_detail::key_hash8("s");
+   psio::pjson_detail::write_u32_le(
+       out.data() + slot_pos,
+       psio::pjson_detail::pack_slot(0, 1));
+   out[count_pos]     = 1;
+   out[count_pos + 1] = 0;
+
+   REQUIRE(pjson::validate({out.data(), out.size()}));
+   pjson_view v{out.data(), out.size()};
+   REQUIRE(v.is_object());
+   auto child = v["s"];
+   REQUIRE(child.is_typed_array());
+   CHECK(child.count() == 3);
+   CHECK(child.typed_int64_at(1) == 20);
+
+   // view_to_json renders the typed array as a JSON array of ints.
+   std::string j = psio::view_to_json(v);
+   CHECK(j == "{\"s\":[10,20,30]}");
+}
+
+TEST_CASE("pjson typed_array: pjson_to_json direct walker",
+          "[pjson][typed_array]")
+{
+   double in[] = {1.5, 2.5, 3.5};
+   auto bytes = make_typed_array<double>(in);
+   std::string j = psio::pjson_to_json({bytes.data(), bytes.size()});
+   CHECK(j == "[1.5,2.5,3.5]");
+
+   std::uint64_t big[] = {0, 18446744073709551615ULL};
+   auto bytes2 = make_typed_array<std::uint64_t>(big);
+   std::string j2 = psio::pjson_to_json({bytes2.data(), bytes2.size()});
+   CHECK(j2 == "[0,18446744073709551615]");
 }
 
 // ── JSON pipeline (when simdjson is available) ───────────────────────────
