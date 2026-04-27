@@ -201,7 +201,7 @@ namespace psio {
                if (v.get_bool().get(b) != simdjson::SUCCESS)
                   throw std::runtime_error("pjson_json: bad bool");
                out.push_back(static_cast<std::uint8_t>(
-                   ((b ? t_bool_true : t_bool_false)) << 4));
+                   (t_bool << 4) | (b ? 1u : 0u)));
                return;
             }
             case JT::number:

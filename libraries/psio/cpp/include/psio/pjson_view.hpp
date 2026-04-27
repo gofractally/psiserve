@@ -70,8 +70,7 @@ namespace psio {
          switch (t)
          {
             case t_null:        return kind::null;
-            case t_bool_false:
-            case t_bool_true:   return kind::boolean;
+            case t_bool:        return kind::boolean;
             case t_int_inline:
             case t_int:         return kind::integer;
             case t_decimal:     return kind::decimal;
@@ -105,7 +104,8 @@ namespace psio {
       bool as_bool() const
       {
          require_(kind::boolean);
-         return (data_[0] >> 4) == pjson_detail::t_bool_true;
+         // low nibble carries the boolean value
+         return (data_[0] & 0x0F) != 0;
       }
 
       // Cross-tier: integer / decimal-with-scale-0 / integer-valued double.

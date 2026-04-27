@@ -75,22 +75,22 @@ The high nibble (`bits 7..4`) is the **type code**. The low nibble
 (`bits 3..0`) is **payload-specific** — for some types it carries
 encoded data; for others it is reserved.
 
-| code | type         | low nibble use                         | raw bits after tag |
-|------|--------------|----------------------------------------|--------------------|
-| 0    | `null`       | reserved (must be 0)                   | 0 bytes |
-| 1    | `bool_false` | reserved (must be 0)                   | 0 bytes |
-| 2    | `bool_true`  | reserved (must be 0)                   | 0 bytes |
-| 3    | `int_inline` | unsigned value 0..15 (the integer)     | 0 bytes |
-| 4    | `int`        | mantissa byte count − 1 (range 1..16)  | `bc` bytes (zigzag-LE) |
-| 5    | `decimal`    | mantissa byte count − 1 (range 1..16)  | `bc` mantissa bytes + varscale (1..4 bytes) |
-| 6    | `ieee_float` | reserved (must be 0)                   | 8 bytes (raw IEEE-754 binary64, LE) |
-| 7    | reserved     |                                        | — |
-| 8    | `string`     | reserved (must be 0)                   | (size − 1) UTF-8 bytes (length implicit from `size`) |
-| 9    | reserved     |                                        | — |
-| 10 (A) | `bytes`    | reserved (must be 0)                   | (size − 1) raw bytes (length implicit from `size`) |
-| 11 (B) | `array`    | reserved (must be 0)                   | container body — see §5 |
-| 12 (C) | `object`   | reserved (must be 0)                   | container body — see §5 |
-| 13–15  | reserved   |                                        | — |
+| code | type         | low nibble use                                 | raw bits after tag |
+|------|--------------|------------------------------------------------|--------------------|
+| 0    | `null`       | reserved (must be 0)                           | 0 bytes |
+| 1    | `bool`       | the boolean value: 0 = false, 1 = true (others reserved) | 0 bytes |
+| 2    | reserved     |                                                | — |
+| 3    | `int_inline` | unsigned value 0..15 (the integer)             | 0 bytes |
+| 4    | `int`        | mantissa byte count − 1 (range 1..16)          | `bc` bytes (zigzag-LE) |
+| 5    | `decimal`    | mantissa byte count − 1 (range 1..16)          | `bc` mantissa bytes + varscale (1..4 bytes) |
+| 6    | `ieee_float` | reserved (must be 0)                           | 8 bytes (raw IEEE-754 binary64, LE) |
+| 7    | reserved     |                                                | — |
+| 8    | `string`     | reserved (must be 0)                           | (size − 1) UTF-8 bytes (length implicit from `size`) |
+| 9    | reserved     |                                                | — |
+| 10 (A) | `bytes`    | reserved (must be 0)                           | (size − 1) raw bytes (length implicit from `size`) |
+| 11 (B) | `array`    | reserved (must be 0)                           | container body — see §5 |
+| 12 (C) | `object`   | reserved (must be 0)                           | container body — see §5 |
+| 13–15  | reserved   |                                                | — |
 
 Implementations must reject (return error) on any reserved tag code or
 non-zero low-nibble bits in tags that mark them reserved.
@@ -99,16 +99,28 @@ non-zero low-nibble bits in tags that mark them reserved.
 
 ## 4. Scalar Encodings
 
-### 4.1 `null`, `bool_false`, `bool_true` (codes 0, 1, 2)
+### 4.1 `null` (code 0)
 
-Tag byte alone. Container `size` for these values is exactly 1 byte.
+Tag byte `0x00` alone. Container `size` is exactly 1 byte.
 
-### 4.2 `int_inline` (code 3)
+### 4.2 `bool` (code 1)
+
+Single byte. The low nibble carries the boolean value:
+
+```
+0x10  →  false
+0x11  →  true
+```
+
+Low-nibble values 2..15 are reserved and must cause a parse error.
+Container `size` is exactly 1 byte.
+
+### 4.3 `int_inline` (code 3)
 
 Tag byte alone. The value is the unsigned integer encoded in the low
 nibble (range `0..15`). Container `size` is exactly 1 byte.
 
-### 4.3 `int` (code 4)
+### 4.4 `int` (code 4)
 
 ```
 tag (1 B): high = 4, low = bc − 1   where bc ∈ {1..16}
@@ -134,7 +146,7 @@ encodings of the value 200, but encoders should pick `bc = 1`.
 The `int_inline` form (code 3) is preferred over `int` for values
 0..15.
 
-### 4.4 `decimal` (code 5)
+### 4.5 `decimal` (code 5)
 
 ```
 tag (1 B):       high = 5, low = bc − 1   where bc ∈ {1..16}
@@ -144,7 +156,7 @@ varscale (1..4 B): scale, see §4.4.1
 
 Represents `mantissa × 10^scale` as an exact decimal value.
 
-#### 4.4.1 Varscale — 2-bit-prefix variable-length signed integer
+#### 4.5.1 Varscale — 2-bit-prefix variable-length signed integer
 
 The scale uses a compact variable-length encoding. The first byte's
 top 2 bits give the total byte count of the varscale; the remaining
@@ -169,7 +181,7 @@ Capacities:
 
 Encoders must use the smallest byte count that fits the value.
 
-#### 4.4.2 Decimal vs IEEE float
+#### 4.5.2 Decimal vs IEEE float
 
 A floating-point value may be encoded either as `decimal`
 (mantissa × 10^scale) or `ieee_float` (raw IEEE-754 binary64). When
@@ -185,7 +197,7 @@ Round-tripping a JSON number through pjson preserves the **value**,
 not the **textual form**. Trailing zeros (`100.00`) and scientific
 notation (`1.5e10`) are normalized away.
 
-### 4.5 `ieee_float` (code 6)
+### 4.6 `ieee_float` (code 6)
 
 ```
 tag (1 B): high = 6, low = 0
@@ -197,7 +209,7 @@ Infinity are technically representable but are forbidden in JSON; pjson
 encoders reading from JSON will not produce NaN or Infinity values.
 pjson encoders sourced from non-JSON inputs may emit them.
 
-### 4.6 `string` (code 8)
+### 4.7 `string` (code 8)
 
 ```
 tag (1 B): high = 8, low = 0
@@ -217,7 +229,7 @@ unescape over the content bytes.
 The string length is `size − 1` where `size` is the caller-provided
 byte length of the value. Strings carry no length prefix.
 
-### 4.7 `bytes` (code 10)
+### 4.8 `bytes` (code 10)
 
 ```
 tag (1 B): high = 10 (0xA), low = 0
@@ -431,8 +443,8 @@ the pjson.
 | JSON | pjson tag |
 |---|---|
 | `null` | 0 (null) |
-| `false` | 1 (bool_false) |
-| `true` | 2 (bool_true) |
+| `false` | 1 (bool, low nibble = 0) |
+| `true` | 1 (bool, low nibble = 1) |
 | integer fitting i64 | 3 (int_inline) for 0..15, else 4 (int) |
 | integer beyond i64 | 4 (int) with bc 9..16 |
 | fractional / exponent | 5 (decimal) when shortest, else 6 (ieee_float) |
@@ -523,9 +535,9 @@ parse_value(ptr, size) -> Value:
    low  = tag & 0x0F
 
    case type of
-   0: return Null()
-   1: return Bool(false)
-   2: return Bool(true)
+   0: return Null()                                       // tag 0x00
+   1: assert low ≤ 1                                      // 0x10 = false, 0x11 = true
+      return Bool(low == 1)
    3: return Int(low)                                     // 0..15
    4: bc = low + 1
       assert 1 + bc == size
@@ -670,7 +682,7 @@ encode_value(value, out: byte buffer):
    case value of
       Null()        -> append 0x00
       Bool(false)   -> append 0x10
-      Bool(true)    -> append 0x20
+      Bool(true)    -> append 0x11
       Int(v) where 0 ≤ v ≤ 15
                     -> append 0x30 | v
       Int(v):

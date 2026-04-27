@@ -74,11 +74,9 @@ namespace psio {
             case t_null:
                out.append("null", 4);
                return;
-            case t_bool_false:
-               out.append("false", 5);
-               return;
-            case t_bool_true:
-               out.append("true", 4);
+            case t_bool:
+               out.append((low & 1) ? "true" : "false",
+                          (low & 1) ? 4 : 5);
                return;
             case t_int_inline:
                // Value 0..15.

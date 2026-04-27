@@ -258,11 +258,15 @@ namespace psio {
          }
       };
 
+      // Tag-byte type codes (high nibble of the tag byte).
+      // Low-nibble usage is per-type; for `t_bool` the low nibble
+      // carries the boolean value itself (0 = false, 1 = true) so
+      // we don't burn two type codes on a 1-bit value.
       enum : std::uint8_t
       {
          t_null        = 0,
-         t_bool_false  = 1,
-         t_bool_true   = 2,
+         t_bool        = 1,   // low nibble: 0 = false, 1 = true
+         // 2 reserved
          t_int_inline  = 3,
          t_int         = 4,
          t_decimal     = 5,
@@ -702,8 +706,9 @@ namespace psio {
                 }
                 else if constexpr (std::is_same_v<T, bool>)
                 {
+                   // tag = (t_bool << 4) | (x ? 1 : 0)
                    dst[pos] = static_cast<std::uint8_t>(
-                       (x ? t_bool_true : t_bool_false) << 4);
+                       (t_bool << 4) | (x ? 1u : 0u));
                    return 1;
                 }
                 else if constexpr (std::is_same_v<T, std::int64_t>)
@@ -844,9 +849,13 @@ namespace psio {
 
          switch (type)
          {
-            case t_null:        out = pjson_value{pjson_null{}}; return size == 1;
-            case t_bool_false:  out = pjson_value{false};        return size == 1;
-            case t_bool_true:   out = pjson_value{true};         return size == 1;
+            case t_null: out = pjson_value{pjson_null{}}; return size == 1;
+            case t_bool:
+               // low nibble holds the value: 0 = false, 1 = true.
+               // Anything else is an error.
+               if (size != 1 || low > 1) return false;
+               out = pjson_value{low == 1};
+               return true;
             case t_int_inline:
                out = pjson_value{static_cast<std::int64_t>(low)};
                return size == 1;

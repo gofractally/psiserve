@@ -214,7 +214,7 @@ namespace psio {
          if constexpr (std::is_same_v<F, bool>)
          {
             dst[pos] = static_cast<std::uint8_t>(
-                ((v ? t_bool_true : t_bool_false)) << 4);
+                (t_bool << 4) | (v ? 1u : 0u));
             return 1;
          }
          else if constexpr (std::is_integral_v<F>)
