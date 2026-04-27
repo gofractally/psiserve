@@ -65,6 +65,10 @@ libraries/psizam/tests/fuzz/wasm-gen/reproducers/
 crash_*.wasm
 mismatch_*.wasm
 
+# Per-run benchmark snapshots. Default-untracked; commit a snapshot
+# only when intentionally pinning it as a baseline (`git add -f`).
+bench_snapshots/
+
 # Added by cargo
 
 /target

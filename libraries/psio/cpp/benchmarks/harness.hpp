@@ -24,11 +24,14 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <string_view>
 #include <vector>
 
@@ -287,6 +290,237 @@ namespace psio_bench {
              << r.enc_cv_pct << "," << r.dec_cv_pct << ","
              << r.wire_bytes << "\n";
       }
+   }
+
+   // ── Snapshot CSV: one file per bench run, one row per cell ───────
+   //
+   // Long-format CSV — every row carries the full platform tuple so a
+   // regression-diff tool can join two snapshots on
+   // (shape, format, library, mode, op) without separately tracking
+   // metadata.
+   //
+   // File path convention:
+   //    bench_snapshots/perf_<UTC-ISO-compact>_<commit>.csv
+   // e.g.
+   //    bench_snapshots/perf_20260427T172345Z_b1536e5.csv
+   //
+   // Default `bench_snapshots/` is gitignored; commit a snapshot only
+   // when intentionally accepting it as a new baseline (`git add -f`).
+
+   struct platform_info
+   {
+      std::string timestamp_utc;   // ISO 8601, "20260427T172345Z"
+      std::string commit_short;    // "b1536e5", "uncommitted", or env value
+      std::string os;              // "darwin" / "linux" / "freebsd" / "other"
+      std::string arch;            // "arm64" / "x86_64" / "other"
+      std::string cpu;             // free-form, may be empty
+      std::string compiler;        // "clang 22.1.4" / "gcc 14.2"
+      std::string cxx_std;         // "c++23"
+      std::string build_type;      // "Release" / "Debug" — from CMake
+   };
+
+   //  CSV cells should never embed commas or newlines; these helpers
+   //  quote-and-escape conservatively for the few free-form fields
+   //  (notes, cpu) where surprise input is possible.
+   inline std::string csv_escape(std::string_view s)
+   {
+      bool needs_quote = false;
+      for (char c : s)
+         if (c == ',' || c == '"' || c == '\n' || c == '\r')
+         {
+            needs_quote = true;
+            break;
+         }
+      if (!needs_quote)
+         return std::string{s};
+      std::string out;
+      out.reserve(s.size() + 2);
+      out.push_back('"');
+      for (char c : s)
+      {
+         if (c == '"')
+            out.push_back('"');
+         out.push_back(c);
+      }
+      out.push_back('"');
+      return out;
+   }
+
+   //  ISO-ish UTC timestamp for filenames (no separators, Z suffix).
+   inline std::string utc_timestamp_compact(std::time_t t = std::time(nullptr))
+   {
+      std::tm tm{};
+#ifdef _WIN32
+      gmtime_s(&tm, &t);
+#else
+      gmtime_r(&t, &tm);
+#endif
+      char buf[24];
+      std::strftime(buf, sizeof(buf), "%Y%m%dT%H%M%SZ", &tm);
+      return std::string{buf};
+   }
+
+   //  Git short hash via `git rev-parse --short HEAD`.  Falls back to
+   //  the env var PSIO_BENCH_COMMIT (so CI can override) or the
+   //  literal "uncommitted" if neither resolves.  popen is portable
+   //  enough for benches; not for production code.
+   inline std::string detect_commit_short()
+   {
+      if (const char* env = std::getenv("PSIO_BENCH_COMMIT");
+          env && *env)
+         return env;
+      std::FILE* p = popen("git rev-parse --short HEAD 2>/dev/null", "r");
+      if (!p)
+         return "uncommitted";
+      char buf[32]{};
+      char* line = std::fgets(buf, sizeof(buf), p);
+      pclose(p);
+      if (!line)
+         return "uncommitted";
+      std::string s{line};
+      while (!s.empty() && (s.back() == '\n' || s.back() == '\r'))
+         s.pop_back();
+      return s.empty() ? std::string{"uncommitted"} : s;
+   }
+
+   inline std::string detect_os()
+   {
+#if defined(__APPLE__)
+      return "darwin";
+#elif defined(__linux__)
+      return "linux";
+#elif defined(__FreeBSD__)
+      return "freebsd";
+#else
+      return "other";
+#endif
+   }
+
+   inline std::string detect_arch()
+   {
+#if defined(__aarch64__) || defined(_M_ARM64)
+      return "arm64";
+#elif defined(__x86_64__) || defined(_M_X64)
+      return "x86_64";
+#else
+      return "other";
+#endif
+   }
+
+   inline std::string detect_compiler()
+   {
+      std::ostringstream os_;
+#if defined(__clang__)
+      os_ << "clang " << __clang_major__ << '.' << __clang_minor__
+          << '.' << __clang_patchlevel__;
+#elif defined(__GNUC__)
+      os_ << "gcc " << __GNUC__ << '.' << __GNUC_MINOR__ << '.'
+          << __GNUC_PATCHLEVEL__;
+#else
+      os_ << "unknown";
+#endif
+      return os_.str();
+   }
+
+   inline std::string detect_cxx_std()
+   {
+#if __cplusplus >= 202302L
+      return "c++23";
+#elif __cplusplus >= 202002L
+      return "c++20";
+#elif __cplusplus >= 201703L
+      return "c++17";
+#else
+      return "c++<=14";
+#endif
+   }
+
+   inline platform_info detect_platform_info()
+   {
+      platform_info p;
+      p.timestamp_utc = utc_timestamp_compact();
+      p.commit_short  = detect_commit_short();
+      p.os            = detect_os();
+      p.arch          = detect_arch();
+      p.cpu           = "";  // CPU model lookup is platform-specific;
+                              //  leave empty for now, fill via env/CMake
+                              //  if needed.
+      if (const char* env = std::getenv("PSIO_BENCH_CPU"); env && *env)
+         p.cpu = env;
+      p.compiler   = detect_compiler();
+      p.cxx_std    = detect_cxx_std();
+#if defined(NDEBUG)
+      p.build_type = "Release";
+#else
+      p.build_type = "Debug";
+#endif
+      return p;
+   }
+
+   //  One row per (shape, format, library, mode, op) — long format.
+   struct snapshot_row
+   {
+      std::string shape;
+      std::string format;       // "ssz", "frac32", "(native)" for competitors
+      std::string library;      // "psio", "capnp", "flatbuffers",
+                                //  "msgpack-cxx", "protobuf", "sszpp"
+      std::string mode;         // "static" / "dynamic"
+      std::string op;           // "size_of" / "encode_rvalue" /
+                                //  "encode_sink" / "decode" /
+                                //  "validate" / "view_one" / "view_all"
+      double      ns_min      = 0.0;
+      double      ns_median   = 0.0;
+      double      cv_pct      = 0.0;
+      std::size_t wire_bytes  = 0;  // 0 if op doesn't produce bytes
+      std::size_t iters       = 0;
+      int         trials      = 0;
+      std::string notes;        // free-form, optional
+   };
+
+   inline constexpr std::string_view kSnapshotCsvHeader =
+      "timestamp_utc,commit,os,arch,cpu,compiler,cxx_std,build_type,"
+      "shape,format,library,mode,op,"
+      "ns_min,ns_median,cv_pct,wire_bytes,iters,trials,notes\n";
+
+   template <typename Out>
+   void write_snapshot_csv(Out&                              out,
+                           const platform_info&              plat,
+                           const std::vector<snapshot_row>&  rows)
+   {
+      out << kSnapshotCsvHeader;
+      for (const auto& r : rows)
+      {
+         out << plat.timestamp_utc << ','
+             << csv_escape(plat.commit_short) << ','
+             << plat.os << ',' << plat.arch << ','
+             << csv_escape(plat.cpu) << ','
+             << csv_escape(plat.compiler) << ','
+             << plat.cxx_std << ',' << plat.build_type << ','
+             << csv_escape(r.shape) << ','
+             << csv_escape(r.format) << ','
+             << csv_escape(r.library) << ','
+             << r.mode << ',' << r.op << ',';
+         char numbuf[64];
+         std::snprintf(numbuf, sizeof(numbuf), "%.3f", r.ns_min);
+         out << numbuf << ',';
+         std::snprintf(numbuf, sizeof(numbuf), "%.3f", r.ns_median);
+         out << numbuf << ',';
+         std::snprintf(numbuf, sizeof(numbuf), "%.2f", r.cv_pct);
+         out << numbuf << ',';
+         out << r.wire_bytes << ',' << r.iters << ',' << r.trials << ','
+             << csv_escape(r.notes) << '\n';
+      }
+   }
+
+   //  Default snapshot path: bench_snapshots/perf_<ts>_<commit>.csv,
+   //  rooted at the current working directory.  Caller is expected to
+   //  create the directory if it doesn't exist.
+   inline std::string default_snapshot_path(const platform_info& p)
+   {
+      std::ostringstream os_;
+      os_ << "bench_snapshots/perf_" << p.timestamp_utc << '_'
+          << p.commit_short << ".csv";
+      return os_.str();
    }
 
 }  // namespace psio_bench
