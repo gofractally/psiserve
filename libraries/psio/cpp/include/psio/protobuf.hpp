@@ -676,6 +676,76 @@ namespace psio
          }
       }
 
+      //  Per-member decode body, indexed by I.  Factored out so the
+      //  fast-path dispatch table can take its address as a uniform
+      //  function pointer.
+      template <typename T, std::size_t I>
+      void pb_decode_field_at(T&                    out,
+                              std::span<const char> src,
+                              std::size_t&          pos,
+                              std::uint8_t          wire_type)
+      {
+         using R  = ::psio::reflect<T>;
+         using FT = std::remove_cvref_t<
+            typename R::template member_type<I>>;
+         auto& fref = out.*(R::template member_pointer<I>);
+
+         if constexpr (pb_is_optional<FT>::value)
+         {
+            using E = typename pb_is_optional<FT>::elem;
+            E inner{};
+            pb_read_value(src, pos, wire_type, inner);
+            fref = std::move(inner);
+         }
+         else if constexpr (is_byte_vector_v<FT>)
+         {
+            if (wire_type != wt::length_delim)
+               throw std::runtime_error(
+                  "protobuf: bytes wire-type mismatch");
+            std::uint64_t n = read_varint(src, pos);
+            if (pos + n > src.size())
+               throw std::runtime_error("protobuf: bytes overrun");
+            fref.assign(reinterpret_cast<const std::uint8_t*>(
+                           src.data() + pos),
+                        reinterpret_cast<const std::uint8_t*>(
+                           src.data() + pos + n));
+            pos += n;
+         }
+         else if constexpr (pb_is_vector<FT>::value)
+         {
+            pb_read_repeated(src, pos, wire_type, fref);
+         }
+         else
+         {
+            pb_read_value(src, pos, wire_type, fref);
+         }
+      }
+
+      //  Per-T compile-time max field number — sizes the dense
+      //  dispatch table.  Empty messages (member_count == 0) hold
+      //  the table at size 1 so the array<...> instantiation is
+      //  well-formed.
+      template <typename T>
+      consteval std::uint32_t pb_max_field_number() noexcept
+      {
+         using R          = ::psio::reflect<T>;
+         constexpr auto N = R::member_count;
+         if constexpr (N == 0)
+            return 0;
+         else
+         {
+            std::uint32_t m = 0;
+            [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+               ((m = (resolve_field_number<T, Is>() > m
+                         ? resolve_field_number<T, Is>()
+                         : m)),
+                ...);
+            }(std::make_index_sequence<N>{});
+            return m;
+         }
+      }
+
       template <typename T>
       void pb_decode_message(T&                    out,
                              std::span<const char> src,
@@ -685,68 +755,44 @@ namespace psio
          using R          = ::psio::reflect<T>;
          constexpr auto N = R::member_count;
          std::size_t pos  = start;
+
+         //  Per-T dispatch table indexed by field number — O(1)
+         //  field_num → member-index lookup regardless of whether
+         //  the type uses default field numbers or `attr(field<N>)`
+         //  overrides.  Field numbers we don't recognise hold a
+         //  nullptr slot (the wire's unknown-field skip path picks
+         //  them up).
+         //
+         //  Size is `max_field_number + 1` so the table is dense
+         //  with index 0 unused.  Sparse overrides (e.g. field<100>
+         //  on a 3-field type) waste slots but stay constant-time;
+         //  pathological large field numbers are the only case where
+         //  this matters and they're rare in practice.
+         using fn_t = void (*)(T&, std::span<const char>,
+                               std::size_t&, std::uint8_t);
+         constexpr std::uint32_t max_fn = pb_max_field_number<T>();
+         constexpr auto          table =
+            []<std::size_t... Is>(std::index_sequence<Is...>)
+         {
+            std::array<fn_t, max_fn + 1> a{};
+            (([&]
+              {
+                 constexpr auto fn = resolve_field_number<T, Is>();
+                 a[fn] = &pb_decode_field_at<T, Is>;
+              }()),
+             ...);
+            return a;
+         }(std::make_index_sequence<N>{});
+
          while (pos < end)
          {
-            std::uint64_t tag        = read_varint(src, pos);
-            std::uint32_t field_num  = static_cast<std::uint32_t>(tag >> 3);
-            std::uint8_t  wire_type  = static_cast<std::uint8_t>(tag & 0x7);
+            std::uint64_t tag       = read_varint(src, pos);
+            std::uint32_t field_num = static_cast<std::uint32_t>(tag >> 3);
+            std::uint8_t  wire_type = static_cast<std::uint8_t>(tag & 0x7);
 
-            //  Compile-time fold over reflected fields: the matching
-            //  one routes the value, the rest fall through to a
-            //  skip().
-            bool handled = false;
-            [&]<std::size_t... Is>(std::index_sequence<Is...>)
-            {
-               ((
-                  [&]
-                  {
-                     if (handled)
-                        return;
-                     constexpr auto fn =
-                        resolve_field_number<T, Is>();
-                     if (field_num != fn)
-                        return;
-                     using FT = std::remove_cvref_t<
-                        typename R::template member_type<Is>>;
-                     auto& fref = out.*(R::template member_pointer<Is>);
-
-                     if constexpr (pb_is_optional<FT>::value)
-                     {
-                        using E = typename pb_is_optional<FT>::elem;
-                        E inner{};
-                        pb_read_value(src, pos, wire_type, inner);
-                        fref = std::move(inner);
-                     }
-                     else if constexpr (is_byte_vector_v<FT>)
-                     {
-                        if (wire_type != wt::length_delim)
-                           throw std::runtime_error(
-                              "protobuf: bytes wire-type mismatch");
-                        std::uint64_t n = read_varint(src, pos);
-                        if (pos + n > src.size())
-                           throw std::runtime_error(
-                              "protobuf: bytes overrun");
-                        fref.assign(
-                           reinterpret_cast<const std::uint8_t*>(
-                              src.data() + pos),
-                           reinterpret_cast<const std::uint8_t*>(
-                              src.data() + pos + n));
-                        pos += n;
-                     }
-                     else if constexpr (pb_is_vector<FT>::value)
-                     {
-                        pb_read_repeated(src, pos, wire_type, fref);
-                     }
-                     else
-                     {
-                        pb_read_value(src, pos, wire_type, fref);
-                     }
-                     handled = true;
-                  }()),
-                ...);
-            }(std::make_index_sequence<N>{});
-
-            if (!handled)
+            if (field_num >= 1 && field_num <= max_fn && table[field_num])
+               table[field_num](out, src, pos, wire_type);
+            else
                skip_field(src, pos, wire_type);
          }
          if (pos != end)
