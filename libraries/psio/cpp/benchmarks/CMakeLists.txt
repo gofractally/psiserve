@@ -50,6 +50,40 @@ else()
       "psio_bench_vs_externals: msgpack-cxx not found — skipping")
 endif()
 
+find_package(CapnProto QUIET CONFIG)
+if(CapnProto_FOUND)
+   #  Manual capnp invocation — capnp_generate_cpp from the cmake
+   #  module hardcodes paths in ways the bench tree doesn't fit.
+   set(CP_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/adapters/bench_schemas.capnp)
+   set(CP_GEN_H
+      ${CMAKE_CURRENT_BINARY_DIR}/adapters/bench_schemas.capnp.h)
+   set(CP_GEN_CC
+      ${CMAKE_CURRENT_BINARY_DIR}/adapters/bench_schemas.capnp.c++)
+   add_custom_command(
+      OUTPUT ${CP_GEN_H} ${CP_GEN_CC}
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+               ${CMAKE_CURRENT_BINARY_DIR}/adapters
+      COMMAND ${CMAKE_COMMAND} -E copy
+               ${CP_SCHEMA} ${CMAKE_CURRENT_BINARY_DIR}/adapters/
+      COMMAND capnp compile -oc++:${CMAKE_CURRENT_BINARY_DIR}/adapters
+               --src-prefix=${CMAKE_CURRENT_BINARY_DIR}/adapters
+               ${CMAKE_CURRENT_BINARY_DIR}/adapters/bench_schemas.capnp
+      DEPENDS ${CP_SCHEMA}
+      COMMENT "capnp compile bench_schemas.capnp")
+   target_sources(psio_bench_vs_externals PRIVATE ${CP_GEN_CC})
+   target_include_directories(psio_bench_vs_externals PRIVATE
+      ${CMAKE_CURRENT_BINARY_DIR}/adapters)
+   target_link_libraries(psio_bench_vs_externals PRIVATE
+      CapnProto::capnp)
+   target_compile_definitions(psio_bench_vs_externals PRIVATE
+      PSIO_HAVE_CAPNP=1)
+   message(STATUS
+      "psio_bench_vs_externals: capnp found — enabled")
+else()
+   message(STATUS
+      "psio_bench_vs_externals: capnp not found — skipping")
+endif()
+
 find_package(flatbuffers QUIET CONFIG)
 if(flatbuffers_FOUND)
    #  flatc generates one bench_schemas_generated.h next to the

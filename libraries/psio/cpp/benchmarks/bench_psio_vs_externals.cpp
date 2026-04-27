@@ -37,6 +37,9 @@
 #ifdef PSIO_HAVE_FLATBUF
 #  include "adapters/flatbuf_adapter.hpp"
 #endif
+#ifdef PSIO_HAVE_CAPNP
+#  include "adapters/capnp_adapter.hpp"
+#endif
 
 #include <cstdio>
 #include <filesystem>
@@ -426,6 +429,84 @@ namespace {
    }
 #endif
 
+#ifdef PSIO_HAVE_CAPNP
+   //  Time libcapnp.  encode = MallocMessageBuilder + setters +
+   //  messageToFlatArray.  decode = FlatArrayMessageReader +
+   //  getRoot<>() (zero-copy, just pointer arithmetic).
+   template <typename T>
+   void bench_libcapnp_cell(std::vector<snapshot_row>& out,
+                            const std::string&         shape_name,
+                            const T&                   v)
+   {
+      using CP = cp_bench::cp_struct_t<T>;
+
+      capnp::MallocMessageBuilder seed_builder;
+      cp_bench::build(seed_builder.initRoot<CP>(), v);
+      auto seed_array = capnp::messageToFlatArray(seed_builder);
+      auto seed_bytes = seed_array.asBytes();
+      const std::size_t wire = seed_bytes.size();
+
+      auto record = [&](std::string op, double ns, double ns_med,
+                         double cv, std::size_t wire_b, std::size_t iters,
+                         int trials, std::string notes = "") {
+         out.push_back(snapshot_row{
+            .shape      = shape_name,
+            .format     = "capnp",
+            .library    = "libcapnp",
+            .mode       = "static",
+            .op         = std::move(op),
+            .ns_min     = ns,
+            .ns_median  = ns_med,
+            .cv_pct     = cv,
+            .wire_bytes = wire_b,
+            .iters      = iters,
+            .trials     = trials,
+            .notes      = std::move(notes),
+         });
+      };
+      auto cv = [](const timing& t) {
+         return t.min_ns > 0.0 ? t.stddev_ns / t.min_ns * 100.0 : 0.0;
+      };
+
+      // size_of — capnp's "size" is the flat-array word count after
+      // building.  Closest cheap proxy: build, then sizeInWords.
+      auto t_size = ns_per_iter(0u, [&](std::size_t) {
+         capnp::MallocMessageBuilder b;
+         cp_bench::build(b.initRoot<CP>(), v);
+         std::size_t n = capnp::computeSerializedSizeInWords(b) * 8;
+         asm volatile("" : "+r"(n) : : "memory");
+      });
+      record("size_of", t_size.min_ns, t_size.median_ns, cv(t_size),
+             wire, t_size.iters, t_size.trials,
+             "build + computeSerializedSizeInWords (no native sizer)");
+
+      // encode_rvalue — fresh builder + build + messageToFlatArray.
+      auto t_enc = ns_per_iter(0u, [&](std::size_t) {
+         capnp::MallocMessageBuilder b;
+         cp_bench::build(b.initRoot<CP>(), v);
+         auto out_arr = capnp::messageToFlatArray(b);
+         asm volatile("" : : "r"(out_arr.begin()) : "memory");
+      });
+      record("encode_rvalue", t_enc.min_ns, t_enc.median_ns, cv(t_enc),
+             wire, t_enc.iters, t_enc.trials,
+             "fresh MallocMessageBuilder + messageToFlatArray");
+
+      // decode (view) — FlatArrayMessageReader + getRoot.  Zero-copy.
+      auto words =
+         kj::ArrayPtr<const capnp::word>(
+            reinterpret_cast<const capnp::word*>(seed_bytes.begin()),
+            seed_bytes.size() / sizeof(capnp::word));
+      auto t_dec = ns_per_iter(0u, [&](std::size_t) {
+         capnp::FlatArrayMessageReader reader(words);
+         auto root = reader.getRoot<CP>();
+         asm volatile("" : : "r"(&root) : "memory");
+      });
+      record("decode", t_dec.min_ns, t_dec.median_ns, cv(t_dec),
+             wire, t_dec.iters, t_dec.trials,
+             "FlatArrayMessageReader + getRoot (zero-copy)");
+   }
+#endif
+
    //  Run all psio formats against one shape value.  Each cell is
    //  gated by fmt_supports<Fmt, T> so unsupported pairs are skipped
    //  rather than triggering a static_assert at compile time.
@@ -464,6 +545,12 @@ namespace {
                        typename fb_bench_adapter::fb_table_for<T>::type;
                     })
          bench_libflatbuf_cell(out, shape_name, v);
+#endif
+#ifdef PSIO_HAVE_CAPNP
+      if constexpr (requires {
+                       typename cp_bench::cp_struct_for<T>::type;
+                    })
+         bench_libcapnp_cell(out, shape_name, v);
 #endif
    }
 
