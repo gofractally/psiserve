@@ -156,6 +156,14 @@ psio3_add_test(psio3_fbs_parser_tests fbs_parser_tests.cpp)
 # MsgPack codec (msgpack.hpp) — schema-driven encode/decode/validate.
 psio3_add_test(psio3_msgpack_tests msgpack_tests.cpp)
 
+# Quick perf comparison of json / msgpack / pjson on a representative
+# struct.  Built as a regular executable (not a ctest).  Run manually:
+#   ./bin/psio3_format_perf
+add_executable(psio3_format_perf format_perf.cpp)
+target_link_libraries(psio3_format_perf PRIVATE psio)
+target_compile_features(psio3_format_perf PRIVATE cxx_std_23)
+target_compile_options(psio3_format_perf PRIVATE -O3 -DNDEBUG)
+
 # Production-shaped WASI 2.3 inputs through wit_gen + wit_constexpr +
 # wit_encode (resources, own/borrow, multi-interface).
 psio3_add_test(psio3_wit_wasi_shapes_tests wit_wasi_shapes_tests.cpp)
