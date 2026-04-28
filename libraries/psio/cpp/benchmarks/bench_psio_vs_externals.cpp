@@ -19,6 +19,7 @@
 #include <psio/capnp.hpp>
 #include <psio/flatbuf.hpp>
 #include <psio/frac.hpp>
+#include <psio/json.hpp>
 #include <psio/msgpack.hpp>
 #include <psio/protobuf.hpp>
 #include <psio/pssz.hpp>
@@ -44,6 +45,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <set>
 #include <span>
 #include <vector>
 
@@ -530,6 +533,8 @@ namespace {
       cell("msgpack",  psio::msgpack{});
       cell("capnp",    psio::capnp{});
       cell("flatbuf",  psio::flatbuf{});
+      // Self-describing formats (no schema needed at decode time).
+      cell("json",     psio::json{});
 
 #ifdef PSIO_HAVE_MSGPACK
       bench_msgpack_cxx_cell(out, shape_name, v);
@@ -610,5 +615,74 @@ int main(int argc, char** argv)
 
    std::printf("wrote %zu rows to %s\n", rows.size(),
                snap_path.c_str());
+
+   // ── Wire-size summary table ─────────────────────────────────────
+   //
+   // Prints one row per (shape, format) showing the byte count.
+   // Useful at a glance to compare format compactness on the same
+   // payload — orthogonal to the speed numbers, often the real
+   // selection criterion.
+
+   //  Pull (shape, format, library) → size from the rows we just
+   //  collected.  encode_rvalue rows always carry wire_bytes; we use
+   //  those.
+   struct size_key
+   {
+      std::string shape, format, library;
+      bool        operator<(const size_key& o) const
+      {
+         if (shape != o.shape) return shape < o.shape;
+         if (format != o.format) return format < o.format;
+         return library < o.library;
+      }
+   };
+   std::map<size_key, std::size_t> sizes;
+   for (const auto& r : rows)
+   {
+      if (r.op != "encode_rvalue" && r.op != "encode_sink")
+         continue;
+      size_key k{r.shape, r.format, r.library};
+      auto [it, inserted] = sizes.emplace(k, r.wire_bytes);
+      if (!inserted && r.wire_bytes > 0 && it->second == 0)
+         it->second = r.wire_bytes;
+   }
+
+   //  Group into one column per (format, library) pair and emit a
+   //  matrix-style table.  Columns are sorted by the median size
+   //  across shapes (compact formats first).
+   std::map<std::string, std::map<std::string, std::size_t>> table;
+   //  table[shape][format-pair] = bytes
+   std::set<std::string> col_set;
+   for (const auto& [k, b] : sizes)
+   {
+      std::string col =
+         k.library == "psio" ? k.format
+                              : (k.library + "/" + k.format);
+      table[k.shape][col] = b;
+      col_set.insert(col);
+   }
+
+   std::printf("\n# Wire-size matrix (bytes per encoded shape)\n\n");
+   std::printf("| %-26s |", "shape");
+   for (const auto& c : col_set)
+      std::printf(" %12s |", c.c_str());
+   std::printf("\n|%-28s|", "----------------------------");
+   for (size_t i = 0; i < col_set.size(); ++i)
+      std::printf("--------------|");
+   std::printf("\n");
+   for (const auto& [shape, cols] : table)
+   {
+      std::printf("| %-26s |", shape.c_str());
+      for (const auto& c : col_set)
+      {
+         auto it = cols.find(c);
+         if (it == cols.end())
+            std::printf(" %12s |", "  -");
+         else
+            std::printf(" %12zu |", it->second);
+      }
+      std::printf("\n");
+   }
+
    return 0;
 }
