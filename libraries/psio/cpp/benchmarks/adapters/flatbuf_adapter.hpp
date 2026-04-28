@@ -176,4 +176,26 @@ namespace fb_bench_adapter {
    template <typename Shape>
    using fb_table_t = typename fb_table_for<Shape>::type;
 
+   //  view_first_scalar(reader) — first scalar field per shape, for
+   //  view_one bench op.  flatbuffers is zero-copy: the call expands
+   //  to a couple of pointer dereferences + a fixed-offset load.
+   inline std::int32_t view_first_scalar(const fb_bench::fb_Point* r)
+   { return r->x(); }
+   inline std::uint64_t view_first_scalar(const fb_bench::fb_NameRecord* r)
+   { return r->account(); }
+   inline std::uint32_t view_first_scalar(const fb_bench::fb_FlatRecord* r)
+   { return r->id(); }
+   inline std::uint32_t view_first_scalar(const fb_bench::fb_Record* r)
+   { return r->id(); }
+   inline std::uint64_t view_first_scalar(const fb_bench::fb_Validator* r)
+   { return r->pubkey_lo(); }
+   inline std::uint32_t view_first_scalar(const fb_bench::fb_LineItem* r)
+   { return r->qty(); }
+   inline std::uint64_t view_first_scalar(const fb_bench::fb_UserProfile* r)
+   { return r->id(); }
+   inline std::uint64_t view_first_scalar(const fb_bench::fb_Order* r)
+   { return r->id(); }
+   inline std::uint64_t view_first_scalar(const fb_bench::fb_ValidatorList* r)
+   { return r->epoch(); }
+
 }  // namespace fb_bench_adapter

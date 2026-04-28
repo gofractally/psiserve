@@ -419,8 +419,7 @@ namespace {
              "reused FlatBufferBuilder.Clear()");
 
       // decode (view) — flatbuffers is zero-copy; "decode" here is
-      // GetRoot<>() + walk all fields once via UnPack-ish manual
-      // copy.  Use UnPackTo() into a heap-allocated NativeT.
+      // GetRoot<>() only (just pointer arithmetic, ~0 ns).
       const std::uint8_t* buf_ptr = fbb_seed.GetBufferPointer();
       auto t_dec = ns_per_iter(0u, [&](std::size_t) {
          auto root = flatbuffers::GetRoot<FB>(buf_ptr);
@@ -429,6 +428,16 @@ namespace {
       record("decode", t_dec.min_ns, t_dec.median_ns, cv(t_dec),
              wire, t_dec.iters, t_dec.trials,
              "GetRoot only (zero-copy; full copy not measured)");
+
+      // view_one — zero-copy random access of one scalar field.
+      auto t_view = ns_per_iter(0u, [&](std::size_t) {
+         auto root = flatbuffers::GetRoot<FB>(buf_ptr);
+         auto val  = fb_bench_adapter::view_first_scalar(root);
+         asm volatile("" : "+r"(val) : : "memory");
+      });
+      record("view_one", t_view.min_ns, t_view.median_ns, cv(t_view),
+             wire, t_view.iters, t_view.trials,
+             "GetRoot + first-scalar getter (zero-copy)");
    }
 #endif
 
@@ -507,6 +516,17 @@ namespace {
       record("decode", t_dec.min_ns, t_dec.median_ns, cv(t_dec),
              wire, t_dec.iters, t_dec.trials,
              "FlatArrayMessageReader + getRoot (zero-copy)");
+
+      // view_one — zero-copy random access of one scalar field.
+      auto t_view = ns_per_iter(0u, [&](std::size_t) {
+         capnp::FlatArrayMessageReader reader(words);
+         auto root = reader.getRoot<CP>();
+         auto val  = cp_bench::view_first_scalar(root);
+         asm volatile("" : "+r"(val) : : "memory");
+      });
+      record("view_one", t_view.min_ns, t_view.median_ns, cv(t_view),
+             wire, t_view.iters, t_view.trials,
+             "FlatArrayMessageReader + first-scalar getter (zero-copy)");
    }
 #endif
 

@@ -176,4 +176,26 @@ namespace cp_bench {
    template <typename Shape>
    using cp_struct_t = typename cp_struct_for<Shape>::type;
 
+   //  view_first_scalar(reader) — return one representative scalar
+   //  field per shape, for the view_one bench op.  Forces the
+   //  reader to actually deference into the wire bytes.
+   inline std::int64_t view_first_scalar(CpPoint::Reader r)
+   { return r.getX(); }
+   inline std::uint64_t view_first_scalar(CpNameRecord::Reader r)
+   { return r.getAccount(); }
+   inline std::uint64_t view_first_scalar(CpFlatRecord::Reader r)
+   { return r.getId(); }
+   inline std::uint64_t view_first_scalar(CpRecord::Reader r)
+   { return r.getId(); }
+   inline std::uint64_t view_first_scalar(CpValidator::Reader r)
+   { return r.getPubkeyLo(); }
+   inline std::uint64_t view_first_scalar(CpLineItem::Reader r)
+   { return r.getQty(); }
+   inline std::uint64_t view_first_scalar(CpUserProfile::Reader r)
+   { return r.getId(); }
+   inline std::uint64_t view_first_scalar(CpOrder::Reader r)
+   { return r.getId(); }
+   inline std::uint64_t view_first_scalar(CpValidatorList::Reader r)
+   { return r.getEpoch(); }
+
 }  // namespace cp_bench
