@@ -157,6 +157,27 @@ namespace {
       record("decode", t_dec.min_ns, t_dec.median_ns, cv(t_dec),
              wire, t_dec.iters, t_dec.trials);
 
+      // view_one — decode + access first reflected field.  Honest
+      // framing: psio's Record-level zero-copy view machinery isn't
+      // yet wired for every format, so what we time here is "decode
+      // and reach in" — the full deserialisation cost, not a
+      // pointer-into-buffer dereference.  Compare against
+      // libcapnp/libflatbuffers' view_one to see the value of true
+      // zero-copy for single-field access.
+      if constexpr (::psio::Reflected<T>)
+      {
+         using R = ::psio::reflect<T>;
+         constexpr auto p0 = R::template member_pointer<0>;
+         auto t_view = ns_per_iter(0u, [&](std::size_t) {
+            auto decoded = psio::decode<T>(fmt, span_bytes);
+            auto val     = decoded.*p0;
+            asm volatile("" : : "r"(&val) : "memory");
+         });
+         record("view_one", t_view.min_ns, t_view.median_ns,
+                cv(t_view), wire, t_view.iters, t_view.trials,
+                "decode + reach first field (no native view yet)");
+      }
+
       // validate (some formats / shapes don't expose this; skip if it
       // would force compile-time errors via SFINAE-bypassing static
       // asserts).  For now, run unconditionally and let the linker /
@@ -249,6 +270,23 @@ namespace {
              wire, t_dec.iters, t_dec.trials);
 
       // No native validate — `unpack` IS the validation; report skipped.
+
+      // view_one — msgpack has no zero-copy; full unpack + convert
+      // + reach a field.  Same shape semantics as the psio-side
+      // view_one_via_decode, just through msgpack-cxx's API.
+      if constexpr (::psio::Reflected<T>)
+      {
+         using R = ::psio::reflect<T>;
+         constexpr auto p0 = R::template member_pointer<0>;
+         auto t_view = ns_per_iter(0u, [&](std::size_t) {
+            auto p = mp_bench::decode<T>(bytes.data(), bytes.size());
+            auto val = p.*p0;
+            asm volatile("" : "+r"(val) : : "memory");
+         });
+         record("view_one", t_view.min_ns, t_view.median_ns, cv(t_view),
+                wire, t_view.iters, t_view.trials,
+                "unpack + reach first field (no zero-copy)");
+      }
    }
 #endif
 
@@ -343,6 +381,25 @@ namespace {
              "ParseFromString into reused pb message");
 
       // No standalone validate — ParseFromString IS the validation.
+
+      // view_one — protobuf has no zero-copy; reach into reused
+      // post-Parse pb message.  This is the canonical libprotobuf
+      // pattern for "get one field after parsing".
+      if constexpr (::psio::Reflected<T>)
+      {
+         auto t_view = ns_per_iter(0u, [&](std::size_t) {
+            dec.Clear();
+            (void)dec.ParseFromString(pre);
+            // Touch one field via the message's accessors.  pb's
+            // ByteSizeLong is a cheap-once-cached scalar read;
+            // sufficient as a "reach in" signal.
+            auto val = dec.ByteSizeLong();
+            asm volatile("" : "+r"(val) : : "memory");
+         });
+         record("view_one", t_view.min_ns, t_view.median_ns,
+                cv(t_view), wire, t_view.iters, t_view.trials,
+                "ParseFromString + ByteSizeLong (no zero-copy)");
+      }
    }
 #endif
 
