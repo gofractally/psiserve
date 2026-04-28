@@ -54,6 +54,61 @@ using namespace psio_bench;
 
 namespace {
 
+   //  bench_view_target(decoded) — return one scalar from a meaningful
+   //  place inside the decoded value, used by the view_one op.
+   //
+   //  Critical: the field MUST be deep enough that the optimiser can't
+   //  shortcut the decode.  Earlier we used member_pointer<0> which
+   //  for shapes whose first field is at byte offset 0 (e.g. ssz / bin
+   //  ValidatorList → epoch at offset 0) let the compiler DCE the
+   //  rest of the decode and read straight from the wire.  By
+   //  targeting a deep field — vector[mid].field, customer.id,
+   //  root.child.child.child.value — the bench measures honest
+   //  decode-and-reach cost.
+   //
+   //  Default falls back to first arithmetic field for the shapes
+   //  that are top-level scalars only (Point, NameRecord, …) — for
+   //  those the optimisation we're worried about doesn't apply
+   //  because there's nothing else to elide.
+   template <typename T>
+   inline std::uint64_t bench_view_target(const T& v)
+   {
+      using R  = ::psio::reflect<T>;
+      constexpr auto p0 = R::template member_pointer<0>;
+      using F0 = std::remove_cvref_t<typename R::template member_type<0>>;
+      if constexpr (std::is_arithmetic_v<F0> ||
+                     std::is_same_v<F0, bool>)
+         return static_cast<std::uint64_t>(v.*p0);
+      else
+         return reinterpret_cast<std::uintptr_t>(&(v.*p0));
+   }
+
+   //  Specialisations for shapes where the first field is too
+   //  shallow / too easily elided.
+
+   inline std::uint64_t bench_view_target(const Order& v)
+   { return v.customer.id; }
+   inline std::uint64_t bench_view_target(const OrderBounded& v)
+   { return v.customer.id; }
+
+   inline std::uint64_t bench_view_target(const ValidatorList& v)
+   {
+      if (v.validators.empty()) return 0;
+      return v.validators[v.validators.size() / 2].pubkey_lo;
+   }
+   inline std::uint64_t bench_view_target(const ValidatorListBounded& v)
+   {
+      if (v.validators.empty()) return 0;
+      return v.validators[v.validators.size() / 2].pubkey_lo;
+   }
+
+   //  Deep4 — the whole point is to access the value 4 nesting levels in.
+   inline std::uint64_t bench_view_target(const Deep4Ext& v)
+   { return v.root.child.child.child.value; }
+   inline std::uint64_t bench_view_target(const Deep4Dwnc& v)
+   { return v.root.child.child.child.value; }
+
+
    //  Per-(format, shape) support gate.  Some psio formats fail to
    //  encode certain shapes (e.g., frac doesn't yet support
    //  vector<variable-element>); the static_assert lives inside the
@@ -166,16 +221,14 @@ namespace {
       // zero-copy for single-field access.
       if constexpr (::psio::Reflected<T>)
       {
-         using R = ::psio::reflect<T>;
-         constexpr auto p0 = R::template member_pointer<0>;
          auto t_view = ns_per_iter(0u, [&](std::size_t) {
             auto decoded = psio::decode<T>(fmt, span_bytes);
-            auto val     = decoded.*p0;
-            asm volatile("" : : "r"(&val) : "memory");
+            std::uint64_t val = bench_view_target(decoded);
+            asm volatile("" : "+r"(val) : : "memory");
          });
          record("view_one", t_view.min_ns, t_view.median_ns,
                 cv(t_view), wire, t_view.iters, t_view.trials,
-                "decode + reach first field (no native view yet)");
+                "decode + reach view_target (no native view yet)");
       }
 
       // validate (some formats / shapes don't expose this; skip if it
@@ -272,20 +325,17 @@ namespace {
       // No native validate — `unpack` IS the validation; report skipped.
 
       // view_one — msgpack has no zero-copy; full unpack + convert
-      // + reach a field.  Same shape semantics as the psio-side
-      // view_one_via_decode, just through msgpack-cxx's API.
+      // + reach the view_target field.
       if constexpr (::psio::Reflected<T>)
       {
-         using R = ::psio::reflect<T>;
-         constexpr auto p0 = R::template member_pointer<0>;
          auto t_view = ns_per_iter(0u, [&](std::size_t) {
             auto p = mp_bench::decode<T>(bytes.data(), bytes.size());
-            auto val = p.*p0;
+            std::uint64_t val = bench_view_target(p);
             asm volatile("" : "+r"(val) : : "memory");
          });
          record("view_one", t_view.min_ns, t_view.median_ns, cv(t_view),
                 wire, t_view.iters, t_view.trials,
-                "unpack + reach first field (no zero-copy)");
+                "unpack + reach view_target (no zero-copy)");
       }
    }
 #endif
@@ -664,6 +714,11 @@ int main(int argc, char** argv)
    run_shape(rows, "OrderBounded",         psio_bench::order_bounded());
    run_shape(rows, "ValidatorListBounded(100)",
              psio_bench::vlist_bounded(100));
+
+   // Depth-4 nested — Ext vs Dwnc head-to-head shows the cost of the
+   // extensibility prefix at every nesting level.
+   run_shape(rows, "Deep4Ext",   psio_bench::deep4_ext());
+   run_shape(rows, "Deep4Dwnc",  psio_bench::deep4_dwnc());
 
    // Where to write the snapshot.  Default: bench_snapshots/.  Caller
    // can override via PSIO_BENCH_SNAPSHOT_DIR or argv[1].

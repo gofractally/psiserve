@@ -198,6 +198,48 @@ struct ValidatorListBounded
 };
 PSIO_REFLECT(ValidatorListBounded, epoch, attr(validators, max<1024>))
 
+// ── Deep nesting: 4 levels, extensible vs DWNC ────────────────────────
+//
+// For view_one fairness — accessing `outer.a.a.a.value` forces every
+// nesting layer to be traversed, exposing the cost of offset-table
+// walks in extensible formats vs static-offset reads in DWNC formats.
+//
+// Two parallel chains so we can compare side-by-side:
+//   - Inner4Ext / Inner3Ext / Inner2Ext / Inner1Ext / Deep4Ext —
+//     no DWNC at any level → variable-size record header per layer.
+//   - Inner4Dwnc / .../Deep4Dwnc — definitionWillNotChange() at every
+//     level → no header, fast static offsets.
+
+struct Inner4Ext { std::uint64_t value = 0; };
+PSIO_REFLECT(Inner4Ext, value)
+
+struct Inner3Ext { Inner4Ext child; std::uint64_t pad3 = 0; };
+PSIO_REFLECT(Inner3Ext, child, pad3)
+
+struct Inner2Ext { Inner3Ext child; std::uint64_t pad2 = 0; };
+PSIO_REFLECT(Inner2Ext, child, pad2)
+
+struct Inner1Ext { Inner2Ext child; std::uint64_t pad1 = 0; };
+PSIO_REFLECT(Inner1Ext, child, pad1)
+
+struct Deep4Ext { Inner1Ext root; };
+PSIO_REFLECT(Deep4Ext, root)
+
+struct Inner4Dwnc { std::uint64_t value = 0; };
+PSIO_REFLECT(Inner4Dwnc, value, definitionWillNotChange())
+
+struct Inner3Dwnc { Inner4Dwnc child; std::uint64_t pad3 = 0; };
+PSIO_REFLECT(Inner3Dwnc, child, pad3, definitionWillNotChange())
+
+struct Inner2Dwnc { Inner3Dwnc child; std::uint64_t pad2 = 0; };
+PSIO_REFLECT(Inner2Dwnc, child, pad2, definitionWillNotChange())
+
+struct Inner1Dwnc { Inner2Dwnc child; std::uint64_t pad1 = 0; };
+PSIO_REFLECT(Inner1Dwnc, child, pad1, definitionWillNotChange())
+
+struct Deep4Dwnc { Inner1Dwnc root; };
+PSIO_REFLECT(Deep4Dwnc, root, definitionWillNotChange())
+
 // ── Sample factories ──────────────────────────────────────────────────
 namespace psio_bench {
 
@@ -304,6 +346,29 @@ namespace psio_bench {
       for (std::uint32_t i = 0; i < n; ++i)
          l.validators.push_back(make_validator(i));
       return l;
+   }
+
+   inline Deep4Ext deep4_ext()
+   {
+      return Deep4Ext{
+         .root = Inner1Ext{
+            .child = Inner2Ext{
+               .child = Inner3Ext{
+                  .child = Inner4Ext{.value = 0xDEAD'BEEF'CAFE'BABEull},
+                  .pad3 = 3},
+               .pad2 = 2},
+            .pad1 = 1}};
+   }
+   inline Deep4Dwnc deep4_dwnc()
+   {
+      return Deep4Dwnc{
+         .root = Inner1Dwnc{
+            .child = Inner2Dwnc{
+               .child = Inner3Dwnc{
+                  .child = Inner4Dwnc{.value = 0xDEAD'BEEF'CAFE'BABEull},
+                  .pad3 = 3},
+               .pad2 = 2},
+            .pad1 = 1}};
    }
 
 }  // namespace psio_bench
