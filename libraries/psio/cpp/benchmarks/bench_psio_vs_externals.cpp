@@ -101,6 +101,13 @@ namespace {
       if (v.validators.empty()) return 0;
       return v.validators[v.validators.size() / 2].pubkey_lo;
    }
+   inline std::uint64_t bench_view_target(const ValidatorListDwnc& v)
+   {
+      if (v.validators.empty()) return 0;
+      return v.validators[v.validators.size() / 2].pubkey_lo;
+   }
+   inline std::uint64_t bench_view_target(const OrderDwnc& v)
+   { return v.customer.id; }
 
    //  Deep4 — the whole point is to access the value 4 nesting levels in.
    inline std::uint64_t bench_view_target(const Deep4Ext& v)
@@ -118,12 +125,15 @@ namespace {
    template <typename Fmt, typename T>
    struct fmt_supports : std::true_type {};
 
-   //  frac32 / frac16 don't currently support vector<variable> — Order
-   //  has vector<LineItem>, OrderBounded has vector<LineItemBounded>.
+   //  frac32 / frac16 don't currently support vector<variable> —
+   //  Order has vector<LineItem>, OrderBounded has vector<LineItemBounded>,
+   //  OrderDwnc has vector<LineItemDwnc>.
    template <> struct fmt_supports<psio::frac32, Order>        : std::false_type {};
    template <> struct fmt_supports<psio::frac32, OrderBounded> : std::false_type {};
+   template <> struct fmt_supports<psio::frac32, OrderDwnc>    : std::false_type {};
    template <> struct fmt_supports<psio::frac16, Order>        : std::false_type {};
    template <> struct fmt_supports<psio::frac16, OrderBounded> : std::false_type {};
+   template <> struct fmt_supports<psio::frac16, OrderDwnc>    : std::false_type {};
 
    //  Per-(shape, format) op timings for the psio side.  Each call
    //  exercises one CPO and pushes one snapshot_row into `out`.
@@ -714,6 +724,16 @@ int main(int argc, char** argv)
    run_shape(rows, "OrderBounded",         psio_bench::order_bounded());
    run_shape(rows, "ValidatorListBounded(100)",
              psio_bench::vlist_bounded(100));
+
+   // ── Dwnc twins of the variable-shape tiers ─────────────────────
+   // For each non-DWNC shape that already exists, time a paired
+   // DWNC variant — apples-to-apples for extensibility-aware
+   // formats (frac32, pssz) so they aren't penalised for header
+   // overhead the user opted out of.
+   run_shape(rows, "FlatRecordDwnc",        psio_bench::flatrec_dwnc());
+   run_shape(rows, "RecordDwnc",            psio_bench::record_dwnc());
+   run_shape(rows, "OrderDwnc",             psio_bench::order_dwnc());
+   run_shape(rows, "ValidatorListDwnc(100)",psio_bench::vlist_dwnc(100));
 
    // Depth-4 nested — Ext vs Dwnc head-to-head shows the cost of the
    // extensibility prefix at every nesting level.

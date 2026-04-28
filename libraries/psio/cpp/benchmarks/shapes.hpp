@@ -198,6 +198,85 @@ struct ValidatorListBounded
 };
 PSIO_REFLECT(ValidatorListBounded, epoch, attr(validators, max<1024>))
 
+// ── Dwnc twins of the variable-shape tiers ────────────────────────────
+//
+// definitionWillNotChange() tells extensible binary formats (frac,
+// pssz) they can drop the per-record header that normally lets old
+// readers tolerate new fields.  Same data; ~2 bytes smaller wire and
+// the static-offset memcpy fast path in pssz/bin.
+//
+// We pair each non-DWNC shape with a Dwnc twin so format comparisons
+// stay apples-to-apples — extensible-aware formats shouldn't be
+// penalised for header overhead when the user has explicitly opted
+// into a frozen layout.
+
+struct FlatRecordDwnc
+{
+   std::uint32_t              id = 0;
+   std::string                label;
+   std::vector<std::uint16_t> values;
+   friend bool operator==(const FlatRecordDwnc&,
+                           const FlatRecordDwnc&) = default;
+};
+PSIO_REFLECT(FlatRecordDwnc, id, label, values, definitionWillNotChange())
+
+struct RecordDwnc
+{
+   std::uint32_t                id = 0;
+   std::string                  label;
+   std::vector<std::uint16_t>   values;
+   std::optional<std::uint32_t> score;
+   friend bool operator==(const RecordDwnc&, const RecordDwnc&) = default;
+};
+PSIO_REFLECT(RecordDwnc, id, label, values, score,
+             definitionWillNotChange())
+
+struct LineItemDwnc
+{
+   std::string   product;
+   std::uint32_t qty        = 0;
+   double        unit_price = 0.0;
+   friend bool operator==(const LineItemDwnc&,
+                           const LineItemDwnc&) = default;
+};
+PSIO_REFLECT(LineItemDwnc, product, qty, unit_price,
+             definitionWillNotChange())
+
+struct UserProfileDwnc
+{
+   std::uint64_t id = 0;
+   std::string   name;
+   std::string   email;
+   std::uint32_t age      = 0;
+   bool          verified = false;
+   friend bool operator==(const UserProfileDwnc&,
+                           const UserProfileDwnc&) = default;
+};
+PSIO_REFLECT(UserProfileDwnc, id, name, email, age, verified,
+             definitionWillNotChange())
+
+struct OrderDwnc
+{
+   std::uint64_t                id = 0;
+   UserProfileDwnc              customer;
+   std::vector<LineItemDwnc>    items;
+   double                       total = 0.0;
+   std::optional<std::string>   note;
+   friend bool operator==(const OrderDwnc&, const OrderDwnc&) = default;
+};
+PSIO_REFLECT(OrderDwnc, id, customer, items, total, note,
+             definitionWillNotChange())
+
+struct ValidatorListDwnc
+{
+   std::uint64_t          epoch = 0;
+   std::vector<Validator> validators;
+   friend bool operator==(const ValidatorListDwnc&,
+                           const ValidatorListDwnc&) = default;
+};
+PSIO_REFLECT(ValidatorListDwnc, epoch, validators,
+             definitionWillNotChange())
+
 // ── Deep nesting: 4 levels, extensible vs DWNC ────────────────────────
 //
 // For view_one fairness — accessing `outer.a.a.a.value` forces every
@@ -341,6 +420,45 @@ namespace psio_bench {
    inline ValidatorListBounded vlist_bounded(std::uint32_t n = 100)
    {
       ValidatorListBounded l;
+      l.epoch = 42;
+      l.validators.reserve(n);
+      for (std::uint32_t i = 0; i < n; ++i)
+         l.validators.push_back(make_validator(i));
+      return l;
+   }
+
+   inline FlatRecordDwnc flatrec_dwnc()
+   {
+      return {.id = 9, .label = "flat-cap",
+              .values = {3, 5, 8, 13, 21, 34}};
+   }
+   inline RecordDwnc record_dwnc()
+   {
+      return {.id = 7, .label = "oracle",
+              .values = {1, 2, 65535, 4096, 32768, 0}, .score = 99};
+   }
+   inline OrderDwnc order_dwnc()
+   {
+      OrderDwnc o;
+      o.id        = 10042;
+      o.customer  = UserProfileDwnc{.id = 77, .name = "Alice Stone",
+                                     .email = "alice@example.com",
+                                     .age = 34, .verified = true};
+      o.items     = {
+         LineItemDwnc{.product = "Widget",
+                       .qty = 2, .unit_price = 9.99},
+         LineItemDwnc{.product = "Sprocket",
+                       .qty = 1, .unit_price = 14.50},
+         LineItemDwnc{.product = "Gizmo-Mk.II",
+                       .qty = 5, .unit_price = 3.25},
+      };
+      o.total = 2 * 9.99 + 14.50 + 5 * 3.25;
+      o.note  = std::string{"gift-wrap please"};
+      return o;
+   }
+   inline ValidatorListDwnc vlist_dwnc(std::uint32_t n = 100)
+   {
+      ValidatorListDwnc l;
       l.epoch = 42;
       l.validators.reserve(n);
       for (std::uint32_t i = 0; i < n; ++i)
