@@ -82,18 +82,30 @@ endif()
 
 # ── Libraries ──────────────────────────────────────────────────────────────────
 add_subdirectory(libraries/psio1)
-# psio lives at external/psio (gofractally/psio), tracked via git
-# submodule.  Used here as a subdirectory build so downstream targets
-# (libraries/wasi, libraries/pcrypt, libraries/pfs, the perf bench)
-# link the same `psio` target without an export indirection.
+
+# psio is fetched from gofractally/psio via CMake FetchContent.  The
+# convention is captured at external/psio/docs/dependency-pattern.md
+# (mirrors psitri-multiindex/docs/dependency-pattern.md) — first-
+# declare-wins lets a parent like this one pin the version
+# authoritatively, source lives in-tree at external/psio so multiple
+# build trees (Debug / Release / Sanitize) share one checkout, and a
+# developer editing psio in a sibling tree can override with
+#   cmake -B build -DFETCHCONTENT_SOURCE_DIR_PSIO=$HOME/dev/psio
+# without changing this file.
 #
-# psio's standalone build defaults tests/benchmarks/tools OFF; psiserve
-# wants them on (we run them in this tree's CI), so enable here before
-# adding the subdirectory.
+# psio's standalone build defaults tests/benchmarks/tools OFF;
+# psiserve runs them in CI, so they're forced ON here BEFORE
+# MakeAvailable so psio's own CMakeLists picks them up.
 set(PSIO_ENABLE_TESTS ON CACHE BOOL "psio: build tests under psiserve" FORCE)
 set(PSIO_ENABLE_BENCHMARKS ON CACHE BOOL "psio: build benchmarks under psiserve" FORCE)
 set(PSIO_ENABLE_TOOLS ON CACHE BOOL "psio: build tools under psiserve" FORCE)
-add_subdirectory(external/psio)
+
+include(FetchContent)
+FetchContent_Declare(psio
+   GIT_REPOSITORY https://github.com/gofractally/psio.git
+   GIT_TAG        main
+   SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/psio)
+FetchContent_MakeAvailable(psio)
 if(NOT PSISERVE_WASI)
    # Embed psitri as a subdirectory so its headers / libraries (sal, psitri,
    # hash, ucc, art) are available to psiserve. Psitri's own test suite and

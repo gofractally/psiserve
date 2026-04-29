@@ -72,3 +72,6 @@ bench_snapshots/
 # Added by cargo
 
 /target
+
+# FetchContent_Declare populates this from gofractally/psio.
+external/psio/
