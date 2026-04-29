@@ -82,7 +82,18 @@ endif()
 
 # ── Libraries ──────────────────────────────────────────────────────────────────
 add_subdirectory(libraries/psio1)
-add_subdirectory(libraries/psio)
+# psio lives at external/psio (gofractally/psio), tracked via git
+# submodule.  Used here as a subdirectory build so downstream targets
+# (libraries/wasi, libraries/pcrypt, libraries/pfs, the perf bench)
+# link the same `psio` target without an export indirection.
+#
+# psio's standalone build defaults tests/benchmarks/tools OFF; psiserve
+# wants them on (we run them in this tree's CI), so enable here before
+# adding the subdirectory.
+set(PSIO_ENABLE_TESTS ON CACHE BOOL "psio: build tests under psiserve" FORCE)
+set(PSIO_ENABLE_BENCHMARKS ON CACHE BOOL "psio: build benchmarks under psiserve" FORCE)
+set(PSIO_ENABLE_TOOLS ON CACHE BOOL "psio: build tools under psiserve" FORCE)
+add_subdirectory(external/psio)
 if(NOT PSISERVE_WASI)
    # Embed psitri as a subdirectory so its headers / libraries (sal, psitri,
    # hash, ucc, art) are available to psiserve. Psitri's own test suite and

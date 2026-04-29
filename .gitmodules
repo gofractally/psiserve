@@ -10,3 +10,6 @@
 [submodule "libraries/psizam/tests/spec/testsuite"]
 	path = libraries/psizam/tests/spec/testsuite
 	url = https://github.com/WebAssembly/testsuite.git
+[submodule "external/psio"]
+	path = external/psio
+	url = https://github.com/gofractally/psio.git
