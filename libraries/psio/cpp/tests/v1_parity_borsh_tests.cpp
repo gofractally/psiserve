@@ -1,4 +1,4 @@
-// v1 ↔ psio3 borsh byte-parity tests.
+// v1 ↔ psio borsh byte-parity tests.
 //
 // Borsh wire (MVP scope):
 //   primitives raw LE, bool = 1 byte, string = u32 len + bytes,

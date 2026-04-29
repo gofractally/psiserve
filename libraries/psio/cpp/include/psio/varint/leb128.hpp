@@ -1,6 +1,6 @@
 #pragma once
 //
-// libraries/psio/cpp/include/psio3/varint/leb128.hpp — LEB128.
+// libraries/psio/cpp/include/psio/varint/leb128.hpp — LEB128.
 //
 // Three sub-codecs covering the variants the codebase actually emits:
 //

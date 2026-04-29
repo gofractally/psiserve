@@ -193,9 +193,216 @@ namespace cp_bench {
    { return r.getQty(); }
    inline std::uint64_t view_first_scalar(CpUserProfile::Reader r)
    { return r.getId(); }
+   //  Order / ValidatorList — reach the same deep field that
+   //  `bench_view_target` reads in the psio fallback path, so the
+   //  view_one numbers compare apples-to-apples.  Without this,
+   //  capnp/flatbuf would report "first outer scalar" while psio
+   //  formats reported "decode + reach into nested element".
    inline std::uint64_t view_first_scalar(CpOrder::Reader r)
-   { return r.getId(); }
+   { return r.getCustomer().getId(); }
    inline std::uint64_t view_first_scalar(CpValidatorList::Reader r)
-   { return r.getEpoch(); }
+   {
+      auto vs = r.getValidators();
+      if (vs.size() == 0) return 0;
+      return vs[vs.size() / 2].getPubkeyLo();
+   }
+
+   // ── to_native — full materialization from a capnp reader ─────────────
+   //
+   // FlatArrayMessageReader + getRoot are zero-copy.  A real libcapnp
+   // consumer that wants a native C++ struct still has to walk every
+   // field, allocate strings, and populate vectors.  These overloads do
+   // that work explicitly so the bench's "decode" cell measures honest
+   // materialisation, not just a pointer-arithmetic getRoot.
+
+   template <typename Shape>
+   Shape to_native(typename cp_struct_t<Shape>::Reader r);
+
+   template <>
+   inline Point to_native<Point>(CpPoint::Reader r)
+   {
+      return Point{static_cast<std::int32_t>(r.getX()),
+                   static_cast<std::int32_t>(r.getY())};
+   }
+
+   template <>
+   inline NameRecord to_native<NameRecord>(CpNameRecord::Reader r)
+   { return NameRecord{r.getAccount(), r.getLimit()}; }
+
+   template <>
+   inline FlatRecord to_native<FlatRecord>(CpFlatRecord::Reader r)
+   {
+      FlatRecord o;
+      o.id    = static_cast<std::uint32_t>(r.getId());
+      auto lab = r.getLabel();
+      o.label.assign(lab.cStr(), lab.size());
+      auto vs = r.getValues();
+      o.values.reserve(vs.size());
+      for (auto v : vs)
+         o.values.push_back(static_cast<std::uint16_t>(v));
+      return o;
+   }
+   template <>
+   inline FlatRecordBounded
+   to_native<FlatRecordBounded>(CpFlatRecord::Reader r)
+   {
+      FlatRecordBounded o;
+      o.id    = static_cast<std::uint32_t>(r.getId());
+      auto lab = r.getLabel();
+      o.label.assign(lab.cStr(), lab.size());
+      auto vs = r.getValues();
+      o.values.reserve(vs.size());
+      for (auto v : vs)
+         o.values.push_back(static_cast<std::uint32_t>(v));
+      return o;
+   }
+
+   template <>
+   inline Record to_native<Record>(CpRecord::Reader r)
+   {
+      Record o;
+      o.id    = static_cast<std::uint32_t>(r.getId());
+      auto lab = r.getLabel();
+      o.label.assign(lab.cStr(), lab.size());
+      auto vs = r.getValues();
+      o.values.reserve(vs.size());
+      for (auto v : vs)
+         o.values.push_back(static_cast<std::uint16_t>(v));
+      auto sc = r.getScore();
+      if (sc != 0) o.score = static_cast<std::uint32_t>(sc);
+      return o;
+   }
+   template <>
+   inline RecordBounded to_native<RecordBounded>(CpRecord::Reader r)
+   {
+      RecordBounded o;
+      o.id    = static_cast<std::uint32_t>(r.getId());
+      auto lab = r.getLabel();
+      o.label.assign(lab.cStr(), lab.size());
+      auto vs = r.getValues();
+      o.values.reserve(vs.size());
+      for (auto v : vs)
+         o.values.push_back(static_cast<std::uint32_t>(v));
+      auto sc = r.getScore();
+      if (sc != 0) o.score = static_cast<std::uint32_t>(sc);
+      return o;
+   }
+
+   template <>
+   inline Validator to_native<Validator>(CpValidator::Reader r)
+   {
+      Validator v;
+      v.pubkey_lo          = r.getPubkeyLo();
+      v.pubkey_hi          = r.getPubkeyHi();
+      v.withdrawal_lo      = r.getWithdrawalLo();
+      v.withdrawal_hi      = r.getWithdrawalHi();
+      v.effective_balance  = r.getEffectiveBalance();
+      v.slashed            = r.getSlashed();
+      v.activation_epoch   = r.getActivationEpoch();
+      v.exit_epoch         = r.getExitEpoch();
+      v.withdrawable_epoch = r.getWithdrawableEpoch();
+      return v;
+   }
+
+   inline LineItem to_native_lineitem(CpLineItem::Reader r)
+   {
+      LineItem li;
+      auto p = r.getProduct();
+      li.product.assign(p.cStr(), p.size());
+      li.qty        = static_cast<std::uint32_t>(r.getQty());
+      li.unit_price = r.getUnitPrice();
+      return li;
+   }
+   inline LineItemBounded to_native_lineitem_bounded(CpLineItem::Reader r)
+   {
+      LineItemBounded li;
+      auto p = r.getProduct();
+      li.product.assign(p.cStr(), p.size());
+      li.qty        = static_cast<std::uint32_t>(r.getQty());
+      li.unit_price = r.getUnitPrice();
+      return li;
+   }
+   inline UserProfile to_native_userprofile(CpUserProfile::Reader r)
+   {
+      UserProfile up;
+      up.id       = r.getId();
+      auto n = r.getName();   up.name.assign(n.cStr(), n.size());
+      auto e = r.getEmail();  up.email.assign(e.cStr(), e.size());
+      up.age      = static_cast<std::uint32_t>(r.getAge());
+      up.verified = r.getVerified();
+      return up;
+   }
+   inline UserProfileBounded
+   to_native_userprofile_bounded(CpUserProfile::Reader r)
+   {
+      UserProfileBounded up;
+      up.id       = r.getId();
+      auto n = r.getName();   up.name.assign(n.cStr(), n.size());
+      auto e = r.getEmail();  up.email.assign(e.cStr(), e.size());
+      up.age      = static_cast<std::uint32_t>(r.getAge());
+      up.verified = r.getVerified();
+      return up;
+   }
+
+   template <>
+   inline Order to_native<Order>(CpOrder::Reader r)
+   {
+      Order o;
+      o.id       = r.getId();
+      o.customer = to_native_userprofile(r.getCustomer());
+      auto its   = r.getItems();
+      o.items.reserve(its.size());
+      for (auto it : its) o.items.push_back(to_native_lineitem(it));
+      o.total = r.getTotal();
+      if (r.hasNote())
+      {
+         auto n = r.getNote();
+         o.note = std::string{n.cStr(), n.size()};
+      }
+      return o;
+   }
+   template <>
+   inline OrderBounded to_native<OrderBounded>(CpOrder::Reader r)
+   {
+      OrderBounded o;
+      o.id       = r.getId();
+      o.customer = to_native_userprofile_bounded(r.getCustomer());
+      auto its   = r.getItems();
+      o.items.reserve(its.size());
+      for (auto it : its)
+         o.items.push_back(to_native_lineitem_bounded(it));
+      o.total = r.getTotal();
+      if (r.hasNote())
+      {
+         auto n = r.getNote();
+         o.note = std::string{n.cStr(), n.size()};
+      }
+      return o;
+   }
+
+   template <>
+   inline ValidatorList
+   to_native<ValidatorList>(CpValidatorList::Reader r)
+   {
+      ValidatorList vl;
+      vl.epoch = r.getEpoch();
+      auto vs  = r.getValidators();
+      vl.validators.reserve(vs.size());
+      for (auto v : vs)
+         vl.validators.push_back(to_native<Validator>(v));
+      return vl;
+   }
+   template <>
+   inline ValidatorListBounded
+   to_native<ValidatorListBounded>(CpValidatorList::Reader r)
+   {
+      ValidatorListBounded vl;
+      vl.epoch = r.getEpoch();
+      auto vs  = r.getValidators();
+      vl.validators.reserve(vs.size());
+      for (auto v : vs)
+         vl.validators.push_back(to_native<Validator>(v));
+      return vl;
+   }
 
 }  // namespace cp_bench

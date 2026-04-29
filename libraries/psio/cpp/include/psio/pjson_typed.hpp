@@ -90,6 +90,16 @@ namespace psio {
          return r;
       }
 
+      // Throwing factory: applies the type-level `maxDynamicData(N)`
+      // cap as a defensive ceiling on the input buffer size before
+      // surfacing any field accessors.  Use this when accepting
+      // untrusted pjson — it rejects oversized payloads up front.
+      static view from_pjson_checked(pjson_view raw)
+      {
+         ::psio::enforce_max_dynamic_cap<T>(raw.size(), "pjson");
+         return from_pjson(raw);
+      }
+
       bool       is_canonical() const noexcept { return canonical_; }
       pjson_view raw() const noexcept { return raw_; }
 
@@ -767,7 +777,9 @@ namespace psio {
    template <typename T>
    inline void to_pjson(const T& t, std::vector<std::uint8_t>& out)
    {
-      out.resize(pjson_encoded_size(t));
+      const std::size_t total = pjson_encoded_size(t);
+      ::psio::enforce_max_dynamic_cap<T>(total, "pjson");
+      out.resize(total);
       to_pjson_at(out.data(), 0, t);
    }
 

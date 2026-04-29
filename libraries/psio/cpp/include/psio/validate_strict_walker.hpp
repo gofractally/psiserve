@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/validate_strict_walker.hpp — semantic-spec validation walker.
+// psio/validate_strict_walker.hpp — semantic-spec validation walker.
 //
 // Implements the validate_strict half of design §5.3.3 / §5.4: after a
 // format's structural validate succeeds, decode the value and walk the

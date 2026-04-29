@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/bytes_view.hpp — byte-span aliases.
+// psio/bytes_view.hpp — byte-span aliases.
 //
 // Direct port of psio/bytes_view.hpp.  Used as the canonical span
 // type at API boundaries throughout the stack (pfs, psitri, etc.).

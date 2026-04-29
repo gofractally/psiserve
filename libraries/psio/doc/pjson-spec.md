@@ -1371,4 +1371,57 @@ Field `"b"`:
 * value at `ptr+4`, size = value_data_size − slot[1].offset − 1 = 4 bytes.
 * `parse_value(ptr+4, 4)` → tag `0x80` → string with content `"two"`.
 
+## 7. Type-level caps
+
+pjson honors two type-level annotations declared in `psio/annotate.hpp`
+and emitted via `PSIO_REFLECT(...)`:
+
+* `maxFields(N)` — caps the number of declared fields on a reflected
+  record (`max_fields_spec`). Surfaced through `psio::max_fields_v<T>`
+  and the composite `psio::effective_max_fields_v<T>` (`min(cap,
+  reflect<T>::member_count)` on Reflected types).
+* `maxDynamicData(N)` — caps the total encoded payload size in bytes
+  (`max_dynamic_data_spec`). Surfaced through
+  `psio::max_dynamic_data_v<T>` and composed with the per-field
+  `length_bound`-derived bound from `max_encoded_size<T>` into
+  `psio::effective_max_dynamic_v<T>` (cap wins downward; never widens).
+
+### 7.1 Encoder behavior
+
+`psio::to_pjson(t, out)` and `psio::from_struct(t)` compute the encoded
+total before allocation. If `psio::max_dynamic_data_v<T>` is present
+and the total exceeds the cap, the encoder throws
+`psio::codec_exception` carrying `format_name = "pjson"`. Silent
+widening would defeat predictable wire size; honest failure is the
+contract.
+
+### 7.2 Decoder / view behavior
+
+* `psio::view<T, pjson_format>::from_pjson(raw)` takes the input span
+  unchecked; downstream call sites that accept untrusted pjson should
+  use `view<T, pjson_format>::from_pjson_checked(raw)`, which calls
+  `enforce_max_dynamic_cap<T>(raw.size(), "pjson")` before constructing
+  the typed view. Oversized buffers are rejected up front rather than
+  pulling field accessors over partially-validated bytes.
+
+### 7.3 Width selection
+
+Slot-table and offset widths in §5.1.1, §5.2, §5.2.1.1, and §5.6 are
+selected at runtime from the actual encoded body size. The cap acts as
+a ceiling, not a forced narrower-width selector — the encoder still
+picks the smallest width that addresses the actual content. The cap's
+job is to bound that content; the width selector's job is to address
+it efficiently within that bound.
+
+### 7.4 Schema-form surfacing
+
+When a Schema IR is produced from C++ reflection (via
+`psio::schema_builder`), the caps surface as `Attribute{name="maxFields",
+value="N"}` and `Attribute{name="maxDynamicData", value="N"}` on the
+record's `Object` / `Struct` IR node, alongside the existing
+`definitionWillNotChange` attribute. Downstream emitters render these
+per their target IDL conventions: WIT → `@maxFields(N)` native
+attribute; capnp / protobuf / fbs → preceding-line comments
+(`# @maxFields(N)` / `// @maxFields(N)`).
+
 End of spec.

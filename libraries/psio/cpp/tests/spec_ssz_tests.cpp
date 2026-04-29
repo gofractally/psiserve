@@ -8,7 +8,7 @@
 //
 // Fixtures covered today: valid uint_{8,16,32,64} and boolean.
 // Bitvectors, bitlists, basic_vectors, and containers are out of
-// scope for the MVP psio3 SSZ codec and are skipped by the script.
+// scope for the MVP psio SSZ codec and are skipped by the script.
 //
 // The manifest location is discovered via an environment variable
 // PSIO_SPEC_MANIFEST, with a fallback to the in-tree build path.

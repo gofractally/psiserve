@@ -8,7 +8,7 @@
 //           libraries/psio/cpp/tests/smoke_perf.cpp
 //           -o smoke_perf
 //
-// (Linked by CMake target psio3_smoke_perf for convenience.)
+// (Linked by CMake target psio_smoke_perf for convenience.)
 
 #include <psio1/fracpack.hpp>
 #include <psio1/from_ssz.hpp>

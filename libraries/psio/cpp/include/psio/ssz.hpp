@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/ssz.hpp — SSZ (Simple Serialize) format tag.
+// psio/ssz.hpp — SSZ (Simple Serialize) format tag.
 //
 // SSZ is the Ethereum consensus-layer canonical format. This header
 // implements the v3-surface SSZ codec: `psio::ssz` is the format tag,
@@ -524,7 +524,7 @@ namespace psio {
          }
          else if constexpr (is_bitvector_v<T>)
          {
-            // SSZ bitvector: ceil(N/8) raw bytes, LSB-first. psio3's
+            // SSZ bitvector: ceil(N/8) raw bytes, LSB-first. psio's
             // bitvector storage already matches the wire layout.
             constexpr std::size_t nbytes = (T::size_value + 7) / 8;
             if constexpr (nbytes > 0)
@@ -2089,6 +2089,9 @@ namespace psio {
                                      T*,
                                      std::span<const char> bytes) noexcept
       {
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(), "ssz");
+             !st.ok())
+            return st;
          return detail::ssz_impl::validate_value<T>(bytes, 0, bytes.size());
       }
 
@@ -2101,6 +2104,7 @@ namespace psio {
       friend void tag_invoke(decltype(::psio::validate_or_throw<T>),
                              ssz, T*, std::span<const char> bytes)
       {
+         ::psio::enforce_max_dynamic_cap<T>(bytes.size(), "ssz");
          detail::ssz_impl::validate_or_throw_value<T>(
             bytes, 0, bytes.size());
       }

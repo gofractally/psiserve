@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/adapter.hpp — per-type adapter registry.
+// psio/adapter.hpp — per-type adapter registry.
 //
 // An adapter is a complete codec surface (packsize / encode / decode /
 // validate / validate_strict) scoped to one type × one presentation

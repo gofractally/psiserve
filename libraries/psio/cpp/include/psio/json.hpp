@@ -1,10 +1,10 @@
 #pragma once
 //
-// psio3/json.hpp — JSON format tag.
+// psio/json.hpp — JSON format tag.
 //
 // Unlike the binary SSZ/pSSZ tags, JSON writes to a `std::string` sink
 // and reads from `std::span<const char>` treated as UTF-8. This is the
-// first non-binary format in psio3 and demonstrates the v3 architecture
+// first non-binary format in psio and demonstrates the v3 architecture
 // scales to text serializations without requiring special hooks.
 //
 // Scope (Phase 9 MVP) — types supported:
@@ -596,6 +596,9 @@ namespace psio {
                                      json, T*,
                                      std::span<const char> bytes) noexcept
       {
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(), "json");
+             !st.ok())
+            return st;
          return detail::json_impl::validate_value<T>(bytes);
       }
 

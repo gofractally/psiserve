@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/annotate.hpp — Layer 1 annotation system.
+// psio/annotate.hpp — Layer 1 annotation system.
 //
 // Annotations are pure user data attached to types or members and
 // consumed by format authors. Design spec: `.issues/psio-v2-design.md`
@@ -32,6 +32,30 @@
 //   psio::annotate<psio::type<T>{}>   → std::tuple<Specs...>
 //   psio::find_spec<Spec>(anns)        → std::optional<Spec>
 //   psio::has_spec_v<Spec, Tuple>      → bool
+//
+// Type-level cap accessors:
+//
+//   psio::is_dwnc_v<T>                 → bool
+//      true when the type carries `definition_will_not_change`.
+//   psio::all_dwnc_v<T>                → bool
+//      true when T and every transitively reachable inner type are
+//      DWNC; primitives, strings, and std containers descend into
+//      element types.
+//   psio::max_fields_v<T>              → optional<size_t>
+//   psio::max_dynamic_data_v<T>        → optional<size_t>
+//      explicit cap from `maxFields(N)` / `maxDynamicData(N)` keywords
+//      in PSIO_REFLECT.
+//   psio::effective_max_fields_v<T>    → optional<size_t>
+//      min(explicit cap, reflect<T>::member_count) — cap wins downward.
+//   psio::effective_max_dynamic_v<T>   → optional<size_t>  (in max_size.hpp)
+//      min(explicit cap, max_encoded_size<T>) — cap wins downward.
+//
+// Cap enforcement helpers (every format consumer reuses these):
+//
+//   psio::enforce_max_dynamic_cap<T>(total, "fmt")
+//      throws codec_exception when total > T's cap.
+//   psio::check_max_dynamic_cap<T>(total, "fmt")
+//      noexcept variant returning codec_status — for validate paths.
 
 #include <psio/error.hpp>
 #include <psio/reflect.hpp>
@@ -380,6 +404,40 @@ namespace psio {
       constexpr bool operator==(const definition_will_not_change&) const = default;
    };
 
+   // Type-level cap on declared field count.  Lets formats pick a
+   // smaller slot index / vtable-width than the (potentially large)
+   // member_count would imply.  The schema author asserts the cap;
+   // validators reject decoded inputs whose declared field count
+   // exceeds it.
+   //
+   // Co-exists with `definition_will_not_change`: use both when you
+   // want a fixed layout AND a tighter slot-table.
+   struct max_fields_spec
+   {
+      using spec_category = static_spec_tag;
+      std::size_t value{};
+      constexpr bool operator==(const max_fields_spec&) const = default;
+   };
+
+   // Type-level cap on the total dynamic / heap region (in bytes) a
+   // single encoded value may occupy across all variable-sized fields.
+   //
+   // Lets formats with adaptive offset widths (pssz, frac, psch, pjson)
+   // pick u8 / u16 instead of u32 when:
+   //   1. `definition_will_not_change` is present (no extension hdr),
+   //   2. all transitively reachable types are also DWNC,
+   //   3. the cap is small enough for the chosen width.
+   //
+   // The author asserts the cap; encoders that exceed it must throw
+   // (silent widening defeats predictable wire size).  Decoders /
+   // validators reject input whose dynamic region exceeds the cap.
+   struct max_dynamic_data_spec
+   {
+      using spec_category = static_spec_tag;
+      std::size_t value{};
+      constexpr bool operator==(const max_dynamic_data_spec&) const = default;
+   };
+
    // ── WIT attribute specs ────────────────────────────────────────────
    //
    // These specs map onto the WIT @-attribute vocabulary at schema
@@ -527,7 +585,7 @@ namespace psio {
    // ── Convenience factory templates ──────────────────────────────────────
    //
    // Nested `spec` namespace so short names (`bytes`, `utf8`, …) stay
-   // free for the storage free functions in the surrounding psio3
+   // free for the storage free functions in the surrounding psio
    // namespace (`psio::bytes(buf)` returns the byte span of a buffer).
 
    namespace spec {
@@ -609,6 +667,238 @@ namespace psio {
       ::psio::definition_will_not_change,
       std::remove_cvref_t<decltype(annotate<type<T>{}>)>>;
 
+   // ── all_dwnc_v — transitive DWNC across reflected members ─────────────
+   //
+   // Format consumers use this to certify precondition #2 from the
+   // type-level-cap design:
+   //   "all transitively reachable types are DWNC"
+   //
+   // A type qualifies as transitively DWNC when:
+   //   - it is itself layout-stable (primitives, std::string, std::byte
+   //     spans — which have no extension points), OR
+   //   - it carries `definition_will_not_change` AND every member type
+   //     is itself transitively DWNC.
+   //
+   // Container element types (std::vector<E>, std::array<E,N>,
+   // std::optional<E>, std::variant<Es...>, std::tuple<Es...>,
+   // std::pair<A,B>) recurse into the inner types — their wire layouts
+   // are stable in psio's formats; only the contained T can introduce
+   // extension headers.
+   //
+   // Non-Reflected non-container types not enumerated below default to
+   // false, biased toward conservative width selection.
+
+   namespace detail::dwnc
+   {
+      template <typename T>
+      struct is_std_vector_ : std::false_type {};
+      template <typename E, typename A>
+      struct is_std_vector_<std::vector<E, A>> : std::true_type
+      {
+         using inner = E;
+      };
+
+      template <typename T>
+      struct is_std_array_ : std::false_type {};
+      template <typename E, std::size_t N>
+      struct is_std_array_<std::array<E, N>> : std::true_type
+      {
+         using inner = E;
+      };
+
+      template <typename T>
+      struct is_std_optional_ : std::false_type {};
+      template <typename E>
+      struct is_std_optional_<std::optional<E>> : std::true_type
+      {
+         using inner = E;
+      };
+
+      template <typename T>
+      struct is_std_variant_ : std::false_type {};
+      template <typename... Es>
+      struct is_std_variant_<std::variant<Es...>> : std::true_type {};
+
+      template <typename T>
+      struct is_std_tuple_ : std::false_type {};
+      template <typename... Es>
+      struct is_std_tuple_<std::tuple<Es...>> : std::true_type {};
+
+      template <typename T>
+      struct is_std_pair_ : std::false_type {};
+      template <typename A, typename B>
+      struct is_std_pair_<std::pair<A, B>> : std::true_type {};
+
+      template <typename T>
+      struct is_std_string_ : std::false_type {};
+      template <typename Char, typename Tr, typename A>
+      struct is_std_string_<std::basic_string<Char, Tr, A>> : std::true_type {};
+
+      template <typename T>
+      consteval bool transitive() noexcept;  // forward
+
+      template <typename Variant, std::size_t... Is>
+      consteval bool variant_all(std::index_sequence<Is...>) noexcept
+      {
+         return (transitive<std::variant_alternative_t<Is, Variant>>() && ...);
+      }
+
+      template <typename Tuple, std::size_t... Is>
+      consteval bool tuple_all(std::index_sequence<Is...>) noexcept
+      {
+         return (transitive<std::tuple_element_t<Is, Tuple>>() && ...);
+      }
+
+      template <typename T, std::size_t... Is>
+      consteval bool record_members(std::index_sequence<Is...>) noexcept
+      {
+         return (transitive<typename reflect<T>::template member_type<Is>>()
+                 && ...);
+      }
+
+      template <typename T>
+      consteval bool transitive() noexcept
+      {
+         using U = std::remove_cvref_t<T>;
+         if constexpr (std::is_arithmetic_v<U> ||
+                       std::is_same_v<U, bool>  ||
+                       std::is_same_v<U, std::byte> ||
+                       std::is_enum_v<U>)
+            return true;
+         else if constexpr (is_std_string_<U>::value)
+            return true;
+         else if constexpr (is_std_vector_<U>::value)
+            return transitive<typename is_std_vector_<U>::inner>();
+         else if constexpr (is_std_array_<U>::value)
+            return transitive<typename is_std_array_<U>::inner>();
+         else if constexpr (is_std_optional_<U>::value)
+            return transitive<typename is_std_optional_<U>::inner>();
+         else if constexpr (is_std_variant_<U>::value)
+            return variant_all<U>(
+               std::make_index_sequence<std::variant_size_v<U>>{});
+         else if constexpr (is_std_tuple_<U>::value)
+            return tuple_all<U>(
+               std::make_index_sequence<std::tuple_size_v<U>>{});
+         else if constexpr (is_std_pair_<U>::value)
+            return transitive<typename U::first_type>() &&
+                   transitive<typename U::second_type>();
+         else if constexpr (::psio::Reflected<U>)
+            return is_dwnc_v<U> &&
+                   record_members<U>(
+                      std::make_index_sequence<reflect<U>::member_count>{});
+         else
+            return false;
+      }
+   }  // namespace detail::dwnc
+
+   template <typename T>
+   inline constexpr bool all_dwnc_v = detail::dwnc::transitive<T>();
+
+   // ── max_fields_v / max_dynamic_data_v ─────────────────────────────────
+   //
+   // Format-author-facing accessors for the two type-level caps.  Return
+   // std::nullopt when the type didn't declare the cap, letting formats
+   // fall back to a width-conservative default.
+
+   template <typename T>
+   inline constexpr std::optional<std::size_t> max_fields_v = []
+   {
+      using TT = std::remove_cvref_t<decltype(annotate<type<T>{}>)>;
+      if constexpr (has_spec_v<max_fields_spec, TT>)
+         return std::optional<std::size_t>{
+            std::get<max_fields_spec>(annotate<type<T>{}>).value};
+      else
+         return std::optional<std::size_t>{};
+   }();
+
+   template <typename T>
+   inline constexpr std::optional<std::size_t> max_dynamic_data_v = []
+   {
+      using TT = std::remove_cvref_t<decltype(annotate<type<T>{}>)>;
+      if constexpr (has_spec_v<max_dynamic_data_spec, TT>)
+         return std::optional<std::size_t>{
+            std::get<max_dynamic_data_spec>(annotate<type<T>{}>).value};
+      else
+         return std::optional<std::size_t>{};
+   }();
+
+   // ── effective_max_fields_v ────────────────────────────────────────────
+   //
+   // Composes an explicit `maxFields(N)` cap with the reflected
+   // `member_count`.  When both are present, the cap WINS DOWNWARD only
+   // — it can be tighter than member_count but never looser, since
+   // overriding upward defeats the purpose of an upper-bound assertion.
+   //
+   // Returns std::nullopt only for non-Reflected types where neither a
+   // member count nor a cap exists; format consumers fall back to the
+   // format-conservative default in that case.
+
+   template <typename T>
+   inline constexpr std::optional<std::size_t> effective_max_fields_v = []
+   {
+      constexpr auto cap = max_fields_v<T>;
+      if constexpr (::psio::Reflected<T>)
+      {
+         constexpr std::size_t mc = reflect<T>::member_count;
+         if constexpr (cap.has_value())
+            return std::optional<std::size_t>{
+               (*cap < mc) ? *cap : mc};
+         else
+            return std::optional<std::size_t>{mc};
+      }
+      else
+      {
+         return cap;  // nullopt unless explicitly capped
+      }
+   }();
+
+   // `effective_max_dynamic_v<T>` lives in psio/max_size.hpp because it
+   // composes the explicit cap with the per-field `length_bound`-
+   // derived bound from `max_encoded_size<T>`.  Putting it there keeps
+   // the annotate.hpp → max_size.hpp dependency one-way.
+
+   // ── Shared cap-enforcement helpers ────────────────────────────────────
+   //
+   // Every format whose validate / validate_or_throw / encode hooks
+   // need to enforce `maxDynamicData(N)` reuses these.  Keeping the
+   // logic in one place ensures consistent error messages and behavior
+   // across pssz / frac / psch / pjson / bin / borsh / bincode / ssz /
+   // wit / avro / msgpack / protobuf / capnp / flatbuf / json / bson.
+   //
+   // Semantics (per-format may layer additional checks on top):
+   //   - cap absent → no-op (return ok / do nothing).
+   //   - cap present, total > cap → throw / return error.
+   //   - cap present, total ≤ cap → ok.
+
+   template <typename T>
+   inline void enforce_max_dynamic_cap(std::size_t total,
+                                        std::string_view format_name)
+   {
+      constexpr auto cap = max_dynamic_data_v<T>;
+      if constexpr (cap.has_value())
+      {
+         if (total > *cap)
+            throw codec_exception{codec_error{
+               "encoded size exceeds maxDynamicData cap",
+               static_cast<std::uint32_t>(total), format_name}};
+      }
+   }
+
+   template <typename T>
+   inline codec_status check_max_dynamic_cap(
+      std::size_t total, std::string_view format_name) noexcept
+   {
+      constexpr auto cap = max_dynamic_data_v<T>;
+      if constexpr (cap.has_value())
+      {
+         if (total > *cap)
+            return codec_status{codec_error{
+               "encoded size exceeds maxDynamicData cap",
+               static_cast<std::uint32_t>(total), format_name}};
+      }
+      return codec_status{};
+   }
+
 }  // namespace psio
 
 // ── Spec helpers (terse names for use inside annotation expressions) ────
@@ -621,7 +911,7 @@ namespace psio {
 // expects, so format code that already reads `length_bound` /
 // `field_num_spec` / etc. needs no changes.
 //
-// Inside the `attr(...)` macro body, `using namespace ::psio3;` brings
+// Inside the `attr(...)` macro body, `using namespace ::psio;` brings
 // these into scope so the user can write `max<255>` rather than
 // `psio::max<255>`. Outside that scope, fully-qualified `psio::max<N>`
 // is the spelling.
@@ -635,7 +925,7 @@ namespace psio {
    inline constexpr length_bound exact{.exact = N};
    // (Note: an alias `bytes<N>` would be ideal here as a near-synonym
    // of `exact<N>` for byte-array contexts, but `psio::bytes` is
-   // already a free function defined in psio3/buffer.hpp.  Use
+   // already a free function defined in psio/buffer.hpp.  Use
    // `exact<N>` for both.)
 
    template <std::uint32_t N>

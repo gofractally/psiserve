@@ -8,7 +8,7 @@
 // "view" is the hot path real consumers use; "decode" materializes the
 // pjson_value variant tree (slower secondary surface).
 //
-// Run:  psio3_bench_pjson_types [iters]   (default 200,000)
+// Run:  psio_bench_pjson_types [iters]   (default 200,000)
 
 #include <psio/pjson.hpp>
 #include <psio/pjson_view.hpp>

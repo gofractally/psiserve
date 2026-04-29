@@ -20,7 +20,7 @@ Manifest line format (tab-separated):
 value_literal depends on category:
   uints/boolean: a decimal string
   basic_vector: comma-separated elements
-  (containers, bitlists, bitvectors are skipped for now — the MVP psio3
+  (containers, bitlists, bitvectors are skipped for now — the MVP psio
    SSZ doesn't support those types yet)
 """
 import os

@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/dynamic_bin.hpp — schema-driven bin encoder/decoder over
+// psio/dynamic_bin.hpp — schema-driven bin encoder/decoder over
 // dynamic_value.
 
 #include <psio/bin.hpp>

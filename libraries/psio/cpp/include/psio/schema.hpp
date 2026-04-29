@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/schema.hpp — runtime schema value (Phase 14a).
+// psio/schema.hpp — runtime schema value (Phase 14a).
 //
 // The schema value is the type-erased description of a reflected type.
 // Given a `psio::schema` and some bytes-plus-format-tag, dynamic codec

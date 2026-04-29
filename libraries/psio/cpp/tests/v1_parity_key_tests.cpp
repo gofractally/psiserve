@@ -1,4 +1,4 @@
-// v1 ↔ psio3 key byte-parity tests.
+// v1 ↔ psio key byte-parity tests.
 //
 // key wire (MVP scope):
 //   unsigned integral: big-endian
@@ -135,7 +135,7 @@ TEST_CASE("key parity: std::variant", "[key][parity][variant]")
            psio::encode(psio::key{}, V{std::string("hi")}));
 }
 
-// v1 key has no built-in uint256 path; psio3 encodes it as big-endian
+// v1 key has no built-in uint256 path; psio encodes it as big-endian
 // MSB-first limb order for sortability. Round-trip only.
 
 #include <psio/ext_int.hpp>

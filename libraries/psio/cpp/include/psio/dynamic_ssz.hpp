@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/dynamic_ssz.hpp — schema-driven SSZ encoder/decoder over
+// psio/dynamic_ssz.hpp — schema-driven SSZ encoder/decoder over
 // dynamic_value.
 //
 // With JSON and SSZ both having dynamic codecs, `transcode_via` can

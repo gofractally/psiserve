@@ -47,7 +47,7 @@ namespace psio {
    // ---- Reflect-API adapters (typelist view over psio's index-based reflect) ----
    //
    // wit_abi was originally written for psio1's typelist-based reflect
-   // (data_members + apply_members). psio (formerly psio3) uses an
+   // (data_members + apply_members). psio (formerly psio) uses an
    // index-based shape (member_pointer<I>, member_count). These adapters
    // synthesize the typelist API on top of the index-based one so the
    // ABI machinery stays unchanged.

@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/detail/variant_util.hpp — shared variant helpers for format
+// psio/detail/variant_util.hpp — shared variant helpers for format
 // codecs. Every binary format encodes std::variant as "index + payload";
 // the index width and payload layout are format-specific, but the
 // runtime-to-compile-time index dispatch is common and lives here.

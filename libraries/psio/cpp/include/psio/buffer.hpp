@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/buffer.hpp — typed byte container.
+// psio/buffer.hpp — typed byte container.
 //
 // `psio::buffer<T, Fmt, Store>` holds encoded bytes, typed at the
 // type-system level with (T, Fmt). Canonical return of
@@ -19,7 +19,7 @@
 // namespace-scope storage templates. This satisfies the "access-
 // surface rule" from design § 5.5: free-function storage API + no
 // library-named methods on the public surface (the reserved-name
-// `_psio3_data` is a detail accessor, not a public method, and is
+// `_psio_data` is a detail accessor, not a public method, and is
 // hidden from name-based method detection used by the rule check).
 
 #include <psio/storage.hpp>
@@ -53,8 +53,8 @@ namespace psio {
       // Library-internal accessor (underscore-prefixed so method-name
       // detection used by the access-surface rule won't mistake it for
       // a user-facing surface method).
-      [[nodiscard]] const std::vector<char>& _psio3_data() const noexcept { return data_; }
-      [[nodiscard]] std::vector<char>&       _psio3_data() noexcept       { return data_; }
+      [[nodiscard]] const std::vector<char>& _psio_data() const noexcept { return data_; }
+      [[nodiscard]] std::vector<char>&       _psio_data() noexcept       { return data_; }
    };
 
    // ── const_borrow variant ──────────────────────────────────────────────
@@ -71,7 +71,7 @@ namespace psio {
       buffer() = default;
       explicit buffer(std::span<const char> s) noexcept : data_(s) {}
 
-      [[nodiscard]] std::span<const char> _psio3_data() const noexcept { return data_; }
+      [[nodiscard]] std::span<const char> _psio_data() const noexcept { return data_; }
    };
 
    // ── mut_borrow variant ────────────────────────────────────────────────
@@ -88,11 +88,11 @@ namespace psio {
       buffer() = default;
       explicit buffer(std::span<char> s) noexcept : data_(s) {}
 
-      [[nodiscard]] std::span<const char> _psio3_data() const noexcept
+      [[nodiscard]] std::span<const char> _psio_data() const noexcept
       {
          return std::span<const char>{data_.data(), data_.size()};
       }
-      [[nodiscard]] std::span<char> _psio3_data() noexcept { return data_; }
+      [[nodiscard]] std::span<char> _psio_data() noexcept { return data_; }
    };
 
    // ── Free-function storage API ─────────────────────────────────────────
@@ -105,32 +105,32 @@ namespace psio {
    [[nodiscard]] std::span<const char>
    bytes(const buffer<T, Fmt, storage::owning>& b) noexcept
    {
-      return std::span<const char>{b._psio3_data().data(), b._psio3_data().size()};
+      return std::span<const char>{b._psio_data().data(), b._psio_data().size()};
    }
    template <typename T, typename Fmt>
    [[nodiscard]] std::span<const char>
    bytes(const buffer<T, Fmt, storage::const_borrow>& b) noexcept
    {
-      return b._psio3_data();
+      return b._psio_data();
    }
    template <typename T, typename Fmt>
    [[nodiscard]] std::span<const char>
    bytes(const buffer<T, Fmt, storage::mut_borrow>& b) noexcept
    {
-      return b._psio3_data();
+      return b._psio_data();
    }
 
    template <typename T, typename Fmt>
    [[nodiscard]] std::span<char>
    mutable_bytes(buffer<T, Fmt, storage::owning>& b) noexcept
    {
-      return std::span<char>{b._psio3_data().data(), b._psio3_data().size()};
+      return std::span<char>{b._psio_data().data(), b._psio_data().size()};
    }
    template <typename T, typename Fmt>
    [[nodiscard]] std::span<char>
    mutable_bytes(buffer<T, Fmt, storage::mut_borrow>& b) noexcept
    {
-      return b._psio3_data();
+      return b._psio_data();
    }
 
    template <typename T, typename Fmt, storage S>

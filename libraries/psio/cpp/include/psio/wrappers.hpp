@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/wrappers.hpp — rich wrapper types (opt-in invasive alternative
+// psio/wrappers.hpp — rich wrapper types (opt-in invasive alternative
 // to annotations). Per design doc § 5.3.6.
 //
 // Users who want invariants baked into the type system (rejecting
@@ -523,7 +523,7 @@ namespace psio {
       static_assert(
          detail::assert_lower_consistent<wrapper_t, type_t>::run(
             wrapper_value, type_value),
-         "psio3: wrapper-inherent annotation and type-level annotation "
+         "psio: wrapper-inherent annotation and type-level annotation "
          "disagree on a spec type. Either fix the type-level annotation "
          "or drop the wrapper. (Member-level specs may still silently "
          "override either source.)");
@@ -555,7 +555,7 @@ namespace psio {
       // and similar mistakes at annotation time, not at wire time.
       static_assert(
          detail::all_specs_apply<field_t, value_t>::value,
-         "psio3: a spec in the effective annotations is attached to a "
+         "psio: a spec in the effective annotations is attached to a "
          "field whose shape is not in the spec's applies_to set. Check "
          "the spec's `applies_to = shape_set<...>` declaration and the "
          "field's shape (e.g. attaching length_bound to a Record is "

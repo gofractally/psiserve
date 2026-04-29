@@ -189,3 +189,40 @@ TEMPLATE_TEST_CASE("pssz scoped sugar matches generic CPO",
    REQUIRE(v.x == v2.x);
    REQUIRE(v.y == v2.y);
 }
+
+// ── maxDynamicData encode-time enforcement ───────────────────────────────
+
+struct CappedRecord
+{
+   std::uint64_t            id;
+   std::vector<std::uint8_t> blob;
+};
+PSIO_REFLECT(CappedRecord, id, blob,
+             definitionWillNotChange(),
+             maxDynamicData(64))
+
+TEST_CASE("pssz encode throws when total exceeds maxDynamicData cap",
+          "[pssz][caps]")
+{
+   CappedRecord ok{42, std::vector<std::uint8_t>(8, 0xAB)};  // small blob
+   REQUIRE_NOTHROW(psio::encode(psio::pssz{}, ok));
+
+   CappedRecord big{42, std::vector<std::uint8_t>(256, 0xAB)};  // > cap
+   REQUIRE_THROWS_AS(psio::encode(psio::pssz{}, big), psio::codec_exception);
+}
+
+TEST_CASE("pssz validate rejects buffer exceeding maxDynamicData cap",
+          "[pssz][caps]")
+{
+   // Wire bytes engineered larger than the cap (bytes.size() > 64 cap).
+   std::vector<char> oversized(128, 0);
+   auto              st = psio::validate<CappedRecord>(
+      psio::pssz{}, std::span<const char>{oversized});
+   REQUIRE(!st.ok());
+   REQUIRE(st.error().format_name == "pssz");
+
+   REQUIRE_THROWS_AS(
+      psio::validate_or_throw<CappedRecord>(
+         psio::pssz{}, std::span<const char>{oversized}),
+      psio::codec_exception);
+}

@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/dynamic_frac.hpp — schema-driven fracpack codec over
+// psio/dynamic_frac.hpp — schema-driven fracpack codec over
 // dynamic_value. Mirrors the shape of dynamic_ssz / dynamic_bin but
 // uses frac's header + heap-offset + length-prefix wire format
 // (design § 5.3.7 / Phase 8 / §14f).

@@ -1,4 +1,4 @@
-// v1 ↔ psio3 native flatbuf byte-parity tests.
+// v1 ↔ psio native flatbuf byte-parity tests.
 //
 // psio::flatbuf (zero-dep native) must produce byte-identical output
 // to psio::flatbuf_lib (Google flatbuffers runtime) on shared fixtures.

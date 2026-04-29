@@ -1,21 +1,21 @@
 // Regression guard for two bug classes that surfaced in v1 psio and
-// could have reappeared in psio3:
+// could have reappeared in psio:
 //
 //   Bug 1 — nested-reflected memcpy fast path that assumed C++ sizeof
 //           matches the wire fixed_size. Broken when the struct has
 //           internal padding (e.g. `struct { u8 a; u64 b; }` is 16
-//           bytes in C++ but 9 bytes on the fracpack wire). psio3's
+//           bytes in C++ but 9 bytes on the fracpack wire). psio's
 //           codecs walk reflected records field-by-field — this test
 //           pins that behavior.
 //
 //   Bug 2 — view/buffer methods named `data()` / `size()` shadowing
-//           reflected field accessors. psio3 uses `_psio3_data()` and
+//           reflected field accessors. psio uses `_psio_data()` and
 //           exposes storage ops as free functions; this test pins the
 //           rule by defining a reflected type with a field literally
 //           named `data` and encoding/decoding through every format.
 //
 // Both classes were discovered by a consumer hitting runtime-wrong
-// bytes in v1. Keeping these tests here means psio3 can't regress
+// bytes in v1. Keeping these tests here means psio can't regress
 // into the same shape.
 
 #include <psio/avro.hpp>

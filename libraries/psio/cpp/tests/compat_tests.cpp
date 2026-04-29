@@ -1,8 +1,8 @@
 // Phase 17 — compat layer.
 //
-// Validates that including psio3/compat/psio_aliases.hpp gives existing
+// Validates that including psio/compat/psio_aliases.hpp gives existing
 // consumers the `psio1::` spellings they used against psio v1, now
-// resolving to psio3. Once Phase 18 renames psio3 → psio, this header
+// resolving to psio. Once Phase 18 renames psio → psio, this header
 // disappears and callsites keep working verbatim.
 
 #include <psio/compat/psio_aliases.hpp>
@@ -29,7 +29,7 @@ struct CompatPerson
 };
 PSIO1_REFLECT(CompatPerson, name, age, scores)
 
-TEST_CASE("psio1:: namespace alias routes encode/decode through psio3",
+TEST_CASE("psio1:: namespace alias routes encode/decode through psio",
           "[compat]")
 {
    CompatPoint p{4, 7};
@@ -57,7 +57,7 @@ TEST_CASE("psio1:: identity with psio:: — they name the same entities",
    STATIC_REQUIRE(std::is_same_v<psio1::frac32, psio::frac32>);
 }
 
-TEST_CASE("psio1::schema_of routes to psio3 schema emitter",
+TEST_CASE("psio1::schema_of routes to psio schema emitter",
           "[compat][schema]")
 {
    auto sc = psio1::schema_of<CompatPerson>();

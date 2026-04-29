@@ -38,6 +38,7 @@
 //   full custom-handler chain.  These are extensions to the same
 //   if-constexpr ladder when their types land in v3.
 
+#include <psio/annotate.hpp>
 #include <psio/reflect.hpp>
 #include <psio/schema_ir.hpp>
 #include <psio/structural.hpp>
@@ -300,6 +301,20 @@ namespace psio::schema_types
             Object o;
             constexpr auto N = reflect<U>::member_count;
             build_record_members<U>(o.members, std::make_index_sequence<N>{});
+            // Surface type-level caps as IR attributes so they round-
+            // trip through emit_pssz / emit_wit / emit_capnp etc.
+            if constexpr (::psio::is_dwnc_v<U>)
+               o.attributes.push_back(
+                  Attribute{"definitionWillNotChange", ""});
+            if constexpr (::psio::max_fields_v<U>.has_value())
+               o.attributes.push_back(Attribute{
+                  "maxFields",
+                  std::to_string(::psio::max_fields_v<U>.value())});
+            if constexpr (::psio::max_dynamic_data_v<U>.has_value())
+               o.attributes.push_back(Attribute{
+                  "maxDynamicData",
+                  std::to_string(
+                     ::psio::max_dynamic_data_v<U>.value())});
             return o;
          }
          else

@@ -84,7 +84,7 @@ TEST_CASE("Optional / Variant concepts", "[shapes]")
    STATIC_REQUIRE((!psio::Variant<int>));
 }
 
-TEST_CASE("Bitfield concept matches psio3 bitvector/bitlist", "[shapes]")
+TEST_CASE("Bitfield concept matches psio bitvector/bitlist", "[shapes]")
 {
    STATIC_REQUIRE((psio::Bitfield<psio::bitvector<16>>));
    STATIC_REQUIRE((psio::Bitfield<psio::bitlist<32>>));

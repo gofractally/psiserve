@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/mutable_view.hpp — arena-backed editable view.
+// psio/mutable_view.hpp — arena-backed editable view.
 //
 // Design doc § 5.5 / § 9. v3.0 ships a minimal implementation with a
 // growable buffer + edit log; the full in-place / overlay-with-replay

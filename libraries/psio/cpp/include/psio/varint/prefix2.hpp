@@ -1,6 +1,6 @@
 #pragma once
 //
-// libraries/psio/cpp/include/psio3/varint/prefix2.hpp — 2-bit prefix.
+// libraries/psio/cpp/include/psio/varint/prefix2.hpp — 2-bit prefix.
 //
 // Two flavors of the same wire layout:
 //

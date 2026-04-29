@@ -47,9 +47,9 @@
 #include <string>
 #include <vector>
 
-using namespace psio3_bench;
+using namespace psio_bench;
 
-// frac_supports<T> — mark shapes that psio3 frac can encode AND decode.
+// frac_supports<T> — mark shapes that psio frac can encode AND decode.
 // Default true; specialize to false for types containing vector<variable>
 // (not yet supported by frac). Follow-up: replace with a proper detection
 // concept once frac's decode_vector variable branch lands.
@@ -419,7 +419,7 @@ namespace {
          out.push_back(bench_v3(shape_name, "pssz-auto", psio::pssz{}, v3v));
 
       // frac32 — skip shapes that transitively contain vector<variable-element>;
-      // psio3's frac doesn't support that yet (decode_vector static_asserts).
+      // psio's frac doesn't support that yet (decode_vector static_asserts).
       // The `requires` check passes on encode but fails at decode instantiation,
       // so we use a shape-level flag set by the caller via a partial
       // specialization of `frac_supports<T>`.
@@ -454,7 +454,7 @@ namespace {
       if constexpr (requires { psio::encode(psio::avro{}, v3v); })
          out.push_back(bench_v3(shape_name, "avro", psio::avro{}, v3v));
 
-      // NOTE: `key` is scalar-only in psio3 (memcmp-sortable encoding).
+      // NOTE: `key` is scalar-only in psio (memcmp-sortable encoding).
       // Records / vectors / optionals don't fit its model; bench it in
       // a separate scalar-focused harness in a follow-up commit.
    }
@@ -489,7 +489,7 @@ int main()
    // Files: markdown + csv for archiving.
    {
       std::ofstream md("PERF_V1_V3_FULL.md");
-      md << "# psio v1 vs psio3 full perf report\n\n";
+      md << "# psio v1 vs psio full perf report\n\n";
       md << "Columns: encode / decode / validate / size_of ns/op (min "
             "of 5 trials), plus wire bytes.\n";
       md << "`v3/v1` row is ratio (smaller = v3 faster / smaller).\n\n";

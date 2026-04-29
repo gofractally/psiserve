@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/conformance.hpp — format-neutral test harness (§4.4).
+// psio/conformance.hpp — format-neutral test harness (§4.4).
 //
 // Writing one test case and sweeping it across every compatible format
 // is a success criterion for v2 (§8 #4). This header ships three

@@ -17,7 +17,7 @@
 // is the apples-to-oranges trap.  Comparing within each axis is
 // the apples-to-apples that surfaces real codec quality differences.
 //
-// Build via psio3_format_perf target.  Output reports ns/op for
+// Build via psio_format_perf target.  Output reports ns/op for
 // encode + decode + round-trip on each format, plus encoded size.
 //
 // Disclaimer: simple steady-state microbenchmark.  Treat as

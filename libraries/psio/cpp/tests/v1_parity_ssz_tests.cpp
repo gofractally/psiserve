@@ -1,14 +1,14 @@
-// v1 ↔ psio3 SSZ byte-parity tests.
+// v1 ↔ psio SSZ byte-parity tests.
 //
-// Links psio (v1) and psio3 into the same binary. For each fixture,
+// Links psio (v1) and psio into the same binary. For each fixture,
 // encodes the same value through both codecs and asserts byte-identity.
-// This is the design-doc-required gate (§6 / §8.5) that psio3 can
+// This is the design-doc-required gate (§6 / §8.5) that psio can
 // actually replace psio for SSZ without changing downstream byte
 // streams.
 
 // Reflection macros live in the type's enclosing namespace, so if the
-// same struct is reflected by both psio and psio3 it needs BOTH macros
-// — we'd rather define it once and reflect with psio3 only, then
+// same struct is reflected by both psio and psio it needs BOTH macros
+// — we'd rather define it once and reflect with psio only, then
 // template-cast to call v1's encoder. v1's encoder doesn't need v1
 // reflection for non-record types; for records we define matching
 // "twin" structs (one for each codec) with identical layout.

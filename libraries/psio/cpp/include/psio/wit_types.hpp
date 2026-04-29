@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/wit_types.hpp — WIT (WebAssembly Interface Types) IR.  Direct
+// psio/wit_types.hpp — WIT (WebAssembly Interface Types) IR.  Direct
 // port of psio/wit_types.hpp.
 //
 // Foundation for the rest of the WIT toolchain: parser produces these

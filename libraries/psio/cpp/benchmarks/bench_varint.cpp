@@ -1,7 +1,7 @@
 // libraries/psio/cpp/benchmarks/bench_varint.cpp
 //
 // Microbenchmark for the three varint algorithms in
-// libraries/psio/cpp/include/psio3/varint/. Reports ns/op and bytes/sec
+// libraries/psio/cpp/include/psio/varint/. Reports ns/op and bytes/sec
 // for encode and decode under four value distributions, with a separate
 // section comparing prefix2 BE vs LE on identical inputs.
 //
@@ -11,7 +11,7 @@
 // graded against a stable baseline.
 //
 // Build with: cmake -DPSIO3_ENABLE_BENCHMARKS=ON ...
-// Run:        ./bin/psio3_bench_varint
+// Run:        ./bin/psio_bench_varint
 //
 
 #include <psio/varint/varint.hpp>

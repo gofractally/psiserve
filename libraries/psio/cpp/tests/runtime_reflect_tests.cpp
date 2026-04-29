@@ -9,7 +9,7 @@
 //
 // No additional machinery is needed; these tests document the patterns
 // and serve as ready-to-copy examples for consumers building RPC
-// stubs, dynamic viewers, or debug tooling on top of psio3.
+// stubs, dynamic viewers, or debug tooling on top of psio.
 
 #include <psio/reflect.hpp>
 

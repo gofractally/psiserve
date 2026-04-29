@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/key.hpp — `key` format tag: memcmp-sortable byte sequences.
+// psio/key.hpp — `key` format tag: memcmp-sortable byte sequences.
 //
 // Wire (MVP scope):
 //   bool:               0x00 or 0x01

@@ -1,13 +1,13 @@
 #pragma once
 //
-// psio3/detail/tag_invoke.hpp — P1895 customization-point plumbing.
+// psio/detail/tag_invoke.hpp — P1895 customization-point plumbing.
 //
 // A CPO (customization point object) is an `inline constexpr` function
-// object. Each CPO in psio3 invokes `tag_invoke(cpo_object{}, ...)`
+// object. Each CPO in psio invokes `tag_invoke(cpo_object{}, ...)`
 // via argument-dependent lookup; format authors supply the matching
 // overload as hidden friends on their format tag struct.
 //
-// This header provides the `tag_invoke` name in psio3 so every CPO's
+// This header provides the `tag_invoke` name in psio so every CPO's
 // `tag_invoke(*this, ...)` expression sees a qualified name that ADL
 // can extend. The function itself is never defined — it only exists
 // as a "handle" for ADL.

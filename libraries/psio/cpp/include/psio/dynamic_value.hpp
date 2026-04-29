@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/dynamic_value.hpp — type-erased value representation.
+// psio/dynamic_value.hpp — type-erased value representation.
 //
 // A `dynamic_value` is the runtime counterpart of any value describable
 // by a `psio::schema`. The pair (schema, dynamic_value) is the

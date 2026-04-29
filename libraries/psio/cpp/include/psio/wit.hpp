@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/wit.hpp — WIT canonical ABI format tag.
+// psio/wit.hpp — WIT canonical ABI format tag.
 //
 // WebAssembly Component Model canonical ABI (GC-unaware subset):
 // fixed-layout records with fields at compile-time offsets, strings
@@ -951,6 +951,9 @@ namespace psio {
                                      std::span<const char> bytes) noexcept
       {
          using namespace detail::wit_impl;
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(), "wit");
+             !st.ok())
+            return st;
          bool ok;
          if constexpr (detail::wit_impl::Record<T>)
             ok = validate_record<T>(bytes, 0);

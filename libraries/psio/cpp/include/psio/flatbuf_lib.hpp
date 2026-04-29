@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/flatbuf_lib.hpp — `flatbuf_lib` format tag: Google flatbuffers
+// psio/flatbuf_lib.hpp — `flatbuf_lib` format tag: Google flatbuffers
 // adapter. Requires the flatbuffers C++ headers on the include path; the
 // tests build target links flatbuffers::flatbuffers when the package is
 // found.

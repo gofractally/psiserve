@@ -22,7 +22,7 @@
 // Build only when msgpack-cxx is present; see the parent
 // CMakeLists.txt.  Run manually:
 //
-//     ./build/Debug-rename/bin/psio3_format_perf_external
+//     ./build/Debug-rename/bin/psio_format_perf_external
 
 #include <psio/msgpack.hpp>
 #include <psio/pjson_typed.hpp>

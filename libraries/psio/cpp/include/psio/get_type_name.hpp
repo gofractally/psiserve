@@ -1,10 +1,10 @@
 #pragma once
 //
-// psio3/get_type_name.hpp — compile-time type-name string source
+// psio/get_type_name.hpp — compile-time type-name string source
 // (port of psio/get_type_name.hpp).
 //
 // `get_type_name<T>()` returns a `const char*` (NUL-terminated) naming
-// the type T as it appears in psio3 schemas / WIT output.  Built-in
+// the type T as it appears in psio schemas / WIT output.  Built-in
 // overloads cover:
 //
 //   primitives:    bool, int8..int64, uint8..uint64, float, double,

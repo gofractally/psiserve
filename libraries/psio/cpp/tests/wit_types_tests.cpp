@@ -1,6 +1,6 @@
 // libraries/psio/cpp/tests/wit_types_tests.cpp
 //
-// Coverage for psio3/wit_types.hpp — primitive index encoding and
+// Coverage for psio/wit_types.hpp — primitive index encoding and
 // reflection wiring on the WIT IR data structures.
 
 #include <psio/wit_types.hpp>

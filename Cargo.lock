@@ -1789,16 +1789,48 @@ dependencies = [
 ]
 
 [[package]]
-name = "psio-tool"
+name = "psio1"
 version = "0.1.0"
 dependencies = [
- "clap",
- "psio",
+ "bincode",
+ "borsh",
+ "criterion",
+ "custom_error",
+ "ethereum_ssz",
+ "ethereum_ssz_derive",
+ "hex 0.3.2",
+ "indexmap",
+ "paste",
+ "postcard",
+ "psio1-macros",
+ "rkyv",
+ "rmp-serde",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "ssz_rs",
+ "ssz_types",
+ "typenum",
 ]
 
 [[package]]
-name = "psio3"
+name = "psio1-macros"
 version = "0.1.0"
+dependencies = [
+ "darling 0.14.4",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "psio1-tool"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "psio1",
+]
 
 [[package]]
 name = "ptr_meta"

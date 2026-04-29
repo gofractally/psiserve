@@ -1,4 +1,4 @@
-// v1 ↔ psio3 avro byte-parity tests.
+// v1 ↔ psio avro byte-parity tests.
 //
 // Avro wire (MVP scope):
 //   integers:           zig-zag varint (Avro "long")
@@ -151,7 +151,7 @@ TEST_CASE("avro round-trip: std::variant",
    REQUIRE(std::get<0>(out) == -42);
 }
 
-// v1 avro has no built-in uint256 wire; psio3 treats it as Avro "fixed"
+// v1 avro has no built-in uint256 wire; psio treats it as Avro "fixed"
 // (raw 32 bytes). Round-trip only — no v1 parity check.
 
 #include <psio/ext_int.hpp>

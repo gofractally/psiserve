@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/max_size.hpp — compile-time upper bound on a type's encoded
+// psio/max_size.hpp — compile-time upper bound on a type's encoded
 // byte count, given its shape and its fields' length_bound annotations.
 //
 // `psio::max_encoded_size<T>()` returns `std::optional<std::size_t>`:
@@ -10,7 +10,7 @@
 //   - nullopt when any sub-field is unbounded — the encoder cannot
 //     guarantee the output will fit in any predetermined width
 //
-// Field-level bounds participate through psio3's standard annotation
+// Field-level bounds participate through psio's standard annotation
 // merge: effective_annotations_for<Rec, F, MemberPtr> gathers
 // member > wrapper > type specs, and the walk below reads length_bound
 // out of that merged tuple. Member beats wrapper beats type, so a field
@@ -237,5 +237,34 @@ namespace psio {
    {
       return detail::max_size_impl::max_bare<T>();
    }
+
+   // ── effective_max_dynamic_v ───────────────────────────────────────────
+   //
+   // Composes an explicit `maxDynamicData(N)` cap (from annotate.hpp's
+   // `max_dynamic_data_v<T>`) with the bound inferred from per-field
+   // `length_bound` annotations (`max_encoded_size<T>`).  The explicit
+   // cap WINS DOWNWARD only — overriding upward defeats the purpose of
+   // an upper-bound assertion.
+   //
+   //   cap present, bound present → min(cap, bound)
+   //   cap present, bound nullopt → cap          (cap is the only bound)
+   //   cap nullopt, bound present → bound        (no override; trust inferred)
+   //   cap nullopt, bound nullopt → nullopt      (caller picks conservative width)
+   //
+   // Format consumers (pssz/frac/psch/pjson) use this for offset-width
+   // selection: pick the narrowest width whose addressable range fits.
+   template <typename T>
+   inline constexpr std::optional<std::size_t> effective_max_dynamic_v = []
+   {
+      constexpr auto cap   = max_dynamic_data_v<T>;
+      constexpr auto bound = max_encoded_size<T>();
+      if constexpr (cap.has_value() && bound.has_value())
+         return std::optional<std::size_t>{
+            (*cap < *bound) ? *cap : *bound};
+      else if constexpr (cap.has_value())
+         return cap;
+      else
+         return bound;
+   }();
 
 }  // namespace psio

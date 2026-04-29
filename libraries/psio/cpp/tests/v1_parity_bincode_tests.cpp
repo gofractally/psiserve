@@ -1,4 +1,4 @@
-// v1 ↔ psio3 bincode byte-parity tests.
+// v1 ↔ psio bincode byte-parity tests.
 //
 // Bincode (default) wire (MVP scope):
 //   primitives raw LE, bool = 1 byte, string = u64 len + bytes,

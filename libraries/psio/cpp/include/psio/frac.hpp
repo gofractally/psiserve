@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/frac.hpp — fracpack format tag family.
+// psio/frac.hpp — fracpack format tag family.
 //
 // Byte-compatible with v1 psio1::fracpack on the MVP shape set —
 // primitives, std::array, std::vector, std::string, std::optional,
@@ -1478,7 +1478,8 @@ namespace psio {
                              const T& v, std::vector<char>& sink)
       {
          const std::size_t total = detail::frac_impl::size_of_v<W>(v);
-         const std::size_t orig  = sink.size();
+         ::psio::enforce_max_dynamic_cap<T>(total, "frac");
+         const std::size_t orig = sink.size();
          sink.resize(orig + total);
          ::psio::fast_buf_stream fbs(sink.data() + orig, total);
          detail::frac_impl::encode_value<W>(v, fbs);
@@ -1489,6 +1490,7 @@ namespace psio {
                                           frac_<W>, const T& v)
       {
          const std::size_t total = detail::frac_impl::size_of_v<W>(v);
+         ::psio::enforce_max_dynamic_cap<T>(total, "frac");
          std::vector<char> out(total);
          ::psio::fast_buf_stream fbs(out.data(), total);
          detail::frac_impl::encode_value<W>(v, fbs);
@@ -1514,6 +1516,10 @@ namespace psio {
                                      frac_<W>, T*,
                                      std::span<const char> bytes) noexcept
       {
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(),
+                                                         "frac");
+             !st.ok())
+            return st;
          return detail::frac_impl::validate_value<W, T>(bytes, 0,
                                                          bytes.size());
       }

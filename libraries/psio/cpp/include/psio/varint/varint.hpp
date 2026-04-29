@@ -1,6 +1,6 @@
 #pragma once
 //
-// libraries/psio/cpp/include/psio3/varint/varint.hpp — umbrella header.
+// libraries/psio/cpp/include/psio/varint/varint.hpp — umbrella header.
 //
 // Header-only library of variable-length integer codecs used across the
 // codebase. Three algorithms live alongside each other so call sites
@@ -8,8 +8,8 @@
 //
 //   varint::leb128   — standard LEB128 (uleb / sleb / zigzag).
 //                      Used by:
-//                        - psio3 bin codec (varuint32 prefixes)
-//                        - psio3 avro codec (zig-zag long)
+//                        - psio bin codec (varuint32 prefixes)
+//                        - psio avro codec (zig-zag long)
 //                        - psizam wasm parser (full uleb/sleb family)
 //
 //   varint::prefix3  — 3-bit length prefix in the top of byte 0,

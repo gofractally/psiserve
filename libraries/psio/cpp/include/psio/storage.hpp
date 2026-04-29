@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/storage.hpp — storage-policy tag for buffer / view / mutable_view.
+// psio/storage.hpp — storage-policy tag for buffer / view / mutable_view.
 //
 // Orthogonal to (T, Fmt). Read ops work on all three variants; write
 // ops require non-const backings.

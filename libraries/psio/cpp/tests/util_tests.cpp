@@ -53,17 +53,17 @@ namespace {
    struct MyVariantTag { std::variant<int, std::string> v; };
 
    // ADL-discoverable opt-in.
-   constexpr bool psio3_is_untagged(const MyVariantTag*) { return true; }
+   constexpr bool psio_is_untagged(const MyVariantTag*) { return true; }
 }
 
-TEST_CASE("psio3_is_untagged ADL hook", "[util][untagged]")
+TEST_CASE("psio_is_untagged ADL hook", "[util][untagged]")
 {
    // Local override picks up via ADL (or unqualified lookup since it
    // sits in the anonymous namespace).
-   STATIC_REQUIRE(psio3_is_untagged(static_cast<const MyVariantTag*>(nullptr))
+   STATIC_REQUIRE(psio_is_untagged(static_cast<const MyVariantTag*>(nullptr))
                   == true);
    // Default for any other type — falls through to the psio:: primary.
-   STATIC_REQUIRE(psio::psio3_is_untagged(
+   STATIC_REQUIRE(psio::psio_is_untagged(
                      static_cast<const std::vector<int>*>(nullptr))
                   == false);
 }

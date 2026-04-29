@@ -27,6 +27,8 @@
 // (if self-describing) and view<T, Fmt> for it. The framework code
 // (writers, transcoders, walkers) doesn't change.
 
+#include <psio/storage.hpp>
+
 namespace psio {
 
    // ── format tags ───────────────────────────────────────────────────────
@@ -46,8 +48,10 @@ namespace psio {
    class dynamic_view;             // schemaless; only self-describing
                                    // formats specialize this.
 
-   template <typename T, typename Fmt>
+   template <typename T, typename Fmt, storage Store = storage::const_borrow>
    class view;                     // schema-aware; every format
-                                   // specializes this.
+                                   // specializes this.  Store is defaulted
+                                   // for headers (e.g. pjson_typed.hpp) that
+                                   // only forward-name the 2-arg form.
 
 }  // namespace psio

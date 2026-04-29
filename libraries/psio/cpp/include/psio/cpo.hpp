@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/cpo.hpp — customization point objects.
+// psio/cpo.hpp — customization point objects.
 //
 // Per design doc § 5.2. Every operation a format customizes is a CPO;
 // each CPO dispatches to `tag_invoke(cpo_obj{}, fmt, args...)` via

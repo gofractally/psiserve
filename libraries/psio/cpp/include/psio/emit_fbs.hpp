@@ -176,10 +176,12 @@ namespace psio::schema_types
 
          void emit_decl_impl(const std::string& name, const Object& o)
          {
+            emit_type_attribute_comments(o.attributes);
             emit_table(name, o.members);
          }
          void emit_decl_impl(const std::string& name, const Struct& s)
          {
+            emit_type_attribute_comments(s.attributes);
             // FBS struct must be all-scalar fixed; otherwise degrade
             // to table with a comment marker.
             bool all_scalar = true;
@@ -195,6 +197,27 @@ namespace psio::schema_types
                emit_table(name, s.members,
                           "// @psio:struct  (degraded to table — "
                           "non-scalar member)");
+         }
+
+         // FBS schemas have no native attribute syntax for psio caps;
+         // emit them as preceding-line comments per the same convention
+         // used elsewhere in this header for psio-specific metadata.
+         void emit_type_attribute_comments(
+            const std::vector<Attribute>& attrs)
+         {
+            for (const auto& a : attrs)
+            {
+               if (a.name == "definitionWillNotChange" ||
+                   a.name == "maxFields" ||
+                   a.name == "maxDynamicData")
+               {
+                  indent();
+                  _out << "// @" << a.name;
+                  if (!a.value.empty())
+                     _out << "(" << a.value << ")";
+                  _out << "\n";
+               }
+            }
          }
          void emit_decl_impl(const std::string& name, const Variant& v)
          {

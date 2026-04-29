@@ -1,10 +1,10 @@
 #pragma once
 //
-// psio3/compat/psio_aliases.hpp — migration-aid header that re-exports
-// psio3 symbols under the historical `psio1::` namespace. Intended for
+// psio/compat/psio_aliases.hpp — migration-aid header that re-exports
+// psio symbols under the historical `psio1::` namespace. Intended for
 // consumers (psizam, pfs, application code) that currently call
 // `psio1::encode(…)` / `psio1::frac::…` / `psio1::reflect<T>` and want to
-// validate their code against psio3 before the swap lands in Phase 18.
+// validate their code against psio before the swap lands in Phase 18.
 //
 // **Status:** transitional. This header is NOT part of the final v2
 // API — after Phase 18 renames `libraries/psio/` → `libraries/psio1/`
@@ -18,26 +18,26 @@
 // consumer's code — a deliberate rough edge so the consumer knows
 // the migration surface isn't complete.
 //
-// **Enabling:** this header is NOT included by the master psio3.hpp.
+// **Enabling:** this header is NOT included by the master psio.hpp.
 // Consumers include it explicitly when they want the bridge:
 //
 //   #include <psio/compat/psio_aliases.hpp>
 //
 // Once included, `psio1::encode(psio1::frac32{}, value, sink)` calls the
-// psio3 encoder. Mixed usage (some `psio1::`, some `psio::`) also
+// psio encoder. Mixed usage (some `psio1::`, some `psio::`) also
 // works — both refer to the same underlying entities.
 
-#include <psio/psio3.hpp>
+#include <psio/psio.hpp>
 
 // Top-level namespace alias — makes `psio1::` resolve to `psio::` for
 // all uses. Nested symbols, templates, traits, concepts, and macros
 // all flow through automatically.
-namespace psio1 = ::psio3;
+namespace psio1 = ::psio;
 
 // Macros: C++ namespaces don't catch macros, so re-export the common
 // ones under the old spelling so consumers' existing macro callsites
 // continue to work. If the old macro name already exists (e.g. from a
-// transitional build where both psio v1 and psio3 are linked), the
+// transitional build where both psio v1 and psio are linked), the
 // guard skips the redefinition.
 
 #ifndef PSIO1_REFLECT

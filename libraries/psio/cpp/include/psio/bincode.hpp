@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/bincode.hpp — `bincode` format tag.
+// psio/bincode.hpp — `bincode` format tag.
 //
 // Rust-ecosystem bincode (default config). Wire (MVP scope):
 //   * primitives: raw LE; bool: 1 byte (0/1)
@@ -610,6 +610,10 @@ namespace psio {
       {
          if (bytes.empty())
             return codec_fail("bincode: empty buffer", 0, "bincode");
+         if (auto st =
+                ::psio::check_max_dynamic_cap<T>(bytes.size(), "bincode");
+             !st.ok())
+            return st;
          return codec_ok();
       }
 

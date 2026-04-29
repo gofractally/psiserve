@@ -1,4 +1,4 @@
-// v1 ↔ psio3 pSSZ byte-parity tests.
+// v1 ↔ psio pSSZ byte-parity tests.
 //
 // Analog of v1_parity_ssz_tests.cpp for the pSSZ family. Verifies that
 // encoding the same value through psio1::to_pssz (v1) and

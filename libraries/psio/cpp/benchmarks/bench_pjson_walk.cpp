@@ -15,7 +15,7 @@
 // and a small nested array, so the cost difference between paths is
 // dominated by the lookup mechanism, not the leaf decode.
 //
-// Run: psio3_bench_pjson_walk
+// Run: psio_bench_pjson_walk
 //      Optional --doc-count N (default: 200,000 trials)
 
 #include <psio/pjson.hpp>

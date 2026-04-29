@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/borsh.hpp — `borsh` format tag.
+// psio/borsh.hpp — `borsh` format tag.
 //
 // Borsh is NEAR/Solana's canonical binary format. Wire (MVP scope):
 //   * primitives: raw LE; bool: 1 byte (0/1)
@@ -623,6 +623,10 @@ namespace psio {
       {
          if (bytes.empty())
             return codec_fail("borsh: empty buffer", 0, "borsh");
+         if (auto st =
+                ::psio::check_max_dynamic_cap<T>(bytes.size(), "borsh");
+             !st.ok())
+            return st;
          return codec_ok();
       }
 

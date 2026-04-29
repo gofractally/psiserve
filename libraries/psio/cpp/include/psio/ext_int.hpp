@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/ext_int.hpp — 128-bit and 256-bit integer types.
+// psio/ext_int.hpp — 128-bit and 256-bit integer types.
 //
 // Byte-compatible with psio1::uint128 / psio1::int128 / psio1::uint256 in v1.
 // Used for SSZ/Ethereum-consensus workloads (balances, hashes, KZG).

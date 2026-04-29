@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/format_tag_base.hpp — CRTP base for format tags.
+// psio/format_tag_base.hpp — CRTP base for format tags.
 //
 // Every format tag (`psio::ssz`, `psio::frac`, ...) inherits from
 // `psio::format_tag_base<Derived>` to get the scoped-sugar form:

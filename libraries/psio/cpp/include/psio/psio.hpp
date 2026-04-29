@@ -1,15 +1,15 @@
 #pragma once
 //
-// psio3 — v2-architecture serialization library.
+// psio — v2-architecture serialization library.
 //
-// This is the master include. Pulls in every public header that psio3
+// This is the master include. Pulls in every public header that psio
 // provides. Header contents grow as the 18-phase implementation plan
 // proceeds; see .issues/psio-v2-design.md for the full architecture
 // spec and /Users/dlarimer/.claude/plans/idempotent-beaming-milner.md
 // for the phase-by-phase plan.
 //
-// During development psio3 lives alongside psio (v1). Once every phase's
-// parity gate passes, psio3 replaces psio via a rename + namespace
+// During development psio lives alongside psio (v1). Once every phase's
+// parity gate passes, psio replaces psio via a rename + namespace
 // rewrite — at which point the `psio::` identifier goes away and this
 // file is replaced by psio/psio.hpp.
 //

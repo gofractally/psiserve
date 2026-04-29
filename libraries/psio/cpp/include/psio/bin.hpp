@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/bin.hpp — `bin` format tag.
+// psio/bin.hpp — `bin` format tag.
 //
 // `bin` is the simplest binary format: primitives serialize as raw LE
 // bytes; std::string and std::vector get a u32 length prefix; std::array
@@ -93,7 +93,7 @@ namespace psio {
       // length / count / index is emitted: string size, vector size,
       // variant index, bitlist bit count, record content_size prefix.
       // The wire encoding (7-bit groups, MSB = continuation, max 5 bytes
-      // for a full u32) is implemented in psio3/varint/leb128.hpp; the
+      // for a full u32) is implemented in psio/varint/leb128.hpp; the
       // wrappers below bridge that header-only library to the bin
       // codec's `Sink::write(const char*, n)` and `std::span<const char>`
       // calling conventions.  Decoders that care about strict canonicity
@@ -1135,6 +1135,9 @@ namespace psio {
          // Minimal structural check: non-empty for non-void types.
          if (bytes.empty())
             return codec_fail("bin: empty buffer", 0, "bin");
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(), "bin");
+             !st.ok())
+            return st;
          return codec_ok();
       }
 

@@ -1,4 +1,4 @@
-// v1 ↔ psio3 fracpack byte-parity tests.
+// v1 ↔ psio fracpack byte-parity tests.
 //
 // Records use v1's pointer-relative offset scheme: in the fixed region
 // each variable field holds a W-byte slot; the slot's value is

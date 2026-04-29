@@ -223,11 +223,35 @@ namespace psio::schema_types
 
          void emit_type_decl_impl(const std::string& tname, const Object& o)
          {
+            emit_type_attribute_lines(o.attributes);
             emit_record(tname, o.members);
          }
          void emit_type_decl_impl(const std::string& tname, const Struct& s)
          {
+            emit_type_attribute_lines(s.attributes);
             emit_record(tname, s.members);
+         }
+
+         // WIT supports @-attribute syntax on type declarations.  Emit
+         // psio caps as native attributes so downstream WIT tooling
+         // (parsers, doc generators, codegen) sees them.  Unknown
+         // attributes are by spec ignored, so this is forward-safe.
+         void emit_type_attribute_lines(
+            const std::vector<Attribute>& attrs)
+         {
+            for (const auto& a : attrs)
+            {
+               if (a.name == "definitionWillNotChange" ||
+                   a.name == "maxFields" ||
+                   a.name == "maxDynamicData")
+               {
+                  indent();
+                  _out << "@" << a.name;
+                  if (!a.value.empty())
+                     _out << "(" << a.value << ")";
+                  _out << "\n";
+               }
+            }
          }
          void emit_type_decl_impl(const std::string& tname, const Variant& v)
          {

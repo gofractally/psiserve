@@ -1,6 +1,6 @@
 #pragma once
 //
-// libraries/psio/cpp/include/psio3/varint/prefix3.hpp — 3-bit prefix.
+// libraries/psio/cpp/include/psio/varint/prefix3.hpp — 3-bit prefix.
 //
 // Layout (top 3 bits of byte 0 = code, remaining bits = payload):
 //

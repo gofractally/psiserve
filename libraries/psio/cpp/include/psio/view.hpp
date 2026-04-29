@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/view.hpp — unified `view<T, Fmt, Store>` zero-copy read surface.
+// psio/view.hpp — unified `view<T, Fmt, Store>` zero-copy read surface.
 //
 // Design rule: the view templates in this file are written ONCE per
 // shape (Primitive, string, vector, optional, variant, …). Each format
@@ -47,8 +47,11 @@
 namespace psio {
 
    // Forward declaration of the unified view template. Partial
-   // specializations for each shape appear below.
-   template <typename T, typename Fmt, storage Store = storage::const_borrow>
+   // specializations for each shape appear below.  The default for
+   // Store lives on the canonical forward decl in `format.hpp`; this
+   // re-declaration must NOT repeat it (template-default-redefinition
+   // is a hard error).
+   template <typename T, typename Fmt, storage Store>
    class view;
 
    // ── view_layout traits ────────────────────────────────────────────────
@@ -114,6 +117,24 @@ namespace psio {
          std::void_t<decltype(traits<Fmt>::template variant_index<int>(
             std::span<const char>{}))>> : std::true_type {};
 
+      // has_record_support<Fmt, T> — does Fmt's traits provide
+      // record_field_span<T, 0>?  Per-(Fmt, T) because some formats
+      // only support record view for shapes meeting certain criteria
+      // (e.g., ssz needs all-fixed-fields).  Per-T detection gives
+      // SFINAE-friendly fallback for unsupported (Fmt, T) pairs.
+      template <typename Fmt, typename T, typename = void>
+      struct has_record_support : std::false_type {};
+
+      // Detects either signature:
+      //   record_field_span<T, N>(span)              [legacy / no root]
+      //   record_field_span<T, N>(span, span root)   [pointer-following]
+      template <typename Fmt, typename T>
+      struct has_record_support<
+         Fmt, T,
+         std::void_t<decltype(traits<Fmt>::template record_field_span<T, 0>(
+            std::span<const char>{}, std::span<const char>{}))>>
+         : std::true_type {};
+
    }  // namespace view_layout
 
    // ── Primitive view ────────────────────────────────────────────────────
@@ -134,8 +155,15 @@ namespace psio {
 
       view() = default;
       explicit view(std::span<const char> s) noexcept : data_(s) {}
+      // Indirect-friendly ctor: the parent vector / record view passes
+      // a root span for formats that follow offsets (flatbuf, capnp).
+      // Primitives never indirect, so the root is discarded.
+      view(std::span<const char> s, std::span<const char> /*r*/) noexcept
+         : data_(s)
+      {
+      }
 
-      [[nodiscard]] std::span<const char> _psio3_data() const noexcept
+      [[nodiscard]] std::span<const char> _psio_data() const noexcept
       {
          return data_;
       }
@@ -166,8 +194,14 @@ namespace psio {
 
       view() = default;
       explicit view(std::span<const char> s) noexcept : data_(s) {}
+      // Indirect-friendly ctor: same rationale as the primitive view —
+      // strings are leaf payloads, so the root span is discarded.
+      view(std::span<const char> s, std::span<const char> /*r*/) noexcept
+         : data_(s)
+      {
+      }
 
-      [[nodiscard]] std::span<const char> _psio3_data() const noexcept
+      [[nodiscard]] std::span<const char> _psio_data() const noexcept
       {
          return data_;
       }
@@ -188,6 +222,7 @@ namespace psio {
    class view<std::vector<T>, Fmt, Store>
    {
       std::span<const char> data_;
+      std::span<const char> root_;
 
      public:
       using element_type                    = std::vector<T>;
@@ -196,11 +231,19 @@ namespace psio {
       static constexpr storage storage_kind = Store;
 
       view() = default;
-      explicit view(std::span<const char> s) noexcept : data_(s) {}
+      explicit view(std::span<const char> s) noexcept : data_(s), root_(s) {}
+      view(std::span<const char> s, std::span<const char> r) noexcept
+         : data_(s), root_(r)
+      {
+      }
 
-      [[nodiscard]] std::span<const char> _psio3_data() const noexcept
+      [[nodiscard]] std::span<const char> _psio_data() const noexcept
       {
          return data_;
+      }
+      [[nodiscard]] std::span<const char> _psio_root() const noexcept
+      {
+         return root_;
       }
 
       [[nodiscard]] std::size_t size() const noexcept
@@ -213,7 +256,8 @@ namespace psio {
       [[nodiscard]] view<T, Fmt, Store> operator[](std::size_t i) const noexcept
       {
          return view<T, Fmt, Store>{
-            view_layout::traits<Fmt>::template vector_element_span<T>(data_, i)};
+            view_layout::traits<Fmt>::template vector_element_span<T>(data_, i),
+            root_};
       }
 
       [[nodiscard]] view<T, Fmt, Store> at(std::size_t i) const noexcept
@@ -274,7 +318,7 @@ namespace psio {
       view() = default;
       explicit view(std::span<const char> s) noexcept : data_(s) {}
 
-      [[nodiscard]] std::span<const char> _psio3_data() const noexcept
+      [[nodiscard]] std::span<const char> _psio_data() const noexcept
       {
          return data_;
       }
@@ -314,7 +358,7 @@ namespace psio {
       view() = default;
       explicit view(std::span<const char> s) noexcept : data_(s) {}
 
-      [[nodiscard]] std::span<const char> _psio3_data() const noexcept
+      [[nodiscard]] std::span<const char> _psio_data() const noexcept
       {
          return data_;
       }
@@ -368,20 +412,95 @@ namespace psio {
       }
    };
 
+   // ── view<T, Fmt, Store> for Reflected struct T ────────────────────────
+   //
+   // A Reflected struct view exposes per-field accessors via `get<N>()`.
+   // The format's traits provide `record_field_span<T, N>(span)`, which
+   // returns the byte range that holds field N — for fixed-layout formats
+   // this is a compile-time offset/size; for formats with extensibility
+   // headers or offset tables it does the necessary runtime walk.
+   //
+   // `get<N>()` returns:
+   //   - the field value directly if the field is a Primitive (memcpy)
+   //   - a sub-view<FieldT, Fmt, Store> for everything else (string,
+   //     vector, optional, variant, nested record).  The sub-view shares
+   //     the parent's backing span — no allocation, no decode.
+   //
+   // Selection: only enabled when traits<Fmt> defines record_field_span<T, 0>.
+   // Formats that don't (or shapes the format can't handle, e.g., ssz on
+   // a record with a variable field but no offset-table support) fall
+   // through to whatever caller mechanism handles the unsupported case.
+   template <typename T, typename Fmt, storage Store>
+      requires Reflected<T>
+            && view_layout::has_record_support<Fmt, T>::value
+   class view<T, Fmt, Store>
+   {
+      // data_ — the bytes of THIS record (a slice of the encoded buffer).
+      // root_ — the absolute encoded buffer, used by formats that follow
+      //         pointers between record fields and heap regions
+      //         (canonical-ABI / wit).  Defaults to data_ for formats
+      //         that don't need pointer-following (ssz, pssz).
+      std::span<const char> data_;
+      std::span<const char> root_;
+
+     public:
+      using element_type                    = T;
+      using format_type                     = Fmt;
+      static constexpr storage storage_kind = Store;
+
+      view() = default;
+      explicit view(std::span<const char> s) noexcept : data_(s), root_(s) {}
+      view(std::span<const char> s, std::span<const char> r) noexcept
+         : data_(s), root_(r)
+      {
+      }
+
+      [[nodiscard]] std::span<const char> _psio_data() const noexcept
+      {
+         return data_;
+      }
+      [[nodiscard]] std::span<const char> _psio_root() const noexcept
+      {
+         return root_;
+      }
+
+      template <std::size_t N>
+      [[nodiscard]] auto get() const noexcept
+      {
+         using FieldT = std::remove_cvref_t<
+            typename ::psio::reflect<T>::template member_type<N>>;
+         auto field_span =
+            view_layout::traits<Fmt>::template record_field_span<T, N>(
+               data_, root_);
+         if constexpr (std::is_arithmetic_v<FieldT>
+                       || std::is_same_v<FieldT, bool>)
+         {
+            FieldT out{};
+            if (field_span.size() >= sizeof(FieldT))
+               std::memcpy(&out, field_span.data(), sizeof(FieldT));
+            return out;
+         }
+         else
+         {
+            return view<FieldT, Fmt, Store>{field_span, root_};
+         }
+      }
+   };
+
    // ── Free-function storage API for views ───────────────────────────────
 
    template <typename T, typename Fmt, storage S>
-      requires requires(const view<T, Fmt, S>& v) { v._psio3_data(); }
+      requires requires(const view<T, Fmt, S>& v) { v._psio_data(); }
    [[nodiscard]] std::span<const char> bytes(const view<T, Fmt, S>& v) noexcept
    {
-      return v._psio3_data();
+      return v._psio_data();
    }
 
    template <typename T, typename Fmt, storage S>
-      requires requires(const view<T, Fmt, S>& v) { v._psio3_data(); }
+      requires requires(const view<T, Fmt, S>& v) { v._psio_data(); }
    [[nodiscard]] std::size_t size(const view<T, Fmt, S>& v) noexcept
    {
-      return v._psio3_data().size();
+      return v._psio_data().size();
    }
 
    template <typename T, typename Fmt, storage S>

@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/shapes.hpp — Layer 1 shape concepts.
+// psio/shapes.hpp — Layer 1 shape concepts.
 //
 // Shapes describe *what the data looks like* — primitive, fixed-size
 // sequence, variable-length sequence, optional, variant, bitfield,
@@ -10,7 +10,7 @@
 //
 // Semantic variation within a shape (e.g. is this `std::string` text,
 // opaque bytes, or hex-on-wire?) lives on reflection annotations in
-// psio3/annotate.hpp — NOT as separate shape concepts.
+// psio/annotate.hpp — NOT as separate shape concepts.
 
 #include <psio/annotate.hpp>
 #include <psio/reflect.hpp>
@@ -170,7 +170,7 @@ namespace psio {
 
    // ── Record ─────────────────────────────────────────────────────────────
    //
-   // Types with a psio3_reflect_helper overload visible via ADL —
+   // Types with a psio_reflect_helper overload visible via ADL —
    // i.e. types that have been declared with PSIO_REFLECT (or, in the
    // future, C++26 auto-reflection).
    template <typename T>

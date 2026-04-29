@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/error.hpp — error model (design doc § 5.4).
+// psio/error.hpp — error model (design doc § 5.4).
 //
 // `psio::validate` is the only operation that can report an error.
 // Every other operation (encode, decode, size, make_boxed, view

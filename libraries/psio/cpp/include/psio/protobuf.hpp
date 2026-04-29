@@ -2223,6 +2223,10 @@ namespace psio
                                      protobuf, T*,
                                      std::span<const char> bytes) noexcept
       {
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(),
+                                                         "protobuf");
+             !st.ok())
+            return st;
          try
          {
             T tmp{};

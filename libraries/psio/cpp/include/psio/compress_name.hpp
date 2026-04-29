@@ -35,7 +35,7 @@ change based on the prior element.
 */
 #pragma once
 //
-// psio3/compress_name.hpp — method-name compressor (port of
+// psio/compress_name.hpp — method-name compressor (port of
 // psio/compress_name.hpp).
 //
 // Encodes pure-letter (a-z) method-name strings into a 64-bit integer

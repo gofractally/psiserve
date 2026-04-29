@@ -1,6 +1,7 @@
 // Phase 2 — annotation system tests.
 
 #include <psio/annotate.hpp>
+#include <psio/max_size.hpp>
 #include <psio/reflect.hpp>
 #include <psio/wrappers.hpp>
 
@@ -301,6 +302,152 @@ TEST_CASE("PSIO_REFLECT definitionWillNotChange() emits type-level dwnc",
    auto dwnc =
       psio::find_spec<psio::definition_will_not_change>(type_anns);
    REQUIRE(dwnc.has_value());
+   STATIC_REQUIRE(psio::is_dwnc_v<DwncRecord>);
+}
+
+// ── New type-level caps: maxFields(N) / maxDynamicData(N) ────────────────
+//
+// Types at file scope because PSIO_REFLECT cats the bare identifier
+// into its helper struct name.
+
+struct CapOnlyRecord { std::uint32_t a, b, c; };
+PSIO_REFLECT(CapOnlyRecord, a, b, c, maxFields(8))
+
+struct FullyBoundedRecord
+{
+   std::uint64_t                slot;
+   std::vector<std::uint8_t>    payload;
+};
+// All three type-level keywords in one PSIO_REFLECT — exercises the
+// tuple_cat aggregator path.  Field-level attr(...) coexists.
+PSIO_REFLECT(FullyBoundedRecord, slot, attr(payload, max<256>),
+             definitionWillNotChange(),
+             maxFields(8),
+             maxDynamicData(4096))
+
+TEST_CASE("PSIO_REFLECT maxFields(N) emits max_fields_spec", "[annotate][reflect][caps]")
+{
+   using T = CapOnlyRecord;
+   STATIC_REQUIRE(psio::reflect<T>::member_count == 3);
+   constexpr auto a = psio::annotate<psio::type<T>{}>;
+   auto mf = psio::find_spec<psio::max_fields_spec>(a);
+   REQUIRE(mf.has_value());
+   REQUIRE(mf->value == 8);
+   REQUIRE(psio::max_fields_v<T>.has_value());
+   REQUIRE(psio::max_fields_v<T>.value() == 8);
+   // No other type-level annotations attached.
+   REQUIRE_FALSE(psio::is_dwnc_v<T>);
+   REQUIRE_FALSE(psio::max_dynamic_data_v<T>.has_value());
+}
+
+TEST_CASE("PSIO_REFLECT combines dwnc + maxFields + maxDynamicData",
+          "[annotate][reflect][caps]")
+{
+   using T = FullyBoundedRecord;
+   STATIC_REQUIRE(psio::reflect<T>::member_count == 2);
+   constexpr auto a = psio::annotate<psio::type<T>{}>;
+
+   // All three type-level specs land in the aggregated tuple.
+   REQUIRE(psio::find_spec<psio::definition_will_not_change>(a).has_value());
+   auto mf = psio::find_spec<psio::max_fields_spec>(a);
+   REQUIRE(mf.has_value());
+   REQUIRE(mf->value == 8);
+   auto md = psio::find_spec<psio::max_dynamic_data_spec>(a);
+   REQUIRE(md.has_value());
+   REQUIRE(md->value == 4096);
+
+   // Convenience accessors.
+   STATIC_REQUIRE(psio::is_dwnc_v<T>);
+   REQUIRE(psio::max_fields_v<T> == std::optional<std::size_t>{8});
+   REQUIRE(psio::max_dynamic_data_v<T> ==
+           std::optional<std::size_t>{4096});
+
+   // Field-level annotation (attr(payload, max<256>)) still attaches —
+   // type-level aggregator must not interfere with per-field emit.
+   constexpr auto payload_anns =
+      psio::annotate<&T::payload>;
+   auto payload_lb = psio::find_spec<psio::length_bound>(payload_anns);
+   REQUIRE(payload_lb.has_value());
+   REQUIRE(payload_lb->max == 256);
+}
+
+// ── Foundation traits: all_dwnc_v / effective_max_*_v ───────────────────
+
+struct LeafDwnc { std::uint32_t a = 0; };
+PSIO_REFLECT(LeafDwnc, a, definitionWillNotChange())
+
+struct LeafExt  { std::uint32_t a = 0; };
+PSIO_REFLECT(LeafExt, a)  // no DWNC
+
+struct WrapsDwnc
+{
+   LeafDwnc                inner;
+   std::vector<LeafDwnc>   list;
+   std::optional<LeafDwnc> maybe;
+};
+PSIO_REFLECT(WrapsDwnc, inner, list, maybe, definitionWillNotChange())
+
+struct WrapsExt
+{
+   LeafDwnc inner_dwnc;
+   LeafExt  inner_ext;   // breaks the transitive DWNC chain
+};
+PSIO_REFLECT(WrapsExt, inner_dwnc, inner_ext, definitionWillNotChange())
+
+TEST_CASE("all_dwnc_v: primitives and strings are leaves", "[annotate][caps]")
+{
+   STATIC_REQUIRE(psio::all_dwnc_v<std::uint32_t>);
+   STATIC_REQUIRE(psio::all_dwnc_v<bool>);
+   STATIC_REQUIRE(psio::all_dwnc_v<std::byte>);
+   STATIC_REQUIRE(psio::all_dwnc_v<std::string>);
+   // Containers of leaves recurse → still true.
+   STATIC_REQUIRE(psio::all_dwnc_v<std::vector<std::uint64_t>>);
+   STATIC_REQUIRE(psio::all_dwnc_v<std::optional<float>>);
+}
+
+TEST_CASE("all_dwnc_v: reflected DWNC composition", "[annotate][caps]")
+{
+   STATIC_REQUIRE(psio::all_dwnc_v<LeafDwnc>);
+   STATIC_REQUIRE_FALSE(psio::all_dwnc_v<LeafExt>);
+   // WrapsDwnc has DWNC type-level + DWNC inner / vector<DWNC> /
+   // optional<DWNC> members — all paths recurse to true.
+   STATIC_REQUIRE(psio::all_dwnc_v<WrapsDwnc>);
+   // WrapsExt is itself DWNC but contains a non-DWNC member → the
+   // transitive chain breaks.
+   STATIC_REQUIRE_FALSE(psio::all_dwnc_v<WrapsExt>);
+}
+
+TEST_CASE("effective_max_fields_v: explicit cap wins downward",
+          "[annotate][caps]")
+{
+   // CapOnlyRecord has 3 reflected fields and maxFields(8).  The cap
+   // is GREATER than member_count → effective is min(8, 3) = 3.
+   REQUIRE(psio::effective_max_fields_v<CapOnlyRecord> ==
+           std::optional<std::size_t>{3});
+   // FullyBoundedRecord has 2 reflected fields and maxFields(8).
+   // min(8, 2) = 2.
+   REQUIRE(psio::effective_max_fields_v<FullyBoundedRecord> ==
+           std::optional<std::size_t>{2});
+   // Type without a cap: just member_count.
+   REQUIRE(psio::effective_max_fields_v<LeafDwnc> ==
+           std::optional<std::size_t>{1});
+}
+
+TEST_CASE("effective_max_dynamic_v: cap and inferred bound interplay",
+          "[annotate][caps]")
+{
+   // FullyBoundedRecord has maxDynamicData(4096) + attr(payload, max<256>).
+   // The per-field max=256 is tighter than the type-level 4096, so
+   // max_encoded_size<T> ≤ 256 + (slot/header overhead) < 4096.
+   // effective_max_dynamic_v should pick the inferred (smaller) bound.
+   constexpr auto eff = psio::effective_max_dynamic_v<FullyBoundedRecord>;
+   REQUIRE(eff.has_value());
+   REQUIRE(*eff <= 4096);
+
+   // LeafDwnc: no cap, inferred bound is its fixed encoded size.  Some
+   // value must come back (a DWNC u32 record has a finite bound).
+   constexpr auto leaf = psio::effective_max_dynamic_v<LeafDwnc>;
+   REQUIRE(leaf.has_value());
 }
 
 TEST_CASE("length_bound on optional<T> reaches the inner T",

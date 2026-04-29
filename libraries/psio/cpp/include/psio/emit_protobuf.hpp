@@ -175,12 +175,36 @@ namespace psio::schema_types
 
          void emit_decl_impl(const std::string& name, const Object& o)
          {
+            emit_type_attribute_comments(o.attributes);
             emit_message(name, o.members);
          }
          void emit_decl_impl(const std::string& name, const Struct& s)
          {
+            emit_type_attribute_comments(s.attributes);
             emit_message(name, s.members,
                          "// @psio:struct  (proto3 has no fixed-size record)");
+         }
+
+         // Protobuf has no native type-level attribute syntax for psio
+         // caps; emit them as preceding-line comments so `protoc`-style
+         // tools can carry the metadata, even if it's not enforced
+         // wire-side.
+         void emit_type_attribute_comments(
+            const std::vector<Attribute>& attrs)
+         {
+            for (const auto& a : attrs)
+            {
+               if (a.name == "definitionWillNotChange" ||
+                   a.name == "maxFields" ||
+                   a.name == "maxDynamicData")
+               {
+                  indent();
+                  _out << "// @" << a.name;
+                  if (!a.value.empty())
+                     _out << "(" << a.value << ")";
+                  _out << "\n";
+               }
+            }
          }
          void emit_decl_impl(const std::string& name, const Variant& v)
          {

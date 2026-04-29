@@ -163,11 +163,34 @@ namespace psio::schema_types
 
          void emit_decl_impl(const std::string& name, const Object& o)
          {
+            emit_type_attribute_comments(o.attributes);
             emit_struct(name, o.members);
          }
          void emit_decl_impl(const std::string& name, const Struct& s)
          {
+            emit_type_attribute_comments(s.attributes);
             emit_struct(name, s.members);
+         }
+
+         // Capnp schema has no native attribute syntax for psio caps.
+         // Surface them as preceding-line comments so readers can
+         // recover the contract and tools can grep for it.
+         void emit_type_attribute_comments(
+            const std::vector<Attribute>& attrs)
+         {
+            for (const auto& a : attrs)
+            {
+               if (a.name == "definitionWillNotChange" ||
+                   a.name == "maxFields" ||
+                   a.name == "maxDynamicData")
+               {
+                  indent();
+                  _out << "# @" << a.name;
+                  if (!a.value.empty())
+                     _out << "(" << a.value << ")";
+                  _out << "\n";
+               }
+            }
          }
          void emit_decl_impl(const std::string& name, const Variant& v)
          {

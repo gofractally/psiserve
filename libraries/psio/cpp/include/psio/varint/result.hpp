@@ -1,6 +1,6 @@
 #pragma once
 //
-// libraries/psio/cpp/include/psio3/varint/result.hpp — return types.
+// libraries/psio/cpp/include/psio/varint/result.hpp — return types.
 //
 // Pulled out of the umbrella header so algorithm headers can include
 // just this without forming a cycle. Each result describes a single

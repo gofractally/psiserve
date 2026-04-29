@@ -11,8 +11,8 @@
 //
 // Naming policy: types live at global scope so PSIO_REFLECT works
 // without namespace gymnastics; factories live in `psio_bench::`.
-// (Was previously `psio3_bench::` when the library was called psio3 —
-// renamed alongside the psio3 → psio rename.)
+// (Was previously `psio_bench::` when the library was called psio —
+// renamed alongside the psio → psio rename.)
 
 #include <psio/annotate.hpp>
 #include <psio/ext_int.hpp>
@@ -319,6 +319,56 @@ PSIO_REFLECT(Inner1Dwnc, child, pad1, definitionWillNotChange())
 struct Deep4Dwnc { Inner1Dwnc root; };
 PSIO_REFLECT(Deep4Dwnc, root, definitionWillNotChange())
 
+// ── Variety stress shapes — primitives BSON Vector + msgpack bin / ────
+//
+// MlEmbedding: vec<float> as a 64-d ML embedding.  Exercises BSON's
+// Vector subtype 0x09 dtype 0x10 (FLOAT32) — and shows the wire-size
+// gap between mongo-idiomatic encoders and naive array-of-double
+// fallbacks.
+//
+// BlobPayload: vec<uint8_t> raw bytes.  Hits BSON generic binary
+// subtype 0x00, protobuf `bytes`, msgpack `bin`.  Common in transit /
+// blob-store workloads.
+//
+// WideRecord: 32 u32 fields.  Stresses vtable size in flatbuf, slot
+// tables in pjson, and fixed-region offset arithmetic in pssz/ssz —
+// places where N=9 (Validator) wasn't enough.
+
+struct MlEmbedding
+{
+   std::uint64_t      id = 0;
+   std::vector<float> embedding;
+   friend bool operator==(const MlEmbedding&, const MlEmbedding&) = default;
+};
+PSIO_REFLECT(MlEmbedding, id, embedding, definitionWillNotChange())
+
+struct BlobPayload
+{
+   std::uint64_t             id = 0;
+   std::vector<std::uint8_t> bytes;
+   friend bool operator==(const BlobPayload&, const BlobPayload&) = default;
+};
+PSIO_REFLECT(BlobPayload, id, bytes, definitionWillNotChange())
+
+struct WideRecord
+{
+   std::uint32_t f00 = 0, f01 = 0, f02 = 0, f03 = 0;
+   std::uint32_t f04 = 0, f05 = 0, f06 = 0, f07 = 0;
+   std::uint32_t f08 = 0, f09 = 0, f10 = 0, f11 = 0;
+   std::uint32_t f12 = 0, f13 = 0, f14 = 0, f15 = 0;
+   std::uint32_t f16 = 0, f17 = 0, f18 = 0, f19 = 0;
+   std::uint32_t f20 = 0, f21 = 0, f22 = 0, f23 = 0;
+   std::uint32_t f24 = 0, f25 = 0, f26 = 0, f27 = 0;
+   std::uint32_t f28 = 0, f29 = 0, f30 = 0, f31 = 0;
+   friend bool operator==(const WideRecord&, const WideRecord&) = default;
+};
+PSIO_REFLECT(WideRecord,
+             f00, f01, f02, f03, f04, f05, f06, f07,
+             f08, f09, f10, f11, f12, f13, f14, f15,
+             f16, f17, f18, f19, f20, f21, f22, f23,
+             f24, f25, f26, f27, f28, f29, f30, f31,
+             definitionWillNotChange())
+
 // ── Sample factories ──────────────────────────────────────────────────
 namespace psio_bench {
 
@@ -464,6 +514,42 @@ namespace psio_bench {
       for (std::uint32_t i = 0; i < n; ++i)
          l.validators.push_back(make_validator(i));
       return l;
+   }
+
+   inline MlEmbedding ml_embedding()
+   {
+      MlEmbedding e;
+      e.id = 0xCAFE'BABE'DEAD'BEEFull;
+      e.embedding.resize(64);
+      // Deterministic non-zero floats so varint formats see real bytes.
+      for (std::size_t i = 0; i < 64; ++i)
+         e.embedding[i] = static_cast<float>(i) * 0.0125f - 0.4f;
+      return e;
+   }
+
+   inline BlobPayload blob_payload()
+   {
+      BlobPayload b;
+      b.id = 0x0123'4567'89AB'CDEFull;
+      b.bytes.resize(256);
+      for (std::size_t i = 0; i < 256; ++i)
+         b.bytes[i] = static_cast<std::uint8_t>(i ^ 0xA5);
+      return b;
+   }
+
+   inline WideRecord wide_record()
+   {
+      WideRecord w;
+      // Spread values so varint formats see varying widths.
+      std::uint32_t* fields[] = {
+         &w.f00, &w.f01, &w.f02, &w.f03, &w.f04, &w.f05, &w.f06, &w.f07,
+         &w.f08, &w.f09, &w.f10, &w.f11, &w.f12, &w.f13, &w.f14, &w.f15,
+         &w.f16, &w.f17, &w.f18, &w.f19, &w.f20, &w.f21, &w.f22, &w.f23,
+         &w.f24, &w.f25, &w.f26, &w.f27, &w.f28, &w.f29, &w.f30, &w.f31,
+      };
+      for (std::size_t i = 0; i < 32; ++i)
+         *fields[i] = static_cast<std::uint32_t>(0x1000'0000u * (i + 1));
+      return w;
    }
 
    inline Deep4Ext deep4_ext()

@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/stream.hpp — shared sink primitives used by every binary format.
+// psio/stream.hpp — shared sink primitives used by every binary format.
 //
 // Every encoder walks its shape once and writes bytes into a sink. The
 // sink concept is uniform across walks so the *same* walker routine
@@ -26,7 +26,7 @@
 //   s.about_to_write(size_t)        — optional reserve hint
 //   s.written() const               — bytes emitted so far
 //
-// The `put` method is a psio3 addition for clarity at call sites —
+// The `put` method is a psio addition for clarity at call sites —
 // `s.put(len)` reads better than `s.write_raw(len)`; both compile to
 // the same thing.
 //

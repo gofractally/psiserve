@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/dynamic_pssz.hpp — schema-driven pSSZ codec over dynamic_value.
+// psio/dynamic_pssz.hpp — schema-driven pSSZ codec over dynamic_value.
 //
 // Same wire layout as SSZ (offset table + heap) but with a configurable
 // offset width W (1/2/4 bytes). For a width-agnostic dynamic codec we

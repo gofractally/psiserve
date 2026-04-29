@@ -1,6 +1,6 @@
 #pragma once
 //
-// libraries/psio/cpp/include/psio3/varint/detail/cpu.hpp
+// libraries/psio/cpp/include/psio/varint/detail/cpu.hpp
 //
 // Compile-time CPU-feature gates used by the varint fast paths. The
 // `varint::<algo>::fast` namespace is implemented in terms of these:
@@ -8,7 +8,7 @@
 // SIMD/bit-manipulation instructions; otherwise it aliases to the
 // portable scalar path.
 //
-// We intentionally do NOT do runtime CPU dispatch — psio3 callers are
+// We intentionally do NOT do runtime CPU dispatch — psio callers are
 // compiled with a known target triple (Apple Silicon for this tree;
 // `-march=native` or an equivalent for x86 hosts). Adding runtime
 // dispatch later is non-breaking because the public API is the same

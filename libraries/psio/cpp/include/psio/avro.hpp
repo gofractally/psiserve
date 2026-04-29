@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/avro.hpp — `avro` format tag (Apache Avro binary).
+// psio/avro.hpp — `avro` format tag (Apache Avro binary).
 //
 // Wire (MVP scope):
 //   bool:              1 byte (0/1)
@@ -71,7 +71,7 @@ namespace psio {
       struct is_bitlist<::psio::bitlist<N>> : std::true_type {};
 
       // Avro `long` is zig-zag varint over int64 (max 10 wire bytes).
-      // Wire encoding lives in psio3/varint/leb128.hpp; the wrappers
+      // Wire encoding lives in psio/varint/leb128.hpp; the wrappers
       // here bridge to the codec's `Sink::write(const void*, n)` and
       // `std::span<const char>` calling conventions.
       template <typename Sink>
@@ -466,6 +466,9 @@ namespace psio {
       {
          if (bytes.empty())
             return codec_fail("avro: empty buffer", 0, "avro");
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(), "avro");
+             !st.ok())
+            return st;
          return codec_ok();
       }
 

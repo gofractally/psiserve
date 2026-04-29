@@ -1,8 +1,8 @@
 [package]
-name = "psio-tool"
+name = "psio1-tool"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-psio = { path = "../psio" }
+psio1 = { path = "../psio1" }
 clap = { version = "4", features = ["derive"] }

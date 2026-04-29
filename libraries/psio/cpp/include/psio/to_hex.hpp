@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/to_hex.hpp — hex string conversion utilities.  Direct port of
+// psio/to_hex.hpp — hex string conversion utilities.  Direct port of
 // psio/to_hex.hpp.
 
 #include <cstdint>

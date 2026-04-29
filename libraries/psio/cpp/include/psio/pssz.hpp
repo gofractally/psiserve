@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/pssz.hpp — pSSZ (PsiSSZ) format tag.
+// psio/pssz.hpp — pSSZ (PsiSSZ) format tag.
 //
 // pSSZ is a variable-width variant of SSZ — offsets and container
 // headers use 1, 2, or 4 bytes rather than always 4. The width is
@@ -67,6 +67,52 @@ namespace psio {
    struct pssz_;  // explicit-width tag (byte-parity testing).
 
    namespace detail::pssz_impl {
+
+      // ── maxDynamicData enforcement ────────────────────────────────────────
+      //
+      // Throws codec_exception when the encoded total exceeds T's
+      // `maxDynamicData(N)` cap.  The schema author asserted the cap;
+      // an encoder that produces > N bytes has violated the wire-size
+      // contract, and silently widening defeats the predictability the
+      // cap was added to provide.
+      //
+      // Note: cap is enforced against TOTAL encoded size (fixed +
+      // dynamic regions).  The spec describes it as a dynamic-region
+      // cap, but the conservative ceiling on total is correct (any
+      // total > cap implies dynamic > cap - fixed_overhead, and the
+      // fixed overhead for pssz is small).  Refine to a strictly
+      // dynamic-only check if the fixed-region delta becomes material.
+      template <typename T>
+      inline void enforce_max_dynamic(std::size_t total)
+      {
+         constexpr auto cap = ::psio::max_dynamic_data_v<T>;
+         if constexpr (cap.has_value())
+         {
+            if (total > *cap)
+               throw codec_exception{codec_error{
+                  "pssz: encoded size exceeds maxDynamicData cap",
+                  static_cast<std::uint32_t>(total), "pssz"}};
+         }
+      }
+
+      // noexcept counterpart for `validate<T>(...)` — returns
+      // codec_status::error on cap excess instead of throwing, matching
+      // the contract of psio::validate.  Returns ok() when no cap is
+      // declared on T.
+      template <typename T>
+      inline codec_status check_max_dynamic(
+         std::span<const char> bytes) noexcept
+      {
+         constexpr auto cap = ::psio::max_dynamic_data_v<T>;
+         if constexpr (cap.has_value())
+         {
+            if (bytes.size() > *cap)
+               return codec_status{codec_error{
+                  "pssz: encoded size exceeds maxDynamicData cap",
+                  static_cast<std::uint32_t>(bytes.size()), "pssz"}};
+         }
+         return codec_status{};
+      }
 
       // ── Width → offset integer type ───────────────────────────────────────
       template <std::size_t W>
@@ -1965,19 +2011,27 @@ namespace psio {
    // ── Width selection ───────────────────────────────────────────────────
    //
    // pssz is one format tag. Its internal offset width (1, 2, or 4
-   // bytes) is selected at compile time from `max_encoded_size<T>()`:
-   //   max ≤ 0xff   → W = 1  (pssz8-equivalent wire)
-   //   max ≤ 0xffff → W = 2  (pssz16-equivalent wire)
-   //   else / unbounded → W = 4  (pssz32-equivalent wire)
+   // bytes) is selected at compile time from
+   // `effective_max_dynamic_v<T>` (max_size.hpp), which composes:
+   //   - `max_encoded_size<T>()` — the bound inferred from per-field
+   //     `length_bound` annotations
+   //   - `max_dynamic_data_v<T>` — the explicit type-level
+   //     `maxDynamicData(N)` cap, when present
+   // The explicit cap wins downward only — a tighter cap can narrow
+   // the offset; a looser cap cannot widen past the inferred bound.
+   //
+   //   eff ≤ 0xff   → W = 1
+   //   eff ≤ 0xffff → W = 2
+   //   else / unbounded → W = 4
    //
    // Narrower widths kick in automatically when a record's variable
-   // fields carry `length_bound` annotations that prove the encoded
-   // output fits in the narrower offset range.
+   // fields carry `length_bound` annotations OR when the schema author
+   // asserts an explicit cap via `maxDynamicData(N)` in PSIO_REFLECT.
 
    template <typename T>
    consteval std::size_t auto_pssz_width() noexcept
    {
-      constexpr auto m = ::psio::max_encoded_size<T>();
+      constexpr auto m = ::psio::effective_max_dynamic_v<T>;
       if constexpr (m.has_value())
       {
          if constexpr (*m <= 0xFFu)
@@ -2012,7 +2066,8 @@ namespace psio {
                              const T& v, std::vector<char>& sink)
       {
          const std::size_t total = detail::pssz_impl::size_of_v<W>(v);
-         const std::size_t orig  = sink.size();
+         detail::pssz_impl::enforce_max_dynamic<T>(total);
+         const std::size_t orig = sink.size();
          sink.resize(orig + total);
          ::psio::fast_buf_stream fbs(sink.data() + orig, total);
          detail::pssz_impl::encode_value<W>(v, fbs);
@@ -2023,6 +2078,7 @@ namespace psio {
                                           pssz_<W>, const T& v)
       {
          const std::size_t total = detail::pssz_impl::size_of_v<W>(v);
+         detail::pssz_impl::enforce_max_dynamic<T>(total);
          std::vector<char> out(total);
          ::psio::fast_buf_stream fbs(out.data(), total);
          detail::pssz_impl::encode_value<W>(v, fbs);
@@ -2048,6 +2104,9 @@ namespace psio {
                                      pssz_<W>, T*,
                                      std::span<const char> bytes) noexcept
       {
+         if (auto st = detail::pssz_impl::check_max_dynamic<T>(bytes);
+             !st.ok())
+            return st;
          return detail::pssz_impl::validate_value<W, T>(bytes, 0,
                                                         bytes.size());
       }
@@ -2057,6 +2116,7 @@ namespace psio {
                              pssz_<W>, T*,
                              std::span<const char> bytes)
       {
+         detail::pssz_impl::enforce_max_dynamic<T>(bytes.size());
          detail::pssz_impl::validate_or_throw_value<W, T>(
             bytes, 0, bytes.size());
       }
@@ -2114,7 +2174,8 @@ namespace psio {
       {
          constexpr std::size_t W = auto_pssz_width_v<T>;
          const std::size_t total = detail::pssz_impl::size_of_v<W>(v);
-         const std::size_t orig  = sink.size();
+         detail::pssz_impl::enforce_max_dynamic<T>(total);
+         const std::size_t orig = sink.size();
          sink.resize(orig + total);
          ::psio::fast_buf_stream fbs(sink.data() + orig, total);
          detail::pssz_impl::encode_value<W>(v, fbs);
@@ -2126,6 +2187,7 @@ namespace psio {
       {
          constexpr std::size_t W = auto_pssz_width_v<T>;
          const std::size_t total = detail::pssz_impl::size_of_v<W>(v);
+         detail::pssz_impl::enforce_max_dynamic<T>(total);
          std::vector<char> out(total);
          ::psio::fast_buf_stream fbs(out.data(), total);
          detail::pssz_impl::encode_value<W>(v, fbs);
@@ -2152,6 +2214,9 @@ namespace psio {
                                      pssz, T*,
                                      std::span<const char> bytes) noexcept
       {
+         if (auto st = detail::pssz_impl::check_max_dynamic<T>(bytes);
+             !st.ok())
+            return st;
          constexpr std::size_t W = auto_pssz_width_v<T>;
          return detail::pssz_impl::validate_value<W, T>(bytes, 0,
                                                         bytes.size());
@@ -2161,6 +2226,7 @@ namespace psio {
       friend void tag_invoke(decltype(::psio::validate_or_throw<T>),
                              pssz, T*, std::span<const char> bytes)
       {
+         detail::pssz_impl::enforce_max_dynamic<T>(bytes.size());
          constexpr std::size_t W = auto_pssz_width_v<T>;
          detail::pssz_impl::validate_or_throw_value<W, T>(
             bytes, 0, bytes.size());

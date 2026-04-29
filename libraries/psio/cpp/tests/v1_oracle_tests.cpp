@@ -1,4 +1,4 @@
-// v1 ↔ psio3 byte-oracle tests.
+// v1 ↔ psio byte-oracle tests.
 //
 // Pattern ported from libraries/psio2/cpp/tests/v1_oracle_tests.cpp:
 // define parallel v1 (psio1::) and v3 (psio::) types with matching

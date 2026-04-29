@@ -1,4 +1,4 @@
-// v1 ↔ psio3 flatbuf_lib byte-parity tests.
+// v1 ↔ psio flatbuf_lib byte-parity tests.
 //
 // Both sides use Google flatbuffers. Assumes flatbuffers::flatbuffers is
 // linked — test target is conditional on find_package(flatbuffers).

@@ -1,5 +1,5 @@
 [package]
-name = "psio-macros"
+name = "psio1-macros"
 version = "0.1.0"
 edition = "2021"
 description = "Derive macros for psio serialization formats (fracpack, capnp, flatbuf, WIT)"

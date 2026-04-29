@@ -1,5 +1,5 @@
 [package]
-name = "psio"
+name = "psio1"
 version = "0.1.0"
 edition = "2021"
 description = "Multi-format serialization: fracpack, Cap'n Proto, FlatBuffers, WIT, JSON, and more"
@@ -15,7 +15,7 @@ indexmap = { version = "2.2.6", features = ["serde"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0.135", features = ["preserve_order"] }
 serde-aux = "4.5"
-psio-macros = { path = "../psio-macros" }
+psio-macros = { path = "../psio1-macros", package = "psio1-macros" }
 paste = "1"
 
 # Competitor Rust SSZ libraries, gated behind features. Live under

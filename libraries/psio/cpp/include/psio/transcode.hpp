@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/transcode.hpp — format-to-format transcoding.
+// psio/transcode.hpp — format-to-format transcoding.
 //
 // Two entry points, covering the compile-time and runtime cases of the
 // schema-is-contract DX (design § 5.2.6):

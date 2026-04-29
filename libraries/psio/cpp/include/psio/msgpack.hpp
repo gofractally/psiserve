@@ -1255,6 +1255,10 @@ namespace psio
                                      T*,
                                      std::span<const char> bytes) noexcept
       {
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(),
+                                                         "msgpack");
+             !st.ok())
+            return st;
          try
          {
             std::size_t pos = 0;

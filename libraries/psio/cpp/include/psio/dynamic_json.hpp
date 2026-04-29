@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/dynamic_json.hpp — schema-driven JSON encoder/decoder over
+// psio/dynamic_json.hpp — schema-driven JSON encoder/decoder over
 // dynamic_value.
 //
 // Unlike the compile-time JSON codec (json.hpp), these functions are

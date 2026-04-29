@@ -1,9 +1,9 @@
 #pragma once
 //
-// psio3/wit_resource.hpp — WIT Component Model resource vocabulary.
+// psio/wit_resource.hpp — WIT Component Model resource vocabulary.
 //
 // Direct port of psio/wit_resource.hpp.  This header is the **shared
-// vocabulary** between psio3's reflection / WIT-generator side and
+// vocabulary** between psio's reflection / WIT-generator side and
 // psizam's runtime side.  It contains:
 //
 //   1. wit_resource             empty marker base — opt-in for types
@@ -187,7 +187,7 @@ namespace psio {
 //
 // own<T> and borrow<T> both lower to a u32 (handle table index) at
 // the WASM boundary.  The traits live in psizam to avoid a psizam
-// dependency in psio3 — the forward declaration of the primary
+// dependency in psio — the forward declaration of the primary
 // template is exactly what's needed here.
 namespace psizam
 {

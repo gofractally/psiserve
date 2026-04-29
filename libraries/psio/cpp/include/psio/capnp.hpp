@@ -1,6 +1,6 @@
 #pragma once
 //
-// psio3/capnp.hpp — Cap'n Proto format tag (single-segment, unpacked).
+// psio/capnp.hpp — Cap'n Proto format tag (single-segment, unpacked).
 //
 // Byte-identical to psio2's `capnp_pack` / `capnp_unpack` on the shape
 // set both support. Single-segment flat-array messages only, no packed
@@ -454,14 +454,24 @@ namespace psio {
 
          std::vector<char> finish()
          {
-            uint32_t          seg_size = static_cast<uint32_t>(words_.size());
-            std::vector<char> result(8 + static_cast<std::size_t>(seg_size) * 8);
-            uint32_t          zero = 0;
-            std::memcpy(result.data(), &zero, 4);
-            std::memcpy(result.data() + 4, &seg_size, 4);
-            std::memcpy(result.data() + 8, words_.data(),
+            std::vector<char> out;
+            finish_into(out);
+            return out;
+         }
+
+         //  Sink form — write the finished segmented-frame bytes into
+         //  a caller-supplied vector, reusing its capacity.  Used by
+         //  the encode-into-sink CPO so a hot-loop caller keeps one
+         //  output vector across iterations.
+         void finish_into(std::vector<char>& sink)
+         {
+            uint32_t seg_size = static_cast<uint32_t>(words_.size());
+            sink.resize(8 + static_cast<std::size_t>(seg_size) * 8);
+            uint32_t zero = 0;
+            std::memcpy(sink.data(), &zero, 4);
+            std::memcpy(sink.data() + 4, &seg_size, 4);
+            std::memcpy(sink.data() + 8, words_.data(),
                         static_cast<std::size_t>(seg_size) * 8);
-            return result;
          }
       };
 
@@ -1183,6 +1193,27 @@ namespace psio {
          return buf.finish();
       }
 
+      //  Sink-form encode — caller-supplied vector<char> reused across
+      //  iterations.  Builder still allocates its words_ buffer per
+      //  call; only the output bytes vector is reused.
+      template <typename T>
+         requires detail::capnp_impl::Record<T>
+      friend void tag_invoke(decltype(::psio::encode), capnp,
+                             const T&            v,
+                             std::vector<char>&  sink)
+      {
+         using namespace detail::capnp_impl;
+         using L = capnp_layout<T>;
+
+         capnp_word_buf buf(word_count_of(v));
+         uint32_t       root = buf.alloc(1);
+         uint32_t       ds   = buf.alloc(L::data_words + L::ptr_count);
+         uint32_t       ps   = ds + L::data_words;
+         buf.write_struct_ptr(root, ds, L::data_words, L::ptr_count);
+         pack_struct(buf, ds, ps, v);
+         buf.finish_into(sink);
+      }
+
       template <typename T>
          requires detail::capnp_impl::Record<T>
       friend T tag_invoke(decltype(::psio::decode<T>), capnp, T*,
@@ -1217,6 +1248,10 @@ namespace psio {
                                      T*,
                                      std::span<const char> bytes) noexcept
       {
+         if (auto st = ::psio::check_max_dynamic_cap<T>(bytes.size(),
+                                                         "capnp");
+             !st.ok())
+            return st;
          if (!detail::capnp_impl::validate_message(bytes.data(),
                                                    bytes.size()))
             return codec_fail("capnp: invalid message", 0, "capnp");
